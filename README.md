@@ -949,10 +949,13 @@ Async runs write a dedicated observability folder:
 <tmpdir>/pi-subagents-<scope>/async-subagent-runs/<id>/
   status.json
   events.jsonl
+  output-<n>.log
   subagent-log-<id>.md
 ```
 
 `status.json` is the source of truth for async progress and powers both the TUI widget and `/subagents-status`. Async status and result files are written atomically, so readers do not observe partial JSON during background updates.
+
+`events.jsonl` is the live event stream. It includes high-level wrapper events plus child `pi` JSON events annotated with subagent metadata for the run and step they belong to. `output-<n>.log` is a live human-readable tail for the current step. `subagent-log-<id>.md` is written when the run completes.
 
 When fallback is used in async/background mode, `status.json` and the final result JSON include the final selected model, ordered attempted models, and per-attempt outcomes so background runs are as debuggable as sync runs.
 

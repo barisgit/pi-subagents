@@ -11,7 +11,7 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createMockPi, createTempDir, makeAgent, removeTempDir, tryImport } from "../support/helpers.ts";
+import { createMockPi, createTempDir, events, makeAgent, removeTempDir, tryImport } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
 
 // Top-level await
@@ -23,6 +23,7 @@ const available = !!(asyncMod && utils && typesMod);
 const isAsyncAvailable = asyncMod?.isAsyncAvailable;
 const executeAsyncSingle = asyncMod?.executeAsyncSingle;
 const readStatus = utils?.readStatus;
+const ASYNC_DIR = typesMod?.ASYNC_DIR;
 const RESULTS_DIR = typesMod?.RESULTS_DIR;
 
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
@@ -127,6 +128,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		mockPi.onCall({ output: "Recovered asynchronously" });
 		const id = `async-fallback-${Date.now().toString(36)}`;
 		const sessionRoot = path.join(tempDir, "sessions");
+		const asyncDir = path.join(ASYNC_DIR, id);
 		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
 		const run = executeAsyncSingle(id, {
 			agent: "worker",
@@ -168,6 +170,116 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results[0].model, "anthropic/claude-sonnet-4");
 		assert.deepEqual(payload.results[0].attemptedModels, ["openai/gpt-5-mini", "anthropic/claude-sonnet-4"]);
 		assert.equal(payload.results[0].modelAttempts.length, 2);
+		assert.match(fs.readFileSync(path.join(asyncDir, "output-0.log"), "utf-8"), /Recovered asynchronously/);
 		assert.equal(mockPi.callCount(), 2);
+	});
+
+	it("background runs detect hidden tool failures even when the child exits 0", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [events.toolResult("bash", "connection refused")],
+		});
+
+		const id = `async-hidden-failure-${Date.now().toString(36)}`;
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const sessionRoot = path.join(tempDir, "sessions");
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Deploy app",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot,
+			maxSubagentDepth: 2,
+		});
+
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > deadline) {
+				assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.equal(payload.success, false);
+		assert.equal(payload.exitCode, 1);
+		assert.equal(payload.results[0].success, false);
+	});
+
+	it("background runs stream child events and live output while active", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ delay: 200, jsonl: [events.toolStart("bash", { command: "ls" })] },
+				{ delay: 600, jsonl: [events.toolEnd("bash"), events.toolResult("bash", "file-a\nfile-b")] },
+				{ delay: 600, jsonl: [events.assistantMessage("Done streaming")], stderr: "warning: mock stderr\n" },
+			],
+		});
+
+		const id = `async-stream-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const eventsPath = path.join(asyncDir, "events.jsonl");
+		const outputPath = path.join(asyncDir, "output-0.log");
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const sessionRoot = path.join(tempDir, "sessions");
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Stream detailed progress",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot,
+			maxSubagentDepth: 2,
+		});
+
+		const liveDeadline = Date.now() + 10_000;
+		let sawChildEvent = false;
+		let sawLiveOutput = false;
+		while (Date.now() < liveDeadline && (!sawChildEvent || !sawLiveOutput)) {
+			if (fs.existsSync(eventsPath)) {
+				const content = fs.readFileSync(eventsPath, "utf-8");
+				sawChildEvent = content.includes('"type":"tool_execution_start"')
+					&& content.includes('"subagentSource":"child"');
+			}
+			if (fs.existsSync(outputPath)) {
+				const content = fs.readFileSync(outputPath, "utf-8");
+				sawLiveOutput = content.includes("bash: ls") || content.includes("file-a") || content.includes("warning: mock stderr");
+			}
+			if (sawChildEvent && sawLiveOutput) break;
+			assert.equal(fs.existsSync(resultPath), false, "run finished before live observability was written");
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		assert.equal(sawChildEvent, true, "expected child JSON events to be streamed into events.jsonl");
+		assert.equal(sawLiveOutput, true, "expected output-0.log to receive live child output");
+
+		const doneDeadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > doneDeadline) {
+				assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.equal(payload.success, true);
+		assert.equal(payload.results[0].output, "Done streaming");
 	});
 });

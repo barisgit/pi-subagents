@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { Message } from "@mariozechner/pi-ai";
 import { appendJsonl, getArtifactPaths } from "./artifacts.ts";
 import { getPiSpawnCommand } from "./pi-spawn.ts";
 import { captureSingleOutputSnapshot, resolveSingleOutput } from "./single-output.ts";
@@ -27,6 +28,7 @@ import {
 } from "./parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import { formatModelAttemptNote, isRetryableModelFailure } from "./model-fallback.ts";
+import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "./utils.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -123,32 +125,44 @@ function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 }
 
-function parseRunOutput(output: string): { usage: Usage; model?: string; error?: string } {
-	const usage = emptyUsage();
-	let model: string | undefined;
-	let error: string | undefined;
-	for (const line of output.split("\n")) {
-		if (!line.trim()) continue;
-		try {
-			const evt = JSON.parse(line) as { type?: string; message?: { role?: string; model?: string; errorMessage?: string; usage?: any } };
-			if (evt.type !== "message_end" || evt.message?.role !== "assistant") continue;
-			const msg = evt.message;
-			if (msg.model) model = msg.model;
-			if (msg.errorMessage) error = msg.errorMessage;
-			const u = msg.usage;
-			if (u) {
-				usage.turns++;
-				usage.input += u.input ?? u.inputTokens ?? 0;
-				usage.output += u.output ?? u.outputTokens ?? 0;
-				usage.cacheRead += u.cacheRead ?? 0;
-				usage.cacheWrite += u.cacheWrite ?? 0;
-				usage.cost += u.cost?.total ?? 0;
-			}
-		} catch {
-			// Ignore malformed stdout lines.
-		}
-	}
-	return { usage, model, error };
+interface ChildEventContext {
+	eventsPath: string;
+	runId: string;
+	stepIndex: number;
+	agent: string;
+}
+
+interface ChildUsage {
+	input?: number;
+	inputTokens?: number;
+	output?: number;
+	outputTokens?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	cost?: { total?: number };
+}
+
+type ChildMessage = Message & {
+	model?: string;
+	errorMessage?: string;
+	usage?: ChildUsage;
+};
+
+interface ChildEvent {
+	type?: string;
+	message?: ChildMessage;
+	toolName?: string;
+	args?: Record<string, unknown>;
+}
+
+interface RunPiStreamingResult {
+	stderr: string;
+	exitCode: number | null;
+	messages: Message[];
+	usage: Usage;
+	model?: string;
+	error?: string;
+	finalOutput: string;
 }
 
 function runPiStreaming(
@@ -159,7 +173,8 @@ function runPiStreaming(
 	piPackageRoot?: string,
 	piArgv1?: string,
 	maxSubagentDepth?: number,
-): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+	childEventContext?: ChildEventContext,
+): Promise<RunPiStreamingResult> {
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
 		const spawnEnv = { ...process.env, ...(env ?? {}), ...getSubagentDepthEnv(maxSubagentDepth) };
@@ -168,29 +183,119 @@ function runPiStreaming(
 			...(piArgv1 ? { argv1: piArgv1 } : {}),
 		});
 		const child = spawn(spawnSpec.command, spawnSpec.args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: spawnEnv });
-		let stdout = "";
 		let stderr = "";
+		let stdoutBuf = "";
+		let stderrBuf = "";
+		const messages: Message[] = [];
+		const usage = emptyUsage();
+		let model: string | undefined;
+		let error: string | undefined;
+		const rawStdoutLines: string[] = [];
+
+		const writeOutputLine = (line: string) => {
+			if (!line.trim()) return;
+			outputStream.write(`${line}\n`);
+		};
+
+		const writeOutputText = (text: string) => {
+			for (const line of text.split("\n")) {
+				writeOutputLine(line);
+			}
+		};
+
+		const appendChildEvent = (event: Record<string, unknown>) => {
+			if (!childEventContext) return;
+			appendJsonl(childEventContext.eventsPath, JSON.stringify({
+				...event,
+				subagentSource: "child",
+				subagentRunId: childEventContext.runId,
+				subagentStepIndex: childEventContext.stepIndex,
+				subagentAgent: childEventContext.agent,
+				observedAt: Date.now(),
+			}));
+		};
+
+		const appendChildLine = (type: "subagent.child.stdout" | "subagent.child.stderr", line: string) => {
+			appendChildEvent({ type, line });
+		};
+
+		const processStdoutLine = (line: string) => {
+			if (!line.trim()) return;
+			let event: ChildEvent;
+			try {
+				event = JSON.parse(line) as ChildEvent;
+			} catch {
+				rawStdoutLines.push(line);
+				writeOutputLine(line);
+				appendChildLine("subagent.child.stdout", line);
+				return;
+			}
+
+			appendChildEvent(event);
+
+			if (event.type === "tool_execution_start" && event.toolName) {
+				const toolArgs = extractToolArgsPreview(event.args ?? {});
+				writeOutputLine(toolArgs ? `${event.toolName}: ${toolArgs}` : event.toolName);
+				return;
+			}
+
+			if ((event.type === "message_end" || event.type === "tool_result_end") && event.message) {
+				messages.push(event.message);
+				const text = extractTextFromContent(event.message.content);
+				if (text) writeOutputText(text);
+
+				if (event.type !== "message_end" || event.message.role !== "assistant") return;
+				if (event.message.model) model = event.message.model;
+				if (event.message.errorMessage) error = event.message.errorMessage;
+				const eventUsage = event.message.usage;
+				if (!eventUsage) return;
+				usage.turns++;
+				usage.input += eventUsage.input ?? eventUsage.inputTokens ?? 0;
+				usage.output += eventUsage.output ?? eventUsage.outputTokens ?? 0;
+				usage.cacheRead += eventUsage.cacheRead ?? 0;
+				usage.cacheWrite += eventUsage.cacheWrite ?? 0;
+				usage.cost += eventUsage.cost?.total ?? 0;
+			}
+		};
+
+		const processStderrText = (text: string) => {
+			stderr += text;
+			stderrBuf += text;
+			outputStream.write(text);
+			if (!childEventContext) return;
+			const lines = stderrBuf.split("\n");
+			stderrBuf = lines.pop() || "";
+			for (const line of lines) {
+				if (!line.trim()) continue;
+				appendChildLine("subagent.child.stderr", line);
+			}
+		};
 
 		child.stdout.on("data", (chunk: Buffer) => {
 			const text = chunk.toString();
-			stdout += text;
-			outputStream.write(text);
+			stdoutBuf += text;
+			const lines = stdoutBuf.split("\n");
+			stdoutBuf = lines.pop() || "";
+			for (const line of lines) processStdoutLine(line);
 		});
 
 		child.stderr.on("data", (chunk: Buffer) => {
-			const text = chunk.toString();
-			stderr += text;
-			outputStream.write(text);
+			processStderrText(chunk.toString());
 		});
 
 		child.on("close", (exitCode) => {
+			if (stdoutBuf.trim()) processStdoutLine(stdoutBuf);
+			if (stderrBuf.trim()) appendChildLine("subagent.child.stderr", stderrBuf);
 			outputStream.end();
-			resolve({ stdout, stderr, exitCode });
+			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
+			resolve({ stderr, exitCode, messages, usage, model, error, finalOutput });
 		});
 
-		child.on("error", () => {
+		child.on("error", (spawnError) => {
 			outputStream.end();
-			resolve({ stdout, stderr, exitCode: 1 });
+			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
+			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);
+			resolve({ stderr, exitCode: 1, messages, usage, model, error: error ?? spawnErrorMessage, finalOutput });
 		});
 	});
 }
@@ -386,14 +491,13 @@ async function runSingleStep(
 	const attemptedModels: string[] = [];
 	const modelAttempts: ModelAttempt[] = [];
 	const attemptNotes: string[] = [];
-	let finalResult:
-		| { stdout: string; stderr: string; exitCode: number | null; usage: Usage; model?: string; error?: string }
-		| undefined;
+	const eventsPath = path.join(path.dirname(ctx.outputFile), "events.jsonl");
+	let finalResult: RunPiStreamingResult | undefined;
 
 	for (let index = 0; index < candidates.length; index++) {
 		const candidate = candidates[index];
 		const { args, env, tempDir } = buildPiArgs({
-			baseArgs: ["-p"],
+			baseArgs: ["--mode", "json", "-p"],
 			task,
 			sessionEnabled,
 			sessionDir,
@@ -406,28 +510,41 @@ async function runSingleStep(
 			mcpDirectTools: step.mcpDirectTools,
 			promptFileStem: step.agent,
 		});
-		const outputFile = index === 0 ? ctx.outputFile : `${ctx.outputFile}.attempt-${index + 1}`;
-		const run = await runPiStreaming(args, step.cwd ?? ctx.cwd, outputFile, env, ctx.piPackageRoot, ctx.piArgv1, step.maxSubagentDepth);
+		const run = await runPiStreaming(
+			args,
+			step.cwd ?? ctx.cwd,
+			ctx.outputFile,
+			env,
+			ctx.piPackageRoot,
+			ctx.piArgv1,
+			step.maxSubagentDepth,
+			{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
+		);
 		cleanupTempDir(tempDir);
 
-		const parsed = parseRunOutput(run.stdout);
-		const error = parsed.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined);
+		const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
+		const effectiveExitCode = hiddenError?.hasError ? (hiddenError.exitCode ?? 1) : run.exitCode;
+		const error = hiddenError?.hasError
+			? hiddenError.details
+				? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
+				: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
+			: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined);
 		const attempt: ModelAttempt = {
-			model: candidate ?? parsed.model ?? step.model ?? "default",
-			success: run.exitCode === 0 && !error,
-			exitCode: run.exitCode,
+			model: candidate ?? run.model ?? step.model ?? "default",
+			success: effectiveExitCode === 0 && !error,
+			exitCode: effectiveExitCode,
 			error,
-			usage: parsed.usage,
+			usage: run.usage,
 		};
 		modelAttempts.push(attempt);
 		if (candidate) attemptedModels.push(candidate);
-		finalResult = { ...run, usage: parsed.usage, model: candidate ?? parsed.model, error };
+		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
 		if (attempt.success) break;
 		if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
 		attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
 	}
 
-	const rawOutput = (finalResult?.stdout || "").trim();
+	const rawOutput = finalResult?.finalOutput ?? "";
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
 		? resolveSingleOutput(step.outputPath, rawOutput, outputSnapshot)
 		: { fullOutput: rawOutput };
