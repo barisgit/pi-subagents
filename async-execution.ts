@@ -59,6 +59,8 @@ export interface AsyncExecutionContext {
 	cwd: string;
 	currentSessionId: string;
 	currentModelProvider?: string;
+	preset?: string;
+	parentAgentName?: string;
 }
 
 export interface AsyncChainParams {
@@ -259,6 +261,8 @@ export function executeAsyncChain(
 			outputPath,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+			preset: ctx.preset,
+			parentAgentName: ctx.parentAgentName,
 		};
 	};
 
@@ -438,6 +442,8 @@ export function executeAsyncSingle(
 						outputPath,
 						sessionFile,
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
+						preset: ctx.preset,
+						parentAgentName: ctx.parentAgentName,
 					},
 				],
 				resultPath: path.join(RESULTS_DIR, `${id}.json`),

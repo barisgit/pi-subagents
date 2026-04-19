@@ -343,6 +343,10 @@ export interface RunSyncOptions {
 	preferredModelProvider?: string;
 	/** Skills to inject (overrides agent default if provided) */
 	skills?: string[];
+	/** Resolved preset to pass through to child Pi processes */
+	preset?: string;
+	/** Immediate parent agent identity for nested delegation guardrails */
+	parentAgentName?: string;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -357,6 +361,40 @@ export interface TopLevelParallelConfig {
 	concurrency?: number;
 }
 
+export interface AgentPresetOverlay {
+	model?: string | false;
+	fallbackModels?: string[] | false;
+	thinking?: string | false;
+	tools?: string[] | false;
+	mcpDirectTools?: string[] | false;
+	extensions?: string[] | false;
+	skills?: string[] | false;
+	output?: string | false;
+	defaultReads?: string[] | false;
+	defaultProgress?: boolean;
+	interactive?: boolean;
+	maxSubagentDepth?: number | false;
+	systemPromptMode?: "append" | "replace";
+	inheritProjectContext?: boolean;
+	inheritSkills?: boolean;
+	systemPrompt?: string | false;
+}
+
+export interface PresetConfig {
+	description?: string;
+	agents?: Record<string, AgentPresetOverlay>;
+	agentOverrides?: Record<string, AgentPresetOverlay>;
+}
+
+export type PresetSource = "param" | "PI_PRESET" | "OH_MY_OPENCODE_SLIM_PRESET" | "config.defaultPreset";
+
+export interface DiscoveryPresetInfo {
+	requested?: string;
+	applied?: string;
+	source?: PresetSource;
+	warnings: string[];
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	forceTopLevelAsync?: boolean;
@@ -367,6 +405,8 @@ export interface ExtensionConfig {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	intercomBridge?: IntercomBridgeConfig;
+	defaultPreset?: string;
+	presets?: Record<string, PresetConfig>;
 }
 
 // ============================================================================
@@ -531,6 +571,83 @@ export function getSubagentDepthEnv(maxDepth?: number): Record<string, string> {
 		PI_SUBAGENT_DEPTH: String(nextDepth),
 		PI_SUBAGENT_MAX_DEPTH: String(normalizeMaxSubagentDepth(maxDepth) ?? resolveCurrentMaxSubagentDepth()),
 	};
+}
+
+function normalizeAgentIdentity(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim().toLowerCase();
+	return trimmed || undefined;
+}
+
+const NESTED_ORCHESTRATOR_AGENT_NAMES = new Set(["orchestrator", "delegate"]);
+const NESTED_ORCHESTRATOR_CHILD_AGENT_NAMES = new Set(["explorer", "librarian", "oracle", "designer", "fixer"]);
+
+export function isNestedOrchestratorAgent(name: unknown): boolean {
+	const normalized = normalizeAgentIdentity(name);
+	return normalized !== undefined && NESTED_ORCHESTRATOR_AGENT_NAMES.has(normalized);
+}
+
+export function isAllowedNestedOrchestratorChild(name: unknown): boolean {
+	const normalized = normalizeAgentIdentity(name);
+	return normalized !== undefined && NESTED_ORCHESTRATOR_CHILD_AGENT_NAMES.has(normalized);
+}
+
+export function getSubagentIdentityEnv(currentAgentName: string, parentAgentName?: string | null): Record<string, string | undefined> {
+	const env: Record<string, string | undefined> = {
+		PI_SUBAGENT_CURRENT_AGENT: currentAgentName,
+	};
+	const normalizedParent = typeof parentAgentName === "string" ? parentAgentName.trim() : "";
+	if (normalizedParent) env.PI_SUBAGENT_PARENT_AGENT = normalizedParent;
+	return env;
+}
+
+export function checkNestedDelegationGuard(requestedAgents: string[]): {
+	blocked: boolean;
+	currentAgent?: string;
+	parentAgent?: string;
+	reason?: string;
+} {
+	const currentAgent = normalizeAgentIdentity(process.env.PI_SUBAGENT_CURRENT_AGENT);
+	const parentAgent = normalizeAgentIdentity(process.env.PI_SUBAGENT_PARENT_AGENT);
+	if (!currentAgent) return { blocked: false };
+	if (!isNestedOrchestratorAgent(currentAgent)) {
+		return {
+			blocked: true,
+			currentAgent,
+			parentAgent,
+			reason:
+				`Nested subagent call blocked: '${process.env.PI_SUBAGENT_CURRENT_AGENT}' is not allowed to delegate. ` +
+				"Only orchestrator agents may make nested subagent calls.",
+		};
+	}
+
+	const targets = [...new Set(requestedAgents.map((agent) => agent.trim()).filter(Boolean))];
+	const nestedOrchestratorTarget = targets.find((agent) => isNestedOrchestratorAgent(agent));
+	if (nestedOrchestratorTarget) {
+		return {
+			blocked: true,
+			currentAgent,
+			parentAgent,
+			reason:
+				`Nested subagent call blocked: orchestrator agent '${process.env.PI_SUBAGENT_CURRENT_AGENT}' ` +
+				`cannot delegate to another orchestrator ('${nestedOrchestratorTarget}').`,
+		};
+	}
+
+	const disallowedTargets = targets.filter((agent) => !isAllowedNestedOrchestratorChild(agent));
+	if (disallowedTargets.length > 0) {
+		return {
+			blocked: true,
+			currentAgent,
+			parentAgent,
+			reason:
+				`Nested subagent call blocked: orchestrator agent '${process.env.PI_SUBAGENT_CURRENT_AGENT}' may only delegate to ` +
+				"explorer, librarian, oracle, designer, or fixer. " +
+				`Requested: ${disallowedTargets.join(", ")}.`,
+		};
+	}
+
+	return { blocked: false, currentAgent, parentAgent };
 }
 
 // ============================================================================

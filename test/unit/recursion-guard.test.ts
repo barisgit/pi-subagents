@@ -1,9 +1,12 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+	checkNestedDelegationGuard,
 	checkSubagentDepth,
 	getSubagentDepthEnv,
 	DEFAULT_SUBAGENT_MAX_DEPTH,
+	isAllowedNestedOrchestratorChild,
+	isNestedOrchestratorAgent,
 	normalizeMaxSubagentDepth,
 	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
@@ -13,10 +16,14 @@ import {
 
 let savedDepth: string | undefined;
 let savedMaxDepth: string | undefined;
+let savedCurrentAgent: string | undefined;
+let savedParentAgent: string | undefined;
 
 beforeEach(() => {
 	savedDepth = process.env.PI_SUBAGENT_DEPTH;
 	savedMaxDepth = process.env.PI_SUBAGENT_MAX_DEPTH;
+	savedCurrentAgent = process.env.PI_SUBAGENT_CURRENT_AGENT;
+	savedParentAgent = process.env.PI_SUBAGENT_PARENT_AGENT;
 });
 
 afterEach(() => {
@@ -24,6 +31,10 @@ afterEach(() => {
 	else process.env.PI_SUBAGENT_DEPTH = savedDepth;
 	if (savedMaxDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH;
 	else process.env.PI_SUBAGENT_MAX_DEPTH = savedMaxDepth;
+	if (savedCurrentAgent === undefined) delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+	else process.env.PI_SUBAGENT_CURRENT_AGENT = savedCurrentAgent;
+	if (savedParentAgent === undefined) delete process.env.PI_SUBAGENT_PARENT_AGENT;
+	else process.env.PI_SUBAGENT_PARENT_AGENT = savedParentAgent;
 });
 
 describe("DEFAULT_SUBAGENT_MAX_DEPTH", () => {
@@ -201,5 +212,52 @@ describe("getSubagentDepthEnv", () => {
 		delete process.env.PI_SUBAGENT_MAX_DEPTH;
 		const env = getSubagentDepthEnv();
 		assert.equal(env.PI_SUBAGENT_DEPTH, "1");
+	});
+});
+
+describe("nested delegation guardrails", () => {
+	it("treats orchestrator and delegate as orchestrator roles", () => {
+		assert.equal(isNestedOrchestratorAgent("orchestrator"), true);
+		assert.equal(isNestedOrchestratorAgent("delegate"), true);
+		assert.equal(isNestedOrchestratorAgent("fixer"), false);
+	});
+
+	it("recognizes the allowed nested orchestrator children", () => {
+		assert.equal(isAllowedNestedOrchestratorChild("explorer"), true);
+		assert.equal(isAllowedNestedOrchestratorChild("fixer"), true);
+		assert.equal(isAllowedNestedOrchestratorChild("worker"), false);
+	});
+
+	it("allows root calls when no current agent identity env is set", () => {
+		delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+		delete process.env.PI_SUBAGENT_PARENT_AGENT;
+		assert.equal(checkNestedDelegationGuard(["explorer"]).blocked, false);
+	});
+
+	it("blocks nested delegation from non-orchestrator agents", () => {
+		process.env.PI_SUBAGENT_CURRENT_AGENT = "fixer";
+		const result = checkNestedDelegationGuard(["explorer"]);
+		assert.equal(result.blocked, true);
+		assert.match(result.reason ?? "", /Only orchestrator agents/);
+	});
+
+	it("blocks orchestrator to orchestrator nesting", () => {
+		process.env.PI_SUBAGENT_CURRENT_AGENT = "orchestrator";
+		const result = checkNestedDelegationGuard(["delegate"]);
+		assert.equal(result.blocked, true);
+		assert.match(result.reason ?? "", /cannot delegate to another orchestrator/i);
+	});
+
+	it("blocks nested orchestrators from delegating outside the allowed child set", () => {
+		process.env.PI_SUBAGENT_CURRENT_AGENT = "delegate";
+		const result = checkNestedDelegationGuard(["worker"]);
+		assert.equal(result.blocked, true);
+		assert.match(result.reason ?? "", /explorer, librarian, oracle, designer, or fixer/);
+	});
+
+	it("allows nested orchestrators to delegate to the allowed child set", () => {
+		process.env.PI_SUBAGENT_CURRENT_AGENT = "orchestrator";
+		const result = checkNestedDelegationGuard(["explorer", "fixer"]);
+		assert.equal(result.blocked, false);
 	});
 });

@@ -28,6 +28,7 @@ interface ManagementParams {
 	chainName?: string;
 	agentScope?: string;
 	config?: unknown;
+	preset?: string;
 }
 
 function result(text: string, isError = false): AgentToolResult<Details> {
@@ -75,14 +76,14 @@ function allAgents(d: { builtin: AgentConfig[]; user: AgentConfig[]; project: Ag
 	return [...d.builtin, ...d.user, ...d.project];
 }
 
-function availableNames(cwd: string, kind: "agent" | "chain"): string[] {
-	const d = discoverAgentsAll(cwd);
+function availableNames(cwd: string, kind: "agent" | "chain", preset?: string): string[] {
+	const d = discoverAgentsAll(cwd, { preset });
 	const items = kind === "agent" ? allAgents(d) : d.chains;
 	return [...new Set(items.map((x) => x.name))].sort((a, b) => a.localeCompare(b));
 }
 
-export function findAgents(name: string, cwd: string, scope: AgentScope = "both"): AgentConfig[] {
-	const d = discoverAgentsAll(cwd);
+export function findAgents(name: string, cwd: string, scope: AgentScope = "both", preset?: string): AgentConfig[] {
+	const d = discoverAgentsAll(cwd, { preset });
 	const raw = name.trim();
 	const sanitized = sanitizeName(raw);
 	return allAgents(d)
@@ -90,10 +91,10 @@ export function findAgents(name: string, cwd: string, scope: AgentScope = "both"
 		.sort((a, b) => a.source.localeCompare(b.source));
 }
 
-export function findChains(name: string, cwd: string, scope: AgentScope = "both"): ChainConfig[] {
+export function findChains(name: string, cwd: string, scope: AgentScope = "both", preset?: string): ChainConfig[] {
 	const raw = name.trim();
 	const sanitized = sanitizeName(raw);
-	return discoverAgentsAll(cwd).chains
+	return discoverAgentsAll(cwd, { preset }).chains
 		.filter((c) => (scope === "both" || c.source === scope) && (c.name === raw || c.name === sanitized))
 		.sort((a, b) => a.source.localeCompare(b.source));
 }
@@ -369,7 +370,7 @@ export function formatChainDetail(chain: ChainConfig): string {
 
 export function handleList(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	const scope = normalizeListScope(params.agentScope) ?? "both";
-	const d = discoverAgentsAll(ctx.cwd);
+	const d = discoverAgentsAll(ctx.cwd, { preset: params.preset });
 	const scopedAgents = allAgents(d).filter((a) => scope === "both" || a.source === "builtin" || a.source === scope).sort((a, b) => a.name.localeCompare(b.name));
 	const agents = scopedAgents.filter((a) => !a.disabled);
 	const disabledBuiltins = scopedAgents.filter((a) => a.source === "builtin" && a.disabled);
@@ -391,9 +392,9 @@ export function handleGet(params: ManagementParams, ctx: ManagementContext): Age
 	const blocks: string[] = [];
 	let anyFound = false;
 	if (params.agent) {
-		const matches = findAgents(params.agent, ctx.cwd, "both");
+		const matches = findAgents(params.agent, ctx.cwd, "both", params.preset);
 		if (!matches.length) {
-			const msg = `Agent '${params.agent}' not found. Available: ${availableNames(ctx.cwd, "agent").join(", ") || "none"}.`;
+			const msg = `Agent '${params.agent}' not found. Available: ${availableNames(ctx.cwd, "agent", params.preset).join(", ") || "none"}.`;
 			if (!hasBoth) return result(msg, true);
 			blocks.push(msg);
 		} else {
@@ -402,9 +403,9 @@ export function handleGet(params: ManagementParams, ctx: ManagementContext): Age
 		}
 	}
 	if (params.chainName) {
-		const matches = findChains(params.chainName, ctx.cwd, "both");
+		const matches = findChains(params.chainName, ctx.cwd, "both", params.preset);
 		if (!matches.length) {
-			const msg = `Chain '${params.chainName}' not found. Available: ${availableNames(ctx.cwd, "chain").join(", ") || "none"}.`;
+			const msg = `Chain '${params.chainName}' not found. Available: ${availableNames(ctx.cwd, "chain", params.preset).join(", ") || "none"}.`;
 			if (!hasBoth) return result(msg, true);
 			blocks.push(msg);
 		} else {

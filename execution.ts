@@ -139,6 +139,9 @@ async function runSingleAttempt(
 		mcpDirectTools: agent.mcpDirectTools,
 		promptFileStem: agent.name,
 		intercomSessionName: options.intercomSessionName,
+		preset: options.preset,
+		currentAgentName: agent.name,
+		parentAgentName: options.parentAgentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 	});
 
 	const result: SingleResult = {

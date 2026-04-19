@@ -53,6 +53,7 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
+	checkNestedDelegationGuard,
 	checkSubagentDepth,
 	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
@@ -98,6 +99,7 @@ export interface SubagentParamsLike {
 	output?: string | boolean;
 	agentScope?: unknown;
 	chainDir?: string;
+	preset?: string;
 }
 
 interface ExecutorDeps {
@@ -108,7 +110,7 @@ interface ExecutorDeps {
 	tempArtifactsDir: string;
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
-	discoverAgents: (cwd: string, scope: AgentScope) => { agents: AgentConfig[] };
+	discoverAgents: (cwd: string, scope: AgentScope, options?: { preset?: string }) => { agents: AgentConfig[] };
 }
 
 interface ExecutionContextData {
@@ -341,6 +343,13 @@ function buildRequestedModeError(params: SubagentParamsLike, message: string): A
 	);
 }
 
+function collectRequestedAgentNames(params: SubagentParamsLike): string[] {
+	if ((params.tasks?.length ?? 0) > 0) return params.tasks!.map((task) => task.agent);
+	if ((params.chain?.length ?? 0) > 0) return params.chain!.flatMap((step) => getStepAgents(step as ChainStep));
+	if (params.agent) return [params.agent];
+	return [];
+}
+
 function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskParam[]; error?: string } {
 	const expanded: TaskParam[] = [];
 	for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
@@ -521,6 +530,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		cwd: ctx.cwd,
 		currentSessionId: deps.state.currentSessionId!,
 		currentModelProvider: ctx.model?.provider,
+		preset: params.preset,
+		parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
 	};
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({
 		provider: m.provider,
@@ -687,6 +698,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		chainSkills,
 		chainDir: params.chainDir,
 		maxSubagentDepth: currentMaxSubagentDepth,
+		preset: params.preset,
 		worktreeSetupHook: deps.config.worktreeSetupHook,
 		worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 	});
@@ -705,6 +717,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			cwd: ctx.cwd,
 			currentSessionId: deps.state.currentSessionId!,
 			currentModelProvider: ctx.model?.provider,
+			preset: params.preset,
+			parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
 		};
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
 		return executeAsyncChain(id, {
@@ -764,6 +778,7 @@ interface ForegroundParallelRunInput {
 	liveProgress: (AgentProgress | undefined)[];
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	worktreeSetup?: WorktreeSetup;
+	preset?: string;
 }
 
 function buildParallelModeError(message: string): AgentToolResult<Details> {
@@ -881,8 +896,10 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			availableModels: input.availableModels,
 			preferredModelProvider: input.ctx.model?.provider,
 			skills: effectiveSkills === false ? [] : effectiveSkills,
-				onUpdate: input.onUpdate
-					? (progressUpdate) => {
+			preset: input.preset,
+			parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+			onUpdate: input.onUpdate
+				? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
 						const stepProgress = progressUpdate.details?.progress || [];
 						if (input.foregroundControl && stepProgress.length > 0) {
@@ -1039,6 +1056,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
 				currentModelProvider: ctx.model?.provider,
+				preset: params.preset,
+				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
 			};
 			const parallelTasks = tasks.map((t, i) => ({
 				agent: t.agent,
@@ -1119,6 +1138,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			liveProgress,
 			onUpdate,
 			worktreeSetup,
+			preset: params.preset,
 		});
 		for (let i = 0; i < results.length; i++) {
 			const run = results[i]!;
@@ -1269,6 +1289,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
 				currentModelProvider: ctx.model?.provider,
+				preset: params.preset,
+				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
 			};
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
@@ -1364,6 +1386,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		availableModels,
 		preferredModelProvider: currentProvider,
 		skills: effectiveSkills,
+		preset: params.preset,
+		parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
 	});
 	if (foregroundControl?.currentIndex === 0) {
 		foregroundControl.interrupt = undefined;
@@ -1524,6 +1548,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (normalized.error) return normalized.error;
 		const normalizedParams = normalized.params!;
 
+		const nestedGuard = checkNestedDelegationGuard(collectRequestedAgentNames(normalizedParams));
+		if (nestedGuard.blocked) {
+			return buildRequestedModeError(normalizedParams, nestedGuard.reason ?? "Nested subagent call blocked.");
+		}
+
 		const effectiveParams = applyForceTopLevelAsyncOverride(
 			normalizedParams,
 			depth,
@@ -1534,7 +1563,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope).agents;
+		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, { preset: normalizedParams.preset }).agents;
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,

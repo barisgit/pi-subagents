@@ -24,6 +24,9 @@ export interface BuildPiArgsInput {
 	mcpDirectTools?: string[];
 	promptFileStem?: string;
 	intercomSessionName?: string;
+	preset?: string;
+	currentAgentName?: string;
+	parentAgentName?: string;
 }
 
 export interface BuildPiArgsResult {
@@ -117,6 +120,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.intercomSessionName) {
 		env.PI_SUBAGENT_INTERCOM_SESSION_NAME = input.intercomSessionName;
 	}
+	if (input.preset) env.PI_PRESET = input.preset;
+	if (input.currentAgentName) env.PI_SUBAGENT_CURRENT_AGENT = input.currentAgentName;
+	if (input.parentAgentName) env.PI_SUBAGENT_PARENT_AGENT = input.parentAgentName;
 	if (input.mcpDirectTools?.length) {
 		env.MCP_DIRECT_TOOLS = input.mcpDirectTools.join(",");
 	} else {

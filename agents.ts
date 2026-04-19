@@ -10,6 +10,13 @@ import { KNOWN_FIELDS } from "./agent-serializer.ts";
 import { parseChain } from "./chain-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import type {
+	AgentPresetOverlay,
+	DiscoveryPresetInfo,
+	ExtensionConfig,
+	PresetConfig,
+	PresetSource,
+} from "./types.ts";
 
 export type AgentScope = "user" | "project" | "both";
 
@@ -113,9 +120,144 @@ export interface ChainConfig {
 	extraFields?: Record<string, string>;
 }
 
+export interface AgentDiscoveryOptions {
+	preset?: string;
+	config?: ExtensionConfig;
+}
+
 export interface AgentDiscoveryResult {
 	agents: AgentConfig[];
 	projectAgentsDir: string | null;
+	preset: DiscoveryPresetInfo;
+}
+
+export interface AgentDiscoveryAllResult {
+	builtin: AgentConfig[];
+	user: AgentConfig[];
+	project: AgentConfig[];
+	chains: ChainConfig[];
+	userDir: string;
+	projectDir: string | null;
+	userSettingsPath: string;
+	projectSettingsPath: string | null;
+	preset: DiscoveryPresetInfo;
+}
+
+function getExtensionConfigPath(): string {
+	return path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
+}
+
+function loadExtensionConfig(config?: ExtensionConfig): ExtensionConfig {
+	if (config) return config;
+	const configPath = getExtensionConfigPath();
+	try {
+		if (fs.existsSync(configPath)) {
+			const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				return parsed as ExtensionConfig;
+			}
+		}
+	} catch {
+		// Discovery should stay resilient; invalid preset config falls back to base discovery.
+	}
+	return {};
+}
+
+function normalizePresetName(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed || undefined;
+}
+
+function normalizePresetStringArray(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const items = value
+		.filter((item): item is string => typeof item === "string")
+		.map((item) => item.trim())
+		.filter(Boolean);
+	return items.length > 0 ? items : undefined;
+}
+
+function normalizePresetSource(
+	explicitPreset: string | undefined,
+	config: ExtensionConfig,
+): { requested?: string; source?: PresetSource } {
+	if (explicitPreset) return { requested: explicitPreset, source: "param" };
+	const envPreset = normalizePresetName(process.env.PI_PRESET);
+	if (envPreset) return { requested: envPreset, source: "PI_PRESET" };
+	const legacyEnvPreset = normalizePresetName(process.env.OH_MY_OPENCODE_SLIM_PRESET);
+	if (legacyEnvPreset) return { requested: legacyEnvPreset, source: "OH_MY_OPENCODE_SLIM_PRESET" };
+	const configPreset = normalizePresetName(config.defaultPreset);
+	if (configPreset) return { requested: configPreset, source: "config.defaultPreset" };
+	return {};
+}
+
+function getPresetAgentOverlays(preset: PresetConfig | undefined): Record<string, AgentPresetOverlay> {
+	if (!preset) return {};
+	const overlays: Record<string, AgentPresetOverlay> = {};
+	for (const source of [preset.agents, preset.agentOverrides]) {
+		if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+		for (const [name, overlay] of Object.entries(source)) {
+			if (!overlay || typeof overlay !== "object" || Array.isArray(overlay)) continue;
+			overlays[name] = overlay as AgentPresetOverlay;
+		}
+	}
+	return overlays;
+}
+
+function applyPresetOverlay(agent: AgentConfig, overlay: AgentPresetOverlay): AgentConfig {
+	const next: AgentConfig = { ...agent };
+	if (overlay.model !== undefined) next.model = overlay.model === false ? undefined : normalizePresetName(overlay.model);
+	if (overlay.fallbackModels !== undefined) next.fallbackModels = overlay.fallbackModels === false ? undefined : normalizePresetStringArray(overlay.fallbackModels);
+	if (overlay.thinking !== undefined) next.thinking = overlay.thinking === false ? undefined : normalizePresetName(overlay.thinking);
+	if (overlay.tools !== undefined) next.tools = overlay.tools === false ? undefined : normalizePresetStringArray(overlay.tools);
+	if (overlay.mcpDirectTools !== undefined) next.mcpDirectTools = overlay.mcpDirectTools === false ? undefined : normalizePresetStringArray(overlay.mcpDirectTools);
+	if (overlay.extensions !== undefined) next.extensions = overlay.extensions === false ? undefined : normalizePresetStringArray(overlay.extensions);
+	if (overlay.skills !== undefined) next.skills = overlay.skills === false ? undefined : normalizePresetStringArray(overlay.skills);
+	if (overlay.output !== undefined) next.output = overlay.output === false ? undefined : normalizePresetName(overlay.output);
+	if (overlay.defaultReads !== undefined) next.defaultReads = overlay.defaultReads === false ? undefined : normalizePresetStringArray(overlay.defaultReads);
+	if (overlay.defaultProgress !== undefined) next.defaultProgress = overlay.defaultProgress;
+	if (overlay.interactive !== undefined) next.interactive = overlay.interactive;
+	if (overlay.maxSubagentDepth !== undefined) {
+		next.maxSubagentDepth = typeof overlay.maxSubagentDepth === "number" && Number.isInteger(overlay.maxSubagentDepth) && overlay.maxSubagentDepth >= 0
+			? overlay.maxSubagentDepth
+			: undefined;
+	}
+	if (overlay.systemPromptMode === "append" || overlay.systemPromptMode === "replace") next.systemPromptMode = overlay.systemPromptMode;
+	if (overlay.inheritProjectContext !== undefined) next.inheritProjectContext = overlay.inheritProjectContext;
+	if (overlay.inheritSkills !== undefined) next.inheritSkills = overlay.inheritSkills;
+	if (overlay.systemPrompt !== undefined) next.systemPrompt = overlay.systemPrompt === false ? "" : overlay.systemPrompt;
+	return next;
+}
+
+function applyPresetOverlays(
+	agents: AgentConfig[],
+	options?: AgentDiscoveryOptions,
+): { agents: AgentConfig[]; preset: DiscoveryPresetInfo } {
+	const config = loadExtensionConfig(options?.config);
+	const { requested, source } = normalizePresetSource(normalizePresetName(options?.preset), config);
+	const presetInfo: DiscoveryPresetInfo = {
+		...(requested ? { requested } : {}),
+		...(source ? { source } : {}),
+		warnings: [],
+	};
+	if (!requested) return { agents, preset: presetInfo };
+	const preset = config.presets && typeof config.presets === "object" && !Array.isArray(config.presets)
+		? config.presets[requested]
+		: undefined;
+	if (!preset) {
+		presetInfo.warnings.push(`Requested preset '${requested}' was not found in ${getExtensionConfigPath()}.`);
+		return { agents, preset: presetInfo };
+	}
+	const overlays = getPresetAgentOverlays(preset);
+	presetInfo.applied = requested;
+	return {
+		agents: agents.map((agent) => {
+			const overlay = overlays[agent.name];
+			return overlay ? applyPresetOverlay(agent, overlay) : agent;
+		}),
+		preset: presetInfo,
+	};
 }
 
 function splitToolList(rawTools: string[] | undefined): { tools?: string[]; mcpDirectTools?: string[] } {
@@ -676,7 +818,7 @@ function resolveNearestProjectAgentDirs(cwd: string): { readDirs: string[]; pref
 }
 const BUILTIN_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
 
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
+export function discoverAgents(cwd: string, scope: AgentScope, options?: AgentDiscoveryOptions): AgentDiscoveryResult {
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
 	const { readDirs: projectAgentDirs, preferredDir: projectAgentsDir } = resolveNearestProjectAgentDirs(cwd);
@@ -698,22 +840,14 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userAgents = [...userAgentsOld, ...userAgentsNew];
 
 	const projectAgents = scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project"));
-	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents)
+	const mergedAgents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents)
 		.filter((agent) => agent.disabled !== true);
+	const presetApplied = applyPresetOverlays(mergedAgents, options);
 
-	return { agents, projectAgentsDir };
+	return { agents: presetApplied.agents, projectAgentsDir, preset: presetApplied.preset };
 }
 
-export function discoverAgentsAll(cwd: string): {
-	builtin: AgentConfig[];
-	user: AgentConfig[];
-	project: AgentConfig[];
-	chains: ChainConfig[];
-	userDir: string;
-	projectDir: string | null;
-	userSettingsPath: string;
-	projectSettingsPath: string | null;
-} {
+export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions): AgentDiscoveryAllResult {
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
 	const { readDirs: projectDirs, preferredDir: projectDir } = resolveNearestProjectAgentDirs(cwd);
@@ -722,14 +856,14 @@ export function discoverAgentsAll(cwd: string): {
 	const userSettings = readSubagentSettings(userSettingsPath);
 	const projectSettings = readSubagentSettings(projectSettingsPath);
 
-	const builtin = applyBuiltinOverrides(
+	const builtinBase = applyBuiltinOverrides(
 		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
 		userSettings,
 		projectSettings,
 		userSettingsPath,
 		projectSettingsPath,
 	);
-	const user = [
+	const userBase = [
 		...loadAgentsFromDir(userDirOld, "user"),
 		...loadAgentsFromDir(userDirNew, "user"),
 	];
@@ -739,7 +873,7 @@ export function discoverAgentsAll(cwd: string): {
 			projectMap.set(agent.name, agent);
 		}
 	}
-	const project = Array.from(projectMap.values());
+	const projectBase = Array.from(projectMap.values());
 
 	const chainMap = new Map<string, ChainConfig>();
 	for (const dir of projectDirs) {
@@ -753,7 +887,20 @@ export function discoverAgentsAll(cwd: string): {
 		...Array.from(chainMap.values()),
 	];
 
+	const presetBuiltin = applyPresetOverlays(builtinBase, options);
+	const presetUser = applyPresetOverlays(userBase, options);
+	const presetProject = applyPresetOverlays(projectBase, options);
 	const userDir = fs.existsSync(userDirNew) ? userDirNew : userDirOld;
 
-	return { builtin, user, project, chains, userDir, projectDir, userSettingsPath, projectSettingsPath };
+	return {
+		builtin: presetBuiltin.agents,
+		user: presetUser.agents,
+		project: presetProject.agents,
+		chains,
+		userDir,
+		projectDir,
+		userSettingsPath,
+		projectSettingsPath,
+		preset: presetBuiltin.preset,
+	};
 }

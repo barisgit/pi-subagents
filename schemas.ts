@@ -132,6 +132,7 @@ export const SubagentParams = Type.Object({
 			"Per-worktree diffs included in output."
 	})),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
+	preset: Type.Optional(Type.String({ description: "Optional preset name for preset-aware agent discovery and routing. Precedence: explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config.defaultPreset." })),
 	context: Type.Optional(Type.String({
 		enum: ["fresh", "fork"],
 		description: "'fresh' (default) or 'fork' to branch from parent session",

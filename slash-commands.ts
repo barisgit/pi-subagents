@@ -32,6 +32,7 @@ interface InlineConfig {
 	model?: string;
 	skill?: string[] | false;
 	progress?: boolean;
+	preset?: string;
 }
 
 const parseInlineConfig = (raw: string): InlineConfig => {
@@ -52,6 +53,7 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 			case "model": config.model = val || undefined; break;
 			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "progress": config.progress = val !== "false"; break;
+			case "preset": config.preset = val || undefined; break;
 		}
 	}
 	return config;
@@ -84,6 +86,25 @@ const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fo
 	}
 
 	return { args, bg, fork };
+};
+
+const extractTopLevelInlineConfig = (rawArgs: string): { args: string; config: InlineConfig } => {
+	const args = rawArgs.trim();
+	if (!args.startsWith("[")) return { args, config: {} };
+	const end = args.indexOf("]");
+	if (end === -1) return { args, config: {} };
+	return {
+		args: args.slice(end + 1).trim(),
+		config: parseInlineConfig(args.slice(1, end)),
+	};
+};
+
+const resolveSlashPreset = (...values: Array<string | undefined>): { preset?: string; error?: string } => {
+	const presets = [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+	if (presets.length > 1) {
+		return { error: `Conflicting preset values: ${presets.join(", ")}` };
+	}
+	return presets[0] ? { preset: presets[0] } : {};
 };
 
 const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) => (prefix: string) => {
@@ -361,6 +382,7 @@ const parseAgentArgs = (
 	args: string,
 	command: string,
 	ctx: ExtensionContext,
+	preset?: string,
 ): { steps: ParsedStep[]; task: string } | null => {
 	const input = args.trim();
 	const usage = `Usage: /${command} agent1 "task1" -> agent2 "task2"`;
@@ -413,7 +435,7 @@ const parseAgentArgs = (
 		ctx.ui.notify(usage, "error");
 		return null;
 	}
-	const agents = discoverAgents(state.baseCwd, "both").agents;
+	const agents = discoverAgents(state.baseCwd, "both", { preset }).agents;
 	for (const step of steps) {
 		if (!agents.find((a) => a.name === step.name)) {
 			ctx.ui.notify(`Unknown agent: ${step.name}`, "error");
@@ -443,17 +465,19 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run a subagent directly: /run agent[output=file] [task] [--bg] [--fork]",
+		description: "Run a subagent directly: /run [preset=name] agent[output=file] [task] [--bg] [--fork]"
 		getArgumentCompletions: makeAgentCompletions(state, false),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-			const input = cleanedArgs.trim();
+			const { args: input, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run <agent> [task] [--bg] [--fork]", "error"); return; }
+			if (!input) { ctx.ui.notify("Usage: /run [preset=name] <agent> [task] [--bg] [--fork]", "error"); return; }
 			const { name: agentName, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
+			const presetResolution = resolveSlashPreset(topLevel.preset, inline.preset);
+			if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
 
-			const agents = discoverAgents(state.baseCwd, "both").agents;
+			const agents = discoverAgents(state.baseCwd, "both", { preset: presetResolution.preset }).agents;
 			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
 
 			let finalTask = task;
@@ -464,6 +488,7 @@ export function registerSlashCommands(
 			if (inline.output !== undefined) params.output = inline.output;
 			if (inline.skill !== undefined) params.skill = inline.skill;
 			if (inline.model) params.model = inline.model;
+			if (presetResolution.preset) params.preset = presetResolution.preset;
 			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
@@ -471,12 +496,15 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("chain", {
-		description: "Run agents in sequence: /chain scout \"task\" -> planner [--bg] [--fork]",
+		description: "Run agents in sequence: /chain [preset=name] scout \"task\" -> planner [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-			const parsed = parseAgentArgs(state, cleanedArgs, "chain", ctx);
+			const { args: chainArgs, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
+			const parsed = parseAgentArgs(state, chainArgs, "chain", ctx, topLevel.preset);
 			if (!parsed) return;
+			const presetResolution = resolveSlashPreset(topLevel.preset, ...parsed.steps.map((step) => step.config.preset));
+			if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
 			const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
 				agent: name,
 				...(stepTask ? { task: stepTask } : i === 0 && parsed.task ? { task: parsed.task } : {}),
@@ -487,6 +515,7 @@ export function registerSlashCommands(
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
 			const params: SubagentParamsLike = { chain, task: parsed.task, clarify: false, agentScope: "both" };
+			if (presetResolution.preset) params.preset = presetResolution.preset;
 			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
@@ -494,12 +523,15 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
+		description: "Run agents in parallel: /parallel [preset=name] scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
 			handler: async (args, ctx) => {
 				const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-				const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
+				const { args: parallelArgs, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
+				const parsed = parseAgentArgs(state, parallelArgs, "parallel", ctx, topLevel.preset);
 				if (!parsed) return;
+				const presetResolution = resolveSlashPreset(topLevel.preset, ...parsed.steps.map((step) => step.config.preset));
+				if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
 				const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
 					agent: name,
 					task: stepTask ?? parsed.task,
@@ -507,6 +539,7 @@ export function registerSlashCommands(
 					...(config.skill !== undefined ? { skill: config.skill } : {}),
 				}));
 				const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
+				if (presetResolution.preset) params.preset = presetResolution.preset;
 				if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);

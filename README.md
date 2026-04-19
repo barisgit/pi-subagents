@@ -275,6 +275,25 @@ Append `[key=value,...]` to any agent name to override its defaults:
 
 Set `output=false`, `reads=false`, or `skills=false` to explicitly disable.
 
+### Preset Routing
+
+You can select a preset for `/run`, `/chain`, or `/parallel` with a top-level prefix or inline agent config:
+
+```text
+/run [preset=fast] fixer review this patch
+/run fixer[preset=fast] review this patch
+/chain [preset=fast] scout "scan" -> planner
+/parallel [preset=fast] scout "scan" -> reviewer "review"
+```
+
+Preset resolution order is:
+1. explicit `preset` on the tool call or slash command
+2. `PI_PRESET`
+3. `OH_MY_OPENCODE_SLIM_PRESET`
+4. `config.defaultPreset`
+
+Presets apply agent overlays during discovery, so an agent's resolved default model reflects the preset unless you still override the model explicitly per run/step/task.
+
 ### Background Execution
 
 Add `--bg` at the end of any slash command to run in the background:
@@ -938,6 +957,28 @@ Session root resolution follows this precedence:
 
 Sessions are always enabled — every subagent run gets a session directory for tracking.
 
+### `defaultPreset` and `presets`
+
+`defaultPreset` selects the default preset when no explicit `preset`, `PI_PRESET`, or `OH_MY_OPENCODE_SLIM_PRESET` is set.
+
+`presets` defines named agent overlays applied during discovery. Example:
+
+```json
+{
+  "defaultPreset": "fast",
+  "presets": {
+    "fast": {
+      "agents": {
+        "fixer": { "model": "openai/gpt-5" },
+        "explorer": { "model": "openai/gpt-5-mini" }
+      }
+    }
+  }
+}
+```
+
+Supported overlay fields mirror agent execution defaults such as `model`, `fallbackModels`, `thinking`, `tools`, `extensions`, `skills`, `output`, `defaultReads`, `defaultProgress`, `interactive`, `maxSubagentDepth`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, and `systemPrompt`.
+
 ### `maxSubagentDepth`
 
 `maxSubagentDepth` sets the default recursion limit for nested delegation when no inherited `PI_SUBAGENT_MAX_DEPTH` is already in effect. Eg:
@@ -1146,6 +1187,14 @@ export PI_SUBAGENT_MAX_DEPTH=0   # disable the subagent tool entirely
 ```
 
 `PI_SUBAGENT_DEPTH` is an internal variable propagated automatically to child processes -- don't set it manually.
+
+On top of the depth limit, nested delegation is role-guarded:
+- root calls remain allowed
+- nested calls are only allowed when the current delegated agent is an orchestrator (`orchestrator` or `delegate`)
+- orchestrators cannot delegate to another orchestrator
+- nested orchestrator children are restricted to `explorer`, `librarian`, `oracle`, `designer`, or `fixer`
+
+Child processes also inherit `PI_PRESET`, `PI_SUBAGENT_CURRENT_AGENT`, and `PI_SUBAGENT_PARENT_AGENT` automatically so preset routing and nested guardrails stay consistent across spawned runs.
 
 ## Async observability
 

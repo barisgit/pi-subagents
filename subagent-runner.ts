@@ -587,6 +587,9 @@ async function runSingleStep(
 			mcpDirectTools: step.mcpDirectTools,
 			promptFileStem: step.agent,
 			intercomSessionName: ctx.childIntercomTarget,
+			preset: step.preset,
+			currentAgentName: step.agent,
+			parentAgentName: step.parentAgentName,
 		});
 		const run = await runPiStreaming(
 			args,

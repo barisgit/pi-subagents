@@ -482,17 +482,27 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 	it("passes maxSubagentDepth through to child execution env", async () => {
 		mockPi.onCall({ echoEnv: ["PI_SUBAGENT_DEPTH", "PI_SUBAGENT_MAX_DEPTH"] });
 		const agents = makeAgentConfigs(["echo"]);
+		const previousDepth = process.env.PI_SUBAGENT_DEPTH;
+		const previousMaxDepth = process.env.PI_SUBAGENT_MAX_DEPTH;
+		delete process.env.PI_SUBAGENT_DEPTH;
+		delete process.env.PI_SUBAGENT_MAX_DEPTH;
+		try {
+			const result = await runSync(tempDir, agents, "echo", "Task", {
+				runId: "depth-env",
+				maxSubagentDepth: 1,
+			});
 
-		const result = await runSync(tempDir, agents, "echo", "Task", {
-			runId: "depth-env",
-			maxSubagentDepth: 1,
-		});
-
-		assert.equal(result.exitCode, 0);
-		assert.deepEqual(JSON.parse(result.finalOutput ?? "{}"), {
-			PI_SUBAGENT_DEPTH: "1",
-			PI_SUBAGENT_MAX_DEPTH: "1",
-		});
+			assert.equal(result.exitCode, 0);
+			assert.deepEqual(JSON.parse(result.finalOutput ?? "{}"), {
+				PI_SUBAGENT_DEPTH: "1",
+				PI_SUBAGENT_MAX_DEPTH: "1",
+			});
+		} finally {
+			if (previousDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+			else process.env.PI_SUBAGENT_DEPTH = previousDepth;
+			if (previousMaxDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH;
+			else process.env.PI_SUBAGENT_MAX_DEPTH = previousMaxDepth;
+		}
 	});
 
 	it("passes prompt inheritance env flags through to child execution", async () => {
@@ -512,6 +522,33 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			PI_SUBAGENT_INHERIT_PROJECT_CONTEXT: "0",
 			PI_SUBAGENT_INHERIT_SKILLS: "0",
 		});
+	});
+
+	it("passes preset and nested agent identity envs through to child execution", async () => {
+		mockPi.onCall({ echoEnv: ["PI_PRESET", "PI_SUBAGENT_CURRENT_AGENT", "PI_SUBAGENT_PARENT_AGENT"] });
+		const previousCurrent = process.env.PI_SUBAGENT_CURRENT_AGENT;
+		const previousParent = process.env.PI_SUBAGENT_PARENT_AGENT;
+		process.env.PI_SUBAGENT_CURRENT_AGENT = "orchestrator";
+		process.env.PI_SUBAGENT_PARENT_AGENT = "root";
+		try {
+			const agents = makeAgentConfigs(["echo"]);
+			const result = await runSync(tempDir, agents, "echo", "Task", {
+				runId: "identity-env",
+				preset: "fast",
+			});
+
+			assert.equal(result.exitCode, 0);
+			assert.deepEqual(JSON.parse(result.finalOutput ?? "{}"), {
+				PI_PRESET: "fast",
+				PI_SUBAGENT_CURRENT_AGENT: "echo",
+				PI_SUBAGENT_PARENT_AGENT: "orchestrator",
+			});
+		} finally {
+			if (previousCurrent === undefined) delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+			else process.env.PI_SUBAGENT_CURRENT_AGENT = previousCurrent;
+			if (previousParent === undefined) delete process.env.PI_SUBAGENT_PARENT_AGENT;
+			else process.env.PI_SUBAGENT_PARENT_AGENT = previousParent;
+		}
 	});
 
 	it("passes custom tool extensions through even when explicit extensions are allowlisted", async () => {
@@ -612,7 +649,12 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			},
 		});
 
+		const detachTicker = setInterval(() => {
+			eventBus.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "test-request" });
+		}, 50);
+
 		const result = await runPromise;
+		clearInterval(detachTicker);
 
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.detached, true);

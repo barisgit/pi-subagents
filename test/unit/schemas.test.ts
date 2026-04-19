@@ -10,6 +10,10 @@ interface SubagentParamsSchema {
 			enum?: string[];
 			description?: string;
 		};
+		preset?: {
+			type?: string;
+			description?: string;
+		};
 		tasks?: {
 			items?: {
 				properties?: {
@@ -90,7 +94,7 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
 	});
 
-	it("includes subagent control fields", () => {
+it("includes subagent control fields", () => {
 		const idSchema = SubagentParams?.properties?.id;
 		assert.ok(idSchema, "id schema should exist");
 		assert.equal(idSchema.type, "string");
@@ -222,5 +226,21 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 				`${JSON.stringify(value)} should validate: ${[...validator.Errors(value)].map((error) => error.message).join(", ")}`,
 			);
 		}
+	});
+
+	it("includes preset-aware routing metadata on execution params", () => {
+		const presetSchema = SubagentParams?.properties?.preset;
+		assert.ok(presetSchema, "preset schema should exist");
+		assert.equal(presetSchema.type, "string");
+		assert.match(String(presetSchema.description ?? ""), /PI_PRESET/);
+		assert.match(String(presetSchema.description ?? ""), /OH_MY_OPENCODE_SLIM_PRESET/);
+	});
+
+	it("includes action on status params for list mode", () => {
+		const actionSchema = StatusParams?.properties?.action;
+		assert.ok(actionSchema, "status action schema should exist");
+		assert.equal(actionSchema.type, "string");
+		assert.match(String(actionSchema.description ?? ""), /list/i);
+	});
 	});
 });

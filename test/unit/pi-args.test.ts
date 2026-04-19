@@ -140,17 +140,23 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(env.PI_SUBAGENT_INHERIT_SKILLS, "1");
 	});
 
-	it("passes a child intercom session name through env", () => {
+	it("passes child intercom, preset, and agent identity env through to child runs", () => {
 		const { env } = buildPiArgs({
 			baseArgs: ["-p"],
 			task: "hello",
 			sessionEnabled: false,
-			inheritProjectContext: true,
-			inheritSkills: true,
+			inheritProjectContext: false,
+			inheritSkills: false,
 			intercomSessionName: "subagent-worker-78f659a3",
+			preset: "fast",
+			currentAgentName: "fixer",
+			parentAgentName: "orchestrator",
 		});
 
 		assert.equal(env.PI_SUBAGENT_INTERCOM_SESSION_NAME, "subagent-worker-78f659a3");
+		assert.equal(env.PI_PRESET, "fast");
+		assert.equal(env.PI_SUBAGENT_CURRENT_AGENT, "fixer");
+		assert.equal(env.PI_SUBAGENT_PARENT_AGENT, "orchestrator");
 	});
 
 	it("keeps tool extension paths when explicit extensions are allowlisted", () => {

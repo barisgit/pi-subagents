@@ -104,6 +104,7 @@ interface ParallelChainRunInput {
 	totalSteps: number;
 	worktreeSetup?: WorktreeSetup;
 	maxSubagentDepth: number;
+	preset?: string;
 }
 
 function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details {
@@ -237,6 +238,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				availableModels: input.availableModels,
 				preferredModelProvider: input.ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				preset: input.preset,
+				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -316,6 +319,7 @@ export interface ChainExecutionParams {
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	preset?: string;
 }
 
 export interface ChainExecutionResult {
@@ -556,6 +560,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					foregroundControl,
 					worktreeSetup,
 					maxSubagentDepth: params.maxSubagentDepth,
+					preset: params.preset,
 				});
 				globalTaskIndex += step.parallel.length;
 
@@ -725,6 +730,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				availableModels,
 				preferredModelProvider: ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				preset: params.preset,
+				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
 				onUpdate: onUpdate
 					? (p) => {
 						const stepResults = p.details?.results || [];

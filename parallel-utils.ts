@@ -15,6 +15,8 @@ export interface RunnerSubagentStep {
 	outputPath?: string;
 	sessionFile?: string;
 	maxSubagentDepth?: number;
+	preset?: string;
+	parentAgentName?: string;
 }
 
 export interface ParallelStepGroup {

@@ -293,7 +293,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		tempArtifactsDir,
 		getSubagentSessionRoot,
 		expandTilde,
-		discoverAgents,
+		discoverAgents: (cwd, scope, options) => discoverAgents(cwd, scope, { ...options, config }),
 	});
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
@@ -403,13 +403,20 @@ EXECUTION (use exactly ONE mode):
 • CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out
 • PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
 • Optional context: { context: "fresh" | "fork" } (default: "fresh")
+• Optional preset: { preset: "name" } - preset-aware discovery/routing (explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config default)
 
 CHAIN TEMPLATE VARIABLES (use in task strings):
 • {task} - The original task/request from the user
 • {previous} - Text response from the previous step (empty for first step)
 • {chain_dir} - Shared directory for chain files (e.g., <tmpdir>/pi-subagents-<scope>/chain-runs/abc123/)
 
-Example: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", task:"Plan based on {previous}"}] }
+Nested guardrails:
+• Root calls remain allowed
+• Nested calls are only allowed from orchestrator agents
+• Orchestrators cannot delegate to other orchestrators
+• Nested orchestrator children are restricted to explorer | librarian | oracle | designer | fixer
+
+Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }
 
 MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • { action: "list" } - discover executable agents/chains and any disabled builtins
