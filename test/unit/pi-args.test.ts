@@ -151,12 +151,16 @@ describe("buildPiArgs system prompt mode wiring", () => {
 			preset: "fast",
 			currentAgentName: "fixer",
 			parentAgentName: "orchestrator",
+			canDelegate: true,
+			allowedDelegateAgents: ["explorer", "oracle"],
 		});
 
 		assert.equal(env.PI_SUBAGENT_INTERCOM_SESSION_NAME, "subagent-worker-78f659a3");
 		assert.equal(env.PI_PRESET, "fast");
 		assert.equal(env.PI_SUBAGENT_CURRENT_AGENT, "fixer");
 		assert.equal(env.PI_SUBAGENT_PARENT_AGENT, "orchestrator");
+		assert.equal(env.PI_SUBAGENT_CAN_DELEGATE, "1");
+		assert.equal(env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS, "explorer,oracle");
 	});
 
 	it("keeps tool extension paths when explicit extensions are allowlisted", () => {

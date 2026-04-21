@@ -108,7 +108,7 @@ const resolveSlashPreset = (...values: Array<string | undefined>): { preset?: st
 };
 
 const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) => (prefix: string) => {
-	const agents = discoverAgents(state.baseCwd, "both").agents;
+	const agents = discoverAgents(state.baseCwd, "both", { surface: "subagent" }).agents;
 	if (!multiAgent) {
 		if (prefix.includes(" ")) return null;
 		return agents.filter((a) => a.name.startsWith(prefix)).map((a) => ({ value: a.name, label: a.name }));
@@ -435,7 +435,7 @@ const parseAgentArgs = (
 		ctx.ui.notify(usage, "error");
 		return null;
 	}
-	const agents = discoverAgents(state.baseCwd, "both", { preset }).agents;
+	const agents = discoverAgents(state.baseCwd, "both", { preset, surface: "subagent" }).agents;
 	for (const step of steps) {
 		if (!agents.find((a) => a.name === step.name)) {
 			ctx.ui.notify(`Unknown agent: ${step.name}`, "error");
@@ -477,7 +477,7 @@ export function registerSlashCommands(
 			const presetResolution = resolveSlashPreset(topLevel.preset, inline.preset);
 			if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
 
-			const agents = discoverAgents(state.baseCwd, "both", { preset: presetResolution.preset }).agents;
+			const agents = discoverAgents(state.baseCwd, "both", { preset: presetResolution.preset, surface: "subagent" }).agents;
 			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
 
 			let finalTask = task;

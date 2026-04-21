@@ -361,6 +361,8 @@ export interface TopLevelParallelConfig {
 	concurrency?: number;
 }
 
+export type AgentSurface = "main" | "subagent" | "both";
+
 export interface AgentPresetOverlay {
 	model?: string | false;
 	fallbackModels?: string[] | false;
@@ -378,10 +380,16 @@ export interface AgentPresetOverlay {
 	inheritProjectContext?: boolean;
 	inheritSkills?: boolean;
 	systemPrompt?: string | false;
+	disabled?: boolean;
+	surface?: AgentSurface;
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[] | false;
 }
 
 export interface PresetConfig {
 	description?: string;
+	defaultRole?: string;
+	strictAgents?: boolean;
 	agents?: Record<string, AgentPresetOverlay>;
 	agentOverrides?: Record<string, AgentPresetOverlay>;
 }
@@ -392,6 +400,7 @@ export interface DiscoveryPresetInfo {
 	requested?: string;
 	applied?: string;
 	source?: PresetSource;
+	defaultRole?: string;
 	warnings: string[];
 }
 
@@ -579,25 +588,57 @@ function normalizeAgentIdentity(value: unknown): string | undefined {
 	return trimmed || undefined;
 }
 
-const NESTED_ORCHESTRATOR_AGENT_NAMES = new Set(["orchestrator", "delegate"]);
-const NESTED_ORCHESTRATOR_CHILD_AGENT_NAMES = new Set(["explorer", "librarian", "oracle", "designer", "fixer"]);
+function normalizeAgentList(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const normalized = value
+		.map((item) => normalizeAgentIdentity(item))
+		.filter((item): item is string => Boolean(item));
+	return normalized.length > 0 ? normalized : undefined;
+}
+
+function parseEnvBoolean(value: string | undefined): boolean | undefined {
+	if (!value) return undefined;
+	const normalized = value.trim().toLowerCase();
+	if (["1", "true", "yes", "on"].includes(normalized)) return true;
+	if (["0", "false", "no", "off"].includes(normalized)) return false;
+	return undefined;
+}
+
+function parseEnvAgentList(value: string | undefined): string[] | undefined {
+	if (!value) return undefined;
+	const normalized = value
+		.split(",")
+		.map((item) => normalizeAgentIdentity(item))
+		.filter((item): item is string => Boolean(item));
+	return normalized.length > 0 ? normalized : undefined;
+}
+
+const LEGACY_NESTED_DELEGATOR_AGENT_NAMES = new Set(["orchestrator", "delegate"]);
+const LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES = new Set(["explorer", "librarian", "oracle", "designer", "fixer"]);
 
 export function isNestedOrchestratorAgent(name: unknown): boolean {
 	const normalized = normalizeAgentIdentity(name);
-	return normalized !== undefined && NESTED_ORCHESTRATOR_AGENT_NAMES.has(normalized);
+	return normalized !== undefined && LEGACY_NESTED_DELEGATOR_AGENT_NAMES.has(normalized);
 }
 
 export function isAllowedNestedOrchestratorChild(name: unknown): boolean {
 	const normalized = normalizeAgentIdentity(name);
-	return normalized !== undefined && NESTED_ORCHESTRATOR_CHILD_AGENT_NAMES.has(normalized);
+	return normalized !== undefined && LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES.has(normalized);
 }
 
-export function getSubagentIdentityEnv(currentAgentName: string, parentAgentName?: string | null): Record<string, string | undefined> {
+export function getSubagentIdentityEnv(
+	currentAgentName: string,
+	parentAgentName?: string | null,
+	options?: { canDelegate?: boolean; allowedDelegateAgents?: string[] },
+): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		PI_SUBAGENT_CURRENT_AGENT: currentAgentName,
 	};
 	const normalizedParent = typeof parentAgentName === "string" ? parentAgentName.trim() : "";
 	if (normalizedParent) env.PI_SUBAGENT_PARENT_AGENT = normalizedParent;
+	if (options?.canDelegate !== undefined) env.PI_SUBAGENT_CAN_DELEGATE = options.canDelegate ? "1" : "0";
+	const allowedDelegateAgents = normalizeAgentList(options?.allowedDelegateAgents);
+	if (allowedDelegateAgents) env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS = allowedDelegateAgents.join(",");
 	return env;
 }
 
@@ -610,41 +651,37 @@ export function checkNestedDelegationGuard(requestedAgents: string[]): {
 	const currentAgent = normalizeAgentIdentity(process.env.PI_SUBAGENT_CURRENT_AGENT);
 	const parentAgent = normalizeAgentIdentity(process.env.PI_SUBAGENT_PARENT_AGENT);
 	if (!currentAgent) return { blocked: false };
-	if (!isNestedOrchestratorAgent(currentAgent)) {
+
+	const explicitCanDelegate = parseEnvBoolean(process.env.PI_SUBAGENT_CAN_DELEGATE);
+	const canDelegate = explicitCanDelegate ?? isNestedOrchestratorAgent(currentAgent);
+	if (!canDelegate) {
 		return {
 			blocked: true,
 			currentAgent,
 			parentAgent,
 			reason:
 				`Nested subagent call blocked: '${process.env.PI_SUBAGENT_CURRENT_AGENT}' is not allowed to delegate. ` +
-				"Only orchestrator agents may make nested subagent calls.",
+				"Only agents marked canDelegate may make nested subagent calls.",
 		};
 	}
 
-	const targets = [...new Set(requestedAgents.map((agent) => agent.trim()).filter(Boolean))];
-	const nestedOrchestratorTarget = targets.find((agent) => isNestedOrchestratorAgent(agent));
-	if (nestedOrchestratorTarget) {
-		return {
-			blocked: true,
-			currentAgent,
-			parentAgent,
-			reason:
-				`Nested subagent call blocked: orchestrator agent '${process.env.PI_SUBAGENT_CURRENT_AGENT}' ` +
-				`cannot delegate to another orchestrator ('${nestedOrchestratorTarget}').`,
-		};
-	}
-
-	const disallowedTargets = targets.filter((agent) => !isAllowedNestedOrchestratorChild(agent));
-	if (disallowedTargets.length > 0) {
-		return {
-			blocked: true,
-			currentAgent,
-			parentAgent,
-			reason:
-				`Nested subagent call blocked: orchestrator agent '${process.env.PI_SUBAGENT_CURRENT_AGENT}' may only delegate to ` +
-				"explorer, librarian, oracle, designer, or fixer. " +
-				`Requested: ${disallowedTargets.join(", ")}.`,
-		};
+	const targets = [...new Set(requestedAgents.map((agent) => normalizeAgentIdentity(agent)).filter((agent): agent is string => Boolean(agent)))];
+	const explicitAllowedTargets = parseEnvAgentList(process.env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS);
+	const allowedTargets = explicitAllowedTargets
+		?? (isNestedOrchestratorAgent(currentAgent) ? [...LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES] : undefined);
+	if (allowedTargets && allowedTargets.length > 0) {
+		const allowedTargetSet = new Set(allowedTargets);
+		const disallowedTargets = targets.filter((agent) => !allowedTargetSet.has(agent));
+		if (disallowedTargets.length > 0) {
+			return {
+				blocked: true,
+				currentAgent,
+				parentAgent,
+				reason:
+					`Nested subagent call blocked: agent '${process.env.PI_SUBAGENT_CURRENT_AGENT}' may only delegate to ` +
+					`${allowedTargets.join(", ")}. Requested: ${disallowedTargets.join(", ")}.`,
+			};
+		}
 	}
 
 	return { blocked: false, currentAgent, parentAgent };

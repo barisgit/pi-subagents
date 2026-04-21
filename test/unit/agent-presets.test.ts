@@ -17,13 +17,14 @@ function writeJson(filePath: string, value: unknown): void {
 	fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
 
-function writeProjectAgent(name: string, model = "anthropic/claude-sonnet-4"): void {
+function writeProjectAgent(name: string, model = "anthropic/claude-sonnet-4", extraFrontmatter = ""): void {
 	const filePath = path.join(tempProject, ".pi", "agents", `${name}.md`);
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	const extra = extraFrontmatter.trim() ? `\n${extraFrontmatter.trim()}` : "";
 	fs.writeFileSync(filePath, `---
 name: ${name}
 description: ${name} agent
-model: ${model}
+model: ${model}${extra}
 ---
 You are ${name}.
 `, "utf-8");
@@ -112,5 +113,32 @@ describe("agent presets", () => {
 		assert.equal(result.preset.applied, undefined);
 		assert.equal(result.preset.source, "param");
 		assert.match(result.preset.warnings[0] ?? "", /Requested preset 'missing' was not found/);
+	});
+
+	it("supports strict workflow role catalogs and main/subagent surface filtering", () => {
+		writeProjectAgent("build", "anthropic/claude-sonnet-4", "surface: main");
+		writeProjectAgent("explorer", "anthropic/claude-sonnet-4", "surface: subagent");
+		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
+			presets: {
+				workflow: {
+					defaultRole: "build",
+					strictAgents: true,
+					agents: {
+						build: { model: "openai/gpt-5", surface: "main" },
+						explorer: { model: "openai/gpt-5-mini", surface: "subagent" },
+					},
+				},
+			},
+		});
+
+		const mainResult = discoverAgents(tempProject, "project", { preset: "workflow", surface: "main" });
+		assert.deepEqual(mainResult.agents.map((agent) => agent.name), ["build"]);
+		assert.equal(mainResult.agents[0]?.model, "openai/gpt-5");
+		assert.equal(mainResult.preset.applied, "workflow");
+		assert.equal(mainResult.preset.defaultRole, "build");
+
+		const subagentResult = discoverAgents(tempProject, "project", { preset: "workflow", surface: "subagent" });
+		assert.deepEqual(subagentResult.agents.map((agent) => agent.name), ["explorer"]);
+		assert.equal(subagentResult.agents[0]?.model, "openai/gpt-5-mini");
 	});
 });

@@ -18,11 +18,11 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
-import { discoverAgents } from "./agents.ts";
+import { type AgentConfig, discoverAgents } from "./agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
 import { cleanupOldChainDirs } from "./settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./render.ts";
-import { SubagentParams } from "./schemas.ts";
+import { StatusParams, SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor } from "./subagent-executor.ts";
 import { createAsyncJobTracker } from "./async-job-tracker.ts";
 import { controlNotificationKey, formatControlNoticeMessage } from "./subagent-control.ts";
@@ -32,8 +32,10 @@ import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge
 import { registerSlashSubagentBridge } from "./slash-bridge.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
+import { formatAsyncRunList, listAsyncRuns } from "./async-status.ts";
 import registerSubagentNotify, { type SubagentNotifyDetails } from "./notify.ts";
 import { formatDuration, shortenPath } from "./formatters.ts";
+import { findByPrefix, readStatus } from "./utils.ts";
 import {
 	type ControlEvent,
 	type Details,
@@ -111,6 +113,30 @@ function isSlashResultRunning(result: { details?: Details }): boolean {
 
 function isSlashResultError(result: { details?: Details }): boolean {
 	return result.details?.results.some((entry) => entry.exitCode !== 0 && entry.progress?.status !== "running") || false;
+}
+
+function normalizeName(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed || undefined;
+}
+
+function getLatestCustomStateName(ctx: ExtensionContext, ...customTypes: string[]): string | undefined {
+	let latest: string | undefined;
+	for (const entry of ctx.sessionManager.getEntries()) {
+		if (!entry || typeof entry !== "object") continue;
+		const candidate = entry as { type?: string; customType?: string; data?: { name?: unknown } };
+		if (candidate.type !== "custom" || !customTypes.includes(candidate.customType ?? "")) continue;
+		if (typeof candidate.data?.name === "string" && candidate.data.name.trim()) {
+			latest = candidate.data.name.trim();
+		}
+	}
+	return latest;
+}
+
+function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info"): void {
+	if (ctx.hasUI) ctx.ui.notify(message, level);
+	else if (level !== "info") console.warn(message);
 }
 
 function rebuildSlashResultContainer(
@@ -384,6 +410,157 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	let activeWorkflowName: string | undefined;
+	let activeRootRoleName: string | undefined;
+	let activeRootRole: AgentConfig | undefined;
+
+	function isDelegatedSubagentSession(): boolean {
+		return Boolean(normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT));
+	}
+
+	function resolveRequestedWorkflow(): string | undefined {
+		return normalizeName(pi.getFlag("preset"))
+			?? normalizeName(process.env.PI_PRESET)
+			?? normalizeName(process.env.OH_MY_OPENCODE_SLIM_PRESET)
+			?? normalizeName(config.defaultPreset);
+	}
+
+	function resolveRootRoleCandidatesForCwd(
+		cwd: string,
+		preset: string | undefined,
+	): { availableRoles: AgentConfig[]; warnings: string[]; defaultRole?: string; appliedWorkflow?: string } {
+		const discovery = discoverAgents(cwd, "both", { preset, config, surface: "main" });
+		return {
+			availableRoles: discovery.agents,
+			warnings: discovery.preset.warnings,
+			defaultRole: discovery.preset.defaultRole,
+			appliedWorkflow: discovery.preset.applied,
+		};
+	}
+
+	function resolveRootRoleCandidates(
+		ctx: ExtensionContext,
+		preset: string | undefined,
+	): { availableRoles: AgentConfig[]; warnings: string[]; defaultRole?: string; appliedWorkflow?: string } {
+		return resolveRootRoleCandidatesForCwd(ctx.cwd, preset);
+	}
+
+	function getRootRoleCompletions(prefix: string): Array<{ value: string; label: string }> | null {
+		if (isDelegatedSubagentSession()) return null;
+		if (prefix.includes(" ")) return null;
+		const workflowName = activeWorkflowName ?? resolveRequestedWorkflow();
+		const cwd = state.lastUiContext?.cwd ?? state.baseCwd;
+		const { availableRoles } = resolveRootRoleCandidatesForCwd(cwd, workflowName);
+		const normalizedPrefix = prefix.trim();
+		const matches = normalizedPrefix
+			? availableRoles.filter((role) => role.name.startsWith(normalizedPrefix))
+			: availableRoles;
+		return matches.map((role) => ({
+			value: role.name,
+			label: role.name === activeRootRoleName ? `${role.name} (current)` : role.name,
+		}));
+	}
+
+	async function applyRootModel(ctx: ExtensionContext, modelRef: string | undefined): Promise<void> {
+		const normalizedModel = normalizeName(modelRef);
+		if (!normalizedModel) return;
+		const model = ctx.modelRegistry.getAvailable().find((candidate) =>
+			`${candidate.provider}/${candidate.id}` === normalizedModel || candidate.id === normalizedModel
+		);
+		if (!model) {
+			notify(ctx, `Role '${activeRootRoleName ?? "unknown"}': model '${normalizedModel}' was not found`, "warning");
+			return;
+		}
+		const success = await pi.setModel(model);
+		if (!success) {
+			notify(ctx, `Role '${activeRootRoleName ?? "unknown"}': no API key for ${model.provider}/${model.id}`, "warning");
+		}
+	}
+
+	function applyRootThinking(role: AgentConfig): void {
+		if (!role.thinking) return;
+		if (["off", "minimal", "low", "medium", "high", "xhigh"].includes(role.thinking)) {
+			pi.setThinkingLevel(role.thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh");
+		}
+	}
+
+	function applyRootTools(ctx: ExtensionContext, role: AgentConfig): void {
+		const requestedTools = [...new Set([...(role.tools ?? []), ...(role.mcpDirectTools ?? [])])];
+		if (requestedTools.length === 0) return;
+		const availableTools = new Set(pi.getAllTools().map((tool) => tool.name));
+		const validTools = requestedTools.filter((tool) => availableTools.has(tool));
+		const invalidTools = requestedTools.filter((tool) => !availableTools.has(tool));
+		if (invalidTools.length > 0) {
+			notify(ctx, `Role '${role.name}': unknown tools: ${invalidTools.join(", ")}`, "warning");
+		}
+		if (validTools.length > 0) {
+			pi.setActiveTools(validTools);
+		}
+	}
+
+	function updateRootStatus(ctx: ExtensionContext): void {
+		if (!ctx.hasUI) return;
+		ctx.ui.setStatus("preset", activeWorkflowName ? ctx.ui.theme.fg("accent", `preset:${activeWorkflowName}`) : undefined);
+		ctx.ui.setStatus("role", activeRootRoleName ? ctx.ui.theme.fg("accent", `role:${activeRootRoleName}`) : undefined);
+	}
+
+	async function activateRootRole(ctx: ExtensionContext, role: AgentConfig, workflowName: string | undefined): Promise<void> {
+		activeWorkflowName = workflowName;
+		activeRootRoleName = role.name;
+		activeRootRole = role;
+		await applyRootModel(ctx, role.model);
+		applyRootThinking(role);
+		applyRootTools(ctx, role);
+		updateRootStatus(ctx);
+	}
+
+	async function initializeRootRole(ctx: ExtensionContext): Promise<void> {
+		const requestedWorkflow = resolveRequestedWorkflow();
+		const { availableRoles, warnings, defaultRole, appliedWorkflow } = resolveRootRoleCandidates(ctx, requestedWorkflow);
+		for (const warning of warnings) notify(ctx, warning, "warning");
+		if (availableRoles.length === 0) {
+			notify(ctx, "No main roles are available for the current workflow.", "warning");
+			activeWorkflowName = undefined;
+			activeRootRoleName = undefined;
+			activeRootRole = undefined;
+			updateRootStatus(ctx);
+			return;
+		}
+
+		const roleFlag = normalizeName(pi.getFlag("role"));
+		const envRole = normalizeName(process.env.PI_ROLE);
+		const restoredRole = getLatestCustomStateName(ctx, "role-state");
+		const requestedRole = roleFlag ?? envRole ?? restoredRole ?? defaultRole ?? "orchestrator";
+		const candidates = [requestedRole, defaultRole, "orchestrator", availableRoles[0]?.name].filter((value): value is string => Boolean(value));
+		const selectedRole = candidates
+			.map((candidate) => availableRoles.find((role) => role.name === candidate))
+			.find((role): role is AgentConfig => Boolean(role));
+
+		if (!selectedRole) {
+			notify(ctx, `Unable to resolve a main role. Available: ${availableRoles.map((role) => role.name).join(", ")}`, "warning");
+			return;
+		}
+		if (requestedRole && selectedRole.name !== requestedRole) {
+			notify(ctx, `Role '${requestedRole}' is not available in this workflow. Using '${selectedRole.name}' instead.`, "warning");
+		}
+		await activateRootRole(ctx, selectedRole, appliedWorkflow ?? requestedWorkflow);
+	}
+
+	async function switchRootRole(ctx: ExtensionContext, requestedRole: string): Promise<boolean> {
+		const normalizedRole = normalizeName(requestedRole);
+		if (!normalizedRole) return false;
+		const workflowName = activeWorkflowName ?? resolveRequestedWorkflow();
+		const { availableRoles, warnings, appliedWorkflow } = resolveRootRoleCandidates(ctx, workflowName);
+		for (const warning of warnings) notify(ctx, warning, "warning");
+		const role = availableRoles.find((candidate) => candidate.name === normalizedRole);
+		if (!role) {
+			notify(ctx, `Unknown main role '${requestedRole}'. Available: ${availableRoles.map((candidate) => candidate.name).join(", ") || "(none)"}`, "error");
+			return false;
+		}
+		await activateRootRole(ctx, role, appliedWorkflow ?? workflowName);
+		return true;
+	}
+
 	function effectiveParallelTaskCount(tasks: Array<{ count?: unknown }> | undefined): number {
 		if (!tasks || tasks.length === 0) return 0;
 		return tasks.reduce((total, task) => {
@@ -412,9 +589,9 @@ CHAIN TEMPLATE VARIABLES (use in task strings):
 
 Nested guardrails:
 • Root calls remain allowed
-• Nested calls are only allowed from orchestrator agents
-• Orchestrators cannot delegate to other orchestrators
-• Nested orchestrator children are restricted to explorer | librarian | oracle | designer | fixer
+• Nested calls are only allowed from agents marked canDelegate
+• Allowed nested child agents come from the current agent's allowedDelegateAgents capability when set
+• Legacy orchestrator/delegate behavior remains the fallback when no explicit capability env is present
 
 Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }
 
@@ -472,8 +649,174 @@ CONTROL:
 
 	};
 
+	const statusTool: ToolDefinition<typeof StatusParams, Details> = {
+		name: "subagent_status",
+		label: "Subagent Status",
+		description: "Inspect async subagent run status and artifacts",
+		parameters: StatusParams,
+
+		async execute(_id, params, _signal, _onUpdate, _ctx) {
+			if (params.action === "list") {
+				try {
+					const runs = listAsyncRuns(ASYNC_DIR, { states: ["queued", "running"] });
+					return {
+						content: [{ type: "text", text: formatAsyncRunList(runs) }],
+						details: { mode: "single", results: [] },
+					};
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return {
+						content: [{ type: "text", text: message }],
+						isError: true,
+						details: { mode: "single", results: [] },
+					};
+				}
+			}
+
+			let asyncDir: string | null = null;
+			let resolvedId = params.id;
+
+			if (params.dir) {
+				asyncDir = path.resolve(params.dir);
+			} else if (params.id) {
+				const direct = path.join(ASYNC_DIR, params.id);
+				if (fs.existsSync(direct)) {
+					asyncDir = direct;
+				} else {
+					const match = findByPrefix(ASYNC_DIR, params.id);
+					if (match) {
+						asyncDir = match;
+						resolvedId = path.basename(match);
+					}
+				}
+			}
+
+			const resultPath =
+				params.id && !asyncDir ? findByPrefix(RESULTS_DIR, params.id, ".json") : null;
+
+			if (!asyncDir && !resultPath) {
+				return {
+					content: [{ type: "text", text: "Async run not found. Provide id or dir." }],
+					isError: true,
+					details: { mode: "single" as const, results: [] },
+				};
+			}
+
+			if (asyncDir) {
+				let status;
+				try {
+					status = readStatus(asyncDir);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return {
+						content: [{ type: "text", text: message }],
+						isError: true,
+						details: { mode: "single" as const, results: [] },
+					};
+				}
+				const logPath = path.join(asyncDir, `subagent-log-${resolvedId ?? "unknown"}.md`);
+				const eventsPath = path.join(asyncDir, "events.jsonl");
+				if (status) {
+					const stepsTotal = status.steps?.length ?? 1;
+					const current = status.currentStep !== undefined ? status.currentStep + 1 : undefined;
+					const stepLine =
+						current !== undefined ? `Step: ${current}/${stepsTotal}` : `Steps: ${stepsTotal}`;
+					const started = new Date(status.startedAt).toISOString();
+					const updated = status.lastUpdate ? new Date(status.lastUpdate).toISOString() : "n/a";
+
+					const lines = [
+						`Run: ${status.runId}`,
+						`State: ${status.state}`,
+						`Mode: ${status.mode}`,
+						stepLine,
+						`Started: ${started}`,
+						`Updated: ${updated}`,
+						`Dir: ${asyncDir}`,
+					];
+					if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
+					if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
+					if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
+
+					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
+				}
+			}
+
+			if (resultPath) {
+				try {
+					const raw = fs.readFileSync(resultPath, "utf-8");
+					const data = JSON.parse(raw) as { id?: string; success?: boolean; summary?: string };
+					const status = data.success ? "complete" : "failed";
+					const lines = [`Run: ${data.id ?? params.id}`, `State: ${status}`, `Result: ${resultPath}`];
+					if (data.summary) lines.push("", data.summary);
+					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return {
+						content: [{ type: "text", text: `Failed to read async result file: ${message}` }],
+						isError: true,
+						details: { mode: "single" as const, results: [] },
+					};
+				}
+			}
+
+			return {
+				content: [{ type: "text", text: "Status file not found." }],
+				isError: true,
+				details: { mode: "single" as const, results: [] },
+			};
+		},
+	};
+
+	pi.registerFlag("preset", {
+		description: "Workflow/model preset to use for the main session",
+		type: "string",
+	});
+	pi.registerFlag("role", {
+		description: "Root role to use for the main session",
+		type: "string",
+	});
+
 	pi.registerTool(tool);
+	pi.registerTool(statusTool);
 	registerSlashCommands(pi, state);
+	pi.registerCommand("role", {
+		description: "Show or switch the active root role",
+		getArgumentCompletions: getRootRoleCompletions,
+		handler: async (args, ctx) => {
+			if (isDelegatedSubagentSession()) {
+				notify(ctx, "'/role' is only available in the main/root session.", "warning");
+				return;
+			}
+			const requested = normalizeName(args);
+			if (!requested) {
+				const workflowName = activeWorkflowName ?? resolveRequestedWorkflow();
+				const { availableRoles, warnings, appliedWorkflow } = resolveRootRoleCandidates(ctx, workflowName);
+				for (const warning of warnings) notify(ctx, warning, "warning");
+				if (availableRoles.length === 0) {
+					notify(ctx, "No main roles are available for the current workflow.", "warning");
+					return;
+				}
+				if (!ctx.hasUI) {
+					notify(
+						ctx,
+						`Root role: ${activeRootRoleName ?? "(none)"}. Workflow: ${appliedWorkflow ?? workflowName ?? "(default)"}. Available: ${availableRoles.map((role) => role.name).join(", ") || "(none)"}`,
+						"info",
+					);
+					return;
+				}
+				const selectedRole = await ctx.ui.select(
+					`Root role (${appliedWorkflow ?? workflowName ?? "default"}; current: ${activeRootRoleName ?? "none"})`,
+					availableRoles.map((role) => role.name),
+				);
+				if (!selectedRole) return;
+				const changed = await switchRootRole(ctx, selectedRole);
+				if (changed) notify(ctx, `Root role '${selectedRole}' activated`, "info");
+				return;
+			}
+			const changed = await switchRootRole(ctx, requested);
+			if (changed) notify(ctx, `Root role '${requested}' activated`, "info");
+		},
+	});
 
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
 	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
@@ -548,9 +891,31 @@ CONTROL:
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
 	};
 
-	pi.on("session_start", (_event, ctx) => {
-		resetSessionState(ctx);
+	pi.on("before_agent_start", async (event) => {
+		if (isDelegatedSubagentSession()) return;
+		const prompt = activeRootRole?.systemPrompt?.trim();
+		if (!prompt) return;
+		return {
+			systemPrompt: `${event.systemPrompt}\n\n${prompt}`,
+		};
 	});
+
+	pi.on("session_start", async (_event, ctx) => {
+		resetSessionState(ctx);
+		if (isDelegatedSubagentSession()) return;
+		await initializeRootRole(ctx);
+	});
+	pi.on("turn_start", () => {
+		if (isDelegatedSubagentSession()) return;
+		if (activeWorkflowName) {
+			pi.appendEntry("workflow-state", { name: activeWorkflowName });
+			pi.appendEntry("preset-state", { name: activeWorkflowName });
+		}
+		if (activeRootRoleName) {
+			pi.appendEntry("role-state", { name: activeRootRoleName, workflow: activeWorkflowName });
+		}
+	});
+
 	pi.on("session_shutdown", () => {
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
@@ -562,6 +927,9 @@ CONTROL:
 		if (globalStore[eventUnsubscribeStoreKey] === eventUnsubscribes) {
 			delete globalStore[eventUnsubscribeStoreKey];
 		}
+		activeWorkflowName = undefined;
+		activeRootRoleName = undefined;
+		activeRootRole = undefined;
 		stopResultWatcher();
 		if (state.poller) clearInterval(state.poller);
 		state.poller = null;

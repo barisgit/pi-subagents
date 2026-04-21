@@ -19,6 +19,10 @@ export const KNOWN_FIELDS = new Set([
 	"defaultProgress",
 	"interactive",
 	"maxSubagentDepth",
+	"disabled",
+	"surface",
+	"canDelegate",
+	"allowedDelegateAgents",
 ]);
 
 function joinComma(values: string[] | undefined): string | undefined {
@@ -65,6 +69,11 @@ export function serializeAgent(config: AgentConfig): string {
 	if (Number.isInteger(config.maxSubagentDepth) && config.maxSubagentDepth >= 0) {
 		lines.push(`maxSubagentDepth: ${config.maxSubagentDepth}`);
 	}
+	if (config.disabled !== undefined) lines.push(`disabled: ${config.disabled ? "true" : "false"}`);
+	if (config.surface) lines.push(`surface: ${config.surface}`);
+	if (config.canDelegate !== undefined) lines.push(`canDelegate: ${config.canDelegate ? "true" : "false"}`);
+	const allowedDelegateAgentsValue = joinComma(config.allowedDelegateAgents);
+	if (allowedDelegateAgentsValue) lines.push(`allowedDelegateAgents: ${allowedDelegateAgentsValue}`);
 
 	if (config.extraFields) {
 		for (const [key, value] of Object.entries(config.extraFields)) {

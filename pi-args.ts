@@ -27,6 +27,8 @@ export interface BuildPiArgsInput {
 	preset?: string;
 	currentAgentName?: string;
 	parentAgentName?: string;
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[];
 }
 
 export interface BuildPiArgsResult {
@@ -123,6 +125,8 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.preset) env.PI_PRESET = input.preset;
 	if (input.currentAgentName) env.PI_SUBAGENT_CURRENT_AGENT = input.currentAgentName;
 	if (input.parentAgentName) env.PI_SUBAGENT_PARENT_AGENT = input.parentAgentName;
+	if (input.canDelegate !== undefined) env.PI_SUBAGENT_CAN_DELEGATE = input.canDelegate ? "1" : "0";
+	if (input.allowedDelegateAgents?.length) env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS = input.allowedDelegateAgents.join(",");
 	if (input.mcpDirectTools?.length) {
 		env.MCP_DIRECT_TOOLS = input.mcpDirectTools.join(",");
 	} else {

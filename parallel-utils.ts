@@ -17,6 +17,8 @@ export interface RunnerSubagentStep {
 	maxSubagentDepth?: number;
 	preset?: string;
 	parentAgentName?: string;
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[];
 }
 
 export interface ParallelStepGroup {

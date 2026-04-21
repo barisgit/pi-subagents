@@ -590,6 +590,8 @@ async function runSingleStep(
 			preset: step.preset,
 			currentAgentName: step.agent,
 			parentAgentName: step.parentAgentName,
+			canDelegate: step.canDelegate,
+			allowedDelegateAgents: step.allowedDelegateAgents,
 		});
 		const run = await runPiStreaming(
 			args,

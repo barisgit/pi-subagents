@@ -11,6 +11,7 @@ import {
 	defaultInheritProjectContext,
 	defaultInheritSkills,
 	defaultSystemPromptMode,
+	discoverAgents,
 	discoverAgentsAll,
 } from "./agents.ts";
 import { serializeAgent } from "./agent-serializer.ts";
@@ -370,11 +371,15 @@ export function formatChainDetail(chain: ChainConfig): string {
 
 export function handleList(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	const scope = normalizeListScope(params.agentScope) ?? "both";
-	const d = discoverAgentsAll(ctx.cwd, { preset: params.preset });
-	const scopedAgents = allAgents(d).filter((a) => scope === "both" || a.source === "builtin" || a.source === scope).sort((a, b) => a.name.localeCompare(b.name));
-	const agents = scopedAgents.filter((a) => !a.disabled);
-	const disabledBuiltins = scopedAgents.filter((a) => a.source === "builtin" && a.disabled);
-	const chains = d.chains.filter((c) => scope === "both" || c.source === scope).sort((a, b) => a.name.localeCompare(b.name));
+	const agentDiscovery = discoverAgents(ctx.cwd, "both", { preset: params.preset, surface: "subagent" });
+	const managementDiscovery = discoverAgentsAll(ctx.cwd, { preset: params.preset });
+	const agents = agentDiscovery.agents
+		.filter((a) => scope === "both" || a.source === "builtin" || a.source === scope)
+		.sort((a, b) => a.name.localeCompare(b.name));
+	const disabledBuiltins = allAgents(managementDiscovery)
+		.filter((a) => a.source === "builtin" && a.disabled && scope === "both")
+		.sort((a, b) => a.name.localeCompare(b.name));
+	const chains = managementDiscovery.chains.filter((c) => scope === "both" || c.source === scope).sort((a, b) => a.name.localeCompare(b.name));
 	const lines = [
 		"Executable agents:",
 		...(agents.length ? agents.map((a) => `- ${a.name} (${a.source}): ${a.description}`) : ["- (none)"]),

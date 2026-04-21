@@ -263,6 +263,8 @@ export function executeAsyncChain(
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
 			preset: ctx.preset,
 			parentAgentName: ctx.parentAgentName,
+			canDelegate: a.canDelegate,
+			allowedDelegateAgents: a.allowedDelegateAgents,
 		};
 	};
 
@@ -444,6 +446,8 @@ export function executeAsyncSingle(
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
 						preset: ctx.preset,
 						parentAgentName: ctx.parentAgentName,
+						canDelegate: agentConfig.canDelegate,
+						allowedDelegateAgents: agentConfig.allowedDelegateAgents,
 					},
 				],
 				resultPath: path.join(RESULTS_DIR, `${id}.json`),
