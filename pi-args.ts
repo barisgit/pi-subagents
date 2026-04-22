@@ -27,6 +27,7 @@ export interface BuildPiArgsInput {
 	preset?: string;
 	runtimeMode?: "delegated" | "root";
 	rootRoleName?: string;
+	forkSessionId?: string;
 	currentAgentName?: string;
 	parentAgentName?: string;
 	canDelegate?: boolean;
@@ -127,6 +128,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.preset) env.PI_PRESET = input.preset;
 	if (input.runtimeMode) env.PI_SUBAGENT_RUNTIME_MODE = input.runtimeMode;
 	if (input.rootRoleName) env.PI_ROLE = input.rootRoleName;
+	if (input.forkSessionId) env.PI_SUBAGENT_FORK_SESSION_ID = input.forkSessionId;
 	if (input.currentAgentName) env.PI_SUBAGENT_CURRENT_AGENT = input.currentAgentName;
 	if (input.parentAgentName) env.PI_SUBAGENT_PARENT_AGENT = input.parentAgentName;
 	if (input.canDelegate !== undefined) env.PI_SUBAGENT_CAN_DELEGATE = input.canDelegate ? "1" : "0";

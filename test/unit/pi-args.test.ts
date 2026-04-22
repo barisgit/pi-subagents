@@ -140,7 +140,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(env.PI_SUBAGENT_INHERIT_SKILLS, "1");
 	});
 
-	it("passes child intercom, preset, runtime mode, and agent identity env through to child runs", () => {
+	it("passes child intercom, preset, runtime mode, session override, and agent identity env through to child runs", () => {
 		const { env } = buildPiArgs({
 			baseArgs: ["-p"],
 			task: "hello",
@@ -151,6 +151,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 			preset: "fast",
 			runtimeMode: "root",
 			rootRoleName: "fixer",
+			forkSessionId: "root-session-123",
 			currentAgentName: "fixer",
 			parentAgentName: "orchestrator",
 			canDelegate: true,
@@ -161,6 +162,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(env.PI_PRESET, "fast");
 		assert.equal(env.PI_SUBAGENT_RUNTIME_MODE, "root");
 		assert.equal(env.PI_ROLE, "fixer");
+		assert.equal(env.PI_SUBAGENT_FORK_SESSION_ID, "root-session-123");
 		assert.equal(env.PI_SUBAGENT_CURRENT_AGENT, "fixer");
 		assert.equal(env.PI_SUBAGENT_PARENT_AGENT, "orchestrator");
 		assert.equal(env.PI_SUBAGENT_CAN_DELEGATE, "1");

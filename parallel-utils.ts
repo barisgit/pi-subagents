@@ -18,6 +18,7 @@ export interface RunnerSubagentStep {
 	preset?: string;
 	runtimeMode?: "delegated" | "root";
 	rootRoleName?: string;
+	forkSessionId?: string;
 	parentAgentName?: string;
 	canDelegate?: boolean;
 	allowedDelegateAgents?: string[];

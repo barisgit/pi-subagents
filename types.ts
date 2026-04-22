@@ -317,6 +317,7 @@ export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 
 export interface ForkReuseConfig {
 	agentName: string;
+	sessionId: string;
 }
 
 export interface RunSyncOptions {
@@ -347,7 +348,7 @@ export interface RunSyncOptions {
 	preferredModelProvider?: string;
 	/** Skills to inject (overrides agent default if provided) */
 	skills?: string[];
-	/** Reuse the exact current agent prompt/model for forked self-delegation. */
+	/** Metadata for same-agent forked self-delegation. */
 	forkReuse?: ForkReuseConfig;
 	/** Resolved preset to pass through to child Pi processes */
 	preset?: string;

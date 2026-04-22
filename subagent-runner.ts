@@ -590,6 +590,7 @@ async function runSingleStep(
 			preset: step.preset,
 			runtimeMode: step.runtimeMode,
 			rootRoleName: step.rootRoleName,
+			forkSessionId: step.forkSessionId,
 			currentAgentName: step.agent,
 			parentAgentName: step.parentAgentName,
 			canDelegate: step.canDelegate,

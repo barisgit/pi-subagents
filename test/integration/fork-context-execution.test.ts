@@ -401,7 +401,13 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 	it("runs forked single executions in root mode without replaying prompt or model flags", async () => {
 		mockPi.reset();
 		mockPi.onCall({
-			echoEnv: ["PI_SUBAGENT_RUNTIME_MODE", "PI_ROLE", "PI_SUBAGENT_CURRENT_AGENT", "PI_SUBAGENT_PARENT_AGENT"],
+			echoEnv: [
+				"PI_SUBAGENT_RUNTIME_MODE",
+				"PI_ROLE",
+				"PI_SUBAGENT_FORK_SESSION_ID",
+				"PI_SUBAGENT_CURRENT_AGENT",
+				"PI_SUBAGENT_PARENT_AGENT",
+			],
 		});
 		const { manager } = makeForkingSessionManagerRecorder({
 			sessionFile: path.join(tempDir, "parent-reuse.jsonl"),
@@ -435,6 +441,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "{}"), {
 			PI_SUBAGENT_RUNTIME_MODE: "root",
 			PI_ROLE: "echo",
+			PI_SUBAGENT_FORK_SESSION_ID: "session-123",
 			PI_SUBAGENT_CURRENT_AGENT: "echo",
 			PI_SUBAGENT_PARENT_AGENT: "echo",
 		});

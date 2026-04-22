@@ -143,6 +143,7 @@ async function runSingleAttempt(
 		preset: options.preset,
 		runtimeMode: forkReuse ? "root" : "delegated",
 		rootRoleName: forkReuse?.agentName,
+		forkSessionId: forkReuse?.sessionId,
 		currentAgentName: agent.name,
 		parentAgentName: options.parentAgentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 		canDelegate: agent.canDelegate,

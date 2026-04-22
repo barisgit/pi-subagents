@@ -388,7 +388,7 @@ function collectForkOverridePaths(params: SubagentParamsLike): string[] {
 
 function resolveForkReuse(
 	params: SubagentParamsLike,
-	_ctx: ExtensionContext,
+	ctx: ExtensionContext,
 	deps: ExecutorDeps,
 ): ForkReuseConfig | undefined {
 	if (params.context !== "fork") return undefined;
@@ -415,8 +415,14 @@ function resolveForkReuse(
 		);
 	}
 
+	const currentSessionId = ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId;
+	if (!currentSessionId) {
+		throw new Error("Fork context requires a known current session id.");
+	}
+
 	return {
 		agentName: currentAgentName,
+		sessionId: currentSessionId,
 	};
 }
 
