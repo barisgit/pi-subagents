@@ -122,24 +122,27 @@ async function runSingleAttempt(
 	},
 ): Promise<SingleResult> {
 	const modelArg = applyThinkingSuffix(model, agent.thinking);
+	const forkReuse = options.forkReuse;
 	const { args, env: sharedEnv, tempDir } = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
 		sessionEnabled: shared.sessionEnabled,
 		sessionDir: options.sessionDir,
 		sessionFile: options.sessionFile,
-		model,
-		thinking: agent.thinking,
-		systemPromptMode: agent.systemPromptMode,
-		inheritProjectContext: agent.inheritProjectContext,
-		inheritSkills: agent.inheritSkills,
-		tools: agent.tools,
-		extensions: agent.extensions,
-		systemPrompt: shared.systemPrompt,
-		mcpDirectTools: agent.mcpDirectTools,
+		model: forkReuse ? undefined : model,
+		thinking: forkReuse ? undefined : agent.thinking,
+		systemPromptMode: forkReuse ? undefined : agent.systemPromptMode,
+		inheritProjectContext: forkReuse ? true : agent.inheritProjectContext,
+		inheritSkills: forkReuse ? true : agent.inheritSkills,
+		tools: forkReuse ? undefined : agent.tools,
+		extensions: forkReuse ? undefined : agent.extensions,
+		systemPrompt: forkReuse ? undefined : shared.systemPrompt,
+		mcpDirectTools: forkReuse ? undefined : agent.mcpDirectTools,
 		promptFileStem: agent.name,
 		intercomSessionName: options.intercomSessionName,
 		preset: options.preset,
+		runtimeMode: forkReuse ? "root" : "delegated",
+		rootRoleName: forkReuse?.agentName,
 		currentAgentName: agent.name,
 		parentAgentName: options.parentAgentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 		canDelegate: agent.canDelegate,
@@ -602,21 +605,26 @@ export async function runSync(
 	const shareEnabled = options.share === true;
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
 	const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-	const skillNames = options.skills ?? agent.skills ?? [];
+	const forkReuse = options.forkReuse;
 	const skillCwd = options.cwd ?? runtimeCwd;
-	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, skillCwd, runtimeCwd);
+	const skillNames = forkReuse ? [] : (options.skills ?? agent.skills ?? []);
+	const { resolved: resolvedSkills, missing: missingSkills } = forkReuse
+		? { resolved: [], missing: [] }
+		: resolveSkillsWithFallback(skillNames, skillCwd, runtimeCwd);
 	let systemPrompt = agent.systemPrompt?.trim() || "";
-	if (resolvedSkills.length > 0) {
+	if (!forkReuse && resolvedSkills.length > 0) {
 		const skillInjection = buildSkillInjection(resolvedSkills);
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillInjection}` : skillInjection;
 	}
 
-	const candidates = buildModelCandidates(
-		options.modelOverride ?? agent.model,
-		agent.fallbackModels,
-		options.availableModels,
-		options.preferredModelProvider,
-	);
+	const candidates = forkReuse
+		? [undefined]
+		: buildModelCandidates(
+			options.modelOverride ?? agent.model,
+			agent.fallbackModels,
+			options.availableModels,
+			options.preferredModelProvider,
+		);
 	const attemptedModels: string[] = [];
 	const modelAttempts: ModelAttempt[] = [];
 	const aggregateUsage = emptyUsage();

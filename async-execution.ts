@@ -21,6 +21,7 @@ import { buildModelCandidates, resolveModelCandidate, type AvailableModelInfo } 
 import {
 	type ArtifactConfig,
 	type Details,
+	type ForkReuseConfig,
 	type MaxOutputConfig,
 	type ResolvedControlConfig,
 	ASYNC_DIR,
@@ -77,6 +78,7 @@ export interface AsyncChainParams {
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
 	maxSubagentDepth: number;
+	forkReuse?: ForkReuseConfig;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	controlConfig?: ResolvedControlConfig;
@@ -101,6 +103,7 @@ export interface AsyncSingleParams {
 	modelOverride?: string;
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
+	forkReuse?: ForkReuseConfig;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	controlConfig?: ResolvedControlConfig;
@@ -194,6 +197,7 @@ export function executeAsyncChain(
 	} = params;
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
+	const forkReuse = params.forkReuse;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 
 	for (const s of chain) {
@@ -226,6 +230,29 @@ export function executeAsyncChain(
 	const buildSeqStep = (s: SequentialStep, sessionFile?: string) => {
 		const a = agents.find((x) => x.name === s.agent)!;
 		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
+		const outputPath = resolveSingleOutputPath(s.output, ctx.cwd, stepCwd);
+		const task = injectSingleOutputInstruction(s.task ?? "{previous}", outputPath);
+		const maxDepth = resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth);
+
+		if (forkReuse) {
+			return {
+				agent: s.agent,
+				task,
+				cwd: stepCwd,
+				inheritProjectContext: true,
+				inheritSkills: true,
+				outputPath,
+				sessionFile,
+				maxSubagentDepth: maxDepth,
+				preset: ctx.preset,
+				runtimeMode: "root" as const,
+				rootRoleName: forkReuse.agentName,
+				parentAgentName: ctx.parentAgentName,
+				canDelegate: a.canDelegate,
+				allowedDelegateAgents: a.allowedDelegateAgents,
+			};
+		}
+
 		const stepSkillInput = normalizeSkillInput(s.skill);
 		const stepOverrides: StepOverrides = { skills: stepSkillInput };
 		const behavior = resolveStepBehavior(a, stepOverrides, chainSkills);
@@ -237,9 +264,6 @@ export function executeAsyncChain(
 			const injection = buildSkillInjection(resolvedSkills);
 			systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
 		}
-
-		const outputPath = resolveSingleOutputPath(s.output, ctx.cwd, stepCwd);
-		const task = injectSingleOutputInstruction(s.task ?? "{previous}", outputPath);
 
 		const primaryModel = resolveModelCandidate(s.model ?? a.model, availableModels, ctx.currentModelProvider);
 		return {
@@ -260,8 +284,9 @@ export function executeAsyncChain(
 			skills: resolvedSkills.map((r) => r.name),
 			outputPath,
 			sessionFile,
-			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+			maxSubagentDepth: maxDepth,
 			preset: ctx.preset,
+			runtimeMode: "delegated" as const,
 			parentAgentName: ctx.parentAgentName,
 			canDelegate: a.canDelegate,
 			allowedDelegateAgents: a.allowedDelegateAgents,
@@ -396,11 +421,14 @@ export function executeAsyncSingle(
 	} = params;
 	const task = params.task ?? "";
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
-	const skillNames = params.skills ?? agentConfig.skills ?? [];
+	const forkReuse = params.forkReuse;
+	const skillNames = forkReuse ? [] : (params.skills ?? agentConfig.skills ?? []);
 	const availableModels = params.availableModels;
-	const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, runnerCwd, ctx.cwd);
+	const { resolved: resolvedSkills } = forkReuse
+		? { resolved: [] }
+		: resolveSkillsWithFallback(skillNames, runnerCwd, ctx.cwd);
 	let systemPrompt = agentConfig.systemPrompt?.trim() ?? "";
-	if (resolvedSkills.length > 0) {
+	if (!forkReuse && resolvedSkills.length > 0) {
 		const injection = buildSkillInjection(resolvedSkills);
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
 	}
@@ -429,22 +457,28 @@ export function executeAsyncSingle(
 						agent,
 						task: taskWithOutputInstruction,
 						cwd: runnerCwd,
-						model: applyThinkingSuffix(resolveModelCandidate(params.modelOverride ?? agentConfig.model, availableModels, ctx.currentModelProvider), agentConfig.thinking),
-						modelCandidates: buildModelCandidates(params.modelOverride ?? agentConfig.model, agentConfig.fallbackModels, availableModels, ctx.currentModelProvider).map((candidate) =>
-							applyThinkingSuffix(candidate, agentConfig.thinking),
-						),
-						tools: agentConfig.tools,
-						extensions: agentConfig.extensions,
-						mcpDirectTools: agentConfig.mcpDirectTools,
-						systemPrompt,
-						systemPromptMode: agentConfig.systemPromptMode,
-						inheritProjectContext: agentConfig.inheritProjectContext,
-						inheritSkills: agentConfig.inheritSkills,
+						model: forkReuse
+							? undefined
+							: applyThinkingSuffix(resolveModelCandidate(params.modelOverride ?? agentConfig.model, availableModels, ctx.currentModelProvider), agentConfig.thinking),
+						modelCandidates: forkReuse
+							? undefined
+							: buildModelCandidates(params.modelOverride ?? agentConfig.model, agentConfig.fallbackModels, availableModels, ctx.currentModelProvider).map((candidate) =>
+								applyThinkingSuffix(candidate, agentConfig.thinking),
+							),
+						tools: forkReuse ? undefined : agentConfig.tools,
+						extensions: forkReuse ? undefined : agentConfig.extensions,
+						mcpDirectTools: forkReuse ? undefined : agentConfig.mcpDirectTools,
+						systemPrompt: forkReuse ? undefined : systemPrompt,
+						systemPromptMode: forkReuse ? undefined : agentConfig.systemPromptMode,
+						inheritProjectContext: forkReuse ? true : agentConfig.inheritProjectContext,
+						inheritSkills: forkReuse ? true : agentConfig.inheritSkills,
 						skills: resolvedSkills.map((r) => r.name),
 						outputPath,
 						sessionFile,
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
 						preset: ctx.preset,
+						runtimeMode: forkReuse ? "root" : "delegated",
+						rootRoleName: forkReuse?.agentName,
 						parentAgentName: ctx.parentAgentName,
 						canDelegate: agentConfig.canDelegate,
 						allowedDelegateAgents: agentConfig.allowedDelegateAgents,

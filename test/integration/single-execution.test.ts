@@ -551,6 +551,26 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		}
 	});
 
+	it("inherits parent MCP_DIRECT_TOOLS when the agent has no explicit direct-tool override", async () => {
+		mockPi.onCall({ echoEnv: ["MCP_DIRECT_TOOLS"] });
+		const previousDirectTools = process.env.MCP_DIRECT_TOOLS;
+		process.env.MCP_DIRECT_TOOLS = "auggie_codebase-retrieval,exa_web_search_exa";
+		try {
+			const agents = makeAgentConfigs(["echo"]);
+			const result = await runSync(tempDir, agents, "echo", "Task", {
+				runId: "inherit-mcp-direct-tools",
+			});
+
+			assert.equal(result.exitCode, 0);
+			assert.deepEqual(JSON.parse(result.finalOutput ?? "{}"), {
+				MCP_DIRECT_TOOLS: "auggie_codebase-retrieval,exa_web_search_exa",
+			});
+		} finally {
+			if (previousDirectTools === undefined) delete process.env.MCP_DIRECT_TOOLS;
+			else process.env.MCP_DIRECT_TOOLS = previousDirectTools;
+		}
+	});
+
 	it("passes custom tool extensions through even when explicit extensions are allowlisted", async () => {
 		mockPi.onCall({ output: "Done" });
 		const agents = [makeAgent("echo", {

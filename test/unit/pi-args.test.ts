@@ -140,7 +140,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(env.PI_SUBAGENT_INHERIT_SKILLS, "1");
 	});
 
-	it("passes child intercom, preset, and agent identity env through to child runs", () => {
+	it("passes child intercom, preset, runtime mode, and agent identity env through to child runs", () => {
 		const { env } = buildPiArgs({
 			baseArgs: ["-p"],
 			task: "hello",
@@ -149,6 +149,8 @@ describe("buildPiArgs system prompt mode wiring", () => {
 			inheritSkills: false,
 			intercomSessionName: "subagent-worker-78f659a3",
 			preset: "fast",
+			runtimeMode: "root",
+			rootRoleName: "fixer",
 			currentAgentName: "fixer",
 			parentAgentName: "orchestrator",
 			canDelegate: true,
@@ -157,6 +159,8 @@ describe("buildPiArgs system prompt mode wiring", () => {
 
 		assert.equal(env.PI_SUBAGENT_INTERCOM_SESSION_NAME, "subagent-worker-78f659a3");
 		assert.equal(env.PI_PRESET, "fast");
+		assert.equal(env.PI_SUBAGENT_RUNTIME_MODE, "root");
+		assert.equal(env.PI_ROLE, "fixer");
 		assert.equal(env.PI_SUBAGENT_CURRENT_AGENT, "fixer");
 		assert.equal(env.PI_SUBAGENT_PARENT_AGENT, "orchestrator");
 		assert.equal(env.PI_SUBAGENT_CAN_DELEGATE, "1");
@@ -178,6 +182,40 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.ok(extensionArgs.some((arg) => arg.endsWith("subagent-prompt-runtime.ts")));
 		assert.ok(extensionArgs.includes("./custom-tool.ts"));
 		assert.ok(extensionArgs.includes("./allowed-ext.ts"));
+	});
+
+	it("inherits parent MCP_DIRECT_TOOLS when no direct-tool override is provided", () => {
+		const { env } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+
+		assert.equal("MCP_DIRECT_TOOLS" in env, false);
+	});
+
+	it("emits explicit MCP_DIRECT_TOOLS values when direct-tool config is provided", () => {
+		const withDirectTools = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			mcpDirectTools: ["auggie_codebase-retrieval", "exa_web_search_exa"],
+		});
+		const withoutDirectTools = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			mcpDirectTools: [],
+		});
+
+		assert.equal(withDirectTools.env.MCP_DIRECT_TOOLS, "auggie_codebase-retrieval,exa_web_search_exa");
+		assert.equal(withoutDirectTools.env.MCP_DIRECT_TOOLS, "__none__");
 	});
 
 	it("emits an empty prompt file when replace mode is used with an empty prompt", () => {

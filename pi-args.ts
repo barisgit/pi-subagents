@@ -25,6 +25,8 @@ export interface BuildPiArgsInput {
 	promptFileStem?: string;
 	intercomSessionName?: string;
 	preset?: string;
+	runtimeMode?: "delegated" | "root";
+	rootRoleName?: string;
 	currentAgentName?: string;
 	parentAgentName?: string;
 	canDelegate?: boolean;
@@ -123,14 +125,16 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		env.PI_SUBAGENT_INTERCOM_SESSION_NAME = input.intercomSessionName;
 	}
 	if (input.preset) env.PI_PRESET = input.preset;
+	if (input.runtimeMode) env.PI_SUBAGENT_RUNTIME_MODE = input.runtimeMode;
+	if (input.rootRoleName) env.PI_ROLE = input.rootRoleName;
 	if (input.currentAgentName) env.PI_SUBAGENT_CURRENT_AGENT = input.currentAgentName;
 	if (input.parentAgentName) env.PI_SUBAGENT_PARENT_AGENT = input.parentAgentName;
 	if (input.canDelegate !== undefined) env.PI_SUBAGENT_CAN_DELEGATE = input.canDelegate ? "1" : "0";
 	if (input.allowedDelegateAgents?.length) env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS = input.allowedDelegateAgents.join(",");
-	if (input.mcpDirectTools?.length) {
-		env.MCP_DIRECT_TOOLS = input.mcpDirectTools.join(",");
-	} else {
-		env.MCP_DIRECT_TOOLS = "__none__";
+	if (input.mcpDirectTools !== undefined) {
+		env.MCP_DIRECT_TOOLS = input.mcpDirectTools.length > 0
+			? input.mcpDirectTools.join(",")
+			: "__none__";
 	}
 
 	return { args, env, tempDir };

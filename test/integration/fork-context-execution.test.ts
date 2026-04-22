@@ -129,8 +129,14 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		}), config);
 	}
 
-	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents, config: Record<string, unknown> = {}) {
+	function makeExecutorWithDiscoverAgents(
+		discoverAgentsImpl: typeof discoverAgents,
+		config: Record<string, unknown> = {},
+		options: { rootAgentName?: string; thinkingLevel?: string } = {},
+	) {
 		let sessionName: string | undefined;
+		const rootAgentName = options.rootAgentName ?? "echo";
+		const thinkingLevel = options.thinkingLevel ?? "high";
 		return createSubagentExecutor({
 			pi: {
 				events: { emit: () => {} },
@@ -138,6 +144,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 				setSessionName: (name: string) => {
 					sessionName = name;
 				},
+				getThinkingLevel: () => thinkingLevel,
 			},
 			state: makeState(tempDir),
 			config,
@@ -146,6 +153,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			getSubagentSessionRoot: () => tempDir,
 			expandTilde: (p: string) => p,
 			discoverAgents: discoverAgentsImpl,
+			getActiveRootRoleName: () => rootAgentName,
 		});
 	}
 
@@ -249,12 +257,23 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		);
 	}
 
-	function makeCtx(sessionManager: SessionManagerStub) {
+	function makeCtx(
+		sessionManager: SessionManagerStub,
+		options: {
+			systemPrompt?: string;
+			model?: { provider: string; id: string };
+			availableModels?: Array<{ provider: string; id: string }>;
+		} = {},
+	) {
+		const model = options.model ?? { provider: "anthropic", id: "claude-sonnet-4" };
+		const availableModels = options.availableModels ?? [model];
 		return {
 			cwd: tempDir,
 			hasUI: false,
 			ui: {},
-			modelRegistry: { getAvailable: () => [] },
+			model,
+			getSystemPrompt: () => options.systemPrompt ?? "Current root prompt",
+			modelRegistry: { getAvailable: () => availableModels },
 			sessionManager,
 		};
 	}
@@ -379,6 +398,96 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.equal(fs.existsSync(args[sessionIndex + 1]!), true);
 	});
 
+	it("runs forked single executions in root mode without replaying prompt or model flags", async () => {
+		mockPi.reset();
+		mockPi.onCall({
+			echoEnv: ["PI_SUBAGENT_RUNTIME_MODE", "PI_ROLE", "PI_SUBAGENT_CURRENT_AGENT", "PI_SUBAGENT_PARENT_AGENT"],
+		});
+		const { manager } = makeForkingSessionManagerRecorder({
+			sessionFile: path.join(tempDir, "parent-reuse.jsonl"),
+			leafId: "leaf-reuse",
+		});
+		const executor = makeExecutorWithDiscoverAgents(
+			() => ({
+				agents: [{ name: "echo", description: "Echo test agent", model: "openai/gpt-5-mini" }],
+				projectAgentsDir: null,
+			}),
+			{},
+			{ rootAgentName: "echo", thinkingLevel: "high" },
+		);
+
+		const result = await executor.execute(
+			"id",
+			{ agent: "echo", task: "single task", context: "fork" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager, {
+				systemPrompt: "Exact current prompt",
+				model: { provider: "anthropic", id: "claude-sonnet-4" },
+				availableModels: [
+					{ provider: "anthropic", id: "claude-sonnet-4" },
+					{ provider: "openai", id: "gpt-5-mini" },
+				],
+			}),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "{}"), {
+			PI_SUBAGENT_RUNTIME_MODE: "root",
+			PI_ROLE: "echo",
+			PI_SUBAGENT_CURRENT_AGENT: "echo",
+			PI_SUBAGENT_PARENT_AGENT: "echo",
+		});
+		const args = readCallArgs();
+		assert.equal(args.includes("--model"), false);
+		assert.equal(args.includes("--system-prompt"), false);
+		assert.equal(args.includes("--append-system-prompt"), false);
+	});
+
+	it("rejects fork requests that target a different agent", async () => {
+		const { manager } = makeForkingSessionManagerRecorder({
+			sessionFile: path.join(tempDir, "parent-mismatch.jsonl"),
+			leafId: "leaf-mismatch",
+		});
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{ agent: "second", task: "single task", context: "fork" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /only allows the current agent 'echo' to fork itself/i);
+	});
+
+	it("rejects fork requests with prompt or model drift overrides", async () => {
+		const { manager } = makeForkingSessionManagerRecorder({
+			sessionFile: path.join(tempDir, "parent-overrides.jsonl"),
+			leafId: "leaf-overrides",
+		});
+		const executor = makeExecutor();
+
+		for (const params of [
+			{ agent: "echo", task: "single task", context: "fork", model: "openai/gpt-5-mini" },
+			{ agent: "echo", task: "single task", context: "fork", skill: ["extra-skill"] },
+			{ agent: "echo", task: "single task", context: "fork", clarify: true },
+		]) {
+			const result = await executor.execute(
+				"id",
+				params,
+				new AbortController().signal,
+				undefined,
+				makeCtx(manager),
+			);
+
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /requires same-agent execution without prompt\/model\/skill overrides/i);
+		}
+	});
+
 	it("creates isolated forked sessions per parallel task", async () => {
 		const { manager, openedPaths, branchedLeafIds } = makeForkingSessionManagerRecorder({
 			sessionFile: path.join(tempDir, "parent-parallel.jsonl"),
@@ -391,7 +500,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			{
 				tasks: [
 					{ agent: "echo", task: "task one" },
-					{ agent: "second", task: "task two" },
+					{ agent: "echo", task: "task two" },
 				],
 				context: "fork",
 			},
@@ -643,8 +752,8 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			{
 				chain: [
 					{ agent: "echo", task: "step 1" },
-					{ parallel: [{ agent: "echo", task: "p1", count: 2 }, { agent: "second", task: "p2", count: 2 }] },
-					{ agent: "second", task: "step 3" },
+					{ parallel: [{ agent: "echo", task: "p1", count: 2 }, { agent: "echo", task: "p2", count: 2 }] },
+					{ agent: "echo", task: "step 3" },
 				],
 				context: "fork",
 				clarify: false,

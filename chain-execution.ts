@@ -46,6 +46,7 @@ import {
 	type ArtifactPaths,
 	type ControlEvent,
 	type Details,
+	type ForkReuseConfig,
 	type ResolvedControlConfig,
 	type SingleResult,
 	MAX_CONCURRENCY,
@@ -104,6 +105,7 @@ interface ParallelChainRunInput {
 	totalSteps: number;
 	worktreeSetup?: WorktreeSetup;
 	maxSubagentDepth: number;
+	forkReuse?: ForkReuseConfig;
 	preset?: string;
 }
 
@@ -238,8 +240,9 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				availableModels: input.availableModels,
 				preferredModelProvider: input.ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				forkReuse: input.forkReuse,
 				preset: input.preset,
-				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentAgentName: input.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -317,6 +320,7 @@ export interface ChainExecutionParams {
 	chainSkills?: string[];
 	chainDir?: string;
 	maxSubagentDepth: number;
+	forkReuse?: ForkReuseConfig;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	preset?: string;
@@ -359,6 +363,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		chainSkills: chainSkillsParam,
 		chainDir: chainDirBase,
 	} = params;
+	const forkReuse = params.forkReuse;
 	const chainSkills = chainSkillsParam ?? [];
 
 	const allProgress: AgentProgress[] = [];
@@ -560,6 +565,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					foregroundControl,
 					worktreeSetup,
 					maxSubagentDepth: params.maxSubagentDepth,
+					forkReuse,
 					preset: params.preset,
 				});
 				globalTaskIndex += step.parallel.length;
@@ -730,8 +736,9 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				availableModels,
 				preferredModelProvider: ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				forkReuse,
 				preset: params.preset,
-				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 				onUpdate: onUpdate
 					? (p) => {
 						const stepResults = p.details?.results || [];

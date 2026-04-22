@@ -212,7 +212,7 @@ tools: read, bash, mcp:github/search_repositories, mcp:github/get_file_contents
 
 The `mcp:` items are additive — they don't affect which builtins the agent gets. `tools: mcp:chrome-devtools` (with no regular tools listed) gives the agent all default builtins plus chrome-devtools tools. To restrict builtins, list them explicitly: `tools: read, bash, mcp:chrome-devtools`.
 
-Subagents only get direct MCP tools when `mcp:` items are explicitly listed. Even if your `mcp.json` has `directTools: true` globally, a subagent without `mcp:` in its frontmatter won't get any direct tools — keeping it lean. The `mcp` proxy tool is still available for discovery if needed.
+Subagents inherit the parent process's direct MCP tool surface by default. If an agent explicitly lists `mcp:` items, those become its direct-tool configuration instead. Agents can still omit direct MCP tools entirely by setting an explicit empty direct-tool config at launch, in which case `MCP_DIRECT_TOOLS=__none__` is sent. The generic `mcp` proxy tool is still available for discovery if needed.
 
 > **First-run caveat:** The MCP adapter caches tool metadata at startup. The first time you connect to a new MCP server, that cache is empty, so tools are only available through the generic `mcp` proxy. After that first session, restart pi and direct tools become available.
 
@@ -462,6 +462,9 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 | Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
 
 Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
+
+`context: "fork"` is intentionally strict: it only allows the current agent to fork itself, reuses the exact current effective system prompt and active model, and rejects clarify plus any top-level/per-step/per-task `model` or `skill` overrides that would break prompt/model reuse.
+
 When `intercomBridge` is enabled (default: `always`) and `pi-intercom` is installed/enabled, delegated children get runtime instructions for contacting the orchestrator session via `intercom({ action: "ask"|"send", ... })`.
 
 > **Note:** Intercom bridging requires the [pi-intercom](https://github.com/nicobailon/pi-intercom) extension. Install it with `pi install npm:pi-intercom`.

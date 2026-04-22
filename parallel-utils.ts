@@ -16,6 +16,8 @@ export interface RunnerSubagentStep {
 	sessionFile?: string;
 	maxSubagentDepth?: number;
 	preset?: string;
+	runtimeMode?: "delegated" | "root";
+	rootRoleName?: string;
 	parentAgentName?: string;
 	canDelegate?: boolean;
 	allowedDelegateAgents?: string[];

@@ -588,6 +588,8 @@ async function runSingleStep(
 			promptFileStem: step.agent,
 			intercomSessionName: ctx.childIntercomTarget,
 			preset: step.preset,
+			runtimeMode: step.runtimeMode,
+			rootRoleName: step.rootRoleName,
 			currentAgentName: step.agent,
 			parentAgentName: step.parentAgentName,
 			canDelegate: step.canDelegate,

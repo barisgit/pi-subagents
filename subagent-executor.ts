@@ -46,6 +46,7 @@ import {
 	type ControlEvent,
 	type Details,
 	type ExtensionConfig,
+	type ForkReuseConfig,
 	type MaxOutputConfig,
 	type ResolvedControlConfig,
 	type SingleResult,
@@ -111,6 +112,7 @@ interface ExecutorDeps {
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
 	discoverAgents: (cwd: string, scope: AgentScope, options?: { preset?: string }) => { agents: AgentConfig[] };
+	getActiveRootRoleName?: () => string | undefined;
 }
 
 interface ExecutionContextData {
@@ -131,6 +133,7 @@ interface ExecutionContextData {
 	effectiveAsync: boolean;
 	controlConfig: ResolvedControlConfig;
 	intercomBridge: IntercomBridgeState;
+	forkReuse?: ForkReuseConfig;
 }
 
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
@@ -350,6 +353,73 @@ function collectRequestedAgentNames(params: SubagentParamsLike): string[] {
 	return [];
 }
 
+function normalizeName(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed || undefined;
+}
+
+function collectForkOverridePaths(params: SubagentParamsLike): string[] {
+	const paths: string[] = [];
+	if (params.clarify === true) paths.push("clarify");
+	if (params.model !== undefined) paths.push("model");
+	if (params.skill !== undefined) paths.push("skill");
+	for (let i = 0; i < (params.tasks?.length ?? 0); i++) {
+		const task = params.tasks![i]!;
+		if (task.model !== undefined) paths.push(`tasks[${i}].model`);
+		if (task.skill !== undefined) paths.push(`tasks[${i}].skill`);
+	}
+	for (let i = 0; i < (params.chain?.length ?? 0); i++) {
+		const step = params.chain![i]!;
+		if (isParallelStep(step)) {
+			for (let j = 0; j < step.parallel.length; j++) {
+				const task = step.parallel[j]!;
+				if (task.model !== undefined) paths.push(`chain[${i}].parallel[${j}].model`);
+				if (task.skill !== undefined) paths.push(`chain[${i}].parallel[${j}].skill`);
+			}
+			continue;
+		}
+		const sequential = step as SequentialStep & { model?: unknown; skill?: unknown };
+		if (sequential.model !== undefined) paths.push(`chain[${i}].model`);
+		if (sequential.skill !== undefined) paths.push(`chain[${i}].skill`);
+	}
+	return paths;
+}
+
+function resolveForkReuse(
+	params: SubagentParamsLike,
+	_ctx: ExtensionContext,
+	deps: ExecutorDeps,
+): ForkReuseConfig | undefined {
+	if (params.context !== "fork") return undefined;
+
+	const currentAgentName = normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT)
+		?? normalizeName(deps.getActiveRootRoleName?.());
+	if (!currentAgentName) {
+		throw new Error("Fork context requires a known current agent identity.");
+	}
+
+	const requestedAgents = collectRequestedAgentNames(params);
+	const mismatchedAgents = [...new Set(requestedAgents.filter((name) => name !== currentAgentName))];
+	if (mismatchedAgents.length > 0) {
+		throw new Error(
+			`Fork context only allows the current agent '${currentAgentName}' to fork itself. ` +
+			`Requested: ${mismatchedAgents.join(", ")}`,
+		);
+	}
+
+	const overridePaths = collectForkOverridePaths(params);
+	if (overridePaths.length > 0) {
+		throw new Error(
+			`Fork context requires same-agent execution without prompt/model/skill overrides. Unsupported overrides: ${overridePaths.join(", ")}`,
+		);
+	}
+
+	return {
+		agentName: currentAgentName,
+	};
+}
+
 function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskParam[]; error?: string } {
 	const expanded: TaskParam[] = [];
 	for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
@@ -489,6 +559,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		effectiveAsync,
 		controlConfig,
 		intercomBridge,
+		forkReuse,
 	} = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -531,7 +602,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		currentSessionId: deps.state.currentSessionId!,
 		currentModelProvider: ctx.model?.provider,
 		preset: params.preset,
-		parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+		parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 	};
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({
 		provider: m.provider,
@@ -574,6 +645,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			chainSkills: [],
 			sessionFilesByFlatIndex: params.tasks.map((_, index) => sessionFileForIndex(index)),
 			maxSubagentDepth: currentMaxSubagentDepth,
+			forkReuse,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			controlConfig,
@@ -600,6 +672,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForIndex),
 			maxSubagentDepth: currentMaxSubagentDepth,
+			forkReuse,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			controlConfig,
@@ -640,6 +713,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			output: effectiveOutput,
 			modelOverride,
 			maxSubagentDepth,
+			forkReuse,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			controlConfig,
@@ -667,6 +741,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		onUpdate,
 		sessionRoot,
 		controlConfig,
+		forkReuse,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget : undefined;
@@ -698,6 +773,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		chainSkills,
 		chainDir: params.chainDir,
 		maxSubagentDepth: currentMaxSubagentDepth,
+		forkReuse,
 		preset: params.preset,
 		worktreeSetupHook: deps.config.worktreeSetupHook,
 		worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
@@ -718,7 +794,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			currentSessionId: deps.state.currentSessionId!,
 			currentModelProvider: ctx.model?.provider,
 			preset: params.preset,
-			parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+			parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 		};
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
 		return executeAsyncChain(id, {
@@ -739,6 +815,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			chainSkills: chainResult.requestedAsync.chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForIndex),
 			maxSubagentDepth: currentMaxSubagentDepth,
+			forkReuse,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			controlConfig,
@@ -778,6 +855,7 @@ interface ForegroundParallelRunInput {
 	liveProgress: (AgentProgress | undefined)[];
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	worktreeSetup?: WorktreeSetup;
+	forkReuse?: ForkReuseConfig;
 	preset?: string;
 }
 
@@ -896,8 +974,9 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			availableModels: input.availableModels,
 			preferredModelProvider: input.ctx.model?.provider,
 			skills: effectiveSkills === false ? [] : effectiveSkills,
+			forkReuse: input.forkReuse,
 			preset: input.preset,
-			parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+			parentAgentName: input.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 			onUpdate: input.onUpdate
 				? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -954,6 +1033,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		onUpdate,
 		sessionRoot,
 		controlConfig,
+		forkReuse,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget : undefined;
@@ -1057,7 +1137,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				currentSessionId: deps.state.currentSessionId!,
 				currentModelProvider: ctx.model?.provider,
 				preset: params.preset,
-				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 			};
 			const parallelTasks = tasks.map((t, i) => ({
 				agent: t.agent,
@@ -1080,6 +1160,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				chainSkills: [],
 				sessionFilesByFlatIndex: tasks.map((_, index) => sessionFileForIndex(index)),
 				maxSubagentDepth: currentMaxSubagentDepth,
+				forkReuse,
 				worktreeSetupHook: deps.config.worktreeSetupHook,
 				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 				controlConfig,
@@ -1138,6 +1219,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			liveProgress,
 			onUpdate,
 			worktreeSetup,
+			forkReuse,
 			preset: params.preset,
 		});
 		for (let i = 0; i < results.length; i++) {
@@ -1211,6 +1293,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		onUpdate,
 		sessionRoot,
 		controlConfig,
+		forkReuse,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, params.agent!, undefined) : undefined;
@@ -1290,7 +1373,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				currentSessionId: deps.state.currentSessionId!,
 				currentModelProvider: ctx.model?.provider,
 				preset: params.preset,
-				parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 			};
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
@@ -1309,6 +1392,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				output: effectiveOutput,
 				modelOverride,
 				maxSubagentDepth,
+				forkReuse,
 				worktreeSetupHook: deps.config.worktreeSetupHook,
 				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 				controlConfig,
@@ -1386,8 +1470,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		availableModels,
 		preferredModelProvider: currentProvider,
 		skills: effectiveSkills,
+		forkReuse,
 		preset: params.preset,
-		parentAgentName: process.env.PI_SUBAGENT_CURRENT_AGENT,
+		parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 	});
 	if (foregroundControl?.currentIndex === 0) {
 		foregroundControl.interrupt = undefined;
@@ -1594,7 +1679,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (validationError) return validationError;
 
 		let sessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
+		let forkReuse: ForkReuseConfig | undefined;
 		try {
+			forkReuse = resolveForkReuse(effectiveParams, ctx, deps);
 			sessionFileForIndex = createForkContextResolver(ctx.sessionManager, effectiveParams.context).sessionFileForIndex;
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
@@ -1656,6 +1743,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			effectiveAsync,
 			controlConfig,
 			intercomBridge,
+			forkReuse,
 		};
 
 		const foregroundMode: "single" | "parallel" | "chain" = hasChain ? "chain" : hasTasks ? "parallel" : "single";

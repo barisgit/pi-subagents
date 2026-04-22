@@ -320,6 +320,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getSubagentSessionRoot,
 		expandTilde,
 		discoverAgents: (cwd, scope, options) => discoverAgents(cwd, scope, { ...options, config }),
+		getActiveRootRoleName: () => activeRootRoleName,
 	});
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
@@ -415,6 +416,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let activeRootRole: AgentConfig | undefined;
 
 	function isDelegatedSubagentSession(): boolean {
+		const runtimeMode = normalizeName(process.env.PI_SUBAGENT_RUNTIME_MODE);
+		if (runtimeMode === "delegated") return true;
+		if (runtimeMode === "root") return false;
 		return Boolean(normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT));
 	}
 
