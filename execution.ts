@@ -14,6 +14,7 @@ import {
 import {
 	type AgentProgress,
 	type ArtifactPaths,
+	type ControlEvent,
 	type ModelAttempt,
 	type RunSyncOptions,
 	type SingleResult,
@@ -24,6 +25,12 @@ import {
 	truncateOutput,
 	getSubagentDepthEnv,
 } from "./types.ts";
+import {
+	DEFAULT_CONTROL_CONFIG,
+	buildControlEvent,
+	deriveActivityState,
+	shouldEmitControlEvent,
+} from "./subagent-control.ts";
 import {
 	getFinalOutput,
 	findLatestSessionFile,
@@ -86,6 +93,7 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 				usage: attempt.usage ? { ...attempt.usage } : undefined,
 			}))
 			: undefined,
+		controlEvents: result.controlEvents ? result.controlEvents.map((event) => ({ ...event })) : undefined,
 		progress,
 		progressSummary: result.progressSummary ? { ...result.progressSummary } : undefined,
 		artifactPaths: result.artifactPaths ? { ...result.artifactPaths } : undefined,
@@ -140,11 +148,19 @@ async function runSingleAttempt(
 		skills: shared.resolvedSkillNames,
 		skillsWarning: shared.skillsWarning,
 	};
+	const startTime = Date.now();
+	const controlConfig = options.controlConfig ?? DEFAULT_CONTROL_CONFIG;
+	let hasSeenActivity = false;
+	let pausedByInterrupt = false;
+	let interruptedByControl = false;
+	const allControlEvents: ControlEvent[] = [];
+	let pendingControlEvents: ControlEvent[] = [];
 
 	const progress: AgentProgress = {
 		index: options.index ?? 0,
 		agent: agent.name,
 		status: "running",
+		activityState: controlConfig.enabled ? "starting" : undefined,
 		task,
 		skills: shared.resolvedSkillNames,
 		recentTools: [],
@@ -152,11 +168,9 @@ async function runSingleAttempt(
 		toolCount: 0,
 		tokens: 0,
 		durationMs: 0,
-		lastActivityAt: Date.now(),
+		lastActivityAt: startTime,
 	};
 	result.progress = progress;
-
-	const startTime = Date.now();
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
 
 	const exitCode = await new Promise<number>((resolve) => {
@@ -173,6 +187,8 @@ async function runSingleAttempt(
 		let detached = false;
 		let intercomStarted = false;
 		let removeAbortListener: (() => void) | undefined;
+		let removeInterruptListener: (() => void) | undefined;
+		let activityTimer: NodeJS.Timeout | undefined;
 
 		const detachForIntercom = () => {
 			detached = true;
@@ -241,18 +257,64 @@ async function runSingleAttempt(
 			settled = true;
 			clearFinalDrainTimers();
 			clearStdioGuard();
+			if (activityTimer) {
+				clearInterval(activityTimer);
+				activityTimer = undefined;
+			}
 			unsubscribeIntercomDetach?.();
 			removeAbortListener?.();
+			removeInterruptListener?.();
 			resolve(code);
+		};
+
+		const drainPendingControlEvents = (): ControlEvent[] | undefined => {
+			if (pendingControlEvents.length === 0) return undefined;
+			const events = pendingControlEvents;
+			pendingControlEvents = [];
+			return events;
+		};
+
+		const updateActivityState = (now: number): boolean => {
+			const next = deriveActivityState({
+				config: controlConfig,
+				startedAt: startTime,
+				lastActivityAt: progress.lastActivityAt,
+				hasSeenActivity,
+				paused: pausedByInterrupt,
+				now,
+			});
+			if (!next || next === progress.activityState) return false;
+			const previous = progress.activityState;
+			progress.activityState = next;
+			if (shouldEmitControlEvent(controlConfig, previous, next)) {
+				const event = buildControlEvent({
+					from: previous,
+					to: next,
+					runId: options.runId,
+					agent: agent.name,
+					index: options.index,
+					ts: now,
+				});
+				allControlEvents.push(event);
+				pendingControlEvents.push(event);
+				options.onControlEvent?.(event);
+			}
+			return true;
 		};
 
 		const emitUpdateSnapshot = (text: string) => {
 			if (!options.onUpdate || processClosed) return;
 			const progressSnapshot = snapshotProgress(progress);
 			const resultSnapshot = snapshotResult(result, progressSnapshot);
+			const controlEvents = drainPendingControlEvents();
 			options.onUpdate({
 				content: [{ type: "text", text }],
-				details: { mode: "single", results: [resultSnapshot], progress: [progressSnapshot] },
+				details: {
+					mode: "single",
+					results: [resultSnapshot],
+					progress: [progressSnapshot],
+					controlEvents,
+				},
 			});
 		};
 
@@ -276,6 +338,8 @@ async function runSingleAttempt(
 			const now = Date.now();
 			progress.durationMs = now - startTime;
 			progress.lastActivityAt = now;
+			hasSeenActivity = true;
+			updateActivityState(now);
 
 			if (evt.type === "tool_execution_start") {
 				if (options.allowIntercomDetach && evt.toolName === "intercom") {
@@ -335,6 +399,18 @@ async function runSingleAttempt(
 				fireUpdate();
 			}
 		};
+
+		if (controlConfig.enabled) {
+			activityTimer = setInterval(() => {
+				if (processClosed || settled || detached) return;
+				const now = Date.now();
+				if (updateActivityState(now)) {
+					progress.durationMs = now - startTime;
+					fireUpdate();
+				}
+			}, 1000);
+			activityTimer.unref?.();
+		}
 
 		let stderrBuf = "";
 
@@ -400,8 +476,62 @@ async function runSingleAttempt(
 				removeAbortListener = () => options.signal?.removeEventListener("abort", kill);
 			}
 		}
+
+		if (options.interruptSignal) {
+			const interrupt = () => {
+				if (processClosed || detached || settled) return;
+				interruptedByControl = true;
+				pausedByInterrupt = true;
+				progress.status = "running";
+				progress.durationMs = Date.now() - startTime;
+				result.interrupted = true;
+				result.finalOutput = "Interrupted. Waiting for explicit next action.";
+				const now = Date.now();
+				const previous = progress.activityState;
+				progress.activityState = "paused";
+				if (shouldEmitControlEvent(controlConfig, previous, "paused")) {
+					const event = buildControlEvent({
+						from: previous,
+						to: "paused",
+						runId: options.runId,
+						agent: agent.name,
+						index: options.index,
+						ts: now,
+					});
+					allControlEvents.push(event);
+					pendingControlEvents.push(event);
+					options.onControlEvent?.(event);
+				}
+				fireUpdate();
+				trySignalChild(proc, "SIGINT");
+				setTimeout(() => {
+					if (settled || processClosed || detached) return;
+					trySignalChild(proc, "SIGTERM");
+				}, 1000).unref?.();
+			};
+			if (options.interruptSignal.aborted) interrupt();
+			else {
+				options.interruptSignal.addEventListener("abort", interrupt, { once: true });
+				removeInterruptListener = () => options.interruptSignal?.removeEventListener("abort", interrupt);
+			}
+		}
 	});
 	result.exitCode = exitCode;
+	if (interruptedByControl) {
+		result.exitCode = 0;
+		result.interrupted = true;
+		result.error = undefined;
+		result.finalOutput = result.finalOutput || "Interrupted. Waiting for explicit next action.";
+		result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
+		progress.activityState = "paused";
+		progress.durationMs = Date.now() - startTime;
+		result.progressSummary = {
+			toolCount: progress.toolCount,
+			tokens: progress.tokens,
+			durationMs: progress.durationMs,
+		};
+		return result;
+	}
 	if (result.detached) {
 		result.exitCode = 0;
 		result.finalOutput = "Detached for intercom coordination.";

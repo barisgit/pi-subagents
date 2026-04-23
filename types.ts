@@ -40,6 +40,35 @@ export interface TokenUsage {
 	total: number;
 }
 
+export type ActivityState = "starting" | "active" | "quiet" | "stalled" | "paused";
+export type ControlParentMode = "transitions" | "verbose";
+export type ControlEventType = "stalled" | "recovered" | "paused" | "resumed" | "activity";
+
+export interface ControlConfig {
+	enabled?: boolean;
+	quietAfterMs?: number;
+	stalledAfterMs?: number;
+	parentMode?: ControlParentMode;
+}
+
+export interface ResolvedControlConfig {
+	enabled: boolean;
+	quietAfterMs: number;
+	stalledAfterMs: number;
+	parentMode: ControlParentMode;
+}
+
+export interface ControlEvent {
+	type: ControlEventType;
+	from?: ActivityState;
+	to: ActivityState;
+	ts: number;
+	agent: string;
+	index?: number;
+	runId: string;
+	message: string;
+}
+
 // ============================================================================
 // Progress Tracking
 // ============================================================================
@@ -48,6 +77,7 @@ export interface AgentProgress {
 	index: number;
 	agent: string;
 	status: "pending" | "running" | "completed" | "failed" | "detached";
+	activityState?: ActivityState;
 	task: string;
 	skills?: string[];
 	lastActivityAt?: number;
@@ -92,11 +122,13 @@ export interface SingleResult {
 	exitCode: number;
 	detached?: boolean;
 	detachedReason?: string;
+	interrupted?: boolean;
 	messages?: Message[];
 	usage: Usage;
 	model?: string;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
+	controlEvents?: ControlEvent[];
 	error?: string;
 	sessionFile?: string;
 	skills?: string[];
@@ -115,6 +147,7 @@ export interface Details {
 	mode: "single" | "parallel" | "chain" | "management";
 	context?: "fresh" | "fork";
 	results: SingleResult[];
+	controlEvents?: ControlEvent[];
 	asyncId?: string;
 	asyncDir?: string;
 	progress?: AgentProgress[];
@@ -162,15 +195,18 @@ export interface ArtifactConfig {
 export interface AsyncStatus {
 	runId: string;
 	mode: "single" | "chain";
-	state: "queued" | "running" | "complete" | "failed";
+	state: "queued" | "running" | "complete" | "failed" | "paused";
+	activityState?: ActivityState;
 	startedAt: number;
 	endedAt?: number;
 	lastUpdate?: number;
+	pid?: number;
 	cwd?: string;
 	currentStep?: number;
 	steps?: Array<{
 		agent: string;
 		status: string;
+		activityState?: ActivityState;
 		durationMs?: number;
 		tokens?: TokenUsage;
 		skills?: string[];
@@ -188,7 +224,8 @@ export interface AsyncStatus {
 export interface AsyncJobState {
 	asyncId: string;
 	asyncDir: string;
-	status: "queued" | "running" | "complete" | "failed";
+	status: "queued" | "running" | "complete" | "failed" | "paused";
+	activityState?: ActivityState;
 	mode?: "single" | "chain";
 	agents?: string[];
 	currentStep?: number;
@@ -205,6 +242,17 @@ export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
 	asyncJobs: Map<string, AsyncJobState>;
+	foregroundControls: Map<string, {
+		runId: string;
+		mode: "single" | "parallel" | "chain";
+		startedAt: number;
+		updatedAt: number;
+		currentAgent?: string;
+		currentIndex?: number;
+		currentActivityState?: ActivityState;
+		interrupt?: () => boolean;
+	}>;
+	lastForegroundControlId: string | null;
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
 	lastUiContext: ExtensionContext | null;
 	poller: NodeJS.Timeout | null;
@@ -251,9 +299,12 @@ export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
 export interface RunSyncOptions {
 	cwd?: string;
 	signal?: AbortSignal;
+	interruptSignal?: AbortSignal;
 	allowIntercomDetach?: boolean;
 	intercomEvents?: IntercomEventBus;
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
+	onControlEvent?: (event: ControlEvent) => void;
+	controlConfig?: ResolvedControlConfig;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig?: ArtifactConfig;
@@ -291,6 +342,7 @@ export interface ExtensionConfig {
 	forceTopLevelAsync?: boolean;
 	defaultSessionDir?: string;
 	maxSubagentDepth?: number;
+	control?: ControlConfig;
 	parallel?: TopLevelParallelConfig;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;

@@ -22,6 +22,7 @@ import {
 	type ArtifactConfig,
 	type Details,
 	type MaxOutputConfig,
+	type ResolvedControlConfig,
 	ASYNC_DIR,
 	RESULTS_DIR,
 	TEMP_ROOT_DIR,
@@ -75,6 +76,7 @@ export interface AsyncChainParams {
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	controlConfig?: ResolvedControlConfig;
 }
 
 export interface AsyncSingleParams {
@@ -96,6 +98,7 @@ export interface AsyncSingleParams {
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	controlConfig?: ResolvedControlConfig;
 }
 
 export interface AsyncExecutionResult {
@@ -178,6 +181,7 @@ export function executeAsyncChain(
 		maxSubagentDepth,
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
+		controlConfig,
 	} = params;
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
@@ -297,6 +301,7 @@ export function executeAsyncChain(
 				piArgv1: process.argv[1],
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
+				controlConfig,
 			},
 			id,
 			runnerCwd,
@@ -364,6 +369,7 @@ export function executeAsyncSingle(
 		maxSubagentDepth,
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
+		controlConfig,
 	} = params;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 	const skillNames = params.skills ?? agentConfig.skills ?? [];
@@ -430,6 +436,7 @@ export function executeAsyncSingle(
 				piArgv1: process.argv[1],
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
+				controlConfig,
 			},
 			id,
 			runnerCwd,

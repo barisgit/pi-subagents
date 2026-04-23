@@ -32,6 +32,7 @@ interface ProgressSummary {
 	agent: string;
 	index: number;
 	status: string;
+	activityState?: string;
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolArgs?: string;
@@ -58,6 +59,7 @@ interface RunSyncResult {
 	progress: ProgressSummary;
 	artifactPaths?: ArtifactPaths;
 	finalOutput?: string;
+	interrupted?: boolean;
 	detached?: boolean;
 	detachedReason?: string;
 	savedOutputPath?: string;
@@ -545,6 +547,27 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		// proving the abort signal terminated the process early.
 		assert.ok(elapsed < 5000, `should abort early, took ${elapsed}ms`);
 		// Exit code is platform-dependent (Windows: often 1 or 0, Linux: null/143)
+	});
+
+	it("soft-interrupts the current turn and returns a paused result", async () => {
+		mockPi.onCall({ delay: 10000 });
+		const agents = makeAgentConfigs(["slow"]);
+		const controller = new AbortController();
+
+		const start = Date.now();
+		setTimeout(() => controller.abort(), 200);
+
+		const result = await runSync(tempDir, agents, "slow", "Slow task", {
+			runId: "interrupt-run",
+			interruptSignal: controller.signal,
+		});
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed < 5000, `should interrupt early, took ${elapsed}ms`);
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.interrupted, true);
+		assert.equal(result.progress.activityState, "paused");
+		assert.match(result.finalOutput ?? "", /Interrupted/);
 	});
 
 	it("detaches cleanly on intercom handoff without aborting the child process", async () => {

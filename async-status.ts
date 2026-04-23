@@ -1,13 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
-import { type AsyncStatus, type TokenUsage } from "./types.ts";
+import { type ActivityState, type AsyncStatus, type TokenUsage } from "./types.ts";
+import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
 import { readStatus } from "./utils.ts";
 
 export interface AsyncRunStepSummary {
 	index: number;
 	agent: string;
 	status: string;
+	activityState?: ActivityState;
 	durationMs?: number;
 	tokens?: TokenUsage;
 	skills?: string[];
@@ -19,7 +21,8 @@ export interface AsyncRunStepSummary {
 export interface AsyncRunSummary {
 	id: string;
 	asyncDir: string;
-	state: "queued" | "running" | "complete" | "failed";
+	state: "queued" | "running" | "complete" | "failed" | "paused";
+	activityState?: ActivityState;
 	mode: "single" | "chain";
 	cwd?: string;
 	startedAt: number;
@@ -66,28 +69,57 @@ function isAsyncRunDir(root: string, entry: string): boolean {
 	}
 }
 
+function outputFileMtime(outputFile: string | undefined): number | undefined {
+	if (!outputFile) return undefined;
+	try {
+		return fs.statSync(outputFile).mtimeMs;
+	} catch {
+		return undefined;
+	}
+}
+
+function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): ActivityState | undefined {
+	if (status.state === "paused") return "paused";
+	if (status.state !== "running") return status.activityState;
+	const outputPath = status.outputFile ? (path.isAbsolute(status.outputFile) ? status.outputFile : path.join(asyncDir, status.outputFile)) : undefined;
+	const lastActivityAt = outputFileMtime(outputPath) ?? status.lastUpdate;
+	return deriveActivityState({
+		config: DEFAULT_CONTROL_CONFIG,
+		startedAt: status.startedAt,
+		lastActivityAt,
+		hasSeenActivity: Boolean(lastActivityAt),
+		paused: false,
+	});
+}
+
 function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string }): AsyncRunSummary {
+	const activityState = deriveAsyncActivityState(asyncDir, status);
 	return {
 		id: status.runId || path.basename(asyncDir),
 		asyncDir,
 		state: status.state,
+		activityState,
 		mode: status.mode,
 		cwd: status.cwd,
 		startedAt: status.startedAt,
 		lastUpdate: status.lastUpdate,
 		endedAt: status.endedAt,
 		currentStep: status.currentStep,
-		steps: (status.steps ?? []).map((step, index) => ({
-			index,
-			agent: step.agent,
-			status: step.status,
-			...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
-			...(step.tokens ? { tokens: step.tokens } : {}),
-			...(step.skills ? { skills: step.skills } : {}),
-			...(step.model ? { model: step.model } : {}),
-			...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
-			...(step.error ? { error: step.error } : {}),
-		})),
+		steps: (status.steps ?? []).map((step, index) => {
+			const stepActivityState = step.activityState ?? (step.status === "running" ? activityState : undefined);
+			return {
+				index,
+				agent: step.agent,
+				status: step.status,
+				...(stepActivityState ? { activityState: stepActivityState } : {}),
+				...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
+				...(step.tokens ? { tokens: step.tokens } : {}),
+				...(step.skills ? { skills: step.skills } : {}),
+				...(step.model ? { model: step.model } : {}),
+				...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
+				...(step.error ? { error: step.error } : {}),
+			};
+		}),
 		...(status.sessionDir ? { sessionDir: status.sessionDir } : {}),
 		...(status.outputFile ? { outputFile: status.outputFile } : {}),
 		...(status.totalTokens ? { totalTokens: status.totalTokens } : {}),
@@ -100,8 +132,9 @@ function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
 		switch (state) {
 			case "running": return 0;
 			case "queued": return 1;
-			case "failed": return 2;
-			case "complete": return 3;
+		case "failed": return 2;
+		case "paused": return 2;
+		case "complete": return 3;
 		}
 	};
 	return [...runs].sort((a, b) => {
@@ -142,7 +175,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): AsyncRunOverlayData {
 	const all = listAsyncRuns(asyncDirRoot);
 	const recent = all
-		.filter((run) => run.state === "complete" || run.state === "failed")
+		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused")
 		.sort((a, b) => (b.lastUpdate ?? b.endedAt ?? b.startedAt) - (a.lastUpdate ?? a.endedAt ?? a.startedAt))
 		.slice(0, recentLimit);
 	return {
@@ -152,7 +185,8 @@ export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): 
 }
 
 function formatStepLine(step: AsyncRunStepSummary): string {
-	const parts = [`${step.index + 1}. ${step.agent}`, step.status];
+	const state = step.activityState ? `${step.status}/${step.activityState}` : step.status;
+	const parts = [`${step.index + 1}. ${step.agent}`, state];
 	if (step.model) parts.push(step.model);
 	if (step.durationMs !== undefined) parts.push(formatDuration(step.durationMs));
 	if (step.tokens) parts.push(`${formatTokens(step.tokens.total)} tok`);
@@ -163,7 +197,8 @@ function formatRunHeader(run: AsyncRunSummary): string {
 	const stepCount = run.steps.length || 1;
 	const stepLabel = run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
 	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir);
-	return `${run.id} | ${run.state} | ${run.mode} | ${stepLabel} | ${cwd}`;
+	const state = run.activityState ? `${run.state}/${run.activityState}` : run.state;
+	return `${run.id} | ${state} | ${run.mode} | ${stepLabel} | ${cwd}`;
 }
 
 export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {

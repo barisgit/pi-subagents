@@ -25,6 +25,7 @@ function statusColor(theme: Theme, status: AsyncRunSummary["state"]): string {
 		case "queued": return theme.fg("accent", status);
 		case "complete": return theme.fg("success", status);
 		case "failed": return theme.fg("error", status);
+		case "paused": return theme.fg("warning", status);
 	}
 }
 
@@ -33,6 +34,7 @@ function stepStatusColor(theme: Theme, status: string): string {
 	if (status === "pending") return theme.fg("dim", status);
 	if (status === "complete" || status === "completed") return theme.fg("success", status);
 	if (status === "failed") return theme.fg("error", status);
+	if (status === "paused") return theme.fg("warning", status);
 	return status;
 }
 
@@ -170,7 +172,8 @@ export class SubagentsStatusComponent implements Component {
 				: "";
 			const duration = step.durationMs !== undefined ? ` | ${formatDuration(step.durationMs)}` : "";
 			const tokens = step.tokens ? ` | ${formatTokens(step.tokens.total)} tok` : "";
-			const line = `  ${step.index + 1}. ${step.agent} | ${stepStatusColor(this.theme, step.status)}${model}${attempts}${duration}${tokens}`;
+			const activity = step.activityState ? `/${step.activityState}` : "";
+			const line = `  ${step.index + 1}. ${step.agent} | ${stepStatusColor(this.theme, step.status)}${activity}${model}${attempts}${duration}${tokens}`;
 			lines.push(row(truncateToWidth(line, innerW), width, this.theme));
 			if (step.error) {
 				lines.push(row(truncateToWidth(`     ${step.error}`, innerW), width, this.theme));

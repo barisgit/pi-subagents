@@ -231,6 +231,7 @@ function compactCompletedProgress(progress: AgentProgress): AgentProgress {
 		index: progress.index,
 		agent: progress.agent,
 		status: progress.status,
+		activityState: progress.activityState,
 		task: progress.task,
 		skills: progress.skills,
 		toolCount: progress.toolCount,

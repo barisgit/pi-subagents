@@ -57,12 +57,22 @@ export const ParallelStepSchema = Type.Object({
 // Note: Using Type.Any() for Google API compatibility (doesn't support anyOf)
 export const ChainItem = Type.Any({ description: "Chain step: either {agent, task?, ...} for sequential or {parallel: [...]} for concurrent execution" });
 
+export const ControlOverrides = Type.Object({
+	enabled: Type.Optional(Type.Boolean({ description: "Enable/disable subagent control activity tracking for this run" })),
+	quietAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "Idle window before activity moves from active to quiet" })),
+	stalledAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "Idle window before activity moves from quiet to stalled" })),
+	parentMode: Type.Optional(Type.String({ enum: ["transitions", "verbose"], description: "Parent-visible control event mode" })),
+});
+
 export const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode)" })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({
-		description: "Management action: 'list' (discover agents/chains), 'get' (full detail), 'create', 'update', 'delete'. Omit for execution mode."
+		description: "Action: management ('list','get','create','update','delete') or control ('interrupt'). Omit for execution mode."
+	})),
+	runId: Type.Optional(Type.String({
+		description: "Target run ID for action='interrupt'. Defaults to the most recently active controllable run in this session."
 	})),
 	// Chain identifier for management (can't reuse 'chain' — that's the execution array)
 	chainName: Type.Optional(Type.String({
@@ -96,6 +106,7 @@ export const SubagentParams = Type.Object({
 	),
 	// Clarification TUI
 	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution (default: true for chains, false for single/parallel). Implies sync mode." })),
+	control: Type.Optional(ControlOverrides),
 	// Solo agent overrides
 	output: Type.Optional(Type.Any({ description: "Output file for single agent (string), or false to disable. Relative paths resolve against cwd." })),
 	skill: Type.Optional(SkillOverride),

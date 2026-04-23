@@ -22,6 +22,17 @@ interface SubagentParamsSchema {
 			minimum?: number;
 			description?: string;
 		};
+		runId?: {
+			type?: string;
+			description?: string;
+		};
+		control?: {
+			properties?: {
+				quietAfterMs?: { minimum?: number };
+				stalledAfterMs?: { minimum?: number };
+				parentMode?: { enum?: string[] };
+			};
+		};
 	};
 }
 
@@ -64,6 +75,19 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 		assert.ok(concurrencySchema, "concurrency schema should exist");
 		assert.equal(concurrencySchema.minimum, 1);
 		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
+	});
+
+	it("includes subagent control fields", () => {
+		const runIdSchema = SubagentParams?.properties?.runId;
+		assert.ok(runIdSchema, "runId schema should exist");
+		assert.equal(runIdSchema.type, "string");
+		assert.match(String(runIdSchema.description ?? ""), /interrupt/i);
+
+		const controlSchema = SubagentParams?.properties?.control;
+		assert.ok(controlSchema, "control schema should exist");
+		assert.equal(controlSchema.properties?.quietAfterMs?.minimum, 1);
+		assert.equal(controlSchema.properties?.stalledAfterMs?.minimum, 1);
+		assert.deepEqual(controlSchema.properties?.parentMode?.enum, ["transitions", "verbose"]);
 	});
 
 	it("includes action on status params for list mode", () => {

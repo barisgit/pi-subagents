@@ -20,6 +20,7 @@ agents into a workflow, or create/edit agents and chains on demand.
 - **Recon and planning**: use `scout` or `context-builder`, then `planner`
 - **Parallel exploration**: run multiple non-conflicting tasks concurrently
 - **Long-running work**: launch async/background runs and inspect them later
+- **Subagent control**: watch clear stalled/paused signals and soft-interrupt only when a delegated run is genuinely blocked
 - **Agent authoring**: create, update, or override agents and chains for a project
 
 ## Tool vs Slash Commands
@@ -146,6 +147,40 @@ subagent({
 
 Inspect async runs with the `subagent_status(...)` tool or the
 `/subagents-status` slash command.
+
+### Subagent control
+
+Subagent control is the runtime visibility and intervention layer for delegated runs. It is separate from lifecycle status. Lifecycle status says whether a child is `running`, `completed`, `failed`, or detached. Activity state says what the child appears to be doing right now: `starting`, `active`, `quiet`, `stalled`, or `paused`.
+
+Default behavior is intentionally conservative. Routine `active` and `quiet` updates are mostly UI/status information. Clear transitions such as `stalled`, `recovered`, and `paused` are the signals worth acting on.
+
+Use soft interrupt when a child is clearly blocked or drifting and the parent needs to regain control:
+
+```typescript
+subagent({ action: "interrupt" })
+```
+
+Pass `runId` when targeting a specific controllable run:
+
+```typescript
+subagent({ action: "interrupt", runId: "abc123" })
+```
+
+A soft interrupt cancels the current child turn and leaves the run paused. It does not mean the delegated task succeeded or failed. After an interrupt, decide the next explicit action: resume with clearer instructions, replace the task, ask the user, or stop the workflow.
+
+Per-run control thresholds can be overridden when a task legitimately runs quiet for longer than usual:
+
+```typescript
+subagent({
+  agent: "worker",
+  task: "Run the slow migration test suite",
+  control: {
+    quietAfterMs: 60000,
+    stalledAfterMs: 300000,
+    parentMode: "transitions"
+  }
+})
+```
 
 ## Clarify TUI
 
@@ -334,6 +369,7 @@ particular agent or with forked context.
   filtered contexts.
 - **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
   unless configured otherwise.
+- **Control state is not lifecycle state.** `paused` means the child turn was intentionally interrupted or is awaiting direction; it is not the same as `failed`.
 - **Intercom asks are blocking.** A session can only maintain one pending outbound
   ask wait state at a time.
 - **Keep conversational authority clear.** Advisory subagents should not silently
@@ -361,6 +397,10 @@ Give subagents specific tasks rather than vague mandates.
 
 If a subagent encounters an unapproved product, architecture, or scope choice,
 it should coordinate back via `intercom` instead of deciding alone.
+
+### Intervene only on clear control signals
+
+Use subagent control proactively when a delegated run is explicitly `stalled` or `paused`, or when a human asks you to regain control. Do not interrupt just because a child is briefly `quiet`. Quiet can be normal during long tool calls, test runs, or model reasoning.
 
 ### Name sessions meaningfully
 

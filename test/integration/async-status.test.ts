@@ -79,6 +79,34 @@ describe("async status helpers", () => {
 		}
 	});
 
+	it("formats paused runs with activity state", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-paused-status-"));
+		try {
+			createAsyncDir(root, "run-paused", {
+				runId: "run-paused",
+				mode: "single",
+				state: "paused",
+				activityState: "paused",
+				startedAt: 100,
+				lastUpdate: 200,
+				endedAt: 200,
+				steps: [{ agent: "worker", status: "complete", activityState: "paused" }],
+			});
+
+			const overlay = listAsyncRunsForOverlay(root, 5);
+			assert.equal(overlay.active.length, 0);
+			assert.equal(overlay.recent[0]?.id, "run-paused");
+			assert.equal(overlay.recent[0]?.activityState, "paused");
+			assert.equal(overlay.recent[0]?.steps[0]?.activityState, "paused");
+
+			const text = formatAsyncRunList(overlay.recent, "Recent async runs");
+			assert.match(text, /run-paused \| paused\/paused/);
+			assert.match(text, /worker \| complete\/paused/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("surfaces malformed status files instead of silently skipping them", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-bad-status-"));
 		const dir = path.join(root, "broken-run");

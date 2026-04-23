@@ -153,6 +153,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		baseCwd: process.cwd(),
 		currentSessionId: null,
 		asyncJobs: new Map(),
+		foregroundControls: new Map(),
+		lastForegroundControlId: null,
 		cleanupTimers: new Map(),
 		lastUiContext: null,
 		poller: null,
@@ -265,11 +267,14 @@ Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", tas
 
 MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • { action: "list" } - discover agents/chains
-• { action: "get", agent: "name" } - full agent detail
+• { action: "get", agent: "name" } - full detail
 • { action: "create", config: { name, systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, ... } }
 • { action: "update", agent: "name", config: { ... } } - merge
 • { action: "delete", agent: "name" }
-• Use chainName for chain operations`,
+• Use chainName for chain operations
+
+CONTROL:
+• { action: "interrupt", runId?: "..." } - soft-interrupt the current child turn and leave the run paused`, 
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
@@ -389,13 +394,17 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 					const lines = [
 						`Run: ${status.runId}`,
-						`State: ${status.state}`,
+						`State: ${status.activityState ? `${status.state}/${status.activityState}` : status.state}`,
 						`Mode: ${status.mode}`,
 						stepLine,
 						`Started: ${started}`,
 						`Updated: ${updated}`,
 						`Dir: ${asyncDir}`,
 					];
+					for (const [index, step] of (status.steps ?? []).entries()) {
+						const stepState = step.activityState ? `${step.status}/${step.activityState}` : step.status;
+						lines.push(`Step ${index + 1}: ${step.agent} ${stepState}`);
+					}
 					if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
 					if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
 					if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);

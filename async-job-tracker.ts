@@ -56,6 +56,7 @@ export function createAsyncJobTracker(state: SubagentState, asyncDirRoot: string
 					if (status) {
 						const previousStatus = job.status;
 						job.status = status.state;
+						job.activityState = status.activityState;
 						job.mode = status.mode;
 						job.currentStep = status.currentStep ?? job.currentStep;
 						job.stepsTotal = status.steps?.length ?? job.stepsTotal;
@@ -68,7 +69,7 @@ export function createAsyncJobTracker(state: SubagentState, asyncDirRoot: string
 						job.outputFile = status.outputFile ?? job.outputFile;
 						job.totalTokens = status.totalTokens ?? job.totalTokens;
 						job.sessionFile = status.sessionFile ?? job.sessionFile;
-						if ((job.status === "complete" || job.status === "failed") && previousStatus !== job.status) {
+						if ((job.status === "complete" || job.status === "failed" || job.status === "paused") && previousStatus !== job.status) {
 							scheduleCleanup(job.asyncId);
 						}
 						continue;
@@ -102,6 +103,7 @@ export function createAsyncJobTracker(state: SubagentState, asyncDirRoot: string
 			asyncId: info.id,
 			asyncDir,
 			status: "queued",
+			activityState: "starting",
 			mode: info.chain ? "chain" : "single",
 			agents,
 			stepsTotal: agents?.length,
@@ -136,6 +138,8 @@ export function createAsyncJobTracker(state: SubagentState, asyncDirRoot: string
 		}
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
+		state.foregroundControls?.clear();
+		state.lastForegroundControlId = null;
 		state.resultFileCoalescer.clear();
 		if (ctx?.hasUI) {
 			state.lastUiContext = ctx;

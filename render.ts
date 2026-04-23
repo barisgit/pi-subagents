@@ -83,7 +83,7 @@ let lastWidgetHash = "";
 
 function computeWidgetHash(jobs: AsyncJobState[]): string {
 	return jobs.slice(0, MAX_WIDGET_JOBS).map(job =>
-		`${job.asyncId}:${job.status}:${job.currentStep}:${job.updatedAt}:${job.totalTokens?.total ?? 0}`
+		`${job.asyncId}:${job.status}:${job.activityState}:${job.currentStep}:${job.updatedAt}:${job.totalTokens?.total ?? 0}`
 	).join("|");
 }
 
@@ -142,6 +142,11 @@ function buildLiveStatusLine(progress: Pick<AgentProgress, "lastActivityAt">): s
 	return formatActivityLabel(progress.lastActivityAt);
 }
 
+function formatActivityState(state: AgentProgress["activityState"]): string | undefined {
+	if (!state) return undefined;
+	return `activity: ${state}`;
+}
+
 /**
  * Render the async jobs widget
  */
@@ -175,7 +180,9 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 				? theme.fg("success", "complete")
 				: job.status === "failed"
 					? theme.fg("error", "failed")
-					: theme.fg("warning", "running");
+					: job.status === "paused"
+						? theme.fg("warning", "paused")
+						: theme.fg("warning", "running");
 
 		const stepsTotal = job.stepsTotal ?? (job.agents?.length ?? 1);
 		const stepIndex = job.currentStep !== undefined ? job.currentStep + 1 : undefined;
@@ -185,12 +192,12 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		const agentLabel = job.agents ? job.agents.join(" -> ") : (job.mode ?? "single");
 
 		const tokenText = job.totalTokens ? ` | ${formatTokens(job.totalTokens.total)} tok` : "";
-		const activityText = job.status === "running" ? getLastActivity(job.outputFile) : "";
+		const activityText = job.activityState ?? (job.status === "running" ? getLastActivity(job.outputFile) : "");
 		const activitySuffix = activityText ? ` | ${theme.fg("dim", activityText)}` : "";
 
 		lines.push(truncLine(`- ${id} ${status} | ${agentLabel} | ${stepText}${elapsed ? ` | ${elapsed}` : ""}${tokenText}${activitySuffix}`, w));
 
-		if (job.status === "running" && job.outputFile) {
+		if ((job.status === "running" || job.status === "paused") && job.outputFile) {
 			const tail = getOutputTail(job.outputFile, 3);
 			for (const line of tail) {
 				lines.push(truncLine(theme.fg("dim", `  > ${line}`), w));
@@ -258,6 +265,10 @@ export function renderSubagentResult(
 			const toolLine = formatCurrentToolLine(r.progress, w, expanded);
 			if (toolLine) {
 				c.addChild(new Text(fit(theme.fg("warning", `> ${toolLine}`)), 0, 0));
+			}
+			const activityStateLine = formatActivityState(r.progress.activityState);
+			if (activityStateLine) {
+				c.addChild(new Text(fit(theme.fg("accent", activityStateLine)), 0, 0));
 			}
 			const liveStatusLine = buildLiveStatusLine(r.progress);
 			if (liveStatusLine) {
@@ -466,6 +477,10 @@ export function renderSubagentResult(
 			const toolLine = formatCurrentToolLine(rProg, w, expanded);
 			if (toolLine) {
 				c.addChild(new Text(fit(theme.fg("warning", `    > ${toolLine}`)), 0, 0));
+			}
+			const activityStateLine = formatActivityState(rProg.activityState);
+			if (activityStateLine) {
+				c.addChild(new Text(fit(theme.fg("accent", `    ${activityStateLine}`)), 0, 0));
 			}
 			const liveStatusLine = buildLiveStatusLine(rProg);
 			if (liveStatusLine) {
