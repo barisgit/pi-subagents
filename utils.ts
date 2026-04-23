@@ -186,6 +186,52 @@ export function writePrompt(agent: string, prompt: string): { dir: string; path:
 }
 
 // ============================================================================
+// XML Metadata Stripping (configurable)
+// ============================================================================
+
+const DEFAULT_STRIP_TAGS = ["dcp-id", "dcp-owner", "dcp-system-reminder"];
+
+let stripRe: RegExp | null = null;
+
+function buildStripRegex(tags: string[]): RegExp {
+	// Match opening tag with any attributes, content (including newlines), and closing tag.
+	// Leading newline is consumed so stripping doesn't leave blank lines.
+	const alternation = tags.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+	return new RegExp(`\\n?<(${alternation})[^>]*>[\\s\\S]*?<\\/\\1>`, "g");
+}
+
+/**
+ * Configure XML tag stripping. Call once at extension init.
+ * Pass `false` or `{ enabled: false }` to disable.
+ * Pass `{ tags: [...] }` to customize which tags are stripped.
+ */
+export function configureXmlStripping(config: import("./types.ts").StripXmlTagsConfig | boolean | undefined): void {
+	if (config === false) {
+		stripRe = null;
+		return;
+	}
+	if (config === true || config === undefined) {
+		stripRe = buildStripRegex(DEFAULT_STRIP_TAGS);
+		return;
+	}
+	if (config.enabled === false) {
+		stripRe = null;
+		return;
+	}
+	const tags = config.tags ?? DEFAULT_STRIP_TAGS;
+	stripRe = tags.length > 0 ? buildStripRegex(tags) : null;
+}
+
+/**
+ * Strip configured XML metadata tags from text.
+ * No-op if stripping is disabled or not yet configured.
+ */
+export function stripXmlMetadataTags(text: string): string {
+	if (!stripRe) return text;
+	return text.replace(stripRe, "").trim();
+}
+
+// ============================================================================
 // Message Parsing Utilities
 // ============================================================================
 
@@ -197,7 +243,7 @@ export function getFinalOutput(messages: Message[]): string {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
-				if (part.type === "text") return part.text;
+				if (part.type === "text") return stripXmlMetadataTags(part.text);
 			}
 		}
 	}
@@ -217,7 +263,7 @@ export function getDisplayItems(messages: Message[] | undefined): DisplayItem[] 
 	for (const msg of messages) {
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
-				if (part.type === "text") items.push({ type: "text", text: part.text });
+				if (part.type === "text") items.push({ type: "text", text: stripXmlMetadataTags(part.text) });
 				else if (part.type === "toolCall") items.push({ type: "tool", name: part.name, args: part.arguments });
 			}
 		}

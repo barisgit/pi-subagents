@@ -411,6 +411,13 @@ export interface DiscoveryPresetInfo {
 	warnings: string[];
 }
 
+export interface StripXmlTagsConfig {
+	/** Enable stripping of XML metadata tags from subagent output. Default: true */
+	enabled?: boolean;
+	/** Tag names (without angle brackets) to strip. Default: ["dcp-id", "dcp-owner", "dcp-system-reminder"] */
+	tags?: string[];
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	forceTopLevelAsync?: boolean;
@@ -423,6 +430,8 @@ export interface ExtensionConfig {
 	intercomBridge?: IntercomBridgeConfig;
 	defaultPreset?: string;
 	presets?: Record<string, PresetConfig>;
+	/** Configure stripping of XML metadata tags from subagent output display. */
+	stripXmlTags?: StripXmlTagsConfig | boolean;
 }
 
 // ============================================================================

@@ -50,6 +50,7 @@ import {
 	SUBAGENT_CONTROL_EVENT,
 	WIDGET_KEY,
 } from "./types.ts";
+import { configureXmlStripping } from "./utils.ts";
 
 /**
  * Derive subagent session base directory from parent session file.
@@ -269,6 +270,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	cleanupOldChainDirs();
 
 	const config = loadConfig();
+	configureXmlStripping(config.stripXmlTags);
 	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
