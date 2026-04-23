@@ -578,6 +578,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
+		promptSnippet: "Delegate to subagents or manage agent definitions",
 		description: `Delegate to subagents or manage agent definitions.
 
 EXECUTION (use exactly ONE mode):
