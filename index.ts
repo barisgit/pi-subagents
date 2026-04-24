@@ -586,6 +586,7 @@ EXECUTION (use exactly ONE mode):
 • SINGLE: { agent, task? } - one task; omit task for self-contained agents
 • CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out
 • PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
+• SWARM: { prompt: "...", tasks: [{agent,task}, ...] } - parallel dispatch with shared prompt. Use {in} in prompt as placeholder for each task's text; if absent, task text is appended to the prompt.
 • Optional context: { context: "fresh" | "fork" } (default: "fresh")
 • Optional preset: { preset: "name" } - preset-aware discovery/routing (explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config default)
 
@@ -601,6 +602,8 @@ Nested guardrails:
 • Legacy orchestrator/delegate behavior remains the fallback when no explicit capability env is present
 
 Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }
+Swarm example: { prompt: "Review this codebase for security issues. Focus on: {in}", tasks: [{agent:"explorer", task:"authentication flow"}, {agent:"explorer", task:"API endpoints"}] }
+Chain with swarm: { chain: [{agent:"scout", task:"Analyze {task}"}, {parallel: [{agent:"explorer", task:"auth"}, {agent:"explorer", task:"API"}], prompt: "Review for security. Focus on: {in}"}] }
 
 MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • { action: "list" } - discover executable agents/chains and any disabled builtins

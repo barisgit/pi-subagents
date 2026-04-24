@@ -83,6 +83,7 @@ export interface SubagentParamsLike {
 	task?: string;
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
+	prompt?: string;
 	concurrency?: number;
 	worktree?: boolean;
 	context?: "fresh" | "fork";
@@ -321,6 +322,16 @@ function validateExecutionInput(
 					isError: true,
 					details: { mode: "chain" as const, results: [] },
 				};
+			}
+			if (isParallelStep(step) && step.prompt) {
+				const count = (step.prompt.match(/\{in\}/g) ?? []).length;
+				if (count > 1) {
+					return {
+						content: [{ type: "text", text: `Parallel step ${i + 1} prompt contains ${count} occurrences of {in}; only one is allowed.` }],
+						isError: true,
+						details: { mode: "chain" as const, results: [] },
+					};
+				}
 			}
 		}
 	}
@@ -1666,6 +1677,28 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			: discoveredAgents;
 		const runId = randomUUID().slice(0, 8);
 		const shareEnabled = effectiveParams.share === true;
+
+		// Expand shared prompt into tasks (swarm-style dispatch)
+		if (effectiveParams.prompt && effectiveParams.tasks && effectiveParams.tasks.length > 0) {
+			const template = effectiveParams.prompt;
+			const placeholderCount = (template.match(/\{in\}/g) ?? []).length;
+			if (placeholderCount > 1) {
+				return {
+					content: [{ type: "text", text: `prompt contains ${placeholderCount} occurrences of {in}; only one is allowed.` }],
+					isError: true,
+					details: { mode: "parallel" as const, results: [] },
+				};
+			}
+			const hasPlaceholder = placeholderCount === 1;
+			effectiveParams.tasks = effectiveParams.tasks.map((t) => ({
+				...t,
+				task: hasPlaceholder
+					? template.replace("{in}", t.task)
+					: `${template}\n\n${t.task}`,
+			}));
+			effectiveParams.prompt = undefined;
+		}
+
 		const hasChain = (effectiveParams.chain?.length ?? 0) > 0;
 		const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
 		const hasSingle = !hasChain && !hasTasks && Boolean(effectiveParams.agent);

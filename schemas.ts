@@ -60,6 +60,7 @@ export const ParallelTaskSchema = Type.Object({
 // Parallel chain step (multiple agents running concurrently)
 export const ParallelStepSchema = Type.Object({
 	parallel: Type.Array(ParallelTaskSchema, { minItems: 1, description: "Tasks to run in parallel" }),
+	prompt: Type.Optional(Type.String({ description: "Common prompt shared across all parallel tasks. Use {in} as placeholder for each task's text; if absent, task text is appended." })),
 	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
 	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
 	worktree: Type.Optional(Type.Boolean({
@@ -132,6 +133,7 @@ export const SubagentParams = Type.Object({
 			"Per-worktree diffs included in output."
 	})),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
+	prompt: Type.Optional(Type.String({ description: "Common prompt shared across all tasks. Use {in} as placeholder for each task's text; if absent, task text is appended. Enables swarm-style dispatch with tasks[]." })),
 	preset: Type.Optional(Type.String({ description: "Optional preset name for preset-aware agent discovery and routing. Precedence: explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config.defaultPreset." })),
 	context: Type.Optional(Type.String({
 		enum: ["fresh", "fork"],

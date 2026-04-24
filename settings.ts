@@ -61,6 +61,7 @@ export interface ParallelTaskItem {
 /** Parallel step: multiple agents running concurrently */
 export interface ParallelStep {
 	parallel: ParallelTaskItem[];
+	prompt?: string;
 	concurrency?: number;
 	failFast?: boolean;
 	worktree?: boolean;
@@ -144,11 +145,14 @@ export function resolveChainTemplates(
 ): ResolvedTemplates {
 	return steps.map((step, i) => {
 		if (isParallelStep(step)) {
-			// Parallel step: resolve each task's template
+			const sharedPrompt = step.prompt;
+			// Parallel step: resolve each task's template, then apply shared prompt
 			return step.parallel.map((task) => {
-				if (task.task) return task.task;
-				// Default for parallel tasks is {previous}
-				return "{previous}";
+				const rawTask = task.task ?? "{previous}";
+				if (!sharedPrompt) return rawTask;
+				return sharedPrompt.includes("{in}")
+					? sharedPrompt.replace("{in}", rawTask)
+					: `${sharedPrompt}\n\n${rawTask}`;
 			});
 		}
 		// Sequential step: existing logic
