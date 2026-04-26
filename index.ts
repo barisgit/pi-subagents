@@ -431,6 +431,49 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	let activeRootRoleName: string | undefined;
 	let activeRootRole: AgentConfig | undefined;
 
+	const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+	const runtimePresetSettingKeys = ["defaultProvider", "defaultModel", "defaultThinkingLevel"] as const;
+
+	function readSettingsFile(): Record<string, unknown> | undefined {
+		try {
+			return JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+		} catch {
+			return undefined;
+		}
+	}
+
+	function restoreRuntimePresetSettings(before: Record<string, unknown> | undefined): void {
+		if (!before) return;
+		const after = readSettingsFile();
+		if (!after) return;
+
+		let changed = false;
+		for (const key of runtimePresetSettingKeys) {
+			if (before[key] === undefined) {
+				if (key in after) {
+					delete after[key];
+					changed = true;
+				}
+				continue;
+			}
+			if (after[key] !== before[key]) {
+				after[key] = before[key];
+				changed = true;
+			}
+		}
+
+		if (changed) fs.writeFileSync(settingsPath, `${JSON.stringify(after, null, 2)}\n`);
+	}
+
+	async function withRuntimePresetSettingsPreserved<T>(action: () => Promise<T> | T): Promise<T> {
+		const before = readSettingsFile();
+		try {
+			return await action();
+		} finally {
+			restoreRuntimePresetSettings(before);
+		}
+	}
+
 	function isDelegatedSubagentSession(): boolean {
 		const runtimeMode = normalizeName(process.env.PI_SUBAGENT_RUNTIME_MODE);
 		if (runtimeMode === "delegated") return true;
@@ -491,7 +534,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			notify(ctx, `Role '${activeRootRoleName ?? "unknown"}': model '${normalizedModel}' was not found`, "warning");
 			return;
 		}
-		const success = await pi.setModel(model);
+		const success = await withRuntimePresetSettingsPreserved(() => pi.setModel(model));
 		if (!success) {
 			notify(ctx, `Role '${activeRootRoleName ?? "unknown"}': no API key for ${model.provider}/${model.id}`, "warning");
 		}
@@ -500,7 +543,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	function applyRootThinking(role: AgentConfig): void {
 		if (!role.thinking) return;
 		if (["off", "minimal", "low", "medium", "high", "xhigh"].includes(role.thinking)) {
-			pi.setThinkingLevel(role.thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh");
+			void withRuntimePresetSettingsPreserved(() =>
+				pi.setThinkingLevel(role.thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh"),
+			);
 		}
 	}
 
