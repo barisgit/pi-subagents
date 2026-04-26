@@ -160,8 +160,13 @@ export interface AgentDiscoveryAllResult {
 	preset: DiscoveryPresetInfo;
 }
 
+const SUBAGENT_CONFIG_PRIMARY = path.join(os.homedir(), ".pi", "agent", "subagent.json");
+const SUBAGENT_CONFIG_LEGACY = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
+
 function getExtensionConfigPath(): string {
-	return path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
+	if (fs.existsSync(SUBAGENT_CONFIG_PRIMARY)) return SUBAGENT_CONFIG_PRIMARY;
+	if (fs.existsSync(SUBAGENT_CONFIG_LEGACY)) return SUBAGENT_CONFIG_LEGACY;
+	return SUBAGENT_CONFIG_PRIMARY;
 }
 
 function loadExtensionConfig(config?: ExtensionConfig): ExtensionConfig {
@@ -951,7 +956,8 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 	const presetBuiltin = applyPresetOverlays(builtinBase, options);
 	const presetUser = applyPresetOverlays(userBase, options);
 	const presetProject = applyPresetOverlays(projectBase, options);
-	const userDir = fs.existsSync(userDirNew) ? userDirNew : userDirOld;
+	// Prefer ~/.pi/agent/agents/ as primary; fall back to ~/.agents/ if only that exists
+	const userDir = fs.existsSync(userDirOld) ? userDirOld : fs.existsSync(userDirNew) ? userDirNew : userDirOld;
 	const filterBySurface = (agents: AgentConfig[]) => agents
 		.filter((agent) => isVisibleOnSurface(agent, options?.surface));
 

@@ -40,6 +40,7 @@ import {
 	detectSubagentError,
 	extractToolArgsPreview,
 	extractTextFromContent,
+	stripXmlMetadataTags,
 } from "./utils.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "./skills.ts";
 import { getPiSpawnCommand } from "./pi-spawn.ts";
@@ -66,9 +67,13 @@ function sumUsage(target: Usage, source: Usage): void {
 	target.turns += source.turns;
 }
 
-function appendRecentOutput(progress: AgentProgress, lines: string[]): void {
-	if (lines.length === 0) return;
-	progress.recentOutput.push(...lines.filter((line) => line.trim()));
+function appendRecentOutput(progress: AgentProgress, text: string): void {
+	const cleanLines = stripXmlMetadataTags(text)
+		.split("\n")
+		.slice(-10)
+		.filter((line) => line.trim());
+	if (cleanLines.length === 0) return;
+	progress.recentOutput.push(...cleanLines);
 	if (progress.recentOutput.length > 50) {
 		progress.recentOutput.splice(0, progress.recentOutput.length - 50);
 	}
@@ -395,7 +400,7 @@ async function runSingleAttempt(
 					}
 					if (!result.model && evt.message.model) result.model = evt.message.model;
 					if (evt.message.errorMessage) result.error = evt.message.errorMessage;
-					appendRecentOutput(progress, extractTextFromContent(evt.message.content).split("\n").slice(-10));
+					appendRecentOutput(progress, extractTextFromContent(evt.message.content));
 					// Final assistant message: start the exit drain window.
 					const stopReason = (evt.message as { stopReason?: string }).stopReason;
 					const hasToolCall = Array.isArray(evt.message.content)
@@ -409,7 +414,7 @@ async function runSingleAttempt(
 
 			if (evt.type === "tool_result_end" && evt.message) {
 				result.messages.push(evt.message);
-				appendRecentOutput(progress, extractTextFromContent(evt.message.content).split("\n").slice(-10));
+				appendRecentOutput(progress, extractTextFromContent(evt.message.content));
 				fireUpdate();
 			}
 		};
