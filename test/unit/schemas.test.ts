@@ -242,5 +242,4 @@ it("includes subagent control fields", () => {
 		assert.equal(actionSchema.type, "string");
 		assert.match(String(actionSchema.description ?? ""), /list/i);
 	});
-	});
 });

@@ -1,10 +1,10 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay } from "./async-status.js";
-import { ASYNC_DIR } from "./types.js";
-import { formatDuration, formatTokens, shortenPath } from "./formatters.js";
-import { formatScrollInfo, renderFooter, renderHeader, row } from "./render-helpers.js";
+import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay } from "./async-status.ts";
+import { ASYNC_DIR } from "./types.ts";
+import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
+import { formatScrollInfo, renderFooter, renderHeader, row } from "./render-helpers.ts";
 
 const AUTO_REFRESH_MS = 2000;
 
@@ -76,6 +76,9 @@ export class SubagentsStatusComponent implements Component {
 	private readonly viewportHeight = 12;
 	private readonly listRunsForOverlay: (asyncDirRoot: string, recentLimit?: number) => AsyncRunOverlayData;
 	private readonly refreshTimer: NodeJS.Timeout;
+	private readonly tui: TUI;
+	private readonly theme: Theme;
+	private readonly done: () => void;
 	private cursor = 0;
 	private scrollOffset = 0;
 	private active: AsyncRunSummary[] = [];
@@ -84,11 +87,14 @@ export class SubagentsStatusComponent implements Component {
 	private errorMessage?: string;
 
 	constructor(
-		private tui: TUI,
-		private theme: Theme,
-		private done: () => void,
+		tui: TUI,
+		theme: Theme,
+		done: () => void,
 		deps: StatusOverlayDeps = {},
 	) {
+		this.tui = tui;
+		this.theme = theme;
+		this.done = done;
 		this.listRunsForOverlay = deps.listRunsForOverlay ?? listAsyncRunsForOverlay;
 		const refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.reload();

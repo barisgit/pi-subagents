@@ -184,7 +184,7 @@ If the run already has an active intercom bridge target, needs-attention notific
 
 ## Clarify TUI
 
-Single and parallel runs support a clarification TUI when you want to preview or
+Single, parallel, and chain runs support a clarification TUI when you want a human to preview or
 edit parameters before launch:
 
 ```typescript
@@ -195,8 +195,10 @@ subagent({
 })
 ```
 
-Chains default to clarify mode unless you explicitly set `clarify: false`.
-For programmatic background launches, use `clarify: false, async: true`.
+Clarify is opt-in for all modes, including chains. Use `clarify: true` only when a human should preview/edit before launch.
+For programmatic background launches, use `async: true` and leave `clarify` unset or set `clarify: false`.
+
+For swarm-style parallel dispatch, pass a top-level `prompt`; use `{in}` once to insert each task, or omit `{in}` to append each task after the common prompt.
 
 ## Worktree Isolation
 

@@ -323,9 +323,6 @@ function runPiStreaming(
 				const termSent = trySignalChild(child, "SIGTERM");
 				if (!termSent) return;
 				forcedTerminationSignal = true;
-				if (!error) {
-					error = `Subagent process did not exit within ${FINAL_DRAIN_MS}ms after its final message. Forcing termination.`;
-				}
 				finalHardKillTimer = setTimeout(() => {
 					if (settled) return;
 					forcedTerminationSignal = trySignalChild(child, "SIGKILL") || forcedTerminationSignal;
@@ -347,13 +344,14 @@ function runPiStreaming(
 			if (stderrBuf.trim()) appendChildLine("subagent.child.stderr", stderrBuf);
 			outputStream.end();
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
+			const completedAfterFinalMessage = forcedTerminationSignal && finalOutput && !error;
 			resolve({
 				stderr,
-				exitCode: interrupted ? 0 : forcedTerminationSignal || signal ? (exitCode ?? 1) : exitCode,
+				exitCode: interrupted || completedAfterFinalMessage ? 0 : forcedTerminationSignal || signal ? (exitCode ?? 1) : exitCode,
 				messages,
 				usage,
 				model,
-				error: interrupted ? undefined : error,
+				error: interrupted || completedAfterFinalMessage ? undefined : error,
 				finalOutput,
 				interrupted,
 			});

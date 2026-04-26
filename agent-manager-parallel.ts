@@ -11,9 +11,10 @@ export interface ParallelSlot {
 
 export interface ParallelState {
 	slots: ParallelSlot[];
+	commonPrompt: string;
 	cursor: number;
 	scrollOffset: number;
-	mode: "browse" | "add" | "edit-task";
+	mode: "browse" | "add" | "edit-task" | "edit-common";
 	addQuery: string;
 	addCursor: number;
 	editIndex: number;
@@ -38,6 +39,7 @@ const ADD_RESULTS_MAX = 5;
 export function createParallelState(agentNames: string[]): ParallelState {
 	return {
 		slots: agentNames.map((name) => ({ agentName: name, customTask: "" })),
+		commonPrompt: "",
 		cursor: 0,
 		scrollOffset: 0,
 		mode: "browse",
@@ -67,6 +69,7 @@ export function handleParallelInput(
 		case "browse": return handleBrowse(state, data);
 		case "add": return handleAdd(state, agents, data);
 		case "edit-task": return handleEditTask(state, data, width);
+		case "edit-common": return handleEditCommon(state, data, width);
 	}
 }
 
@@ -74,6 +77,12 @@ function handleBrowse(state: ParallelState, data: string): ParallelAction | unde
 	if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return { type: "back" };
 	if (matchesKey(data, "up")) { state.cursor = Math.max(0, state.cursor - 1); clampSlotScroll(state, SLOT_VIEWPORT_BROWSE); return; }
 	if (matchesKey(data, "down")) { state.cursor = Math.min(state.slots.length - 1, state.cursor + 1); clampSlotScroll(state, SLOT_VIEWPORT_BROWSE); return; }
+
+	if (data === "c" || data === "C") {
+		state.mode = "edit-common";
+		state.editEditor = createEditorState(state.commonPrompt);
+		return;
+	}
 
 	if (matchesKey(data, "ctrl+a")) {
 		state.mode = "add";
@@ -167,6 +176,31 @@ function handleEditTask(state: ParallelState, data: string, width: number): Para
 	return;
 }
 
+function handleEditCommon(state: ParallelState, data: string, width: number): ParallelAction | undefined {
+	if (!state.editEditor) { state.mode = "browse"; return; }
+
+	if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+		state.editEditor = null;
+		state.mode = "browse";
+		return;
+	}
+
+	if (matchesKey(data, "return")) {
+		state.commonPrompt = state.editEditor.buffer.trim();
+		state.editEditor = null;
+		state.mode = "browse";
+		return;
+	}
+
+	if (matchesKey(data, "tab")) return;
+
+	const innerW = width - 2;
+	const boxInnerWidth = Math.max(10, innerW - 4);
+	const nextState = handleEditorInput(state.editEditor, data, boxInnerWidth);
+	if (nextState) state.editEditor = nextState;
+	return;
+}
+
 function renderSlotLine(
 	slot: ParallelSlot,
 	slotNumber: number,
@@ -204,8 +238,13 @@ export function renderParallel(
 
 	if (state.mode === "browse") {
 		clampSlotScroll(state, SLOT_VIEWPORT_BROWSE);
+		if (state.commonPrompt) {
+			contentLines.push(` ${theme.fg("dim", "Common prompt:")} ${truncateToWidth(state.commonPrompt, width - 20)}`);
+			contentLines.push("");
+		}
 		const start = state.scrollOffset;
-		const end = Math.min(state.slots.length, start + SLOT_VIEWPORT_BROWSE);
+		const viewport = state.commonPrompt ? SLOT_VIEWPORT_BROWSE - 2 : SLOT_VIEWPORT_BROWSE;
+		const end = Math.min(state.slots.length, start + viewport);
 		for (let i = start; i < end; i++) {
 			contentLines.push(renderSlotLine(state.slots[i]!, i + 1, i === state.cursor, width, theme));
 		}
@@ -234,6 +273,26 @@ export function renderParallel(
 			const descWidth = Math.max(0, width - 2 - 1 - 1 - 16 - 2);
 			contentLines.push(` ${cur} ${pad(truncateToWidth(nameStr, 16), 16)}  ${theme.fg("dim", truncateToWidth(a.description, descWidth))}`);
 		}
+	} else if (state.mode === "edit-common") {
+		contentLines.push(` ${theme.fg("dim", "Common prompt (swarm template):")}`);
+		contentLines.push(` ${theme.fg("dim", "Use {in} once to insert each slot task; without it, slot task is appended.")}`);
+		contentLines.push("");
+
+		const innerW = width - 2;
+		const boxInnerWidth = Math.max(10, innerW - 4);
+		contentLines.push(` \u250C${"\u2500".repeat(boxInnerWidth)}\u2510`);
+		if (state.editEditor) {
+			const editorState = { ...state.editEditor };
+			const wrapped = wrapText(editorState.buffer, boxInnerWidth);
+			const cursorPos = getCursorDisplayPos(editorState.cursor, wrapped.starts);
+			editorState.viewportOffset = ensureCursorVisible(cursorPos.line, 3, editorState.viewportOffset);
+			for (const editorLine of renderEditor(editorState, boxInnerWidth, 3)) {
+				contentLines.push(` \u2502${pad(editorLine, boxInnerWidth)}\u2502`);
+			}
+		} else {
+			for (let i = 0; i < 3; i++) contentLines.push(` \u2502${pad("", boxInnerWidth)}\u2502`);
+		}
+		contentLines.push(` \u2514${"\u2500".repeat(boxInnerWidth)}\u2518`);
 	} else if (state.mode === "edit-task") {
 		const slotLines = Math.min(state.slots.length, SLOT_VIEWPORT_COMPACT);
 		const slotStart = Math.max(0, Math.min(state.editIndex - Math.floor(slotLines / 2), state.slots.length - slotLines));
@@ -281,10 +340,10 @@ export function renderParallel(
 	let footerText: string;
 	if (state.mode === "add") {
 		footerText = " [enter] add  [esc] cancel ";
-	} else if (state.mode === "edit-task") {
+	} else if (state.mode === "edit-task" || state.mode === "edit-common") {
 		footerText = " [enter] save  [esc] cancel ";
 	} else {
-		footerText = " [ctrl+a] add  [del] remove  [enter] edit task  [ctrl+r] continue  [esc] back ";
+		footerText = " [c] common prompt  [ctrl+a] add  [del] remove  [enter] edit task  [ctrl+r] continue  [esc] back ";
 	}
 	lines.push(renderFooter(footerText, width, theme));
 

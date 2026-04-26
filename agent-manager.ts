@@ -31,7 +31,7 @@ import { pad, row, renderHeader, renderFooter } from "./render-helpers.ts";
 export type ManagerResult =
 	| { action: "launch"; agent: string; task: string; skipClarify?: boolean }
 	| { action: "chain"; agents: string[]; task: string; skipClarify?: boolean }
-	| { action: "parallel"; tasks: Array<{ agent: string; task: string }>; skipClarify?: boolean }
+	| { action: "parallel"; tasks: Array<{ agent: string; task: string }>; prompt?: string; skipClarify?: boolean }
 	| { action: "launch-chain"; chain: ChainConfig; task: string; skipClarify?: boolean }
 	| undefined;
 
@@ -503,7 +503,8 @@ export class AgentManagerComponent implements Component {
 					} else if (this.parallelMode && this.parallelState) {
 						const sharedTask = this.taskEditor.buffer;
 						const tasks = this.parallelState.slots.map((slot) => ({ agent: slot.agentName, task: slot.customTask || sharedTask }));
-						this.done({ action: "parallel", tasks, skipClarify: this.skipClarify }); return;
+						const prompt = this.parallelState.commonPrompt || undefined;
+						this.done({ action: "parallel", tasks, prompt, skipClarify: this.skipClarify }); return;
 					}
 					if (this.chainAgentIds.length > 1) {
 						const agents = this.chainAgentIds

@@ -351,8 +351,8 @@ Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — 
 | Detail | View resolved prompt, frontmatter fields, recent run history, and active builtin override path |
 | Edit | Edit fields with specialized pickers and toggles (model, thinking, prompt mode, inherited context, inherited skills, prompt editor) |
 | Chain Detail | View chain steps with flow visualization and dependency map |
-| Parallel Builder | Build parallel execution slots, add same agent multiple times, per-slot task overrides |
-| Task Input | Enter task and launch with optional skip-clarify toggle |
+| Parallel Builder | Build parallel/swarm execution slots, add same agent multiple times, set a common prompt, and add per-slot task overrides |
+| Task Input | Enter shared fallback task and launch with optional skip-clarify toggle |
 | New Agent | Create from templates (Blank, Scout, Planner, Implementer, Code Reviewer, Blank Chain) |
 
 **List screen keybindings:**
@@ -371,6 +371,7 @@ On a builtin detail screen, `e` opens the builtin override flow instead of cloni
 
 **Parallel builder keybindings:**
 - `↑↓` — navigate slots
+- `C` — edit common prompt for swarm-style launches; use `{in}` once to insert each slot task, otherwise the slot task is appended
 - `Ctrl+A` — add agent (opens search picker)
 - `Del` or `Ctrl+D` — remove slot
 - `Enter` — edit per-slot task override
@@ -469,11 +470,11 @@ When `intercomBridge` is enabled (default: `always`) and `pi-intercom` is instal
 
 > **Note:** Intercom bridging requires the [pi-intercom](https://github.com/nicobailon/pi-intercom) extension. Install it with `pi install npm:pi-intercom`.
 
-All modes support foreground and background execution. Foreground is the default (the call waits and streams progress). For programmatic background launch, use `clarify: false, async: true`. For interactive background launch, use `clarify: true` and press `b` in the TUI before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
+All modes support foreground and background execution. Foreground is the default (the call waits and streams progress). For programmatic background launch, use `async: true` and leave `clarify` unset or set `clarify: false`. For interactive background launch, use `clarify: true` and press `b` in the TUI before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
 
-**Clarify TUI for single/parallel:**
+**Clarify TUI:**
 
-Single and parallel modes also support the clarify TUI for previewing/editing parameters before execution. Unlike chains, they default to no TUI - use `clarify: true` to enable:
+Single, parallel, and chain modes support the clarify TUI for previewing/editing parameters before execution. It is opt-in for all modes; use `clarify: true` to enable:
 
 ```typescript
 // Single agent with clarify TUI
@@ -601,7 +602,7 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 // Parallel with forked context (each task gets its own isolated fork)
 { tasks: [{ agent: "scout", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
 
-// Chain with TUI clarification (default)
+// Chain, runs immediately by default
 { chain: [
   { agent: "scout", task: "Gather context for auth refactor" },
   { agent: "planner" },  // task defaults to {previous}
@@ -609,14 +610,20 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
   { agent: "reviewer" }
 ]}
 
+// Chain with interactive launch preview
+{ chain: [
+  { agent: "scout", task: "Gather context for auth refactor" },
+  { agent: "planner" }
+], clarify: true }
+
 // Chain with forked context (each step gets its own isolated fork of the same parent leaf)
 { chain: [
   { agent: "scout", task: "Analyze current branch decisions" },
   { agent: "planner", task: "Plan from {previous}" }
 ], context: "fork" }
 
-// Chain without TUI (enables async)
-{ chain: [...], clarify: false, async: true }
+// Async chain (no launch preview unless clarify:true is explicitly set)
+{ chain: [...], async: true }
 
 // Chain with behavior overrides
 { chain: [
@@ -766,9 +773,9 @@ Notes:
 | `chain` | ChainItem[] | - | Sequential steps with behavior overrides (see below) |
 | `context` | `"fresh" \| "fork"` | `fresh` | Execution context mode. `fork` uses a real branched session from the parent's current leaf for each child run |
 | `chainDir` | string | user-scoped temp dir like `<tmpdir>/pi-subagents-<scope>/chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
-| `clarify` | boolean | true (chains) | Show TUI to preview/edit chain; implies sync mode |
+| `clarify` | boolean | false | Show TUI to preview/edit before execution; implies sync mode |
 | `agentScope` | `"user" \| "project" \| "both"` | `both` | Agent discovery scope (project wins on name collisions) |
-| `async` | boolean | false | Background execution (requires `clarify: false` for chains) |
+| `async` | boolean | false | Background execution |
 | `cwd` | string | - | Override working directory |
 | `maxOutput` | `{bytes?, lines?}` | 200KB, 5000 lines | Truncation limits for final output |
 | `artifacts` | boolean | true | Write debug artifacts |

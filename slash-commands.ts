@@ -369,6 +369,7 @@ async function openAgentManager(
 	} else if (result.action === "parallel") {
 		await runSlashSubagent(pi, ctx, {
 			tasks: result.tasks,
+			prompt: result.prompt,
 			clarify: !result.skipClarify,
 			agentScope: "both",
 		});
@@ -465,7 +466,7 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run a subagent directly: /run [preset=name] agent[output=file] [task] [--bg] [--fork]"
+		description: "Run a subagent directly: /run [preset=name] agent[output=file] [task] [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, false),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);

@@ -23,7 +23,7 @@ import { type AgentConfig, discoverAgents } from "./agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
 import { cleanupOldChainDirs } from "./settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./render.ts";
-import { StatusParams, SubagentParams } from "./schemas.ts";
+import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor } from "./subagent-executor.ts";
 import { createAsyncJobTracker } from "./async-job-tracker.ts";
 import { controlNotificationKey, formatControlNoticeMessage } from "./subagent-control.ts";
@@ -33,10 +33,8 @@ import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge
 import { registerSlashSubagentBridge } from "./slash-bridge.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
-import { formatAsyncRunList, listAsyncRuns } from "./async-status.ts";
 import registerSubagentNotify, { type SubagentNotifyDetails } from "./notify.ts";
 import { formatDuration, shortenPath } from "./formatters.ts";
-import { findByPrefix, readStatus } from "./utils.ts";
 import {
 	type ControlEvent,
 	type Details,
@@ -236,10 +234,16 @@ function parseSubagentNotifyContent(content: string): SubagentNotifyDetails | un
 }
 
 class SubagentControlNoticeComponent implements Component {
+	private readonly details: SubagentControlMessageDetails;
+	private readonly theme: ExtensionContext["ui"]["theme"];
+
 	constructor(
-		private readonly details: SubagentControlMessageDetails,
-		private readonly theme: ExtensionContext["ui"]["theme"],
-	) {}
+		details: SubagentControlMessageDetails,
+		theme: ExtensionContext["ui"]["theme"],
+	) {
+		this.details = details;
+		this.theme = theme;
+	}
 
 	invalidate(): void {}
 
@@ -360,7 +364,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			? trimmedPreview.split("\n").filter((line) => line.trim())
 			: [trimmedPreview.split("\n", 1)[0] ?? ""].filter((line) => line.trim());
 		for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
-			text += `\n  ${theme.fg("dim", `⎿  ${line}`)}`;
+			text += `\n  ${theme.fg("dim", `└─ ${line}`)}`;
 		}
 		if (!options.expanded && trimmedPreview.includes("\n")) {
 			text += `\n  ${theme.fg("dim", "Ctrl+O full notification")}`;
@@ -611,9 +615,9 @@ Nested guardrails:
 • Allowed nested child agents come from the current agent's allowedDelegateAgents capability when set
 • Legacy orchestrator/delegate behavior remains the fallback when no explicit capability env is present
 
-Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }
-Swarm example: { prompt: "Review this codebase for security issues. Focus on: {in}", tasks: [{agent:"explorer", task:"authentication flow"}, {agent:"explorer", task:"API endpoints"}] }
-Chain with swarm: { chain: [{agent:"scout", task:"Analyze {task}"}, {parallel: [{agent:"explorer", task:"auth"}, {agent:"explorer", task:"API"}], prompt: "Review for security. Focus on: {in}"}] }
+Example: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", task:"Plan based on {previous}"}] }
+Swarm example: { prompt: "Review this codebase for security issues. Focus on: {in}", tasks: [{agent:"agent-a", task:"authentication flow"}, {agent:"agent-b", task:"API endpoints"}] }
+Chain with swarm: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {parallel: [{agent:"agent-b", task:"auth"}, {agent:"agent-c", task:"API"}], prompt: "Review for security. Focus on: {in}"}] }
 
 MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • { action: "list" } - discover executable agents/chains and any disabled builtins
@@ -669,135 +673,7 @@ CONTROL:
 
 	};
 
-	const statusTool: ToolDefinition<typeof StatusParams, Details> = {
-		name: "subagent_status",
-		label: "Subagent Status",
-		description: "Inspect async subagent run status and artifacts",
-		parameters: StatusParams,
-
-		async execute(_id, params, _signal, _onUpdate, _ctx) {
-			if (params.action === "list") {
-				try {
-					const runs = listAsyncRuns(ASYNC_DIR, { states: ["queued", "running"] });
-					return {
-						content: [{ type: "text", text: formatAsyncRunList(runs) }],
-						details: { mode: "single", results: [] },
-					};
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					return {
-						content: [{ type: "text", text: message }],
-						isError: true,
-						details: { mode: "single", results: [] },
-					};
-				}
-			}
-
-			let asyncDir: string | null = null;
-			let resolvedId = params.id;
-
-			if (params.dir) {
-				asyncDir = path.resolve(params.dir);
-			} else if (params.id) {
-				const direct = path.join(ASYNC_DIR, params.id);
-				if (fs.existsSync(direct)) {
-					asyncDir = direct;
-				} else {
-					const match = findByPrefix(ASYNC_DIR, params.id);
-					if (match) {
-						asyncDir = match;
-						resolvedId = path.basename(match);
-					}
-				}
-			}
-
-			const resultPath =
-				params.id && !asyncDir ? findByPrefix(RESULTS_DIR, params.id, ".json") : null;
-
-			if (!asyncDir && !resultPath) {
-				return {
-					content: [{ type: "text", text: "Async run not found. Provide id or dir." }],
-					isError: true,
-					details: { mode: "single" as const, results: [] },
-				};
-			}
-
-			if (asyncDir) {
-				let status;
-				try {
-					status = readStatus(asyncDir);
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					return {
-						content: [{ type: "text", text: message }],
-						isError: true,
-						details: { mode: "single" as const, results: [] },
-					};
-				}
-				const logPath = path.join(asyncDir, `subagent-log-${resolvedId ?? "unknown"}.md`);
-				const eventsPath = path.join(asyncDir, "events.jsonl");
-				if (status) {
-					const stepsTotal = status.steps?.length ?? 1;
-					const current = status.currentStep !== undefined ? status.currentStep + 1 : undefined;
-					const stepLine =
-						current !== undefined ? `Step: ${current}/${stepsTotal}` : `Steps: ${stepsTotal}`;
-					const started = new Date(status.startedAt).toISOString();
-					const updated = status.lastUpdate ? new Date(status.lastUpdate).toISOString() : "n/a";
-
-					const lines = [
-						`Run: ${status.runId}`,
-						`State: ${status.state}`,
-						`Mode: ${status.mode}`,
-						stepLine,
-						`Started: ${started}`,
-						`Updated: ${updated}`,
-						`Dir: ${asyncDir}`,
-					];
-					if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
-					if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
-					if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
-
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-				}
-			}
-
-			if (resultPath) {
-				try {
-					const raw = fs.readFileSync(resultPath, "utf-8");
-					const data = JSON.parse(raw) as { id?: string; success?: boolean; summary?: string };
-					const status = data.success ? "complete" : "failed";
-					const lines = [`Run: ${data.id ?? params.id}`, `State: ${status}`, `Result: ${resultPath}`];
-					if (data.summary) lines.push("", data.summary);
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					return {
-						content: [{ type: "text", text: `Failed to read async result file: ${message}` }],
-						isError: true,
-						details: { mode: "single" as const, results: [] },
-					};
-				}
-			}
-
-			return {
-				content: [{ type: "text", text: "Status file not found." }],
-				isError: true,
-				details: { mode: "single" as const, results: [] },
-			};
-		},
-	};
-
-	pi.registerFlag("preset", {
-		description: "Workflow/model preset to use for the main session",
-		type: "string",
-	});
-	pi.registerFlag("role", {
-		description: "Root role to use for the main session",
-		type: "string",
-	});
-
 	pi.registerTool(tool);
-	pi.registerTool(statusTool);
 	registerSlashCommands(pi, state);
 	pi.registerCommand("role", {
 		description: "Show or switch the active root role",

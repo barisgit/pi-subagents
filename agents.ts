@@ -160,13 +160,18 @@ export interface AgentDiscoveryAllResult {
 	preset: DiscoveryPresetInfo;
 }
 
-const SUBAGENT_CONFIG_PRIMARY = path.join(os.homedir(), ".pi", "agent", "subagent.json");
-const SUBAGENT_CONFIG_LEGACY = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
+function getExtensionConfigPaths(): { primary: string; legacy: string } {
+	return {
+		primary: path.join(os.homedir(), ".pi", "agent", "subagent.json"),
+		legacy: path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json"),
+	};
+}
 
 function getExtensionConfigPath(): string {
-	if (fs.existsSync(SUBAGENT_CONFIG_PRIMARY)) return SUBAGENT_CONFIG_PRIMARY;
-	if (fs.existsSync(SUBAGENT_CONFIG_LEGACY)) return SUBAGENT_CONFIG_LEGACY;
-	return SUBAGENT_CONFIG_PRIMARY;
+	const { primary, legacy } = getExtensionConfigPaths();
+	if (fs.existsSync(primary)) return primary;
+	if (fs.existsSync(legacy)) return legacy;
+	return primary;
 }
 
 function loadExtensionConfig(config?: ExtensionConfig): ExtensionConfig {

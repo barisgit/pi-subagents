@@ -79,7 +79,7 @@ function truncLine(text: string, maxWidth: number): string {
 	return result + activeStyles.join("") + "…";
 }
 
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER = ["-", "\\", "|", "/"];
 const WIDGET_ANIMATION_MS = 80;
 
 let widgetTimer: ReturnType<typeof setInterval> | undefined;
@@ -199,6 +199,10 @@ function formatToolUseStat(count: number): string {
 	return `${count} tool use${count === 1 ? "" : "s"}`;
 }
 
+function formatTurnStat(turns: number | undefined): string {
+	return turns ? `⟳ ${turns}` : "";
+}
+
 function formatProgressStats(theme: Theme, progress: Pick<AgentProgress, "toolCount" | "tokens" | "durationMs"> | undefined, includeDuration = true): string {
 	if (!progress) return "";
 	const parts: string[] = [];
@@ -305,7 +309,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 		const stats = widgetStats(job, theme);
 		items.push([
 			`${widgetStatusGlyph(job, theme)} ${themeBold(theme, widgetJobName(job))}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
-			`  ${theme.fg("dim", `⎿  ${widgetActivity(job)}`)}`,
+			`  ${theme.fg("dim", `└─ ${widgetActivity(job)}`)}`,
 		]);
 		slots--;
 	}
@@ -321,7 +325,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 		const stats = widgetStats(job, theme);
 		items.push([
 			`${widgetStatusGlyph(job, theme)} ${themeBold(theme, widgetJobName(job))}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
-			`  ${theme.fg("dim", `⎿  ${widgetActivity(job)}`)}`,
+			`  ${theme.fg("dim", `└─ ${widgetActivity(job)}`)}`,
 		]);
 		slots--;
 	}
@@ -413,7 +417,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const isRunning = r.progress?.status === "running";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const stats = statJoin(theme, [
-		r.usage?.turns ? `⟳${r.usage.turns}` : "",
+		formatTurnStat(r.usage?.turns),
 		formatProgressStats(theme, progress),
 	]);
 	const c = new Container();
@@ -422,7 +426,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 
 	if (isRunning && r.progress) {
 		const activity = compactCurrentActivity(r.progress);
-		c.addChild(new Text(truncLine(theme.fg("dim", `  ⎿  ${activity}`), width), 0, 0));
+		c.addChild(new Text(truncLine(theme.fg("dim", `  └─ ${activity}`), width), 0, 0));
 		const liveStatus = buildLiveStatusLine(r.progress);
 		if (liveStatus && liveStatus !== activity) c.addChild(new Text(truncLine(theme.fg("dim", `     ${liveStatus}`), width), 0, 0));
 		c.addChild(new Text(truncLine(theme.fg("accent", "  Press Ctrl+O for live detail"), width), 0, 0));
@@ -430,7 +434,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 		return c;
 	}
 
-	c.addChild(new Text(truncLine(theme.fg("dim", `  ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
+	c.addChild(new Text(truncLine(theme.fg("dim", `  └─ ${resultStatusLine(r, output)}`), width), 0, 0));
 	const preview = firstOutputLine(output);
 	if (preview && r.exitCode === 0 && !hasEmptyTextOutputWithoutOutputTarget(r.task, output)) {
 		c.addChild(new Text(truncLine(theme.fg("dim", `     ${preview}`), width), 0, 0));
@@ -451,6 +455,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	).length;
 	const failed = d.results.some((r) => r.exitCode !== 0 && r.progress?.status !== "running");
 	const paused = d.results.some((r) => (r.interrupted || r.detached) && r.progress?.status !== "running");
+	const totalTurns = d.results.reduce((sum, r) => sum + (r.usage?.turns || 0), 0);
 	let totalSummary = d.progressSummary;
 	if (!totalSummary) {
 		let sawProgress = false;
@@ -471,7 +476,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
 	const stepInfo = hasRunning ? `${itemLabel} ${currentStep}/${totalCount}` : `${itemLabel} ${ok}/${totalCount}`;
-	const stats = statJoin(theme, [stepInfo, formatProgressStats(theme, totalSummary)]);
+	const stats = statJoin(theme, [stepInfo, formatTurnStat(totalTurns), formatProgressStats(theme, totalSummary)]);
 	const glyph = hasRunning
 		? theme.fg("accent", spinnerFrame())
 		: failed
@@ -499,17 +504,20 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
 		const stepNumber = r.progress?.index !== undefined ? r.progress.index + 1 : progressFromArray?.index !== undefined ? progressFromArray.index + 1 : i + 1;
-		const stepStats = formatProgressStats(theme, rProg);
+		const stepStats = statJoin(theme, [
+			formatTurnStat(r.usage?.turns),
+			formatProgressStats(theme, rProg),
+		]);
 		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		const line = `${glyph} ${itemTitle} ${stepNumber}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
 		c.addChild(new Text(truncLine(`  ${line}`, width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
 			const activity = compactCurrentActivity(rProg);
-			c.addChild(new Text(truncLine(theme.fg("dim", `    ⎿  ${activity}`), width), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `    └─ ${activity}`), width), 0, 0));
 			c.addChild(new Text(truncLine(theme.fg("accent", "    Press Ctrl+O for live detail"), width), 0, 0));
 		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
-			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    ⎿  ${resultStatusLine(r, output)}`), width), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    └─ ${resultStatusLine(r, output)}`), width), 0, 0));
 		}
 		const outputTarget = extractOutputTarget(r.task);
 		if (outputTarget) c.addChild(new Text(truncLine(theme.fg("dim", `    output: ${outputTarget}`), width), 0, 0));

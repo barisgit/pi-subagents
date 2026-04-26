@@ -153,10 +153,10 @@ describe("renderSubagentResult fork indicator", () => {
 
 		const text = widget.render(120).join("\n");
 		assert.match(text, /^✓ reviewer/);
-		assert.match(text, /⟳2/);
+		assert.match(text, /⟳ 2/);
 		assert.match(text, /3 tool uses/);
 		assert.match(text, /1\.2k token/);
-		assert.match(text, /⎿  Done/);
+		assert.match(text, /└─ Done/);
 		assert.match(text, /session: \/tmp\/session\.jsonl/);
 	});
 
@@ -178,7 +178,7 @@ describe("renderSubagentResult fork indicator", () => {
 
 		const text = widget.render(120).join("\n");
 		assert.match(text, /^✗ reviewer/);
-		assert.match(text, /⎿  Error: boom/);
+		assert.match(text, /└─ Error: boom/);
 	});
 
 	it("shows live detail hints for running subagents", () => {
@@ -218,7 +218,7 @@ describe("renderSubagentResult fork indicator", () => {
 		const text = widget.render(120).join("\n");
 		assert.match(text, /Press Ctrl\+O for live detail/);
 		assert.match(text, /active 2s ago/);
-		assert.match(text, /⎿  read: package\.json \| 3\.0s/);
+		assert.match(text, /└─ read: package\.json \| 3\.0s/);
 		assert.match(text, /output: \/tmp\/reviewer_output\.md/);
 	});
 
@@ -241,7 +241,7 @@ describe("renderSubagentResult fork indicator", () => {
 
 		const text = widget.render(120).join("\n");
 		assert.match(text, /^■ chain/);
-		assert.match(text, /⎿  Paused/);
+		assert.match(text, /└─ Paused/);
 	});
 
 	it("keeps empty-output warnings visible in compact multi-result rendering", () => {
@@ -261,7 +261,7 @@ describe("renderSubagentResult fork indicator", () => {
 		}, { expanded: false }, theme);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /⎿  Done \(no text output\)/);
+		assert.match(text, /└─ Done \(no text output\)/);
 		assert.doesNotMatch(text, /0ms/);
 	});
 

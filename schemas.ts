@@ -2,7 +2,7 @@
  * TypeBox schemas for subagent tool parameters
  */
 
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 
 const SkillOverride = Type.Unsafe({
 	type: ["string", "array", "boolean"],
@@ -150,7 +150,7 @@ export const SubagentParams = Type.Object({
 		Type.String({ description: "Directory to store session logs (default: temp; enables sessions even if share=false)" }),
 	),
 	// Clarification TUI
-	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution (default: true for chains, false for single/parallel). Implies sync mode." })),
+	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution (default: false). Implies sync mode." })),
 	control: Type.Optional(ControlOverrides),
 	// Solo agent overrides
 	output: Type.Optional(Type.Unsafe({
