@@ -84,6 +84,16 @@ Precedence is:
 
 ## Running Subagents
 
+### Mode selection heuristics
+
+- Use **single** for one small, bounded task.
+- Use **chain** instead of manual serial calls when stages depend on each other, e.g. explore → plan → build → review.
+- Use **parallel** when branches are independent, especially read-only recon or non-overlapping implementation work.
+- Use **swarm** (`prompt` + `tasks`) when you want multiple perspectives, approach comparisons, review diversity, or one common prompt applied to several focus areas.
+- Use **async** when the parent agent/main thread can keep working while child agents run; inspect with `subagent({ action: "status" })` or `/subagents-status`.
+- Use `worktree: true` for concurrent edits that might otherwise collide.
+- Do not use `clarify` unless a human explicitly requested an interactive launch preview.
+
 ### Single agent
 
 ```typescript
@@ -115,6 +125,19 @@ subagent({
   tasks: [
     { agent: "scout", task: "Explore the auth module" },
     { agent: "reviewer", task: "Review the API client" }
+  ]
+})
+```
+
+### Swarm execution
+
+```typescript
+subagent({
+  prompt: "Review the codebase for risks in this area. Focus on: {in}",
+  tasks: [
+    { agent: "scout", task: "authentication flow" },
+    { agent: "reviewer", task: "API boundaries" },
+    { agent: "oracle", task: "architecture trade-offs" }
   ]
 })
 ```

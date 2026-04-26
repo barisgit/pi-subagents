@@ -597,12 +597,18 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 EXECUTION (use exactly ONE mode):
 • Before executing, use { action: "list" } to inspect configured agents/chains. Only execute agents listed as executable/non-disabled.
-• SINGLE: { agent, task? } - one task; omit task for self-contained agents
-• CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out
-• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
-• SWARM: { prompt: "...", tasks: [{agent,task}, ...] } - parallel dispatch with shared prompt. Use {in} in prompt as placeholder for each task's text; if absent, task text is appended to the prompt.
+• SINGLE: { agent, task? } - one bounded task for one agent; omit task for self-contained agents.
+• CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - dependent stages where later work needs {previous}; ideal for explore → plan → build → review.
+• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - independent tasks that can run at the same time; use worktree for concurrent edits.
+• SWARM: { prompt: "...", tasks: [{agent,task}, ...] } - multiple perspectives/variants under one common prompt. Use {in} in prompt as placeholder for each task's focus; if absent, task text is appended.
+• ASYNC: add async:true for long-running, non-blocking, or user-monitorable work. Use action:"status" or /subagents-status to inspect later.
 • Optional context: { context: "fresh" | "fork" } (default: "fresh")
 • Optional preset: { preset: "name" } - preset-aware discovery/routing (explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config default)
+
+MODE SELECTION DEFAULTS:
+• Prefer CHAIN over serial single calls when phases depend on each other.
+• Prefer PARALLEL/SWARM when branches are independent, when comparing approaches, or when you want review/advice diversity.
+• Prefer ASYNC when the parent agent/main thread can keep working while child agents run; the user can monitor via status if needed. Do not use clarify unless explicitly requested.
 
 CHAIN TEMPLATE VARIABLES (use in task strings):
 • {task} - The original task/request from the user

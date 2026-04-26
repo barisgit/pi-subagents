@@ -458,9 +458,19 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 
 | Mode | Async Support | Notes |
 |------|---------------|-------|
-| Single | Yes | `{ agent, task? }` - omit `task` for self-contained agents; agents with `output` write to temp dir |
-| Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables |
-| Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
+| Single | Yes | `{ agent, task? }` - one bounded task for one agent; omit `task` for self-contained agents |
+| Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables for dependent stages |
+| Parallel | Yes | `{ tasks: [{agent, task}...] }` for independent tasks that can run at the same time |
+| Swarm | Yes | `{ prompt, tasks }` for parallel perspectives/variants under one common prompt; use `{in}` as the per-task focus placeholder |
+
+### Execution mode heuristics
+
+- Use **single** for one small, bounded task.
+- Use **chain** instead of manual serial calls when stages depend on each other, e.g. explore → plan → build → review.
+- Use **parallel** when branches are independent, especially read-only recon or non-overlapping implementation work.
+- Use **swarm** when you want multiple perspectives, approach comparisons, review diversity, or the same prompt applied to several focus areas.
+- Use **async** for long-running or monitorable work so the parent agent/main thread can continue while child agents run; inspect with `subagent({ action: "status" })` or `/subagents-status`.
+- Use `worktree: true` for concurrent edits that might otherwise collide.
 
 Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
 
