@@ -486,7 +486,7 @@ async function runSingleAttempt(
 					return;
 				}
 				proc.kill("SIGTERM");
-				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000);
+				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000).unref?.();
 			};
 			if (options.signal.aborted) kill();
 			else {

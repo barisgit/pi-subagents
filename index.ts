@@ -317,12 +317,18 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	primeExistingResults();
 
 	const runtimeCleanup = () => {
+		stopResultWatcher();
 		stopWidgetAnimation();
 		stopResultAnimations();
 		if (state.poller) {
 			clearInterval(state.poller);
 			state.poller = null;
 		}
+		for (const timer of state.cleanupTimers.values()) {
+			clearTimeout(timer);
+		}
+		state.cleanupTimers.clear();
+		state.asyncJobs.clear();
 	};
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 

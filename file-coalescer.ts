@@ -9,7 +9,11 @@ interface FileCoalescer {
 }
 
 const defaultTimerApi: TimerApi = {
-	setTimeout: (handler, delayMs) => setTimeout(handler, delayMs),
+	setTimeout: (handler, delayMs) => {
+		const timer = setTimeout(handler, delayMs);
+		timer.unref?.();
+		return timer;
+	},
 	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 

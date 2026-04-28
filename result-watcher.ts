@@ -59,6 +59,7 @@ export function createResultWatcher(
 				console.error(`Failed to restart subagent result watcher for '${resultsDir}':`, error);
 			}
 		}, 3000);
+		state.watcherRestartTimer.unref?.();
 	};
 
 	const startResultWatcher = () => {

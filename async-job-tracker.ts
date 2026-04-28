@@ -40,6 +40,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				rerenderWidget(state.lastUiContext);
 			}
 		}, completionRetentionMs);
+		timer.unref?.();
 		state.cleanupTimers.set(asyncId, timer);
 	};
 	const emitNewControlEvents = (job: AsyncJobState) => {
