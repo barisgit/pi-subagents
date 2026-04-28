@@ -1,5 +1,5 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 function fuzzyScore(query: string, text: string): number {
 	const lq = query.toLowerCase();
@@ -35,19 +35,27 @@ export function pad(s: string, len: number): string {
 	return s + " ".repeat(Math.max(0, len - vis));
 }
 
+function normalizeRenderableText(text: string): string {
+	return text
+		.replaceAll("\t", "    ")
+		.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g, "");
+}
+
 export function row(content: string, width: number, theme: Theme): string {
-	const innerW = width - 2;
-	return theme.fg("border", "│") + pad(content, innerW) + theme.fg("border", "│");
+	const innerW = Math.max(0, width - 2);
+	const safeContent = truncateToWidth(normalizeRenderableText(content), innerW);
+	return theme.fg("border", "│") + pad(safeContent, innerW) + theme.fg("border", "│");
 }
 
 export function renderHeader(text: string, width: number, theme: Theme): string {
-	const innerW = width - 2;
-	const padLen = Math.max(0, innerW - visibleWidth(text));
+	const innerW = Math.max(0, width - 2);
+	const safeText = truncateToWidth(normalizeRenderableText(text), innerW);
+	const padLen = Math.max(0, innerW - visibleWidth(safeText));
 	const padLeft = Math.floor(padLen / 2);
 	const padRight = padLen - padLeft;
 	return (
 		theme.fg("border", "╭" + "─".repeat(padLeft)) +
-		theme.fg("accent", text) +
+		theme.fg("accent", safeText) +
 		theme.fg("border", "─".repeat(padRight) + "╮")
 	);
 }
@@ -66,13 +74,14 @@ export function formatScrollInfo(above: number, below: number): string {
 }
 
 export function renderFooter(text: string, width: number, theme: Theme): string {
-	const innerW = width - 2;
-	const padLen = Math.max(0, innerW - visibleWidth(text));
+	const innerW = Math.max(0, width - 2);
+	const safeText = truncateToWidth(normalizeRenderableText(text), innerW);
+	const padLen = Math.max(0, innerW - visibleWidth(safeText));
 	const padLeft = Math.floor(padLen / 2);
 	const padRight = padLen - padLeft;
 	return (
 		theme.fg("border", "╰" + "─".repeat(padLeft)) +
-		theme.fg("dim", text) +
+		theme.fg("dim", safeText) +
 		theme.fg("border", "─".repeat(padRight) + "╯")
 	);
 }

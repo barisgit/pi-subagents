@@ -74,6 +74,8 @@ interface TaskParam {
 	skill?: string | string[] | boolean;
 }
 
+type RawTaskParam = string | (Partial<TaskParam> & Record<string, unknown>);
+
 export interface SubagentParamsLike {
 	action?: string;
 	id?: string;
@@ -82,7 +84,7 @@ export interface SubagentParamsLike {
 	agent?: string;
 	task?: string;
 	chain?: ChainStep[];
-	tasks?: TaskParam[];
+	tasks?: RawTaskParam[];
 	prompt?: string;
 	concurrency?: number;
 	worktree?: boolean;
@@ -358,7 +360,11 @@ function buildRequestedModeError(params: SubagentParamsLike, message: string): A
 }
 
 function collectRequestedAgentNames(params: SubagentParamsLike): string[] {
-	if ((params.tasks?.length ?? 0) > 0) return params.tasks!.map((task) => task.agent);
+	if ((params.tasks?.length ?? 0) > 0) {
+		return params.tasks!
+			.map((task) => typeof task === "object" && task && !Array.isArray(task) ? normalizeName(task.agent) : undefined)
+			.filter((agent): agent is string => Boolean(agent));
+	}
 	if ((params.chain?.length ?? 0) > 0) return params.chain!.flatMap((step) => getStepAgents(step as ChainStep));
 	if (params.agent) return [params.agent];
 	return [];
@@ -377,6 +383,7 @@ function collectForkOverridePaths(params: SubagentParamsLike): string[] {
 	if (params.skill !== undefined) paths.push("skill");
 	for (let i = 0; i < (params.tasks?.length ?? 0); i++) {
 		const task = params.tasks![i]!;
+		if (typeof task !== "object" || !task || Array.isArray(task)) continue;
 		if (task.model !== undefined) paths.push(`tasks[${i}].model`);
 		if (task.skill !== undefined) paths.push(`tasks[${i}].skill`);
 	}
@@ -437,6 +444,33 @@ function resolveForkReuse(
 	};
 }
 
+export function normalizeTopLevelTasks(params: SubagentParamsLike): { tasks?: TaskParam[]; error?: string } {
+	const rawTasks = params.tasks;
+	if (!rawTasks) return { tasks: undefined };
+	const defaultAgent = normalizeName(params.agent);
+	const tasks: TaskParam[] = [];
+	for (let taskIndex = 0; taskIndex < rawTasks.length; taskIndex++) {
+		const rawTask = rawTasks[taskIndex];
+		if (typeof rawTask === "string") {
+			const task = rawTask.trim();
+			if (!defaultAgent) return { error: `tasks[${taskIndex}] string shorthand requires top-level agent` };
+			if (!task) return { error: `tasks[${taskIndex}] must be a non-empty string` };
+			tasks.push({ agent: defaultAgent, task });
+			continue;
+		}
+		if (!rawTask || typeof rawTask !== "object" || Array.isArray(rawTask)) {
+			return { error: `tasks[${taskIndex}] must be an object or, with top-level agent, a string` };
+		}
+		const agent = normalizeName(rawTask.agent) ?? defaultAgent;
+		if (!agent) return { error: `tasks[${taskIndex}].agent is required when top-level agent is not set` };
+		if (typeof rawTask.task !== "string" || !rawTask.task.trim()) {
+			return { error: `tasks[${taskIndex}].task must be a non-empty string` };
+		}
+		tasks.push({ ...rawTask, agent, task: rawTask.task } as TaskParam);
+	}
+	return { tasks };
+}
+
 function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskParam[]; error?: string } {
 	const expanded: TaskParam[] = [];
 	for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
@@ -480,7 +514,11 @@ function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; e
 
 function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: AgentToolResult<Details> } {
 	if (params.tasks) {
-		const expandedTasks = expandTopLevelTaskCounts(params.tasks);
+		const normalizedTasks = normalizeTopLevelTasks(params);
+		if (normalizedTasks.error) {
+			return { error: buildRequestedModeError(params, normalizedTasks.error) };
+		}
+		const expandedTasks = expandTopLevelTaskCounts(normalizedTasks.tasks ?? []);
 		if (expandedTasks.error) {
 			return { error: buildRequestedModeError(params, expandedTasks.error) };
 		}
@@ -595,12 +633,13 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	}
 
 	if (hasTasks && params.tasks) {
+		const tasks = params.tasks as TaskParam[];
 		const maxParallelTasks = resolveTopLevelParallelMaxTasks(deps.config.parallel?.maxTasks);
-		if (params.tasks.length > maxParallelTasks) {
+		if (tasks.length > maxParallelTasks) {
 			return buildParallelModeError(`Max ${maxParallelTasks} tasks`);
 		}
 		if (params.worktree) {
-			const worktreeTaskCwdError = buildParallelWorktreeTaskCwdError(params.tasks, effectiveCwd);
+			const worktreeTaskCwdError = buildParallelWorktreeTaskCwdError(tasks, effectiveCwd);
 			if (worktreeTaskCwdError) return buildParallelModeError(worktreeTaskCwdError);
 		}
 	}
@@ -632,12 +671,13 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	const childIntercomTarget = intercomBridge.active ? (agent: string, index: number) => resolveSubagentIntercomTarget(id, agent, index) : undefined;
 
 	if (hasTasks && params.tasks) {
-		const agentConfigs = params.tasks.map((task) => agents.find((agent) => agent.name === task.agent));
-		const modelOverrides = params.tasks.map((task, index) =>
+		const tasks = params.tasks as TaskParam[];
+		const agentConfigs = tasks.map((task) => agents.find((agent) => agent.name === task.agent));
+		const modelOverrides = tasks.map((task, index) =>
 			resolveModelCandidate(task.model ?? agentConfigs[index]?.model, availableModels, currentProvider),
 		);
-		const skillOverrides = params.tasks.map((task) => normalizeSkillInput(task.skill));
-		const parallelTasks = params.tasks.map((task, index) => ({
+		const skillOverrides = tasks.map((task) => normalizeSkillInput(task.skill));
+		const parallelTasks = tasks.map((task, index) => ({
 			agent: task.agent,
 			task: params.context === "fork" ? wrapForkTask(task.task) : task.task,
 			cwd: task.cwd,
@@ -647,7 +687,11 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		return executeAsyncChain(id, {
 			chain: [{
 				parallel: parallelTasks,
-				concurrency: resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency),
+				concurrency: resolveTopLevelParallelConcurrency(
+					params.concurrency,
+					deps.config.parallel?.concurrency,
+					deps.config.parallel?.maxConcurrency,
+				),
 				worktree: params.worktree,
 			}],
 			agents,
@@ -660,7 +704,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			shareEnabled,
 			sessionRoot,
 			chainSkills: [],
-			sessionFilesByFlatIndex: params.tasks.map((_, index) => sessionFileForIndex(index)),
+			sessionFilesByFlatIndex: tasks.map((_, index) => sessionFileForIndex(index)),
 			maxSubagentDepth: currentMaxSubagentDepth,
 			forkReuse,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
@@ -1006,6 +1050,9 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
 							input.foregroundControl.currentTool = current?.currentTool;
 							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
+							input.foregroundControl.recentTools = current?.recentTools;
+							input.foregroundControl.recentOutput = current?.recentOutput;
+							input.foregroundControl.finalOutput = stepResults[0]?.finalOutput;
 							input.foregroundControl.updatedAt = Date.now();
 						}
 						if (stepResults.length > 0) input.liveResults[index] = stepResults[0];
@@ -1056,9 +1103,13 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget : undefined;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
-	const tasks = params.tasks!;
+	const tasks = params.tasks as TaskParam[];
 	const maxParallelTasks = resolveTopLevelParallelMaxTasks(deps.config.parallel?.maxTasks);
-	const parallelConcurrency = resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency);
+	const parallelConcurrency = resolveTopLevelParallelConcurrency(
+		params.concurrency,
+		deps.config.parallel?.concurrency,
+		deps.config.parallel?.maxConcurrency,
+	);
 
 	if (tasks.length > maxParallelTasks)
 		return {
@@ -1458,6 +1509,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
 				foregroundControl.currentTool = firstProgress?.currentTool;
 				foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
+				foregroundControl.recentTools = firstProgress?.recentTools;
+				foregroundControl.recentOutput = firstProgress?.recentOutput;
+				foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
 				foregroundControl.updatedAt = Date.now();
 			}
 			onUpdate(update);
@@ -1497,6 +1551,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		foregroundControl.lastActivityAt = r.progress?.lastActivityAt;
 		foregroundControl.currentTool = r.progress?.currentTool;
 		foregroundControl.currentToolStartedAt = r.progress?.currentToolStartedAt;
+		foregroundControl.recentTools = r.progress?.recentTools;
+		foregroundControl.recentOutput = r.progress?.recentOutput;
+		foregroundControl.finalOutput = r.finalOutput;
 		foregroundControl.updatedAt = Date.now();
 	}
 	recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);

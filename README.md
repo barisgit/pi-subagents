@@ -460,8 +460,8 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 |------|---------------|-------|
 | Single | Yes | `{ agent, task? }` - one bounded task for one agent; omit `task` for self-contained agents |
 | Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables for dependent stages |
-| Parallel | Yes | `{ tasks: [{agent, task}...] }` for independent tasks that can run at the same time |
-| Swarm | Yes | `{ prompt, tasks }` for parallel perspectives/variants under one common prompt; use `{in}` as the per-task focus placeholder |
+| Parallel | Yes | `{ tasks: [{agent, task}...] }` for independent tasks that can run at the same time. With top-level `agent`, task items may omit `agent` or be plain strings. |
+| Swarm | Yes | `{ prompt, tasks }` for parallel perspectives/variants under one common prompt; use `{in}` as the per-task focus placeholder. For a single-agent swarm, use `{ agent, prompt, tasks: ["focus A", "focus B"] }`. |
 
 ### Execution mode heuristics
 
@@ -602,6 +602,13 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 
 // Parallel
 { tasks: [{ agent: "scout", task: "a" }, { agent: "scout", task: "b" }] }
+
+// Parallel shorthand for one repeated agent
+{ agent: "scout", tasks: ["a", "b"] }
+{ agent: "scout", tasks: [{ task: "a" }, { task: "b", model: "provider/model" }] }
+
+// Single-agent swarm shorthand
+{ agent: "scout", prompt: "Review this area: {in}", tasks: ["auth", "API"] }
 
 // Parallel with top-level concurrency override
 { tasks: [{ agent: "scout", task: "a" }, { agent: "reviewer", task: "b" }], concurrency: 2 }
@@ -949,7 +956,8 @@ When enabled:
 {
   "parallel": {
     "maxTasks": 12,
-    "concurrency": 6
+    "concurrency": 6,
+    "maxConcurrency": 8
   }
 }
 ```
@@ -957,8 +965,9 @@ When enabled:
 Fields:
 - `maxTasks` defaults to `8` when unset or invalid
 - `concurrency` defaults to `4` when unset or invalid
+- `maxConcurrency` is optional; when set, it caps both per-call `concurrency` and configured `concurrency`
 
-Per-call `concurrency` on the `subagent` tool takes precedence over `config.parallel.concurrency` for top-level `tasks` runs.
+Per-call `concurrency` on the `subagent` tool takes precedence over `config.parallel.concurrency` for top-level `tasks` runs, but cannot exceed `config.parallel.maxConcurrency` when that cap is set.
 
 ### `defaultSessionDir`
 

@@ -97,6 +97,13 @@ describe("top-level parallel config helpers", () => {
 		assert.equal(resolveTopLevelParallelConcurrency(0, 6), 6);
 		assert.equal(resolveTopLevelParallelConcurrency(undefined, 0), 4);
 	});
+
+	it("caps concurrency when maxConcurrency is configured", () => {
+		assert.equal(resolveTopLevelParallelConcurrency(21, 8, 8), 8);
+		assert.equal(resolveTopLevelParallelConcurrency(undefined, 12, 8), 8);
+		assert.equal(resolveTopLevelParallelConcurrency(4, 8, 8), 4);
+		assert.equal(resolveTopLevelParallelConcurrency(21, 8, 0), 21);
+	});
 });
 
 describe("resolveChildMaxSubagentDepth", () => {

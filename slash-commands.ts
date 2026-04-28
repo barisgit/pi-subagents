@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Key, matchesKey } from "@mariozechner/pi-tui";
 import { discoverAgents, discoverAgentsAll } from "./agents.ts";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
-import { SubagentsStatusComponent } from "./subagents-status.ts";
+import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-status.ts";
 import { discoverAvailableSkills } from "./skills.ts";
 import type { SubagentParamsLike } from "./subagent-executor.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
@@ -548,11 +548,13 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("subagents-status", {
-		description: "Show active and recent async subagent runs",
+		description: "Show live sync and async subagent runs",
 		handler: async (_args, ctx) => {
 			await ctx.ui.custom<void>(
-				(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined)),
-				{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
+				(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
+					listForegroundRuns: () => foregroundRunsFromState(state),
+				}),
+				{ overlay: true, overlayOptions: { anchor: "center", width: 140, maxHeight: "90%" } },
 			);
 		},
 	});

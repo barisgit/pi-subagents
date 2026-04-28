@@ -14,16 +14,19 @@ interface SubagentParamsSchema {
 			type?: string;
 			description?: string;
 		};
-		tasks?: {
-			items?: {
-				properties?: {
-					count?: {
-						minimum?: number;
-						description?: string;
+			tasks?: {
+				items?: {
+					type?: string | string[];
+					required?: string[];
+					properties?: {
+						agent?: { type?: string };
+						count?: {
+							minimum?: number;
+							description?: string;
+						};
 					};
 				};
 			};
-		};
 		concurrency?: {
 			minimum?: number;
 			description?: string;
@@ -82,8 +85,14 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 		assert.match(String(contextSchema.description ?? ""), /fork/);
 	});
 
-	it("includes count and concurrency on top-level parallel mode", () => {
-		const taskCountSchema = SubagentParams?.properties?.tasks?.items?.properties?.count;
+	it("includes count, shorthand, and concurrency on top-level parallel mode", () => {
+		const taskItemSchema = SubagentParams?.properties?.tasks?.items;
+		assert.ok(taskItemSchema, "tasks[] schema should exist");
+		assert.deepEqual(taskItemSchema.type, ["object", "string"]);
+		assert.deepEqual(taskItemSchema.required, ["task"]);
+		assert.equal(taskItemSchema.properties?.agent?.type, "string");
+
+		const taskCountSchema = taskItemSchema.properties?.count;
 		assert.ok(taskCountSchema, "tasks[].count schema should exist");
 		assert.equal(taskCountSchema.minimum, 1);
 		assert.match(String(taskCountSchema.description ?? ""), /repeat/i);
@@ -212,6 +221,8 @@ it("includes subagent control fields", () => {
 			{ skill: false },
 			{ tasks: [{ agent: "reviewer", task: "check this", skill: "review" }] },
 			{ tasks: [{ agent: "reviewer", task: "check this", skill: false }] },
+			{ agent: "reviewer", tasks: ["check auth", "check API"] },
+			{ agent: "reviewer", tasks: [{ task: "check auth" }, { task: "check API", model: "provider/model" }] },
 			{ chain: [{ agent: "reviewer", reads: false }] },
 			{ chain: [{ parallel: [{ agent: "reviewer", reads: false, skill: false }] }] },
 			{ config: { name: "reviewer", description: "Review things" } },

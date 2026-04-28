@@ -265,6 +265,9 @@ export interface SubagentState {
 		lastActivityAt?: number;
 		currentTool?: string;
 		currentToolStartedAt?: number;
+		recentTools?: Array<{ tool: string; args?: string; endMs?: number }>;
+		recentOutput?: string[];
+		finalOutput?: string;
 		interrupt?: () => boolean;
 	}>;
 	lastForegroundControlId: string | null;
@@ -366,6 +369,7 @@ export interface IntercomBridgeConfig {
 export interface TopLevelParallelConfig {
 	maxTasks?: number;
 	concurrency?: number;
+	maxConcurrency?: number;
 }
 
 export type AgentSurface = "main" | "subagent" | "both";
@@ -542,10 +546,13 @@ export function resolveTopLevelParallelMaxTasks(value: unknown): number {
 export function resolveTopLevelParallelConcurrency(
 	override: unknown,
 	configValue: unknown,
+	maxValue?: unknown,
 ): number {
-	return normalizeTopLevelParallelValue(override)
+	const requested = normalizeTopLevelParallelValue(override)
 		?? normalizeTopLevelParallelValue(configValue)
 		?? MAX_CONCURRENCY;
+	const max = normalizeTopLevelParallelValue(maxValue);
+	return max === undefined ? requested : Math.min(requested, max);
 }
 
 export function getAsyncConfigPath(suffix: string): string {

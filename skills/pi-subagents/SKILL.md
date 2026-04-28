@@ -221,7 +221,7 @@ subagent({
 Clarify is opt-in for all modes, including chains. Use `clarify: true` only when a human should preview/edit before launch.
 For programmatic background launches, use `async: true` and leave `clarify` unset or set `clarify: false`.
 
-For swarm-style parallel dispatch, pass a top-level `prompt`; use `{in}` once to insert each task, or omit `{in}` to append each task after the common prompt.
+For swarm-style parallel dispatch, pass a top-level `prompt`; use `{in}` once to insert each task, or omit `{in}` to append each task after the common prompt. If all branches use the same agent, pass top-level `agent` and use `tasks` as plain strings or `{ task }` objects, e.g. `subagent({ agent: "explorer", prompt: "Review {in}", tasks: ["auth", "API"] })`.
 
 ## Worktree Isolation
 

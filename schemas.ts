@@ -22,12 +22,27 @@ const ReadsOverride = Type.Unsafe({
 });
 
 export const TaskItem = Type.Object({ 
-	agent: Type.String(), 
+	agent: Type.Optional(Type.String({ description: "Agent for this task. May be omitted when top-level agent is provided." })), 
 	task: Type.String(), 
 	cwd: Type.Optional(Type.String()),
 	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat this parallel task N times with the same settings." })),
 	model: Type.Optional(Type.String({ description: "Override model for this task (e.g. 'google/gemini-3-pro')" })),
 	skill: Type.Optional(SkillOverride),
+});
+
+export const TopLevelTaskItem = Type.Unsafe({
+	type: ["object", "string"],
+	properties: {
+		agent: { type: "string", description: "Agent for this task. May be omitted when top-level agent is provided." },
+		task: { type: "string" },
+		cwd: { type: "string" },
+		count: { type: "integer", minimum: 1, description: "Repeat this parallel task N times with the same settings." },
+		model: { type: "string", description: "Override model for this task (e.g. 'google/gemini-3-pro')" },
+		skill: SkillOverride,
+	},
+	required: ["task"],
+	additionalProperties: true,
+	description: "Top-level parallel/swarm task. Use {agent, task} or, when top-level agent is set, {task} or a plain string task.",
 });
 
 // Sequential chain step (single agent)
@@ -125,7 +140,7 @@ export const SubagentParams = Type.Object({
 		additionalProperties: true,
 		description: "Agent or chain config for create/update. Agent: name, description, scope ('user'|'project', default 'user'), systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, model, tools (comma-separated), extensions (comma-separated), skills (comma-separated), thinking, output, reads, progress, maxSubagentDepth. Chain: name, description, scope, steps (array of {agent, task?, output?, reads?, model?, skills?, progress?}). Presence of 'steps' creates a chain instead of an agent. String values must be valid JSON."
 	})),
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task, count?}, ...]" })),
+	tasks: Type.Optional(Type.Array(TopLevelTaskItem, { description: "PARALLEL mode: [{agent, task, count?}, ...]. With top-level agent, items may omit agent or be plain strings." })),
 	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or 4." })),
 	worktree: Type.Optional(Type.Boolean({
 		description: "Create isolated git worktrees for each parallel task. " +

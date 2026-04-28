@@ -641,11 +641,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		description: `Delegate to subagents or manage agent definitions.
 
 EXECUTION (use exactly ONE mode):
-• Before executing, use { action: "list" } to inspect configured agents/chains. Only execute agents listed as executable/non-disabled.
+• Use { action: "list" } when available agents/chains are unknown or may have changed. Execute only agents known to be executable/non-disabled.
 • SINGLE: { agent, task? } - one bounded task for one agent; omit task for self-contained agents.
 • CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - dependent stages where later work needs {previous}; ideal for explore → plan → build → review.
-• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - independent tasks that can run at the same time; use worktree for concurrent edits.
-• SWARM: { prompt: "...", tasks: [{agent,task}, ...] } - multiple perspectives/variants under one common prompt. Use {in} in prompt as placeholder for each task's focus; if absent, task text is appended.
+• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - independent tasks that can run at the same time; use worktree for concurrent edits. With top-level agent, tasks may omit agent or be plain strings.
+• SWARM: { prompt: "...", tasks: [{agent,task}, ...] } - multiple perspectives/variants under one common prompt. Use {in} in prompt as placeholder for each task's focus; if absent, task text is appended. For one agent over many focuses, use { agent:"agent-a", prompt:"... {in}", tasks:["focus A", "focus B"] }.
 • ASYNC: add async:true for long-running, non-blocking, or user-monitorable work. Use action:"status" or /subagents-status to inspect later.
 • Optional context: { context: "fresh" | "fork" } (default: "fresh")
 • Optional preset: { preset: "name" } - preset-aware discovery/routing (explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config default)
@@ -668,6 +668,7 @@ Nested guardrails:
 
 Example: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", task:"Plan based on {previous}"}] }
 Swarm example: { prompt: "Review this codebase for security issues. Focus on: {in}", tasks: [{agent:"agent-a", task:"authentication flow"}, {agent:"agent-b", task:"API endpoints"}] }
+Single-agent swarm shorthand: { agent:"agent-a", prompt:"Review for risks in: {in}", tasks:["authentication flow", "API boundaries"] }
 Chain with swarm: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {parallel: [{agent:"agent-b", task:"auth"}, {agent:"agent-c", task:"API"}], prompt: "Review for security. Focus on: {in}"}] }
 
 MANAGEMENT (use action field, omit agent/task/chain/tasks):
