@@ -346,7 +346,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		tempArtifactsDir,
 		getSubagentSessionRoot,
 		expandTilde,
-		discoverAgents: (cwd, scope, options) => resolveAgentTools(discoverAgents(cwd, scope, { ...options, config })),
+		discoverAgents: (cwd, scope, options) => {
+				const result = discoverAgents(cwd, scope, { ...options, config });
+				return { ...result, agents: resolveAgentTools(result.agents) };
+			},
 		getActiveRootRoleName: () => activeRootRoleName,
 	});
 
