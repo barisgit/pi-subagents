@@ -1,0 +1,17 @@
+{
+  "nextId": 2,
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Read-only UX review of status-screen diff",
+      "description": "Review recent status-screen diff for UX improvements, with brief pauses over about 45 seconds and no file edits; summarize notes.",
+      "status": "completed",
+      "activeForm": "Reviewing recent status-screen diff read-only",
+      "blocks": [],
+      "blockedBy": [],
+      "metadata": {},
+      "createdAt": 1777301391533,
+      "updatedAt": 1777301500593
+    }
+  ]
+}

@@ -20,6 +20,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
 import { type AgentConfig, discoverAgents } from "./agents.ts";
+import { resolveAgentToolPatterns, resolveToolPatterns } from "./resolve-tool-patterns.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
 import { cleanupOldChainDirs } from "./settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./render.ts";
@@ -333,6 +334,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
 	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR);
+	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
+		const available = pi.getAllTools().map((t) => t.name);
+		return agents.map((a) => resolveAgentToolPatterns(a, available));
+	};
 	const executor = createSubagentExecutor({
 		pi,
 		state,
@@ -341,7 +346,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		tempArtifactsDir,
 		getSubagentSessionRoot,
 		expandTilde,
-		discoverAgents: (cwd, scope, options) => discoverAgents(cwd, scope, { ...options, config }),
+		discoverAgents: (cwd, scope, options) => resolveAgentTools(discoverAgents(cwd, scope, { ...options, config })),
 		getActiveRootRoleName: () => activeRootRoleName,
 	});
 
@@ -558,14 +563,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	function applyRootTools(ctx: ExtensionContext, role: AgentConfig): void {
 		const requestedTools = [...new Set([...(role.tools ?? []), ...(role.mcpDirectTools ?? [])])];
 		if (requestedTools.length === 0) return;
-		const availableTools = new Set(pi.getAllTools().map((tool) => tool.name));
-		const validTools = requestedTools.filter((tool) => availableTools.has(tool));
-		const invalidTools = requestedTools.filter((tool) => !availableTools.has(tool));
-		if (invalidTools.length > 0) {
-			notify(ctx, `Role '${role.name}': unknown tools: ${invalidTools.join(", ")}`, "warning");
+		const availableNames = pi.getAllTools().map((t) => t.name);
+		const resolved = resolveToolPatterns(requestedTools, availableNames);
+		const availableSet = new Set(availableNames);
+		const unknown = resolved.filter((t) => !availableSet.has(t));
+		if (unknown.length > 0) {
+			notify(ctx, `Role '${role.name}': unknown tools: ${unknown.join(", ")}`, "warning");
 		}
-		if (validTools.length > 0) {
-			pi.setActiveTools(validTools);
+		if (resolved.length > 0) {
+			pi.setActiveTools(resolved);
 		}
 	}
 

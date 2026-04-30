@@ -1,0 +1,41 @@
+{
+  "nextId": 13,
+  "tasks": [
+    {
+      "id": "10",
+      "title": "Review pending git changes",
+      "description": "Inspect working tree to identify which changes belong to the subagent shorthand/concurrency/status work and avoid committing accidental files.",
+      "status": "completed",
+      "blocks": [],
+      "blockedBy": [],
+      "metadata": {},
+      "createdAt": 1777338247108,
+      "updatedAt": 1777338449219,
+      "context": "Delegated commit/push subagent inspected status/diffs and intentionally excluded untracked `.pi/` local/private generated task data."
+    },
+    {
+      "id": "11",
+      "title": "Commit selected changes",
+      "description": "Stage appropriate files and create a clear commit message.",
+      "status": "completed",
+      "blocks": [],
+      "blockedBy": [],
+      "metadata": {},
+      "createdAt": 1777338247111,
+      "updatedAt": 1777338449219,
+      "context": "Committed source/test/docs changes as `569f731` with message `Improve subagent parallel controls and status UI`."
+    },
+    {
+      "id": "12",
+      "title": "Push commit",
+      "description": "Push current branch to its upstream remote and report result.",
+      "status": "completed",
+      "blocks": [],
+      "blockedBy": [],
+      "metadata": {},
+      "createdAt": 1777338247112,
+      "updatedAt": 1777338449220,
+      "context": "Pushed branch `main` to `origin` (`https://github.com/barisgit/pi-subagents.git`), result `99ee7be..569f731 main -> main`."
+    }
+  ]
+}

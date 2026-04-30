@@ -1,0 +1,41 @@
+{
+  "nextId": 4,
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Inspect divergence and remotes",
+      "description": "",
+      "context": "Determine whether origin is fork or upstream; quantify main/origin/upstream divergence before changing history.",
+      "status": "completed",
+      "blocks": [],
+      "blockedBy": [],
+      "metadata": {},
+      "createdAt": 1777248352137,
+      "updatedAt": 1777248361165
+    },
+    {
+      "id": "2",
+      "title": "Choose and apply branch fix",
+      "description": "",
+      "context": "User corrected target: do NOT rebase onto upstream. Keep fork self-contained; target base is origin/main (barisgit fork). Upstream rebase was aborted successfully; local main back to pre-rebase state. Need resolve local main vs origin/main divergence safely.",
+      "status": "completed",
+      "blocks": [],
+      "blockedBy": [],
+      "metadata": {},
+      "createdAt": 1777248352138,
+      "updatedAt": 1777248764392
+    },
+    {
+      "id": "3",
+      "title": "Verify clean state and summarize",
+      "description": "",
+      "context": "Explain current divergence after restoring backup and provide safe push/pull strategy. Need avoid destructive commands without confirmation.",
+      "status": "completed",
+      "blocks": [],
+      "blockedBy": [],
+      "metadata": {},
+      "createdAt": 1777248352138,
+      "updatedAt": 1777249312224
+    }
+  ]
+}
