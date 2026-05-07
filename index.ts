@@ -657,42 +657,26 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 EXECUTION (use exactly ONE mode):
 • Use { action: "list" } when available agents/chains are unknown or may have changed. Execute only agents known to be executable/non-disabled.
-• SINGLE: { agent, task? } - one bounded task for one agent; omit task for self-contained agents.
-• CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - dependent stages where later work needs {previous}; ideal for explore → plan → build → review.
-• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - independent tasks that can run at the same time; use worktree for concurrent edits. With top-level agent, tasks may omit agent or be plain strings.
-• SWARM: { prompt: "...", tasks: [{agent,task}, ...] } - multiple perspectives/variants under one common prompt. Use {in} in prompt as placeholder for each task's focus; if absent, task text is appended. For one agent over many focuses, use { agent:"agent-a", prompt:"... {in}", tasks:["focus A", "focus B"] }.
-• ASYNC: add async:true for long-running, non-blocking, or user-monitorable work. Use action:"status" or /subagents-status to inspect later.
-• Optional context: { context: "fresh" | "fork" } (default: "fresh")
-• Optional preset: { preset: "name" } - preset-aware discovery/routing (explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config default)
+• SINGLE: { agent, task? } - one bounded task; task may be omitted for self-contained agents.
+• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?, worktree? } - independent tasks; top-level agent lets tasks omit agent or be strings.
+• CHAIN: { chain: [{agent,task?}, {parallel:[{agent,task?}]}] } - dependent stages using {previous}.
+• SWARM: { prompt: "... {in}", tasks: [...] } - multiple perspectives/variants under one common prompt.
+• ASYNC: add async:true for background work; inspect with action:"status" or /subagents-status.
+• Optional: context "fresh"|"fork" (default fresh), preset "name". Use fork only for same-role session branching; use fresh for specialists.
 
-MODE SELECTION DEFAULTS:
-• Prefer CHAIN over serial single calls when phases depend on each other.
-• Prefer PARALLEL/SWARM when branches are independent, when comparing approaches, or when you want review/advice diversity.
-• Prefer ASYNC when the parent agent/main thread can keep working while child agents run; the user can monitor via status if needed. Do not use clarify unless explicitly requested.
+MODE SELECTION:
+• Use CHAIN for dependent phases, PARALLEL/SWARM for independent branches or review diversity, ASYNC only when the parent can continue.
+• Chain task variables: {task}=original request, {previous}=prior result, {chain_dir}=shared artifact dir.
 
-CHAIN TEMPLATE VARIABLES (use in task strings):
-• {task} - The original task/request from the user
-• {previous} - Text response from the previous step (empty for first step)
-• {chain_dir} - Shared directory for chain files (e.g., <tmpdir>/pi-subagents-<scope>/chain-runs/abc123/)
+Nested guardrails: root calls are allowed; nested calls require canDelegate and are limited by allowedDelegateAgents when set.
 
-Nested guardrails:
-• Root calls remain allowed
-• Nested calls are only allowed from agents marked canDelegate
-• Allowed nested child agents come from the current agent's allowedDelegateAgents capability when set
-• Legacy orchestrator/delegate behavior remains the fallback when no explicit capability env is present
+Examples:
+• Chain: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", task:"Plan from {previous}"}] }
+• Swarm: { agent:"agent-a", prompt:"Review for risks in: {in}", tasks:["auth", "API"] }
 
-Example: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", task:"Plan based on {previous}"}] }
-Swarm example: { prompt: "Review this codebase for security issues. Focus on: {in}", tasks: [{agent:"agent-a", task:"authentication flow"}, {agent:"agent-b", task:"API endpoints"}] }
-Single-agent swarm shorthand: { agent:"agent-a", prompt:"Review for risks in: {in}", tasks:["authentication flow", "API boundaries"] }
-Chain with swarm: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {parallel: [{agent:"agent-b", task:"auth"}, {agent:"agent-c", task:"API"}], prompt: "Review for security. Focus on: {in}"}] }
-
-MANAGEMENT (use action field, omit agent/task/chain/tasks):
-• { action: "list" } - discover executable agents/chains and any disabled builtins
-• { action: "get", agent: "name" } - full detail
-• { action: "create", config: { name, systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, ... } }
-• { action: "update", agent: "name", config: { ... } } - merge
-• { action: "delete", agent: "name" }
-• Use chainName for chain operations
+MANAGEMENT (use action; omit execution fields):
+• list/get/create/update/delete agents or chains; use chainName for chain operations.
+• config should include name/description/systemPrompt; steps creates a chain.
 
 CONTROL:
 • { action: "status", id: "..." } - inspect an async/background run by id or prefix

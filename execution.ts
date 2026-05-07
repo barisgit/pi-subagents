@@ -31,6 +31,7 @@ import {
 	buildControlEvent,
 	claimControlNotification,
 	deriveActivityState,
+	isControlEventAllowed,
 	shouldEmitControlEvent,
 	shouldNotifyControlEvent,
 } from "./subagent-control.ts";
@@ -288,7 +289,10 @@ async function runSingleAttempt(
 		};
 
 		const emittedControlEventKeys = new Set<string>();
+		const isRunFinalized = () =>
+			settled || processClosed || detached || childExited || finalDrainTimer !== undefined;
 		const emitControlEvent = (event: ControlEvent) => {
+			if (!isControlEventAllowed({ runFinalized: isRunFinalized() })) return;
 			if (shouldNotifyControlEvent(controlConfig, event) && !claimControlNotification(controlConfig, event, emittedControlEventKeys)) return;
 			allControlEvents.push(event);
 			pendingControlEvents.push(event);

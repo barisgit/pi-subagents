@@ -86,13 +86,16 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 	});
 
 	it("includes count, shorthand, and concurrency on top-level parallel mode", () => {
-		const taskItemSchema = SubagentParams?.properties?.tasks?.items;
+		const taskItemSchema = SubagentParams?.properties?.tasks?.items as JsonSchemaNode & { anyOf?: Array<JsonSchemaNode & { properties?: Record<string, JsonSchemaNode>; required?: string[] }> } | undefined;
 		assert.ok(taskItemSchema, "tasks[] schema should exist");
-		assert.deepEqual(taskItemSchema.type, ["object", "string"]);
-		assert.deepEqual(taskItemSchema.required, ["task"]);
-		assert.equal(taskItemSchema.properties?.agent?.type, "string");
+		const objectTaskSchema = taskItemSchema.anyOf?.find((schema) => schema.type === "object");
+		const stringTaskSchema = taskItemSchema.anyOf?.find((schema) => schema.type === "string");
+		assert.ok(objectTaskSchema, "tasks[] should accept object task items");
+		assert.ok(stringTaskSchema, "tasks[] should accept string task shorthand");
+		assert.deepEqual(objectTaskSchema.required, ["task"]);
+		assert.equal(objectTaskSchema.properties?.agent?.type, "string");
 
-		const taskCountSchema = taskItemSchema.properties?.count;
+		const taskCountSchema = objectTaskSchema.properties?.count;
 		assert.ok(taskCountSchema, "tasks[].count schema should exist");
 		assert.equal(taskCountSchema.minimum, 1);
 		assert.match(String(taskCountSchema.description ?? ""), /repeat/i);
@@ -137,7 +140,13 @@ it("includes subagent control fields", () => {
 				if (!current.value || typeof current.value !== "object") continue;
 
 				const node = current.value as JsonSchemaNode;
-				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type")) {
+				if (
+					Object.hasOwn(node, "description")
+					&& !Object.hasOwn(node, "type")
+					&& !Object.hasOwn(node, "anyOf")
+					&& !Object.hasOwn(node, "oneOf")
+					&& !Object.hasOwn(node, "allOf")
+				) {
 					descriptionOnlyPaths.push(current.path);
 				}
 
@@ -185,19 +194,19 @@ it("includes subagent control fields", () => {
 	});
 
 	it("uses explicit types for flexible fields and chain items", () => {
-		const skillSchema = SubagentParams?.properties?.skill;
+		const skillSchema = SubagentParams?.properties?.skill as JsonSchemaNode & { anyOf?: JsonSchemaNode[] } | undefined;
 		assert.ok(skillSchema, "skill schema should exist");
-		assert.deepEqual(skillSchema.type, ["string", "array", "boolean"]);
-		assert.deepEqual(skillSchema.items, { type: "string" });
+		assert.deepEqual(skillSchema.anyOf?.map((schema) => schema.type), ["boolean", "array", "string"]);
+		assert.deepEqual(skillSchema.anyOf?.find((schema) => schema.type === "array")?.items, { type: "string" });
 
-		const outputSchema = SubagentParams?.properties?.output;
+		const outputSchema = SubagentParams?.properties?.output as JsonSchemaNode & { anyOf?: JsonSchemaNode[] } | undefined;
 		assert.ok(outputSchema, "output schema should exist");
-		assert.deepEqual(outputSchema.type, ["string", "boolean"]);
+		assert.deepEqual(outputSchema.anyOf?.map((schema) => schema.type), ["boolean", "string"]);
 
-		const configSchema = SubagentParams?.properties?.config;
+		const configSchema = SubagentParams?.properties?.config as JsonSchemaNode & { anyOf?: JsonSchemaNode[] } | undefined;
 		assert.ok(configSchema, "config schema should exist");
-		assert.deepEqual(configSchema.type, ["object", "string"]);
-		assert.equal(configSchema.additionalProperties, true);
+		assert.deepEqual(configSchema.anyOf?.map((schema) => schema.type), ["object", "string"]);
+		assert.equal(configSchema.anyOf?.find((schema) => schema.type === "object")?.additionalProperties, true);
 
 		const chainItem = SubagentParams?.properties?.chain?.items;
 		assert.ok(chainItem, "chain item schema should exist");
@@ -207,9 +216,11 @@ it("includes subagent control fields", () => {
 		assert.equal(chainItem.properties?.agent?.type, "string");
 		assert.equal(chainItem.properties?.parallel?.type, "array");
 		assert.equal((chainItem.properties?.parallel?.items as { properties?: Record<string, JsonSchemaNode> } | undefined)?.properties?.agent?.type, "string");
-		assert.deepEqual(chainItem.properties?.output?.type, ["string", "boolean"]);
-		assert.deepEqual(chainItem.properties?.reads?.type, ["array", "boolean"]);
-		assert.deepEqual(chainItem.properties?.reads?.items, { type: "string" });
+		const chainOutput = chainItem.properties?.output as JsonSchemaNode & { anyOf?: JsonSchemaNode[] } | undefined;
+		const chainReads = chainItem.properties?.reads as JsonSchemaNode & { anyOf?: JsonSchemaNode[] } | undefined;
+		assert.deepEqual(chainOutput?.anyOf?.map((schema) => schema.type), ["boolean", "string"]);
+		assert.deepEqual(chainReads?.anyOf?.map((schema) => schema.type), ["array", "boolean"]);
+		assert.deepEqual(chainReads?.anyOf?.find((schema) => schema.type === "array")?.items, { type: "string" });
 	});
 
 	it("validates representative flexible field values with TypeBox compiler", () => {
@@ -248,7 +259,7 @@ it("includes subagent control fields", () => {
 	});
 
 	it("includes action on status params for list mode", () => {
-		const actionSchema = StatusParams?.properties?.action;
+		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "status action schema should exist");
 		assert.equal(actionSchema.type, "string");
 		assert.match(String(actionSchema.description ?? ""), /list/i);

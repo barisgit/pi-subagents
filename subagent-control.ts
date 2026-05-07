@@ -106,6 +106,19 @@ export function shouldNotifyControlEvent(config: ResolvedControlConfig, event: C
 	return config.enabled && config.notifyOn.includes(event.type);
 }
 
+/**
+ * Suppress activity-stall events once a run has effectively finished.
+ *
+ * The activity-stall heuristic only updates `lastActivityAt` on parsed structured
+ * events from the child. During a long final assistant message (no tool calls)
+ * the child can be silent for >60s while still streaming tokens. Without this
+ * gate, the timer fires `needs_attention` after the run has completed, which
+ * surfaces a stale notice in the parent.
+ */
+export function isControlEventAllowed(input: { runFinalized: boolean }): boolean {
+	return !input.runFinalized;
+}
+
 export function controlNotificationKey(event: ControlEvent, childIntercomTarget?: string): string {
 	const childKey = childIntercomTarget ?? (event.index !== undefined ? `${event.runId}:${event.index}` : event.runId);
 	return `${childKey}:${event.type}`;

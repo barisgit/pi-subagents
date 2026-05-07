@@ -185,6 +185,47 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("does not bridge stale control events after a run is already complete", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-complete-stale-control");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-complete-stale-control",
+				mode: "single",
+				state: "complete",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "complete" }],
+			}), "utf-8");
+			fs.writeFileSync(path.join(runDir, "events.jsonl"), `${JSON.stringify({
+				type: "subagent.control",
+				channels: ["event"],
+				event: {
+					type: "needs_attention",
+					to: "needs_attention",
+					ts: 123,
+					runId: "run-complete-stale-control",
+					agent: "worker",
+					message: "worker needs attention",
+				},
+			})}\n`, "utf-8");
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 10,
+			});
+			tracker.handleStarted({ id: "run-complete-stale-control", asyncDir: runDir, agent: "worker" });
+
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(recorder.events.some((event) => event.channel === "subagent:control-event"), false);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("honors async control notification channels", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {

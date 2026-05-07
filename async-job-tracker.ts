@@ -18,6 +18,12 @@ interface AsyncJobTrackerOptions {
 	pollIntervalMs?: number;
 }
 
+type AsyncJobLifecycleStatus = AsyncJobState["status"];
+
+function isTerminalAsyncStatus(status: AsyncJobLifecycleStatus): boolean {
+	return status === "complete" || status === "failed" || status === "paused";
+}
+
 export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, asyncDirRoot: string, options: AsyncJobTrackerOptions = {}): {
 	ensurePoller: () => void;
 	handleStarted: (data: unknown) => void;
@@ -113,15 +119,17 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 
 			for (const job of state.asyncJobs.values()) {
 				try {
-					emitNewControlEvents(job);
+					const previousStatus = job.status;
+					const previousStatusWasTerminal = isTerminalAsyncStatus(previousStatus);
 					const status = readStatus(job.asyncDir);
 					if (status) {
-						const previousStatus = job.status;
-						job.status = status.state;
-						job.activityState = status.activityState;
+						if (!previousStatusWasTerminal || isTerminalAsyncStatus(status.state)) {
+							job.status = status.state;
+						}
+						job.activityState = isTerminalAsyncStatus(job.status) ? undefined : status.activityState;
 						job.lastActivityAt = status.lastActivityAt ?? job.lastActivityAt;
-						job.currentTool = status.currentTool ?? job.currentTool;
-						job.currentToolStartedAt = status.currentToolStartedAt ?? job.currentToolStartedAt;
+						job.currentTool = isTerminalAsyncStatus(job.status) ? undefined : (status.currentTool ?? job.currentTool);
+						job.currentToolStartedAt = isTerminalAsyncStatus(job.status) ? undefined : (status.currentToolStartedAt ?? job.currentToolStartedAt);
 						job.mode = status.mode;
 						job.currentStep = status.currentStep ?? job.currentStep;
 						job.stepsTotal = status.steps?.length ?? job.stepsTotal;
@@ -134,11 +142,15 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.outputFile = status.outputFile ?? job.outputFile;
 						job.totalTokens = status.totalTokens ?? job.totalTokens;
 						job.sessionFile = status.sessionFile ?? job.sessionFile;
-						if ((job.status === "complete" || job.status === "failed" || job.status === "paused") && previousStatus !== job.status) {
-							scheduleCleanup(job.asyncId);
+						if (isTerminalAsyncStatus(job.status)) {
+							if (previousStatus !== job.status) scheduleCleanup(job.asyncId);
+							continue;
 						}
+						emitNewControlEvents(job);
 						continue;
 					}
+					if (isTerminalAsyncStatus(job.status)) continue;
+					emitNewControlEvents(job);
 					job.status = job.status === "queued" ? "running" : job.status;
 					job.updatedAt = Date.now();
 				} catch (error) {

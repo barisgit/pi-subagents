@@ -2,176 +2,181 @@
  * TypeBox schemas for subagent tool parameters
  */
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
-const SkillOverride = Type.Unsafe({
-	type: ["string", "array", "boolean"],
-	items: { type: "string" },
-	description: "Skill name(s) to inject (comma-separated), array of strings, or boolean (false disables, true uses default)",
+const SkillOverride = Type.Union([
+	Type.Boolean(),
+	Type.Array(Type.String()),
+	Type.String(),
+], {
+	description: "Skill override: string, string[], true default, or false disabled",
 });
 
-const OutputOverride = Type.Unsafe({
-	type: ["string", "boolean"],
-	description: "Output filename/path (string), or false to disable file output",
+const OutputOverride = Type.Union([
+	Type.Boolean(),
+	Type.String(),
+], {
+	description: "Output path, true default, or false disabled",
 });
 
-const ReadsOverride = Type.Unsafe({
-	type: ["array", "boolean"],
-	items: { type: "string" },
-	description: "Files to read before running (array of filenames), or false to disable",
+const ReadsOverride = Type.Union([
+	Type.Array(Type.String()),
+	Type.Boolean(),
+], {
+	description: "Files to read first, or false disabled",
 });
 
 export const TaskItem = Type.Object({ 
-	agent: Type.Optional(Type.String({ description: "Agent for this task. May be omitted when top-level agent is provided." })), 
+	agent: Type.Optional(Type.String({ description: "Agent; optional with top-level agent." })), 
 	task: Type.String(), 
 	cwd: Type.Optional(Type.String()),
-	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat this parallel task N times with the same settings." })),
-	model: Type.Optional(Type.String({ description: "Override model for this task (e.g. 'google/gemini-3-pro')" })),
+	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat task N times." })),
+	model: Type.Optional(Type.String({ description: "Model override" })),
 	skill: Type.Optional(SkillOverride),
 });
 
-export const TopLevelTaskItem = Type.Unsafe({
-	type: ["object", "string"],
-	properties: {
-		agent: { type: "string", description: "Agent for this task. May be omitted when top-level agent is provided." },
-		task: { type: "string" },
-		cwd: { type: "string" },
-		count: { type: "integer", minimum: 1, description: "Repeat this parallel task N times with the same settings." },
-		model: { type: "string", description: "Override model for this task (e.g. 'google/gemini-3-pro')" },
-		skill: SkillOverride,
-	},
-	required: ["task"],
-	additionalProperties: true,
-	description: "Top-level parallel/swarm task. Use {agent, task} or, when top-level agent is set, {task} or a plain string task.",
+export const TopLevelTaskItem = Type.Union([
+	Type.Object({
+		agent: Type.Optional(Type.String({ description: "Agent; optional with top-level agent." })),
+		task: Type.String(),
+		cwd: Type.Optional(Type.String()),
+		count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat task N times." })),
+		model: Type.Optional(Type.String({ description: "Model override" })),
+		skill: Type.Optional(SkillOverride),
+	}, { additionalProperties: true }),
+	Type.String(),
+], {
+	description: "Parallel/swarm item; string shorthand allowed with top-level agent.",
 });
 
 // Sequential chain step (single agent)
 export const SequentialStepSchema = Type.Object({
 	agent: Type.String(),
 	task: Type.Optional(Type.String({ 
-		description: "Task template with variables: {task}=original request, {previous}=prior step's text response, {chain_dir}=shared folder. Required for first step, defaults to '{previous}' for subsequent steps." 
+		description: "Task template; supports {task}, {previous}, {chain_dir}." 
 	})),
 	cwd: Type.Optional(Type.String()),
 	output: Type.Optional(OutputOverride),
 	reads: Type.Optional(ReadsOverride),
-	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
+	progress: Type.Optional(Type.Boolean({ description: "Track progress.md in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for this step" })),
+	model: Type.Optional(Type.String({ description: "Model override" })),
 });
 
 // Parallel task item (within a parallel step)
 export const ParallelTaskSchema = Type.Object({
 	agent: Type.String(),
-	task: Type.Optional(Type.String({ description: "Task template with {task}, {previous}, {chain_dir} variables. Defaults to {previous}." })),
+	task: Type.Optional(Type.String({ description: "Task template; supports {task}, {previous}, {chain_dir}." })),
 	cwd: Type.Optional(Type.String()),
-	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat this parallel task N times with the same settings." })),
+	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat task N times." })),
 	output: Type.Optional(OutputOverride),
 	reads: Type.Optional(ReadsOverride),
-	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
+	progress: Type.Optional(Type.Boolean({ description: "Track progress.md in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for this task" })),
+	model: Type.Optional(Type.String({ description: "Model override" })),
 });
 
 // Parallel chain step (multiple agents running concurrently)
 export const ParallelStepSchema = Type.Object({
-	parallel: Type.Array(ParallelTaskSchema, { minItems: 1, description: "Tasks to run in parallel" }),
-	prompt: Type.Optional(Type.String({ description: "Common prompt shared across all parallel tasks. Use {in} as placeholder for each task's text; if absent, task text is appended." })),
-	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
-	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
+	parallel: Type.Array(ParallelTaskSchema, { minItems: 1, description: "Parallel tasks" }),
+	prompt: Type.Optional(Type.String({ description: "Shared prompt; {in} inserts task text." })),
+	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks" })),
+	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure" })),
 	worktree: Type.Optional(Type.Boolean({
-		description: "Create isolated git worktrees for each parallel task."
+		description: "Isolated git worktrees per parallel task."
 	})),
 });
 
 // Flattened so providers that reject anyOf/oneOf can still accept either sequential or parallel steps.
 export const ChainItem = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Sequential step agent name" })),
+	agent: Type.Optional(Type.String({ description: "Sequential step agent" })),
 	task: Type.Optional(Type.String({
-		description: "Task template with variables: {task}=original request, {previous}=prior step's text response, {chain_dir}=shared folder. Required for first step, defaults to '{previous}' for subsequent steps."
+		description: "Task template; supports {task}, {previous}, {chain_dir}."
 	})),
 	cwd: Type.Optional(Type.String()),
 	output: Type.Optional(OutputOverride),
 	reads: Type.Optional(ReadsOverride),
-	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
+	progress: Type.Optional(Type.Boolean({ description: "Track progress.md in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for this step" })),
-	parallel: Type.Optional(Type.Array(ParallelTaskSchema, { minItems: 1, description: "Tasks to run in parallel" })),
-	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
-	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
+	model: Type.Optional(Type.String({ description: "Model override" })),
+	parallel: Type.Optional(Type.Array(ParallelTaskSchema, { minItems: 1, description: "Parallel tasks" })),
+	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks" })),
+	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure" })),
 	worktree: Type.Optional(Type.Boolean({
-		description: "Create isolated git worktrees for each parallel task."
+		description: "Isolated git worktrees per parallel task."
 	})),
-}, { description: "Chain step: use {agent, task?, ...} for sequential or {parallel: [...]} for concurrent execution" });
+}, { description: "Chain step: sequential {agent, task?} or parallel {parallel}." });
 
 export const ControlOverrides = Type.Object({
-	enabled: Type.Optional(Type.Boolean({ description: "Enable/disable subagent control attention tracking for this run" })),
-	needsAttentionAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "No-observed-activity window before a run needs attention" })),
+	enabled: Type.Optional(Type.Boolean({ description: "Enable control tracking" })),
+	needsAttentionAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "Idle ms before attention notice" })),
 	notifyOn: Type.Optional(Type.Array(Type.String({ enum: ["needs_attention"] }), {
-		description: "Control event types that should notify the parent/orchestrator. Defaults to needs_attention.",
+		description: "Control events to notify on.",
 	})),
 	notifyChannels: Type.Optional(Type.Array(Type.String({ enum: ["event", "async", "intercom"] }), {
-		description: "Notification channels to use when available. Defaults to event, async, and intercom.",
+		description: "Notification channels.",
 	})),
 });
 
 export const SubagentParams = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
-	task: Type.Optional(Type.String({ description: "Task (SINGLE mode, optional for self-contained agents)" })),
+	agent: Type.Optional(Type.String({ description: "Agent name or management target" })),
+	task: Type.Optional(Type.String({ description: "Single-agent task; optional for self-contained agents" })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({
-		description: "Action: management ('list','get','create','update','delete') or control ('status','interrupt'). Omit for execution mode."
+		description: "Action: list/get/create/update/delete/status/interrupt; omit for execution."
 	})),
 	id: Type.Optional(Type.String({
-		description: "Run id or prefix for action='status' or action='interrupt'."
+		description: "Run id/prefix for status or interrupt."
 	})),
 	runId: Type.Optional(Type.String({
-		description: "Target run ID for action='interrupt'. Defaults to the most recently active controllable run in this session. Prefer id for new calls."
+		description: "Interrupt target run ID; prefer id."
 	})),
 	dir: Type.Optional(Type.String({
-		description: "Async run directory for action='status'."
+		description: "Async run directory for status."
 	})),
 	// Chain identifier for management (can't reuse 'chain' — that's the execution array)
 	chainName: Type.Optional(Type.String({
-		description: "Chain name for get/update/delete management actions"
+		description: "Chain name for management actions"
 	})),
 	// Agent/chain configuration for create/update (nested to avoid conflicts with execution fields)
-	config: Type.Optional(Type.Unsafe({
-		type: ["object", "string"],
-		additionalProperties: true,
-		description: "Agent or chain config for create/update. Agent: name, description, scope ('user'|'project', default 'user'), systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, model, tools (comma-separated), extensions (comma-separated), skills (comma-separated), thinking, output, reads, progress, maxSubagentDepth. Chain: name, description, scope, steps (array of {agent, task?, output?, reads?, model?, skills?, progress?}). Presence of 'steps' creates a chain instead of an agent. String values must be valid JSON."
+	config: Type.Optional(Type.Union([
+		Type.Object({}, { additionalProperties: true }),
+		Type.String(),
+	], {
+		description: "Agent/chain config; include name/description/systemPrompt. String must be JSON; steps creates a chain."
 	})),
-	tasks: Type.Optional(Type.Array(TopLevelTaskItem, { description: "PARALLEL mode: [{agent, task, count?}, ...]. With top-level agent, items may omit agent or be plain strings." })),
-	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or 4." })),
+	tasks: Type.Optional(Type.Array(TopLevelTaskItem, { description: "Parallel/swarm tasks; strings allowed with top-level agent." })),
+	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Max concurrent top-level parallel tasks" })),
 	worktree: Type.Optional(Type.Boolean({
-		description: "Create isolated git worktrees for each parallel task. " +
-			"Prevents filesystem conflicts. Requires clean git state. " +
-			"Per-worktree diffs included in output."
+		description: "Isolated git worktrees for parallel tasks; requires clean git state."
 	})),
-	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
-	prompt: Type.Optional(Type.String({ description: "Common prompt shared across all tasks. Use {in} as placeholder for each task's text; if absent, task text is appended. Enables swarm-style dispatch with tasks[]." })),
-	preset: Type.Optional(Type.String({ description: "Optional preset name for preset-aware agent discovery and routing. Precedence: explicit param > PI_PRESET > OH_MY_OPENCODE_SLIM_PRESET > config.defaultPreset." })),
+	chain: Type.Optional(Type.Array(ChainItem, { description: "Sequential/parallel chain; {previous} is prior result." })),
+	prompt: Type.Optional(Type.String({ description: "Shared swarm prompt; {in} inserts task text." })),
+	preset: Type.Optional(Type.String({ description: "Preset override; env fallback PI_PRESET/OH_MY_OPENCODE_SLIM_PRESET." })),
 	context: Type.Optional(Type.String({
 		enum: ["fresh", "fork"],
-		description: "'fresh' (default) or 'fork' to branch from parent session",
+		description: "'fresh' default; 'fork' only for same-role session branching",
 	})),
-	chainDir: Type.Optional(Type.String({ description: "Persistent directory for chain artifacts. Default: a user-scoped temp directory under <tmpdir>/ (auto-cleaned after 24h)" })),
-	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
-	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: 'user', 'project', or 'both' (default: 'both'; project wins on name collisions)" })),
+	chainDir: Type.Optional(Type.String({ description: "Persistent chain artifact directory" })),
+	async: Type.Optional(Type.Boolean({ description: "Run in background" })),
+	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: user, project, or both" })),
 	cwd: Type.Optional(Type.String()),
-	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts (default: true)" })),
-	includeProgress: Type.Optional(Type.Boolean({ description: "Include full progress in result (default: false)" })),
-	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist for sharing (default: false)" })),
+	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts" })),
+	includeProgress: Type.Optional(Type.Boolean({ description: "Include full progress" })),
+	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist" })),
 	sessionDir: Type.Optional(
-		Type.String({ description: "Directory to store session logs (default: temp; enables sessions even if share=false)" }),
+		Type.String({ description: "Session log directory" }),
 	),
 	// Clarification TUI
-	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution (default: false). Implies sync mode." })),
+	clarify: Type.Optional(Type.Boolean({ description: "Show preview/edit TUI; implies sync" })),
 	control: Type.Optional(ControlOverrides),
 	// Solo agent overrides
-	output: Type.Optional(Type.Unsafe({
-		type: ["string", "boolean"],
-		description: "Output file for single agent (string), or false to disable. Relative paths resolve against cwd.",
+	output: Type.Optional(Type.Union([
+		Type.Boolean(),
+		Type.String(),
+	], {
+		description: "Single-agent output path, or false disabled.",
 	})),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4')" })),
+	model: Type.Optional(Type.String({ description: "Single-agent model override" })),
 });

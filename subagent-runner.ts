@@ -26,6 +26,7 @@ import {
 	claimControlNotification,
 	formatControlIntercomMessage,
 	formatControlNoticeMessage,
+	isControlEventAllowed,
 	shouldEmitControlEvent,
 } from "./subagent-control.ts";
 import {
@@ -888,6 +889,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	};
 	const emittedControlEventKeys = new Set<string>();
 	const appendControlEvent = (event: ReturnType<typeof buildControlEvent>) => {
+		if (!isControlEventAllowed({ runFinalized: statusPayload.state !== "running" })) return;
 		const childIntercomTarget = config.childIntercomTargets?.[statusPayload.currentStep];
 		if (controlConfig.notifyChannels.length === 0 || !claimControlNotification(controlConfig, event, emittedControlEventKeys, childIntercomTarget)) return;
 		appendJsonl(eventsPath, JSON.stringify({

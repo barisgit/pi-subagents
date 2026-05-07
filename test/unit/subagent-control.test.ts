@@ -7,6 +7,7 @@ import {
 	deriveActivityState,
 	formatControlIntercomMessage,
 	formatControlNoticeMessage,
+	isControlEventAllowed,
 	resolveControlConfig,
 	shouldEmitControlEvent,
 	shouldNotifyControlEvent,
@@ -109,6 +110,11 @@ describe("subagent control attention state", () => {
 
 		assert.match(message, /worker needs attention in run 78f659a3/);
 		assert.match(message, /Nudge: intercom\(\{ action: "send", to: "subagent-worker-78f659a3"/);
+	});
+
+	it("suppresses control events once the run has finalized", () => {
+		assert.equal(isControlEventAllowed({ runFinalized: false }), true);
+		assert.equal(isControlEventAllowed({ runFinalized: true }), false);
 	});
 
 	it("dedupes notifications once per child target and attention state", () => {

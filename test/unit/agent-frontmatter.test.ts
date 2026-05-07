@@ -2,11 +2,24 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { serializeAgent } from "../../agent-serializer.ts";
 import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../agents.ts";
 
 const tempDirs: string[] = [];
+const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
+const originalPreset = process.env.PI_PRESET;
+const originalLegacyPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
+
+beforeEach(() => {
+	const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-frontmatter-home-"));
+	tempDirs.push(homeDir);
+	process.env.HOME = homeDir;
+	process.env.USERPROFILE = homeDir;
+	delete process.env.PI_PRESET;
+	delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+});
 
 afterEach(() => {
 	while (tempDirs.length > 0) {
@@ -14,6 +27,14 @@ afterEach(() => {
 		if (!dir) continue;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+	if (originalHome === undefined) delete process.env.HOME;
+	else process.env.HOME = originalHome;
+	if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+	else process.env.USERPROFILE = originalUserProfile;
+	if (originalPreset === undefined) delete process.env.PI_PRESET;
+	else process.env.PI_PRESET = originalPreset;
+	if (originalLegacyPreset === undefined) delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
+	else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
 });
 
 describe("agent frontmatter maxSubagentDepth", () => {

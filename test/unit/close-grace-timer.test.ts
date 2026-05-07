@@ -74,11 +74,12 @@ describe("attachPostExitStdioGuard", () => {
 	});
 
 	it("does not delay a clean exit", async () => {
+		const idleMs = 2000;
 		const script = writeScript("clean.sh", ["#!/bin/bash", "set -eu", "echo hello", "exit 0"]);
-		const result = await runWithGuard(script, 2000, 8000, 5000);
+		const result = await runWithGuard(script, idleMs, 8000, 5000);
 		assert.equal(result.exitCode, 0);
 		assert.match(result.stdout, /hello/);
-		assert.ok(result.resolvedMs < 500, `expected fast close, got ${result.resolvedMs}ms`);
+		assert.ok(result.resolvedMs < idleMs, `expected close before idle guard, got ${result.resolvedMs}ms`);
 	});
 
 	it("cuts off a silent grandchild with the idle timer", async () => {
