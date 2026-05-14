@@ -237,6 +237,65 @@ function compactCurrentActivity(progress: AgentProgress): string {
 	return formatCurrentToolLine(progress, getTermWidth() - 4, false) ?? buildLiveStatusLine(progress) ?? "thinking…";
 }
 
+/**
+ * Build the live "what's happening right now" line for a running agent.
+ * Priority: needs_attention warning → currently-executing tool → thinking timer → starting.
+ * Returns { text, tone } so callers can apply the right color.
+ */
+function buildLiveCurrentLine(
+	progress: AgentProgress,
+	availableWidth: number,
+): { text: string; tone: "warning" | "accent" | "dim" } {
+	const needsAttention = progress.activityState === "needs_attention";
+	if (needsAttention) {
+		const age = progress.lastActivityAt !== undefined
+			? formatActivityAge(Math.max(0, Date.now() - progress.lastActivityAt))
+			: "a while";
+		return { text: `! no activity for ${age}`, tone: "warning" };
+	}
+	const toolLine = formatCurrentToolLine(progress, availableWidth, false);
+	if (toolLine) return { text: toolLine, tone: "accent" };
+	if (progress.lastToolEndAt !== undefined) {
+		const thinkingMs = Math.max(0, Date.now() - progress.lastToolEndAt);
+		return { text: `thinking ${formatDuration(thinkingMs)}`, tone: "dim" };
+	}
+	if (progress.toolCount === 0) return { text: "starting…", tone: "dim" };
+	return { text: "thinking…", tone: "dim" };
+}
+
+/**
+ * Build N history breadcrumb lines from progress.recentTools (most-recent first).
+ * Returns plain strings (no theming) suitable for dim styling at the call site.
+ */
+function buildLiveHistoryLines(
+	progress: AgentProgress,
+	count: number,
+	availableWidth: number,
+): string[] {
+	if (count <= 0 || !progress.recentTools?.length) return [];
+	const slice = progress.recentTools.slice(-count).reverse();
+	const maxArgsLen = Math.max(20, availableWidth - 24);
+	return slice.map((entry) => {
+		const args = entry.args
+			? (entry.args.length <= maxArgsLen ? entry.args : `${entry.args.slice(0, maxArgsLen)}...`)
+			: "";
+		const durationSuffix = entry.durationMs !== undefined ? `  ${formatDuration(entry.durationMs)}` : "";
+		return args
+			? `← ${entry.tool}: ${args}${durationSuffix}`
+			: `← ${entry.tool}${durationSuffix}`;
+	});
+}
+
+/**
+ * Choose how many history lines to render per agent given how many are running concurrently.
+ * 1 running: 2 lines. 2-4 running: 2 lines. 5-8 running: 1 line. 9+: 0 lines (header-only).
+ */
+function historyLinesForRunningCount(runningCount: number): number {
+	if (runningCount <= 4) return 2;
+	if (runningCount <= 8) return 1;
+	return 0;
+}
+
 function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
 	return jobs.some((job) => job.status === "running");
 }
@@ -425,10 +484,16 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning)} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
 
 	if (isRunning && r.progress) {
-		const activity = compactCurrentActivity(r.progress);
-		c.addChild(new Text(truncLine(theme.fg("dim", `  └─ ${activity}`), width), 0, 0));
-		const liveStatus = buildLiveStatusLine(r.progress);
-		if (liveStatus && liveStatus !== activity) c.addChild(new Text(truncLine(theme.fg("dim", `     ${liveStatus}`), width), 0, 0));
+		const current = buildLiveCurrentLine(r.progress, width);
+		const history = buildLiveHistoryLines(r.progress, 2, width);
+		const hasHistory = history.length > 0;
+		const currentPrefix = hasHistory ? "  ├─" : "  └─";
+		c.addChild(new Text(truncLine(`${theme.fg("dim", currentPrefix)} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
+		for (let i = 0; i < history.length; i++) {
+			const last = i === history.length - 1;
+			const prefix = last ? "  └─" : "  ├─";
+			c.addChild(new Text(truncLine(theme.fg("dim", `${prefix} ${history[i]}`), width), 0, 0));
+		}
 		c.addChild(new Text(truncLine(theme.fg("accent", "  Press Ctrl+O for live detail"), width), 0, 0));
 		if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `  output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
 		return c;
@@ -491,6 +556,18 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
+
+	// Count concurrently-running agents so we can adapt history density.
+	let runningCount = 0;
+	for (let i = 0; i < stepsToShow; i++) {
+		const r = d.results[i];
+		if (!r) continue;
+		const pf = d.progress?.find((p) => p.index === i) || d.progress?.find((p) => p.agent === r.agent && p.status === "running");
+		const rp = r.progress || pf || r.progressSummary;
+		if (rp && "status" in rp && rp.status === "running") runningCount++;
+	}
+	const historyN = historyLinesForRunningCount(runningCount);
+
 	for (let i = 0; i < stepsToShow; i++) {
 		const r = d.results[i];
 		const agentName = useResultsDirectly ? (r?.agent || `${itemLabel}-${i + 1}`) : (d.chainAgents![i] || r?.agent || `${itemLabel}-${i + 1}`);
@@ -513,12 +590,28 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		const line = `${glyph} ${itemTitle} ${stepNumber}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
 		c.addChild(new Text(truncLine(`  ${line}`, width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
-			const activity = compactCurrentActivity(rProg);
-			c.addChild(new Text(truncLine(theme.fg("dim", `    └─ ${activity}`), width), 0, 0));
+			const fullProg = r.progress ?? (progressFromArray && "recentTools" in progressFromArray ? progressFromArray as AgentProgress : undefined);
+			if (fullProg) {
+				const current = buildLiveCurrentLine(fullProg, width);
+				const history = buildLiveHistoryLines(fullProg, historyN, width);
+				const hasHistory = history.length > 0;
+				const currentPrefix = hasHistory ? "    ├─" : "    └─";
+				c.addChild(new Text(truncLine(`${theme.fg("dim", currentPrefix)} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
+				for (let h = 0; h < history.length; h++) {
+					const last = h === history.length - 1;
+					const prefix = last ? "    └─" : "    ├─";
+					c.addChild(new Text(truncLine(theme.fg("dim", `${prefix} ${history[h]}`), width), 0, 0));
+				}
+			} else {
+				// Fallback when only ProgressSummary is available (no recentTools).
+				const activity = compactCurrentActivity(rProg as AgentProgress);
+				c.addChild(new Text(truncLine(theme.fg("dim", `    └─ ${activity}`), width), 0, 0));
+			}
 		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
 			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    └─ ${resultStatusLine(r, output)}`), width), 0, 0));
 		}
 	}
+	if (hasRunning) c.addChild(new Text(truncLine(theme.fg("accent", "  Press Ctrl+O for live detail"), width), 0, 0));
 	if (d.artifacts) c.addChild(new Text(truncLine(theme.fg("dim", `  artifacts: ${shortenPath(d.artifacts.dir)}`), width), 0, 0));
 	return c;
 }

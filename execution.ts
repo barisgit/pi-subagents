@@ -375,15 +375,20 @@ async function runSingleAttempt(
 
 			if (evt.type === "tool_execution_end") {
 				if (progress.currentTool) {
+					const durationMs = progress.currentToolStartedAt !== undefined
+						? Math.max(0, now - progress.currentToolStartedAt)
+						: undefined;
 					progress.recentTools.push({
 						tool: progress.currentTool,
 						args: progress.currentToolArgs || "",
 						endMs: now,
+						durationMs,
 					});
 				}
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
 				progress.currentToolStartedAt = undefined;
+				progress.lastToolEndAt = now;
 				fireUpdate();
 			}
 

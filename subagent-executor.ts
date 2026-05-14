@@ -1050,6 +1050,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
 							input.foregroundControl.currentTool = current?.currentTool;
 							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
+							input.foregroundControl.lastToolEndAt = current?.lastToolEndAt;
 							input.foregroundControl.recentTools = current?.recentTools;
 							input.foregroundControl.recentOutput = current?.recentOutput;
 							input.foregroundControl.finalOutput = stepResults[0]?.finalOutput;
@@ -1509,6 +1510,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
 				foregroundControl.currentTool = firstProgress?.currentTool;
 				foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
+				foregroundControl.lastToolEndAt = firstProgress?.lastToolEndAt;
 				foregroundControl.recentTools = firstProgress?.recentTools;
 				foregroundControl.recentOutput = firstProgress?.recentOutput;
 				foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
@@ -1551,6 +1553,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		foregroundControl.lastActivityAt = r.progress?.lastActivityAt;
 		foregroundControl.currentTool = r.progress?.currentTool;
 		foregroundControl.currentToolStartedAt = r.progress?.currentToolStartedAt;
+		foregroundControl.lastToolEndAt = r.progress?.lastToolEndAt;
 		foregroundControl.recentTools = r.progress?.recentTools;
 		foregroundControl.recentOutput = r.progress?.recentOutput;
 		foregroundControl.finalOutput = r.finalOutput;

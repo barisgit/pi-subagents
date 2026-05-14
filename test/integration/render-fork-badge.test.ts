@@ -217,8 +217,8 @@ describe("renderSubagentResult fork indicator", () => {
 
 		const text = widget.render(120).join("\n");
 		assert.match(text, /Press Ctrl\+O for live detail/);
-		assert.match(text, /active 2s ago/);
-		assert.match(text, /└─ read: package\.json \| 3\.0s/);
+		// Tool is currently executing → "current" line shows the tool with elapsed time.
+		assert.match(text, /read: package\.json \| 3\.0s/);
 		assert.match(text, /output: \/tmp\/reviewer_output\.md/);
 	});
 

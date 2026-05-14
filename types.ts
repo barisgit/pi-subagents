@@ -84,7 +84,8 @@ export interface AgentProgress {
 	currentTool?: string;
 	currentToolArgs?: string;
 	currentToolStartedAt?: number;
-	recentTools: Array<{ tool: string; args: string; endMs: number }>;
+	lastToolEndAt?: number;
+	recentTools: Array<{ tool: string; args: string; endMs: number; durationMs?: number }>;
 	recentOutput: string[];
 	toolCount: number;
 	tokens: number;
@@ -265,7 +266,8 @@ export interface SubagentState {
 		lastActivityAt?: number;
 		currentTool?: string;
 		currentToolStartedAt?: number;
-		recentTools?: Array<{ tool: string; args?: string; endMs?: number }>;
+		lastToolEndAt?: number;
+		recentTools?: Array<{ tool: string; args?: string; endMs?: number; durationMs?: number }>;
 		recentOutput?: string[];
 		finalOutput?: string;
 		interrupt?: () => boolean;
