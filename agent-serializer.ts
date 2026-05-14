@@ -23,6 +23,7 @@ export const KNOWN_FIELDS = new Set([
 	"surface",
 	"canDelegate",
 	"allowedDelegateAgents",
+	"color",
 ]);
 
 function joinComma(values: string[] | undefined): string | undefined {

@@ -106,8 +106,23 @@ export interface AgentConfig {
 	surface?: AgentSurface;
 	canDelegate?: boolean;
 	allowedDelegateAgents?: string[];
+	/**
+	 * Color token (pi-tui ThemeColor) used to tint the agent name in compact live
+	 * progress rendering. Defaults are provided for builtin agents via defaultAgentColor;
+	 * any markdown agent can override with `color: <token>` in its YAML frontmatter.
+	 */
+	color?: string;
 	extraFields?: Record<string, string>;
 	override?: BuiltinAgentOverrideInfo;
+}
+
+/**
+ * Resolve the final color for an agent: frontmatter `color:` field only.
+ * No hardcoded per-name defaults -- user agents (and overridable builtins) choose
+ * their own color in markdown. Exported so execution.ts can stamp it onto AgentProgress.
+ */
+export function resolveAgentColor(agent: { name: string; color?: string }): string | undefined {
+	return agent.color;
 }
 
 interface SubagentSettings {
@@ -819,6 +834,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			surface,
 			canDelegate,
 			allowedDelegateAgents: allowedDelegateAgents && allowedDelegateAgents.length > 0 ? allowedDelegateAgents : undefined,
+			color: typeof frontmatter.color === "string" && frontmatter.color.trim() ? frontmatter.color.trim() : undefined,
 			extraFields: Object.keys(extraFields).length > 0 ? extraFields : undefined,
 		});
 	}

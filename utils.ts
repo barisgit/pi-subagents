@@ -312,10 +312,16 @@ export function extractToolCallSummaries(messages: Message[] | undefined): ToolC
 export function compactForegroundResult(result: SingleResult): SingleResult {
 	if (result.progress?.status === "running") return result;
 	const toolCalls = result.toolCalls?.length ? result.toolCalls : extractToolCallSummaries(result.messages);
+	// Preserve a slim progress snapshot so post-completion rendering still has
+	// agent color, tokenSamples (sparkline), and recentTools available. Drop only
+	// the heaviest fields (recentOutput) -- everything else is cheap.
+	const slimProgress = result.progress
+		? { ...result.progress, recentOutput: [] as string[] }
+		: undefined;
 	return {
 		...result,
 		messages: undefined,
-		progress: undefined,
+		progress: slimProgress,
 		toolCalls: toolCalls.length ? toolCalls : undefined,
 	};
 }

@@ -177,7 +177,10 @@ describe("foreground result payload compaction", { skip: !available ? "subagent 
 		const step = result.details?.results?.[0];
 		assert.equal(step?.exitCode, 0);
 		assert.ok(step?.messages === undefined, "completed foreground results should not inline raw messages");
-		assert.ok(step?.progress === undefined, "completed foreground results should not inline full progress objects");
+		// Slim progress is preserved post-completion so the renderer keeps agent color and tokenSamples
+		// (for sparkline freeze). Verify recentOutput was stripped -- that's the heavy field we drop.
+		assert.ok(step?.progress !== undefined, "completed foreground results keep a slim progress snapshot");
+		assert.deepEqual(step?.progress?.recentOutput, [], "slim progress drops recentOutput");
 		assert.ok(step?.toolCalls?.length, "completed foreground results should preserve compact tool-call summaries");
 		assert.equal(step?.toolCalls?.[0]?.text, "write /tmp/huge-report.md");
 		assert.equal(step?.toolCalls?.[0]?.expandedText, "write /tmp/huge-report.md");

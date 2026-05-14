@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { Message } from "@mariozechner/pi-ai";
 import type { AgentConfig } from "./agents.ts";
+import { resolveAgentColor } from "./agents.ts";
 import {
 	ensureArtifactsDir,
 	getArtifactPaths,
@@ -186,6 +187,10 @@ async function runSingleAttempt(
 		durationMs: 0,
 		lastActivityAt: startTime,
 		thinking: typeof agent.thinking === "string" ? agent.thinking : undefined,
+		color: resolveAgentColor(agent),
+		// Seed an initial sample so the first message_end immediately produces a valid
+		// delta -- otherwise short-lived agents never reach the >=2 samples sparkline gate.
+		tokenSamples: [{ ts: startTime, tokens: 0 }],
 	};
 	result.progress = progress;
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
@@ -408,12 +413,14 @@ async function runSingleAttempt(
 						// Record token sample for sparkline. Drop samples older than 30s to bound the buffer.
 						if (!progress.tokenSamples) progress.tokenSamples = [];
 						progress.tokenSamples.push({ ts: now, tokens: progress.tokens });
-						const cutoff = now - 50_000;
+						// 240s sparkline window + safety margin. Cap entries to bound memory:
+						// 300 * ~24 bytes ≈ 7KB per agent.
+						const cutoff = now - 250_000;
 						while (progress.tokenSamples.length > 0 && progress.tokenSamples[0]!.ts < cutoff) {
 							progress.tokenSamples.shift();
 						}
-						if (progress.tokenSamples.length > 120) {
-							progress.tokenSamples.splice(0, progress.tokenSamples.length - 120);
+						if (progress.tokenSamples.length > 300) {
+							progress.tokenSamples.splice(0, progress.tokenSamples.length - 300);
 						}
 					}
 					if (!result.model && evt.message.model) result.model = evt.message.model;

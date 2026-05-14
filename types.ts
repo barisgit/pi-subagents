@@ -89,6 +89,12 @@ export interface AgentProgress {
 	recentOutput: string[];
 	tokenSamples?: Array<{ ts: number; tokens: number }>;
 	thinking?: string;
+	/**
+	 * Theme color token used to tint the agent name in compact rendering.
+	 * Stamped from AgentConfig.color (frontmatter override) or defaultAgentColor()
+	 * at progress init. Undefined = falls back to toolTitle in the renderer.
+	 */
+	color?: string;
 	toolCount: number;
 	tokens: number;
 	durationMs: number;

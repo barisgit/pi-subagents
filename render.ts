@@ -113,6 +113,53 @@ function spinnerFrame(): string {
 	return SPINNER[Math.floor(Date.now() / WIDGET_ANIMATION_MS) % SPINNER.length]!;
 }
 
+// Named ANSI 256 colors for agent name tinting. Picked from the xterm 256 palette
+// so each color is visually distinct under both dark and light terminal themes.
+// User writes `color: cyan` in agent frontmatter; missing/unknown -> no tinting.
+const AGENT_COLOR_MAP: Record<string, number> = {
+	red: 196,
+	green: 76,
+	yellow: 220,
+	blue: 39,
+	magenta: 201,
+	cyan: 51,
+	orange: 208,
+	pink: 213,
+	purple: 141,
+	teal: 80,
+	lime: 154,
+	gray: 245,
+	white: 231,
+	brown: 130,
+	gold: 178,
+	sky: 117,
+	mint: 121,
+	coral: 209,
+	lavender: 183,
+	crimson: 161,
+};
+
+function tintAgentName(name: string, color: string | undefined): string {
+	if (!color) return name;
+	const trimmed = color.trim().toLowerCase();
+	let ansi = AGENT_COLOR_MAP[trimmed];
+	if (ansi === undefined) {
+		// Accept raw numeric codes too (e.g. `color: 199`).
+		const n = Number(trimmed);
+		if (Number.isInteger(n) && n >= 0 && n <= 255) ansi = n;
+	}
+	if (ansi === undefined) return name;
+	return `\u001b[38;5;${ansi}m${name}\u001b[39m`;
+}
+
+// Distinctive multi-headline spinner: sparkle/star cycle (vs the ASCII '- \ | /').
+// Used only on the top-level parallel/chain/single header so the headline reads as
+// "the container is alive" without making every per-agent row spin too.
+const MULTI_SPINNER = ["\u2733", "\u2734", "\u2735", "\u2736", "\u2737", "\u2738", "\u2739", "\u273A", "\u273B", "\u273C", "\u273D"];
+function multiSpinnerFrame(): string {
+	return MULTI_SPINNER[Math.floor(Date.now() / WIDGET_ANIMATION_MS) % MULTI_SPINNER.length]!;
+}
+
 function resultIsRunning(result: AgentToolResult<Details>): boolean {
 	return result.details?.progress?.some((entry) => entry.status === "running")
 		|| result.details?.results.some((entry) => entry.progress?.status === "running")
@@ -240,7 +287,10 @@ function resultStatusLine(result: Details["results"][number], output: string): s
 }
 
 function resultGlyph(result: Details["results"][number], output: string, theme: Theme, running = result.progress?.status === "running"): string {
-	if (running) return theme.fg("accent", spinnerFrame());
+	// Per-agent running glyph is static (was spinnerFrame()). Spinning every row
+	// alongside the multi headline + tool elapsed timer was too much animation.
+	// The multi headline keeps its sparkle spinner as the single liveness indicator.
+	if (running) return theme.fg("accent", "◇");
 	if (result.detached) return theme.fg("warning", "■");
 	if (result.interrupted) return theme.fg("warning", "■");
 	if (result.exitCode !== 0) return theme.fg("error", "✗");
@@ -271,9 +321,12 @@ function buildLiveCurrentLine(
 	const toolLine = formatCurrentToolLine(progress, availableWidth, false);
 	if (toolLine) return { text: toolLine, tone: "accent" };
 	if (progress.lastToolEndAt !== undefined) {
+		// Thinking pressure bar removed: visual fill added little over the elapsed
+		// number, and being the widest bar it dominated attention. The thinking
+		// level's tone-flip (warning past saturation) is preserved via thinkingBarMaxMs.
 		const thinkingMs = Math.max(0, Date.now() - progress.lastToolEndAt);
-		const { bar, tone } = buildThinkingBar(thinkingMs, adaptiveBarWidth(), progress.thinking);
-		return { text: `thinking ${bar} ${formatDuration(thinkingMs)}`, tone };
+		const tone: "dim" | "warning" = thinkingMs > thinkingBarMaxMs(progress.thinking) ? "warning" : "dim";
+		return { text: `thinking ${formatDuration(thinkingMs)}`, tone };
 	}
 	if (progress.toolCount === 0) return { text: "starting…", tone: "dim" };
 	return { text: "thinking…", tone: "dim" };
@@ -319,6 +372,14 @@ const SPARK_CHARS = ["\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586",
  * renders the per-bucket token *delta* (rate) as block characters normalized to the peak
  * in this window. Returns '' for <2 samples (not enough signal yet).
  */
+/**
+ * Global ceiling for sparkline normalization (tokens/sec). All sparklines render against
+ * the same fixed scale so quiet and loud agents are visually comparable across rows.
+ * Cube-root scaled (rate/CEILING)^(1/3): 10 tok/s -> 11%, 100 -> 23%, 1000 -> 50%, 8000 -> 100%;
+ * clipped above. Loud agents still visibly dominate but a slow grep isn't invisible.
+ */
+const SPARKLINE_RATE_CEILING = 8000;
+
 function buildSparkline(
 	samples: ReadonlyArray<{ ts: number; tokens: number }> | undefined,
 	width = 8,
@@ -326,7 +387,7 @@ function buildSparkline(
 	now = Date.now(),
 ): string {
 	if (!samples || samples.length < 2 || width <= 0) return "";
-	const windowMs = 40_000;
+	const windowMs = 240_000;
 
 	// Wall-clock anchored, BUT quantized to cell boundaries to avoid sub-cell
 	// drift (the "worm"). Each cell represents windowMs/width of real time.
@@ -351,8 +412,10 @@ function buildSparkline(
 	const buckets = new Array<number>(width).fill(0);
 	const counts = new Array<number>(width).fill(0);
 	for (const d of deltas) {
-		const ageMs = anchor - d.ts;
-		if (ageMs < 0 || ageMs >= windowMs) continue;
+		// Samples newer than the floored anchor (i.e. since the last cell boundary)
+		// belong in the rightmost cell, not skipped.
+		const ageMs = Math.max(0, anchor - d.ts);
+		if (ageMs >= windowMs) continue;
 		// idx 0 = oldest, idx width-1 = freshest. Bias slightly so the very
 		// freshest sample (ageMs ~= 0) always lands in the rightmost cell.
 		const frac = Math.min(0.9999, 1 - ageMs / windowMs);
@@ -363,21 +426,21 @@ function buildSparkline(
 	for (let i = 0; i < width; i++) {
 		if (counts[i]! > 0) buckets[i] = buckets[i]! / counts[i]!;
 	}
-	const peak = Math.max(...buckets);
-	const baselineGlyph = SPARK_CHARS[0]!;
 
-	if (peak <= 0) {
-		const track = baselineGlyph.repeat(width);
-		return theme ? theme.fg("dim", track) : track;
-	}
+	// All-empty: render a width-preserving invisible track of spaces so right-align stays stable.
+	if (buckets.every((b) => b <= 0)) return " ".repeat(width);
 
 	let out = "";
 	for (let i = 0; i < width; i++) {
 		if (counts[i] === 0 || buckets[i]! <= 0) {
-			out += theme ? theme.fg("dim", baselineGlyph) : baselineGlyph;
+			// Empty cell = no baseline glyph. Use a space so bars appear to float
+			// on an unbounded canvas while still occupying the cell for alignment.
+			out += " ";
 			continue;
 		}
-		const rel = buckets[i]! / peak;
+		// Cube-root normalized against the global ceiling. Gentler than log so the visual
+		// gap between e.g. 100 and 1000 tok/s stays clear, while a slow agent still shows.
+		const rel = Math.min(1, Math.cbrt(buckets[i]! / SPARKLINE_RATE_CEILING));
 		const gi = Math.min(SPARK_CHARS.length - 1, Math.max(0, Math.floor(rel * SPARK_CHARS.length)));
 		const ch = SPARK_CHARS[gi]!;
 		out += theme ? theme.fg("accent", ch) : ch;
@@ -455,8 +518,8 @@ function adaptiveBarWidth(): number {
  */
 function adaptiveSparkWidth(): number {
 	const termWidth = getTermWidth();
-	// More generous on wide terminals: 120w → 17, 180w → 25, 240w → 34, 320w → 45, cap 60.
-	return Math.max(8, Math.min(60, Math.floor(termWidth / 7)));
+	// Aggressive on wide terminals: 120w → 20, 180w → 30, 240w → 40, 320w → 53, cap 80.
+	return Math.max(8, Math.min(80, Math.floor(termWidth / 6)));
 }
 
 /**
@@ -653,8 +716,21 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	]);
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	const spark = isRunning && r.progress ? buildSparkline(r.progress.tokenSamples, adaptiveSparkWidth(), theme) : "";
-	const headBase = `${resultGlyph(r, output, theme, isRunning)} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
+	// Sparkline persists after completion: when not running, anchor `now` to the
+	// last sample's timestamp so the final shape freezes at the moment of finish
+	// rather than continuing to age leftward into oblivion.
+	const sparkSamples = r.progress?.tokenSamples;
+	const sparkNow = isRunning ? Date.now() : (sparkSamples?.[sparkSamples.length - 1]?.ts ?? Date.now());
+	const spark = r.progress && sparkSamples && sparkSamples.length >= 2
+		? buildSparkline(sparkSamples, adaptiveSparkWidth(), theme, sparkNow)
+		: "";
+	// Single-agent block has no parent headline above it, so the row glyph itself
+	// must carry the liveness signal -- use the sparkle spinner instead of the
+	// static ◇ that resultGlyph returns for running multi-block rows.
+	const headGlyph = isRunning ? theme.fg("accent", multiSpinnerFrame()) : resultGlyph(r, output, theme, isRunning);
+	const boldName = theme.bold(r.agent);
+	const tintedName = r.progress?.color ? tintAgentName(boldName, r.progress.color) : theme.fg("toolTitle", boldName);
+	const headBase = `${headGlyph} ${tintedName}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
 	c.addChild(new Text(truncLine(rightAlignSuffix(headBase, spark, width), width), 0, 0));
 
 	if (isRunning && r.progress) {
@@ -714,7 +790,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const stepInfo = hasRunning ? `${itemLabel} ${currentStep}/${totalCount}` : `${itemLabel} ${ok}/${totalCount}`;
 	const stats = statJoin(theme, [stepInfo, formatTurnStat(totalTurns), formatProgressStats(theme, totalSummary)]);
 	const glyph = hasRunning
-		? theme.fg("accent", spinnerFrame())
+		? theme.fg("accent", multiSpinnerFrame())
 		: failed
 			? theme.fg("error", "✗")
 			: paused
@@ -766,9 +842,20 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		]);
 		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
-		const fullProgForSpark = r.progress ?? (rProg && "recentTools" in rProg ? rProg as AgentProgress : undefined);
-		const spark = rRunning && fullProgForSpark ? buildSparkline(fullProgForSpark.tokenSamples, adaptiveSparkWidth(), theme) : "";
-		const lineBase = `  ${glyph} ${itemTitle} ${stepNumber}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
+		// Sparkline source: prefer r.progress, fall back to progressFromArray (live updates put a full AgentProgress in d.progress).
+		const fullProgForSpark = r.progress
+			?? (progressFromArray && "tokenSamples" in progressFromArray ? progressFromArray as AgentProgress : undefined);
+		const sparkSamples = fullProgForSpark?.tokenSamples;
+		const sparkNow = rRunning ? Date.now() : (sparkSamples?.[sparkSamples.length - 1]?.ts ?? Date.now());
+		const spark = fullProgForSpark && sparkSamples && sparkSamples.length >= 2
+			? buildSparkline(sparkSamples, adaptiveSparkWidth(), theme, sparkNow)
+			: "";
+		const rowBoldName = themeBold(theme, agentName);
+		// Color survives completion: read from any progress-shaped object that carries it.
+		const rowColor = r.progress?.color
+			?? (progressFromArray && "color" in progressFromArray ? (progressFromArray as { color?: string }).color : undefined);
+		const coloredName = rowColor ? tintAgentName(rowBoldName, rowColor) : rowBoldName;
+		const lineBase = `  ${glyph} ${itemTitle} ${stepNumber}: ${coloredName}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
 		c.addChild(new Text(truncLine(rightAlignSuffix(lineBase, spark, width), width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
 			const fullProg = r.progress ?? (progressFromArray && "recentTools" in progressFromArray ? progressFromArray as AgentProgress : undefined);
@@ -790,6 +877,13 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			}
 		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
 			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    └─ ${resultStatusLine(r, output)}`), width), 0, 0));
+		}
+		// Spacer between running blocks only (skip after last row; skip after completed/pending rows).
+		// Running blocks are dense (header + current + N history) and benefit from a breathing line.
+		// Completed/pending blocks stay compact so scrollback doesn't bloat.
+		// pi-tui's empty Text collapses to 0 height; use Spacer(1) to actually allocate a row.
+		if (rRunning && i < stepsToShow - 1) {
+			c.addChild(new Spacer(1));
 		}
 	}
 	if (!hasRunning && d.artifacts) c.addChild(new Text(truncLine(theme.fg("dim", `  artifacts: ${shortenPath(d.artifacts.dir)}`), width), 0, 0));
