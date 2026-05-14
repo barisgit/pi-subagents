@@ -82,6 +82,21 @@ function truncLine(text: string, maxWidth: number): string {
 const SPINNER = ["-", "\\", "|", "/"];
 const WIDGET_ANIMATION_MS = 80;
 
+/**
+ * Right-align `suffix` to terminal width on the same line as `base`.
+ * If base+suffix already fits, pad between them; if they overflow, drop the suffix
+ * (truncLine will handle base). Both inputs may contain ANSI styling; widths are
+ * computed visually via visibleWidth.
+ */
+function rightAlignSuffix(base: string, suffix: string, maxWidth: number): string {
+	if (!suffix) return base;
+	const baseW = visibleWidth(base);
+	const sufW = visibleWidth(suffix);
+	if (baseW + sufW + 2 > maxWidth) return base; // not enough room, drop spark
+	const pad = Math.max(2, maxWidth - baseW - sufW);
+	return `${base}${" ".repeat(pad)}${suffix}`;
+}
+
 let widgetTimer: ReturnType<typeof setInterval> | undefined;
 let latestWidgetCtx: ExtensionContext | undefined;
 let latestWidgetJobs: AsyncJobState[] = [];
@@ -257,7 +272,8 @@ function buildLiveCurrentLine(
 	if (toolLine) return { text: toolLine, tone: "accent" };
 	if (progress.lastToolEndAt !== undefined) {
 		const thinkingMs = Math.max(0, Date.now() - progress.lastToolEndAt);
-		return { text: `thinking ${formatDuration(thinkingMs)}`, tone: "dim" };
+		const { bar, tone } = buildThinkingBar(thinkingMs, adaptiveBarWidth(), progress.thinking);
+		return { text: `thinking ${bar} ${formatDuration(thinkingMs)}`, tone };
 	}
 	if (progress.toolCount === 0) return { text: "starting…", tone: "dim" };
 	return { text: "thinking…", tone: "dim" };
@@ -291,9 +307,146 @@ function buildLiveHistoryLines(
  * 1 running: 2 lines. 2-4 running: 2 lines. 5-8 running: 1 line. 9+: 0 lines (header-only).
  */
 function historyLinesForRunningCount(runningCount: number): number {
-	if (runningCount <= 4) return 2;
-	if (runningCount <= 8) return 1;
+	if (runningCount <= 1) return 2;
+	if (runningCount <= 4) return 1;
 	return 0;
+}
+
+const SPARK_CHARS = ["\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586", "\u2587", "\u2588"];
+
+/**
+ * Build a sparkline from token samples. Buckets the time window into `width` slots and
+ * renders the per-bucket token *delta* (rate) as block characters normalized to the peak
+ * in this window. Returns '' for <2 samples (not enough signal yet).
+ */
+function buildSparkline(
+	samples: ReadonlyArray<{ ts: number; tokens: number }> | undefined,
+	width = 8,
+	theme?: Theme,
+): string {
+	if (!samples || samples.length < 2 || width <= 0) return "";
+
+	// Compute deltas between consecutive samples. One delta = one cell.
+	// This decouples the sparkline from wall-clock time: cells only change
+	// when new samples arrive, eliminating the "worm crawl" of time-bucketed views.
+	const deltas: number[] = [];
+	for (let i = 1; i < samples.length; i++) {
+		const cur = samples[i]!;
+		const prev = samples[i - 1]!;
+		const dtSec = Math.max(0.05, (cur.ts - prev.ts) / 1000);
+		const dTok = Math.max(0, cur.tokens - prev.tokens);
+		deltas.push(dTok / dtSec);
+	}
+	if (deltas.length === 0) return "";
+
+	// Take the last `width` deltas, right-aligned.
+	const recent = deltas.slice(-width);
+	const peak = Math.max(...recent);
+	const baselineGlyph = SPARK_CHARS[0]!;
+	const padCount = Math.max(0, width - recent.length);
+	const padding = theme
+		? theme.fg("dim", baselineGlyph.repeat(padCount))
+		: baselineGlyph.repeat(padCount);
+
+	if (peak <= 0) {
+		const track = baselineGlyph.repeat(width);
+		return theme ? theme.fg("dim", track) : track;
+	}
+
+	let bars = "";
+	for (const rate of recent) {
+		if (rate <= 0) {
+			bars += theme ? theme.fg("dim", baselineGlyph) : baselineGlyph;
+			continue;
+		}
+		const rel = rate / peak;
+		const gi = Math.min(SPARK_CHARS.length - 1, Math.max(0, Math.floor(rel * SPARK_CHARS.length)));
+		const ch = SPARK_CHARS[gi]!;
+		bars += theme ? theme.fg("accent", ch) : ch;
+	}
+	return padding + bars;
+}
+
+/**
+ * Build a "thinking pressure" bar. 8 cells fill on a soft log scale up to ~8s.
+ * Returns { bar, tone } where tone is 'dim' for normal and 'warning' past 5s.
+ */
+function buildThinkingBar(
+	thinkingMs: number,
+	width = 8,
+	thinkingLevel?: string,
+): { bar: string; tone: "dim" | "warning" } {
+	const clamped = Math.max(0, thinkingMs);
+	const maxMs = thinkingBarMaxMs(thinkingLevel);
+	const maxSec = maxMs / 1000;
+	// Soft log scale: 0 -> 0, maxSec -> full, asymptotic past.
+	const frac = Math.min(1, Math.log10(1 + clamped / 1000) / Math.log10(1 + maxSec));
+	const filled = Math.round(frac * width);
+	// Use full block / light shade (both fill the cell on the same baseline).
+	// U+2586 (lower three quarters block) sits low and visually mis-aligns with U+2591.
+	const bar = "\u2588".repeat(filled) + "\u2591".repeat(Math.max(0, width - filled));
+	return { bar, tone: clamped > maxMs ? "warning" : "dim" };
+}
+
+/**
+ * Build a chain progress bar. `done` slots filled (success), `running` slots filled (accent),
+ * remainder empty (dim). Returns the themed string ready to embed.
+ */
+function buildChainBar(theme: Theme, done: number, running: number, total: number, width = 8): string {
+	if (total <= 0) return "";
+	const d = Math.max(0, Math.min(total, done));
+	const r = Math.max(0, Math.min(total - d, running));
+	const doneCells = Math.round((d / total) * width);
+	const runCells = Math.round(((d + r) / total) * width) - doneCells;
+	const emptyCells = Math.max(0, width - doneCells - runCells);
+	return theme.fg("success", "\u25b0".repeat(doneCells))
+		+ theme.fg("accent", "\u25b0".repeat(Math.max(0, runCells)))
+		+ theme.fg("dim", "\u25b1".repeat(emptyCells));
+}
+
+/**
+ * Map a thinking effort level to the soft-log saturation point in milliseconds.
+ * Past this point the thinking bar reads as "full" and the tone flips to warning.
+ */
+function thinkingBarMaxMs(level?: string): number {
+	switch (level) {
+		case "xhigh": return 60_000;
+		case "high": return 30_000;
+		case "medium": return 15_000;
+		case "low": return 8_000;
+		case "minimal":
+		case "off":
+		case undefined:
+			return 5_000;
+		default: return 15_000;
+	}
+}
+
+/**
+ * Width for progress bars scales with terminal width.
+ * 120-wide -> 15, 180-wide -> 22, 240-wide -> 30, hard cap 40.
+ */
+function adaptiveBarWidth(): number {
+	const termWidth = getTermWidth();
+	return Math.max(8, Math.min(40, Math.floor(termWidth / 8)));
+}
+
+/**
+ * Width for the inline sparkline. Same family as adaptiveBarWidth but capped a touch lower
+ * so the right-aligned sparkline doesn't crowd the stats column.
+ */
+function adaptiveSparkWidth(): number {
+	const termWidth = getTermWidth();
+	return Math.max(8, Math.min(30, Math.floor(termWidth / 10)));
+}
+
+/**
+ * History line count for a single-agent compact block scales with terminal height.
+ * 24-row term -> 3, 40-row -> 7, 60-row -> 10.
+ */
+function adaptiveSingleHistoryCount(): number {
+	const rows = process.stdout.rows || 24;
+	return Math.max(2, Math.min(10, Math.floor((rows - 10) / 4)));
 }
 
 function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
@@ -481,11 +634,13 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	]);
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning)} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
+	const spark = isRunning && r.progress ? buildSparkline(r.progress.tokenSamples, adaptiveSparkWidth(), theme) : "";
+	const headBase = `${resultGlyph(r, output, theme, isRunning)} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
+	c.addChild(new Text(truncLine(rightAlignSuffix(headBase, spark, width), width), 0, 0));
 
 	if (isRunning && r.progress) {
 		const current = buildLiveCurrentLine(r.progress, width);
-		const history = buildLiveHistoryLines(r.progress, 2, width);
+		const history = buildLiveHistoryLines(r.progress, adaptiveSingleHistoryCount(), width);
 		const hasHistory = history.length > 0;
 		const currentPrefix = hasHistory ? "  ├─" : "  └─";
 		c.addChild(new Text(truncLine(`${theme.fg("dim", currentPrefix)} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
@@ -494,8 +649,6 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 			const prefix = last ? "  └─" : "  ├─";
 			c.addChild(new Text(truncLine(theme.fg("dim", `${prefix} ${history[i]}`), width), 0, 0));
 		}
-		c.addChild(new Text(truncLine(theme.fg("accent", "  Press Ctrl+O for live detail"), width), 0, 0));
-		if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `  output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
 		return c;
 	}
 
@@ -504,7 +657,6 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	if (preview && r.exitCode === 0 && !hasEmptyTextOutputWithoutOutputTarget(r.task, output)) {
 		c.addChild(new Text(truncLine(theme.fg("dim", `     ${preview}`), width), 0, 0));
 	}
-	if (r.sessionFile) c.addChild(new Text(truncLine(theme.fg("dim", `  session: ${shortenPath(r.sessionFile)}`), width), 0, 0));
 	if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `  output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
 	if (r.truncation?.artifactPath) c.addChild(new Text(truncLine(theme.fg("dim", `  full output: ${shortenPath(r.truncation.artifactPath)}`), width), 0, 0));
 	return c;
@@ -552,7 +704,15 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
+	// Chain progress bar for chain mode only (parallel/swarm have no inherent order).
+	const chainBar = (d.mode === "chain" && !hasParallelInChain && totalCount > 1)
+		? buildChainBar(theme, ok, hasRunning ? 1 : 0, totalCount, adaptiveBarWidth())
+		: "";
+	const chainBarPrefix = chainBar ? `${chainBar} ` : "";
+	// Only emit the '· stats' tail when stats is non-empty (prevents a hanging '· ' on empty early frames).
+	const statsTail = stats ? ` ${theme.fg("dim", "·")} ${stats}` : "";
+	const headlinePrefix = chainBarPrefix ? ` ${chainBarPrefix}` : "";
+	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${headlinePrefix}${statsTail}`, width), 0, 0));
 
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
@@ -587,8 +747,10 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		]);
 		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
-		const line = `${glyph} ${itemTitle} ${stepNumber}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
-		c.addChild(new Text(truncLine(`  ${line}`, width), 0, 0));
+		const fullProgForSpark = r.progress ?? (rProg && "recentTools" in rProg ? rProg as AgentProgress : undefined);
+		const spark = rRunning && fullProgForSpark ? buildSparkline(fullProgForSpark.tokenSamples, adaptiveSparkWidth(), theme) : "";
+		const lineBase = `  ${glyph} ${itemTitle} ${stepNumber}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
+		c.addChild(new Text(truncLine(rightAlignSuffix(lineBase, spark, width), width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
 			const fullProg = r.progress ?? (progressFromArray && "recentTools" in progressFromArray ? progressFromArray as AgentProgress : undefined);
 			if (fullProg) {
@@ -611,8 +773,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    └─ ${resultStatusLine(r, output)}`), width), 0, 0));
 		}
 	}
-	if (hasRunning) c.addChild(new Text(truncLine(theme.fg("accent", "  Press Ctrl+O for live detail"), width), 0, 0));
-	if (d.artifacts) c.addChild(new Text(truncLine(theme.fg("dim", `  artifacts: ${shortenPath(d.artifacts.dir)}`), width), 0, 0));
+	if (!hasRunning && d.artifacts) c.addChild(new Text(truncLine(theme.fg("dim", `  artifacts: ${shortenPath(d.artifacts.dir)}`), width), 0, 0));
 	return c;
 }
 

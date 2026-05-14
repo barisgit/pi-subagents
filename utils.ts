@@ -442,12 +442,41 @@ export function extractToolArgsPreview(args: Record<string, unknown>): string {
 	const urlsPreview = previewArray(args.urls);
 	if (urlsPreview) return truncatePreview(urlsPreview, 60);
 	if (typeof args.prompt === "string" && args.prompt.trim().length > 0) return truncatePreview(args.prompt, 60);
-	
-	const previewKeys = ["command", "path", "file_path", "pattern", "query", "url", "task", "describe", "search"];
+
+	// Grep-like calls: pattern is the distinguishing field. Combine pattern + path/glob so
+	// repeated greps in the same directory don't all look identical.
+	if (typeof args.pattern === "string" && args.pattern.trim().length > 0) {
+		const pat = truncatePreview(args.pattern, 80);
+		const loc = typeof args.path === "string" && args.path.trim().length > 0
+			? args.path
+			: typeof args.glob === "string" && args.glob.trim().length > 0
+				? args.glob
+				: undefined;
+		return loc ? `${pat} in ${truncatePreview(loc, 120)}` : pat;
+	}
+
+	// Read calls: append offset/limit so back-to-back reads of the same file look different.
+	if ((typeof args.file_path === "string" || typeof args.path === "string") && (typeof args.offset === "number" || typeof args.limit === "number")) {
+		const p = (args.file_path ?? args.path) as string;
+		const off = typeof args.offset === "number" ? args.offset : undefined;
+		const lim = typeof args.limit === "number" ? args.limit : undefined;
+		const suffix = off !== undefined && lim !== undefined
+			? ` (L${off}-${off + lim})`
+			: off !== undefined
+				? ` (from L${off})`
+				: lim !== undefined
+					? ` (${lim} lines)`
+					: "";
+		return `${truncatePreview(p, 180)}${suffix}`;
+	}
+
+	// Command, then path-like keys. Pattern handled above; place file_path before path
+	// so a specific file wins over a directory when both exist.
+	const previewKeys = ["command", "file_path", "path", "query", "url", "task", "describe", "search"];
 	for (const key of previewKeys) {
 		if (args[key] && typeof args[key] === "string") {
 			const value = args[key] as string;
-			return truncatePreview(value, 60);
+			return truncatePreview(value, 200);
 		}
 	}
 	

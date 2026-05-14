@@ -87,6 +87,8 @@ export interface AgentProgress {
 	lastToolEndAt?: number;
 	recentTools: Array<{ tool: string; args: string; endMs: number; durationMs?: number }>;
 	recentOutput: string[];
+	tokenSamples?: Array<{ ts: number; tokens: number }>;
+	thinking?: string;
 	toolCount: number;
 	tokens: number;
 	durationMs: number;

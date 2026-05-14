@@ -157,7 +157,8 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.match(text, /3 tool uses/);
 		assert.match(text, /1\.2k token/);
 		assert.match(text, /└─ Done/);
-		assert.match(text, /session: \/tmp\/session\.jsonl/);
+		// 'session:' line was dropped by design — the URL-encoded session path is gunk in this view.
+		assert.doesNotMatch(text, /session: \/tmp\/session\.jsonl/);
 	});
 
 	it("keeps failure reasons visible in compact rendering", () => {
@@ -216,10 +217,12 @@ describe("renderSubagentResult fork indicator", () => {
 		}, { expanded: false }, theme);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /Press Ctrl\+O for live detail/);
 		// Tool is currently executing → "current" line shows the tool with elapsed time.
 		assert.match(text, /read: package\.json \| 3\.0s/);
-		assert.match(text, /output: \/tmp\/reviewer_output\.md/);
+		// While running, the 'output:' line is hidden to keep the row count down;
+		// the Ctrl+O hint lives in the status bar instead of inline per-block.
+		assert.doesNotMatch(text, /Press Ctrl\+O for live detail/);
+		assert.doesNotMatch(text, /output: \/tmp\/reviewer_output\.md/);
 	});
 
 	it("keeps paused multi-result runs visible in the compact headline", () => {

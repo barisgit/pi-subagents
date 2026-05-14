@@ -185,6 +185,7 @@ async function runSingleAttempt(
 		tokens: 0,
 		durationMs: 0,
 		lastActivityAt: startTime,
+		thinking: typeof agent.thinking === "string" ? agent.thinking : undefined,
 	};
 	result.progress = progress;
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
@@ -404,6 +405,16 @@ async function runSingleAttempt(
 						result.usage.cacheWrite += u.cacheWrite || 0;
 						result.usage.cost += u.cost?.total || 0;
 						progress.tokens = result.usage.input + result.usage.output;
+						// Record token sample for sparkline. Drop samples older than 30s to bound the buffer.
+						if (!progress.tokenSamples) progress.tokenSamples = [];
+						progress.tokenSamples.push({ ts: now, tokens: progress.tokens });
+						const cutoff = now - 50_000;
+						while (progress.tokenSamples.length > 0 && progress.tokenSamples[0]!.ts < cutoff) {
+							progress.tokenSamples.shift();
+						}
+						if (progress.tokenSamples.length > 120) {
+							progress.tokenSamples.splice(0, progress.tokenSamples.length - 120);
+						}
 					}
 					if (!result.model && evt.message.model) result.model = evt.message.model;
 					if (evt.message.errorMessage) result.error = evt.message.errorMessage;
