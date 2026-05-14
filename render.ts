@@ -323,48 +323,66 @@ function buildSparkline(
 	samples: ReadonlyArray<{ ts: number; tokens: number }> | undefined,
 	width = 8,
 	theme?: Theme,
+	now = Date.now(),
 ): string {
 	if (!samples || samples.length < 2 || width <= 0) return "";
+	const windowMs = 40_000;
 
-	// Compute deltas between consecutive samples. One delta = one cell.
-	// This decouples the sparkline from wall-clock time: cells only change
-	// when new samples arrive, eliminating the "worm crawl" of time-bucketed views.
-	const deltas: number[] = [];
+	// Wall-clock anchored, BUT quantized to cell boundaries to avoid sub-cell
+	// drift (the "worm"). Each cell represents windowMs/width of real time.
+	// We round `now` down to the nearest cell-duration so re-bucketing happens
+	// only when wall-clock crosses a cell boundary -- clean 1-cell step shifts,
+	// not 80ms-per-frame smear. Samples still decay leftward as they age.
+	const cellMs = windowMs / width;
+	const anchor = Math.floor(now / cellMs) * cellMs;
+	const cutoff = anchor - windowMs;
+
+	// Compute per-pair rates anchored to the later sample's timestamp.
+	const deltas: Array<{ ts: number; rate: number }> = [];
 	for (let i = 1; i < samples.length; i++) {
 		const cur = samples[i]!;
 		const prev = samples[i - 1]!;
+		if (cur.ts < cutoff) continue;
 		const dtSec = Math.max(0.05, (cur.ts - prev.ts) / 1000);
 		const dTok = Math.max(0, cur.tokens - prev.tokens);
-		deltas.push(dTok / dtSec);
+		deltas.push({ ts: cur.ts, rate: dTok / dtSec });
 	}
-	if (deltas.length === 0) return "";
 
-	// Take the last `width` deltas, right-aligned.
-	const recent = deltas.slice(-width);
-	const peak = Math.max(...recent);
+	const buckets = new Array<number>(width).fill(0);
+	const counts = new Array<number>(width).fill(0);
+	for (const d of deltas) {
+		const ageMs = anchor - d.ts;
+		if (ageMs < 0 || ageMs >= windowMs) continue;
+		// idx 0 = oldest, idx width-1 = freshest. Bias slightly so the very
+		// freshest sample (ageMs ~= 0) always lands in the rightmost cell.
+		const frac = Math.min(0.9999, 1 - ageMs / windowMs);
+		const idx = Math.min(width - 1, Math.max(0, Math.floor(frac * width)));
+		buckets[idx]! += d.rate;
+		counts[idx]! += 1;
+	}
+	for (let i = 0; i < width; i++) {
+		if (counts[i]! > 0) buckets[i] = buckets[i]! / counts[i]!;
+	}
+	const peak = Math.max(...buckets);
 	const baselineGlyph = SPARK_CHARS[0]!;
-	const padCount = Math.max(0, width - recent.length);
-	const padding = theme
-		? theme.fg("dim", baselineGlyph.repeat(padCount))
-		: baselineGlyph.repeat(padCount);
 
 	if (peak <= 0) {
 		const track = baselineGlyph.repeat(width);
 		return theme ? theme.fg("dim", track) : track;
 	}
 
-	let bars = "";
-	for (const rate of recent) {
-		if (rate <= 0) {
-			bars += theme ? theme.fg("dim", baselineGlyph) : baselineGlyph;
+	let out = "";
+	for (let i = 0; i < width; i++) {
+		if (counts[i] === 0 || buckets[i]! <= 0) {
+			out += theme ? theme.fg("dim", baselineGlyph) : baselineGlyph;
 			continue;
 		}
-		const rel = rate / peak;
+		const rel = buckets[i]! / peak;
 		const gi = Math.min(SPARK_CHARS.length - 1, Math.max(0, Math.floor(rel * SPARK_CHARS.length)));
 		const ch = SPARK_CHARS[gi]!;
-		bars += theme ? theme.fg("accent", ch) : ch;
+		out += theme ? theme.fg("accent", ch) : ch;
 	}
-	return padding + bars;
+	return out;
 }
 
 /**
@@ -437,7 +455,8 @@ function adaptiveBarWidth(): number {
  */
 function adaptiveSparkWidth(): number {
 	const termWidth = getTermWidth();
-	return Math.max(8, Math.min(30, Math.floor(termWidth / 10)));
+	// More generous on wide terminals: 120w → 17, 180w → 25, 240w → 34, 320w → 45, cap 60.
+	return Math.max(8, Math.min(60, Math.floor(termWidth / 7)));
 }
 
 /**
