@@ -342,7 +342,9 @@ function buildLiveHistoryLines(
 	availableWidth: number,
 ): string[] {
 	if (count <= 0 || !progress.recentTools?.length) return [];
-	const slice = progress.recentTools.slice(-count).reverse();
+	// Chronological order: oldest first, newest last. The renderer places this above
+	// the current-activity line so the freshest event sits adjacent to "now".
+	const slice = progress.recentTools.slice(-count);
 	const maxArgsLen = Math.max(20, availableWidth - 24);
 	return slice.map((entry) => {
 		const args = entry.args
@@ -736,14 +738,12 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	if (isRunning && r.progress) {
 		const current = buildLiveCurrentLine(r.progress, width);
 		const history = buildLiveHistoryLines(r.progress, adaptiveSingleHistoryCount(), width);
-		const hasHistory = history.length > 0;
-		const currentPrefix = hasHistory ? "  ├─" : "  └─";
-		c.addChild(new Text(truncLine(`${theme.fg("dim", currentPrefix)} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
+		// Chronological layout: history (oldest -> newest) on top, current activity at the bottom
+		// so the freshest information sits right next to "now".
 		for (let i = 0; i < history.length; i++) {
-			const last = i === history.length - 1;
-			const prefix = last ? "  └─" : "  ├─";
-			c.addChild(new Text(truncLine(theme.fg("dim", `${prefix} ${history[i]}`), width), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("dim", `  ├─ ${history[i]}`), width), 0, 0));
 		}
+		c.addChild(new Text(truncLine(`${theme.fg("dim", "  └─")} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
 		return c;
 	}
 
@@ -862,14 +862,11 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			if (fullProg) {
 				const current = buildLiveCurrentLine(fullProg, width);
 				const history = buildLiveHistoryLines(fullProg, historyN, width);
-				const hasHistory = history.length > 0;
-				const currentPrefix = hasHistory ? "    ├─" : "    └─";
-				c.addChild(new Text(truncLine(`${theme.fg("dim", currentPrefix)} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
+				// Chronological layout: history (oldest -> newest) on top, current activity at the bottom.
 				for (let h = 0; h < history.length; h++) {
-					const last = h === history.length - 1;
-					const prefix = last ? "    └─" : "    ├─";
-					c.addChild(new Text(truncLine(theme.fg("dim", `${prefix} ${history[h]}`), width), 0, 0));
+					c.addChild(new Text(truncLine(theme.fg("dim", `    ├─ ${history[h]}`), width), 0, 0));
 				}
+				c.addChild(new Text(truncLine(`${theme.fg("dim", "    └─")} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
 				const activity = compactCurrentActivity(rProg as AgentProgress);
