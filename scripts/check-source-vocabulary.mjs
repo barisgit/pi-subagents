@@ -1,0 +1,24 @@
+#!/usr/bin/env node
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const root = process.cwd();
+const forbidden = /\b(charter|mission|goal)s?\b/i;
+const sourceFiles = readdirSync(root)
+	.filter((name) => name.endsWith(".ts"))
+	.sort();
+
+const hits = [];
+for (const file of sourceFiles) {
+	const text = readFileSync(join(root, file), "utf8");
+	const lines = text.split(/\r?\n/);
+	lines.forEach((line, index) => {
+		if (forbidden.test(line)) hits.push(`${file}:${index + 1}: ${line.trim()}`);
+	});
+}
+
+if (hits.length > 0) {
+	console.error("Neutral vocabulary guard failed for extension source:");
+	for (const hit of hits) console.error(hit);
+	process.exit(1);
+}
