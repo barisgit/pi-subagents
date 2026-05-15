@@ -24,6 +24,7 @@ import {
 	type ForkReuseConfig,
 	type MaxOutputConfig,
 	type ResolvedControlConfig,
+	type SubagentMetadata,
 	ASYNC_DIR,
 	RESULTS_DIR,
 	SUBAGENT_ASYNC_STARTED_EVENT,
@@ -84,6 +85,7 @@ export interface AsyncChainParams {
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
+	metadata?: SubagentMetadata;
 }
 
 export interface AsyncSingleParams {
@@ -109,6 +111,7 @@ export interface AsyncSingleParams {
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
+	metadata?: SubagentMetadata;
 }
 
 export interface AsyncExecutionResult {
@@ -350,6 +353,7 @@ export function executeAsyncChain(
 				controlConfig,
 				controlIntercomTarget,
 				childIntercomTargets,
+				metadata: params.metadata,
 			},
 			id,
 			runnerCwd,
@@ -371,6 +375,7 @@ export function executeAsyncChain(
 		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
 			id,
 			pid: spawnResult.pid,
+			metadata: params.metadata,
 			agent: firstAgents[0],
 			task: isParallelStep(firstStep)
 				? firstStep.parallel[0]?.task?.slice(0, 50)
@@ -503,6 +508,7 @@ export function executeAsyncSingle(
 				controlConfig,
 				controlIntercomTarget,
 				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(agent, 0)] : undefined,
+				metadata: params.metadata,
 			},
 			id,
 			runnerCwd,
@@ -520,6 +526,7 @@ export function executeAsyncSingle(
 		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
 			id,
 			pid: spawnResult.pid,
+			metadata: params.metadata,
 			agent,
 			task: task?.slice(0, 50),
 			cwd: runnerCwd,

@@ -75,6 +75,7 @@ interface SubagentRunConfig {
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTargets?: Array<string | undefined>;
+	metadata?: Record<string, unknown>;
 }
 
 interface StepResult {
@@ -825,7 +826,7 @@ function appendParallelWorktreeSummary(
 }
 
 async function runSubagent(config: SubagentRunConfig): Promise<void> {
-	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
+	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig, metadata } =
 		config;
 	let previousOutput = "";
 	const results: StepResult[] = [];
@@ -1412,6 +1413,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			shareUrl,
 			gistUrl,
 			shareError,
+			metadata,
 			...(taskIndex !== undefined && { taskIndex }),
 			...(totalTasks !== undefined && { totalTasks }),
 		});

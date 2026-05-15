@@ -113,6 +113,8 @@ export interface ProgressSummary {
 	durationMs: number;
 }
 
+export type SubagentMetadata = Record<string, unknown>;
+
 // ============================================================================
 // Results
 // ============================================================================
@@ -321,6 +323,9 @@ export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
 export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
 export const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
 export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
+export const SUBAGENT_SPAWN_STARTED_EVENT = "subagent:spawn_started";
+export const SUBAGENT_COMPLETED_EVENT = "subagent:completed";
+export const SUBAGENT_FAILED_EVENT = "subagent:failed";
 export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
 export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 

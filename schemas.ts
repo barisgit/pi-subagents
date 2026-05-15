@@ -26,6 +26,10 @@ const ReadsOverride = Type.Union([
 	description: "Files to read first, or false disabled",
 });
 
+const MetadataSchema = Type.Record(Type.String(), Type.Any(), {
+	description: "Opaque passthrough metadata for lifecycle events.",
+});
+
 export const TaskItem = Type.Object({ 
 	agent: Type.Optional(Type.String({ description: "Agent; optional with top-level agent." })), 
 	task: Type.String(), 
@@ -159,6 +163,7 @@ export const SubagentParams = Type.Object({
 	})),
 	chainDir: Type.Optional(Type.String({ description: "Persistent chain artifact directory" })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background" })),
+	metadata: Type.Optional(MetadataSchema),
 	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: user, project, or both" })),
 	includeInternal: Type.Optional(Type.Boolean({ description: "Include internal extension-only personas in management list output" })),
 	cwd: Type.Optional(Type.String()),

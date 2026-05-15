@@ -50,10 +50,14 @@ import {
 	type MaxOutputConfig,
 	type ResolvedControlConfig,
 	type SingleResult,
+	type SubagentMetadata,
 	type SubagentState,
 	DEFAULT_ARTIFACT_CONFIG,
+	SUBAGENT_COMPLETED_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
+	SUBAGENT_FAILED_EVENT,
+	SUBAGENT_SPAWN_STARTED_EVENT,
 	checkNestedDelegationGuard,
 	checkSubagentDepth,
 	resolveTopLevelParallelConcurrency,
@@ -104,6 +108,7 @@ export interface SubagentParamsLike {
 	agentScope?: unknown;
 	chainDir?: string;
 	preset?: string;
+	metadata?: SubagentMetadata;
 }
 
 interface ExecutorDeps {
@@ -712,6 +717,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			controlConfig,
 			controlIntercomTarget,
 			childIntercomTarget,
+			metadata: params.metadata,
 		});
 	}
 
@@ -739,6 +745,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			controlConfig,
 			controlIntercomTarget,
 			childIntercomTarget,
+			metadata: params.metadata,
 		});
 	}
 
@@ -780,6 +787,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			controlConfig,
 			controlIntercomTarget,
 			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(agent, index) : undefined,
+			metadata: params.metadata,
 		});
 	}
 
@@ -882,6 +890,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			controlConfig,
 			controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 			childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
+			metadata: params.metadata,
 		});
 	}
 
@@ -892,6 +901,7 @@ interface ForegroundParallelRunInput {
 	tasks: TaskParam[];
 	taskTexts: string[];
 	agents: AgentConfig[];
+	pi: ExtensionAPI;
 	ctx: ExtensionContext;
 	signal: AbortSignal;
 	runId: string;
@@ -918,6 +928,7 @@ interface ForegroundParallelRunInput {
 	worktreeSetup?: WorktreeSetup;
 	forkReuse?: ForkReuseConfig;
 	preset?: string;
+	metadata?: SubagentMetadata;
 }
 
 function buildParallelModeError(message: string): AgentToolResult<Details> {
@@ -926,6 +937,22 @@ function buildParallelModeError(message: string): AgentToolResult<Details> {
 		isError: true,
 		details: { mode: "parallel" as const, results: [] },
 	};
+}
+
+function emitSyncLifecycleEvent(
+	pi: ExtensionAPI,
+	event: string,
+	payload: {
+		runId: string;
+		agent: string;
+		task?: string;
+		cwd?: string;
+		exitCode?: number;
+		error?: string;
+		metadata?: SubagentMetadata;
+	},
+): void {
+	pi.events.emit(event, payload);
 }
 
 function createParallelWorktreeSetup(
@@ -1001,6 +1028,14 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 		const overrideSkills = input.skillOverrides[index];
 		const effectiveSkills = overrideSkills === undefined ? input.behaviors[index]?.skills : overrideSkills;
 		const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd, input.worktreeSetup, index);
+		const eventPayload = {
+			runId: input.runId,
+			agent: task.agent,
+			task: input.taskTexts[index],
+			cwd: taskCwd ?? input.ctx.cwd,
+			metadata: input.metadata,
+		};
+		emitSyncLifecycleEvent(input.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
 		const interruptController = new AbortController();
 		if (input.foregroundControl) {
 			input.foregroundControl.currentAgent = task.agent;
@@ -1015,7 +1050,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				return true;
 			};
 		}
-		return runSync(input.ctx.cwd, input.agents, task.agent, input.taskTexts[index]!, {
+		const result = await runSync(input.ctx.cwd, input.agents, task.agent, input.taskTexts[index]!, {
 			cwd: taskCwd,
 			signal: input.signal,
 			interruptSignal: interruptController.signal,
@@ -1078,6 +1113,12 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				input.foregroundControl.updatedAt = Date.now();
 			}
 		});
+		emitSyncLifecycleEvent(input.pi, result.exitCode === 0 ? SUBAGENT_COMPLETED_EVENT : SUBAGENT_FAILED_EVENT, {
+			...eventPayload,
+			exitCode: result.exitCode,
+			error: result.error,
+		});
+		return result;
 	});
 }
 
@@ -1235,6 +1276,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				controlConfig,
 				controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
+				metadata: params.metadata,
 			});
 		}
 	}
@@ -1264,6 +1306,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			tasks,
 			taskTexts,
 			agents,
+			pi: deps.pi,
 			ctx,
 			signal,
 			runId,
@@ -1290,6 +1333,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			worktreeSetup,
 			forkReuse,
 			preset: params.preset,
+			metadata: params.metadata,
 		});
 		for (let i = 0; i < results.length; i++) {
 			const run = results[i]!;
@@ -1467,6 +1511,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				controlConfig,
 				controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
+				metadata: params.metadata,
 			});
 		}
 	}
@@ -1520,6 +1565,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		}
 		: undefined;
 
+	const eventPayload = {
+		runId,
+		agent: params.agent!,
+		task: cleanTask,
+		cwd: effectiveCwd,
+		metadata: params.metadata,
+	};
+	emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
 		cwd: effectiveCwd,
 		signal,
@@ -1546,6 +1599,11 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		forkReuse,
 		preset: params.preset,
 		parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+	});
+	emitSyncLifecycleEvent(deps.pi, r.exitCode === 0 ? SUBAGENT_COMPLETED_EVENT : SUBAGENT_FAILED_EVENT, {
+		...eventPayload,
+		exitCode: r.exitCode,
+		error: r.error,
 	});
 	if (foregroundControl?.currentIndex === 0) {
 		foregroundControl.interrupt = undefined;
