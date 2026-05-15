@@ -109,6 +109,7 @@ export interface SubagentParamsLike {
 	chainDir?: string;
 	preset?: string;
 	metadata?: SubagentMetadata;
+	rawAgentConfig?: AgentConfig;
 }
 
 interface ExecutorDeps {
@@ -1790,9 +1791,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			context: effectiveParams.context,
 			orchestratorTarget: sessionName,
 		});
-		const agents = intercomBridge.active
-			? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
+		const executionAgents = effectiveParams.rawAgentConfig
+			? [...discoveredAgents.filter((agent) => agent.name !== effectiveParams.rawAgentConfig?.name), effectiveParams.rawAgentConfig]
 			: discoveredAgents;
+		const agents = intercomBridge.active
+			? executionAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
+			: executionAgents;
 		const runId = randomUUID().slice(0, 8);
 		const shareEnabled = effectiveParams.share === true;
 

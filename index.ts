@@ -40,12 +40,15 @@ import {
 	type ControlEvent,
 	type Details,
 	type ExtensionConfig,
+	type SpawnRawInput,
+	type SubagentExposedAPI,
 	type SubagentState,
 	ASYNC_DIR,
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_EXPOSE_API_EVENT,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	WIDGET_KEY,
@@ -352,6 +355,58 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			},
 		getActiveRootRoleName: () => activeRootRoleName,
 	});
+	const buildSpawnRawContext = (): ExtensionContext => state.lastUiContext ?? {
+		cwd: state.baseCwd,
+		hasUI: false,
+		ui: {} as ExtensionContext["ui"],
+		sessionManager: {
+			getSessionId: () => state.currentSessionId ?? "spawn-raw",
+			getSessionFile: () => null,
+		} as ExtensionContext["sessionManager"],
+		modelRegistry: { getAvailable: () => [] } as ExtensionContext["modelRegistry"],
+	};
+	const spawnRaw = async (input: SpawnRawInput) => executor.execute(
+		"subagent-spawn-raw",
+		{
+			agent: "__raw__",
+			task: input.prompt,
+			async: input.async,
+			cwd: input.cwd,
+			metadata: input.metadata,
+			rawAgentConfig: {
+				name: "__raw__",
+				description: "Raw extension subagent",
+				tools: input.tools ?? ["read", "grep", "find", "ls"],
+				model: input.model,
+				thinking: input.thinking,
+				systemPromptMode: input.systemPromptMode ?? "replace",
+				inheritProjectContext: input.inheritProjectContext ?? false,
+				inheritSkills: input.inheritSkills === true,
+				systemPrompt: input.systemPrompt,
+				source: "builtin",
+				filePath: "<spawnRaw>",
+				skills: Array.isArray(input.inheritSkills) ? input.inheritSkills : undefined,
+				defaultReads: input.defaultReads,
+				defaultProgress: input.defaultProgress,
+				surface: "internal",
+			},
+		},
+		new AbortController().signal,
+		undefined,
+		buildSpawnRawContext(),
+	);
+	const subagentApi: SubagentExposedAPI = {
+		spawnRaw,
+		list: (options) => discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", { config, includeInternal: options?.includeInternal })
+			.agents.map((agent) => ({
+				name: agent.name,
+				description: agent.description,
+				source: agent.source,
+				surface: agent.surface,
+			})),
+	};
+	const exposeSubagentApi = () => pi.events.emit(SUBAGENT_EXPOSE_API_EVENT, subagentApi);
+	exposeSubagentApi();
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
 		const details = resolveSlashMessageDetails(message.details);
@@ -849,6 +904,7 @@ CONTROL:
 
 	pi.on("session_start", async (_event, ctx) => {
 		resetSessionState(ctx);
+		exposeSubagentApi();
 		if (isDelegatedSubagentSession()) return;
 		await initializeRootRole(ctx);
 	});

@@ -115,6 +115,40 @@ export interface ProgressSummary {
 
 export type SubagentMetadata = Record<string, unknown>;
 
+export interface SpawnRawInput {
+	systemPrompt: string;
+	prompt: string;
+	tools?: string[];
+	model?: string;
+	thinking?: "off" | "low" | "medium" | "high";
+	systemPromptMode?: "replace" | "append";
+	inheritProjectContext?: boolean;
+	inheritSkills?: boolean | string[];
+	defaultReads?: string[];
+	defaultProgress?: boolean;
+	metadata?: SubagentMetadata;
+	async?: boolean;
+	cwd?: string;
+}
+
+export interface SpawnResult {
+	content: Array<{ type: "text"; text: string }>;
+	details: Details;
+	isError?: boolean;
+}
+
+export interface PersonaInfo {
+	name: string;
+	description: string;
+	source?: string;
+	surface?: AgentSurface;
+}
+
+export interface SubagentExposedAPI {
+	spawnRaw(input: SpawnRawInput): Promise<SpawnResult>;
+	list(options?: { includeInternal?: boolean }): PersonaInfo[];
+}
+
 // ============================================================================
 // Results
 // ============================================================================
@@ -321,6 +355,7 @@ export interface IntercomEventBus {
 
 export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
 export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
+export const SUBAGENT_EXPOSE_API_EVENT = "subagent:expose-api";
 export const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
 export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
 export const SUBAGENT_SPAWN_STARTED_EVENT = "subagent:spawn_started";
