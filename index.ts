@@ -19,7 +19,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
-import { type AgentConfig, discoverAgents } from "./agents.ts";
+import { type AgentConfig, type RegisteredPersonaDir, discoverAgents, loadInternalPersonaDir } from "./agents.ts";
 import { resolveAgentToolPatterns, resolveToolPatterns } from "./resolve-tool-patterns.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
 import { cleanupOldChainDirs } from "./settings.ts";
@@ -40,15 +40,21 @@ import {
 	type ControlEvent,
 	type Details,
 	type ExtensionConfig,
+	type PersonaDirErrorPayload,
+	type RegisterPersonaDirPayload,
 	type SpawnRawInput,
 	type SubagentExposedAPI,
 	type SubagentState,
+	type UnregisterPersonaDirPayload,
 	ASYNC_DIR,
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_EXPOSE_API_EVENT,
+	SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT,
+	SUBAGENT_REGISTER_PERSONA_DIR_EVENT,
+	SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	WIDGET_KEY,
@@ -341,6 +347,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const available = pi.getAllTools().map((t) => t.name);
 		return agents.map((a) => resolveAgentToolPatterns(a, available));
 	};
+	const personaDirs = new Map<string, RegisterPersonaDirPayload>();
+	const getRegisteredPersonaDirs = (): RegisteredPersonaDir[] => Array.from(personaDirs.values()).map((dir) => ({
+		extensionId: dir.extensionId,
+		path: dir.path,
+	}));
 	const executor = createSubagentExecutor({
 		pi,
 		state,
@@ -350,9 +361,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getSubagentSessionRoot,
 		expandTilde,
 		discoverAgents: (cwd, scope, options) => {
-				const result = discoverAgents(cwd, scope, { ...options, config });
-				return { ...result, agents: resolveAgentTools(result.agents) };
-			},
+			const result = discoverAgents(cwd, scope, { ...options, config, registeredPersonaDirs: getRegisteredPersonaDirs() });
+			return { ...result, agents: resolveAgentTools(result.agents) };
+		},
 		getActiveRootRoleName: () => activeRootRoleName,
 	});
 	const buildSpawnRawContext = (): ExtensionContext => state.lastUiContext ?? {
@@ -397,7 +408,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	);
 	const subagentApi: SubagentExposedAPI = {
 		spawnRaw,
-		list: (options) => discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", { config, includeInternal: options?.includeInternal })
+		list: (options) => discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", {
+			config,
+			includeInternal: options?.includeInternal,
+			registeredPersonaDirs: getRegisteredPersonaDirs(),
+		})
 			.agents.map((agent) => ({
 				name: agent.name,
 				description: agent.description,
@@ -856,10 +871,45 @@ CONTROL:
 			{ triggerTurn: true },
 		);
 	};
+	const emitPersonaDirError = (payload: PersonaDirErrorPayload) => {
+		pi.events.emit(SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT, payload);
+	};
+	const handleRegisterPersonaDir = (payload: RegisterPersonaDirPayload) => {
+		if (!payload || !payload.extensionId || payload.scope !== "internal" || !path.isAbsolute(payload.path)) {
+			emitPersonaDirError({
+				extensionId: payload?.extensionId ?? "",
+				conflictingExtensionId: "",
+				personaName: "",
+				message: "Invalid subagent persona directory registration",
+			});
+			return;
+		}
+		const newAgents = loadInternalPersonaDir(payload.path);
+		const newNames = new Set(newAgents.map((agent) => agent.name));
+		for (const existing of personaDirs.values()) {
+			if (existing.extensionId === payload.extensionId) continue;
+			for (const agent of loadInternalPersonaDir(existing.path)) {
+				if (!newNames.has(agent.name)) continue;
+				emitPersonaDirError({
+					extensionId: payload.extensionId,
+					conflictingExtensionId: existing.extensionId,
+					personaName: agent.name,
+					message: `Subagent persona name '${agent.name}' is already registered by extension '${existing.extensionId}'`,
+				});
+				return;
+			}
+		}
+		personaDirs.set(payload.extensionId, payload);
+	};
+	const handleUnregisterPersonaDir = (payload: UnregisterPersonaDirPayload) => {
+		if (payload?.extensionId) personaDirs.delete(payload.extensionId);
+	};
 	const eventUnsubscribes = [
 		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
+		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, handleRegisterPersonaDir),
+		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, handleUnregisterPersonaDir),
 	];
 	globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
 

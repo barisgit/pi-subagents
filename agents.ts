@@ -151,11 +151,17 @@ export interface ChainConfig {
 	extraFields?: Record<string, string>;
 }
 
+export interface RegisteredPersonaDir {
+	extensionId: string;
+	path: string;
+}
+
 export interface AgentDiscoveryOptions {
 	preset?: string;
 	config?: ExtensionConfig;
 	surface?: Exclude<AgentSurface, "both">;
 	includeInternal?: boolean;
+	registeredPersonaDirs?: RegisteredPersonaDir[];
 }
 
 export interface AgentDiscoveryResult {
@@ -696,7 +702,7 @@ export function removeBuiltinAgentOverride(cwd: string, name: string, scope: "us
 	return filePath;
 }
 
-function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
+function loadAgentsFromDir(dir: string, source: AgentSource, options?: { forceInternal?: boolean }): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
 	if (!fs.existsSync(dir)) {
@@ -791,7 +797,9 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 
 		const parsedMaxSubagentDepth = Number(frontmatter.maxSubagentDepth);
 
-		const surface = normalizePresetAgentSurface(frontmatter.scope) ?? normalizePresetAgentSurface(frontmatter.surface) ?? defaultSurface();
+		const surface = options?.forceInternal === true
+			? "internal"
+			: normalizePresetAgentSurface(frontmatter.scope) ?? normalizePresetAgentSurface(frontmatter.surface) ?? defaultSurface();
 		const canDelegate = frontmatter.canDelegate === "true"
 			? true
 			: frontmatter.canDelegate === "false"
@@ -906,6 +914,14 @@ function resolveNearestProjectAgentDirs(cwd: string): { readDirs: string[]; pref
 }
 const BUILTIN_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
 
+export function loadInternalPersonaDir(dir: string): AgentConfig[] {
+	return loadAgentsFromDir(dir, "builtin", { forceInternal: true });
+}
+
+function loadRegisteredPersonaAgents(options?: AgentDiscoveryOptions): AgentConfig[] {
+	return (options?.registeredPersonaDirs ?? []).flatMap((dir) => loadInternalPersonaDir(dir.path));
+}
+
 export function discoverAgents(cwd: string, scope: AgentScope, options?: AgentDiscoveryOptions): AgentDiscoveryResult {
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
@@ -930,7 +946,9 @@ export function discoverAgents(cwd: string, scope: AgentScope, options?: AgentDi
 	const projectAgents = scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project"));
 	const mergedAgents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents);
 	const presetApplied = applyPresetOverlays(mergedAgents, options);
-	const visibleAgents = presetApplied.agents
+	const registeredAgents = loadRegisteredPersonaAgents(options)
+		.filter((agent) => !presetApplied.agents.some((existing) => existing.name === agent.name));
+	const visibleAgents = [...presetApplied.agents, ...registeredAgents]
 		.filter((agent) => agent.disabled !== true)
 		.filter((agent) => isVisibleOnSurface(agent, options?.surface, options?.includeInternal));
 
@@ -978,6 +996,8 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 	];
 
 	const presetBuiltin = applyPresetOverlays(builtinBase, options);
+	const registeredAgents = loadRegisteredPersonaAgents(options)
+		.filter((agent) => !presetBuiltin.agents.some((existing) => existing.name === agent.name));
 	const presetUser = applyPresetOverlays(userBase, options);
 	const presetProject = applyPresetOverlays(projectBase, options);
 	// Prefer ~/.pi/agent/agents/ as primary; fall back to ~/.agents/ if only that exists
@@ -986,7 +1006,7 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 		.filter((agent) => isVisibleOnSurface(agent, options?.surface, options?.includeInternal));
 
 	return {
-		builtin: filterBySurface(presetBuiltin.agents),
+		builtin: filterBySurface([...presetBuiltin.agents, ...registeredAgents]),
 		user: filterBySurface(presetUser.agents),
 		project: filterBySurface(presetProject.agents),
 		chains,

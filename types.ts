@@ -149,6 +149,23 @@ export interface SubagentExposedAPI {
 	list(options?: { includeInternal?: boolean }): PersonaInfo[];
 }
 
+export interface RegisterPersonaDirPayload {
+	extensionId: string;
+	path: string;
+	scope: "internal";
+}
+
+export interface UnregisterPersonaDirPayload {
+	extensionId: string;
+}
+
+export interface PersonaDirErrorPayload {
+	extensionId: string;
+	conflictingExtensionId: string;
+	personaName: string;
+	message: string;
+}
+
 // ============================================================================
 // Results
 // ============================================================================
@@ -356,6 +373,9 @@ export interface IntercomEventBus {
 export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
 export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
 export const SUBAGENT_EXPOSE_API_EVENT = "subagent:expose-api";
+export const SUBAGENT_REGISTER_PERSONA_DIR_EVENT = "subagent:register-persona-dir";
+export const SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT = "subagent:unregister-persona-dir";
+export const SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT = "subagent:register-persona-dir-error";
 export const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
 export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
 export const SUBAGENT_SPAWN_STARTED_EVENT = "subagent:spawn_started";
