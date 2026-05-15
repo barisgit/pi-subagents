@@ -160,6 +160,7 @@ export const SubagentParams = Type.Object({
 	chainDir: Type.Optional(Type.String({ description: "Persistent chain artifact directory" })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background" })),
 	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: user, project, or both" })),
+	includeInternal: Type.Optional(Type.Boolean({ description: "Include internal extension-only personas in management list output" })),
 	cwd: Type.Optional(Type.String()),
 	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts" })),
 	includeProgress: Type.Optional(Type.Boolean({ description: "Include full progress" })),

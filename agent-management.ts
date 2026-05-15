@@ -28,6 +28,7 @@ interface ManagementParams {
 	agent?: string;
 	chainName?: string;
 	agentScope?: string;
+	includeInternal?: boolean;
 	config?: unknown;
 	preset?: string;
 }
@@ -371,7 +372,7 @@ export function formatChainDetail(chain: ChainConfig): string {
 
 export function handleList(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	const scope = normalizeListScope(params.agentScope) ?? "both";
-	const agentDiscovery = discoverAgents(ctx.cwd, "both", { preset: params.preset, surface: "subagent" });
+	const agentDiscovery = discoverAgents(ctx.cwd, "both", { preset: params.preset, surface: "subagent", includeInternal: params.includeInternal === true });
 	const managementDiscovery = discoverAgentsAll(ctx.cwd, { preset: params.preset });
 	const agents = agentDiscovery.agents
 		.filter((a) => scope === "both" || a.source === "builtin" || a.source === scope)

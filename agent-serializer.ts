@@ -21,6 +21,7 @@ export const KNOWN_FIELDS = new Set([
 	"maxSubagentDepth",
 	"disabled",
 	"surface",
+	"scope",
 	"canDelegate",
 	"allowedDelegateAgents",
 	"color",

@@ -382,7 +382,7 @@ export interface TopLevelParallelConfig {
 	maxConcurrency?: number;
 }
 
-export type AgentSurface = "main" | "subagent" | "both";
+export type AgentSurface = "main" | "subagent" | "both" | "internal";
 
 export interface AgentPresetOverlay {
 	model?: string | false;
@@ -403,6 +403,8 @@ export interface AgentPresetOverlay {
 	systemPrompt?: string | false;
 	disabled?: boolean;
 	surface?: AgentSurface;
+	/** Alias for surface in preset/subagent.json role-topology config. */
+	scope?: AgentSurface;
 	canDelegate?: boolean;
 	allowedDelegateAgents?: string[] | false;
 }

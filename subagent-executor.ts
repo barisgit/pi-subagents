@@ -114,7 +114,7 @@ interface ExecutorDeps {
 	tempArtifactsDir: string;
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
-	discoverAgents: (cwd: string, scope: AgentScope, options?: { preset?: string }) => { agents: AgentConfig[] };
+	discoverAgents: (cwd: string, scope: AgentScope, options?: { preset?: string; includeInternal?: boolean }) => { agents: AgentConfig[] };
 	getActiveRootRoleName?: () => string | undefined;
 }
 
@@ -1725,7 +1725,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, { preset: normalizedParams.preset }).agents;
+		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, { preset: normalizedParams.preset, includeInternal: true }).agents;
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,

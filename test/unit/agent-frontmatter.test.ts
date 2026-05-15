@@ -37,6 +37,31 @@ afterEach(() => {
 	else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
 });
 
+describe("agent frontmatter scope", () => {
+	it("parses internal scope from discovered agent frontmatter", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-internal-scope-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "hidden.md"), `---
+name: hidden
+description: Hidden helper
+scope: internal
+---
+
+Stay hidden
+`, "utf-8");
+
+		const defaultResult = discoverAgents(dir, "project", { surface: "subagent" });
+		assert.equal(defaultResult.agents.find((agent) => agent.name === "hidden"), undefined);
+
+		const internalResult = discoverAgents(dir, "project", { surface: "subagent", includeInternal: true });
+		const hidden = internalResult.agents.find((agent) => agent.name === "hidden");
+		assert.equal(hidden?.surface, "internal");
+	});
+
+});
+
 describe("agent frontmatter maxSubagentDepth", () => {
 	it("serializes maxSubagentDepth into agent frontmatter", () => {
 		const agent: AgentConfig = {

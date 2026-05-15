@@ -155,6 +155,7 @@ export interface AgentDiscoveryOptions {
 	preset?: string;
 	config?: ExtensionConfig;
 	surface?: Exclude<AgentSurface, "both">;
+	includeInternal?: boolean;
 }
 
 export interface AgentDiscoveryResult {
@@ -221,12 +222,13 @@ function normalizePresetStringArray(value: unknown): string[] | undefined {
 }
 
 function normalizePresetAgentSurface(value: unknown): AgentSurface | undefined {
-	return value === "main" || value === "subagent" || value === "both" ? value : undefined;
+	return value === "main" || value === "subagent" || value === "both" || value === "internal" ? value : undefined;
 }
 
-function isVisibleOnSurface(agent: AgentConfig, surface: Exclude<AgentSurface, "both"> | undefined): boolean {
-	if (!surface) return true;
+function isVisibleOnSurface(agent: AgentConfig, surface: Exclude<AgentSurface, "both"> | undefined, includeInternal = false): boolean {
 	const agentSurface = agent.surface ?? defaultSurface();
+	if (agentSurface === "internal") return includeInternal;
+	if (!surface) return true;
 	return agentSurface === "both" || agentSurface === surface;
 }
 
@@ -281,6 +283,7 @@ function applyPresetOverlay(agent: AgentConfig, overlay: AgentPresetOverlay): Ag
 	if (overlay.systemPrompt !== undefined) next.systemPrompt = overlay.systemPrompt === false ? "" : overlay.systemPrompt;
 	if (overlay.disabled !== undefined) next.disabled = overlay.disabled;
 	if (overlay.surface !== undefined) next.surface = normalizePresetAgentSurface(overlay.surface);
+	if (overlay.scope !== undefined) next.surface = normalizePresetAgentSurface(overlay.scope);
 	if (overlay.canDelegate !== undefined) next.canDelegate = overlay.canDelegate;
 	if (overlay.allowedDelegateAgents !== undefined) {
 		next.allowedDelegateAgents = overlay.allowedDelegateAgents === false ? undefined : normalizePresetStringArray(overlay.allowedDelegateAgents);
@@ -788,7 +791,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 
 		const parsedMaxSubagentDepth = Number(frontmatter.maxSubagentDepth);
 
-		const surface = normalizePresetAgentSurface(frontmatter.surface) ?? defaultSurface();
+		const surface = normalizePresetAgentSurface(frontmatter.scope) ?? normalizePresetAgentSurface(frontmatter.surface) ?? defaultSurface();
 		const canDelegate = frontmatter.canDelegate === "true"
 			? true
 			: frontmatter.canDelegate === "false"
@@ -929,7 +932,7 @@ export function discoverAgents(cwd: string, scope: AgentScope, options?: AgentDi
 	const presetApplied = applyPresetOverlays(mergedAgents, options);
 	const visibleAgents = presetApplied.agents
 		.filter((agent) => agent.disabled !== true)
-		.filter((agent) => isVisibleOnSurface(agent, options?.surface));
+		.filter((agent) => isVisibleOnSurface(agent, options?.surface, options?.includeInternal));
 
 	return { agents: visibleAgents, projectAgentsDir, preset: presetApplied.preset };
 }
@@ -980,7 +983,7 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 	// Prefer ~/.pi/agent/agents/ as primary; fall back to ~/.agents/ if only that exists
 	const userDir = fs.existsSync(userDirOld) ? userDirOld : fs.existsSync(userDirNew) ? userDirNew : userDirOld;
 	const filterBySurface = (agents: AgentConfig[]) => agents
-		.filter((agent) => isVisibleOnSurface(agent, options?.surface));
+		.filter((agent) => isVisibleOnSurface(agent, options?.surface, options?.includeInternal));
 
 	return {
 		builtin: filterBySurface(presetBuiltin.agents),
