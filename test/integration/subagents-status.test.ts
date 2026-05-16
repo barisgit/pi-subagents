@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import { foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
-import type { AsyncRunOverlayData } from "../../async-status.ts";
+import type { AsyncRunOverlayData, AsyncRunSummary } from "../../async-status.ts";
 import type { SubagentState } from "../../types.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
@@ -15,16 +15,15 @@ function wait(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createRun(id: string, state: "queued" | "running" | "complete" | "failed") {
-	return {
+function createRun(id: string, state: AsyncRunSummary["state"], overrides: Partial<AsyncRunSummary> = {}): AsyncRunSummary {
+	const base: AsyncRunSummary = {
 		id,
 		asyncDir: `/tmp/${id}`,
 		state,
-		activityState: undefined,
 		lastActivityAt: Date.now() - 1500,
 		currentTool: state === "running" ? "bash" : undefined,
 		currentToolStartedAt: state === "running" ? Date.now() - 1000 : undefined,
-		mode: "single" as const,
+		mode: "single",
 		cwd: `/tmp/${id}`,
 		startedAt: Date.now() - 5000,
 		lastUpdate: state === "running" ? Date.now() - 500 : Date.now() - 1000,
@@ -42,6 +41,7 @@ function createRun(id: string, state: "queued" | "running" | "complete" | "faile
 		outputFile: `/tmp/${id}/output-0.log`,
 		sessionFile: `/tmp/${id}/session.jsonl`,
 	};
+	return { ...base, ...overrides };
 }
 
 function createSyncRun(id = "sync-a"): ForegroundRunSummary {
@@ -72,244 +72,312 @@ function createTestTheme(): StatusTheme {
 	} as StatusTheme;
 }
 
-function createAnsiTheme(): StatusTheme {
-	return {
-		fg: (_token: string, text: string) => `\u001B[38;2;138;190;183m${text}\u001B[39m`,
-		bg: (_token: string, text: string) => text,
-	} as StatusTheme;
+function stripBorders(line: string): string {
+	return line.replace(/^│/, "").replace(/│$/, "").trim();
 }
 
-function stripSgr(text: string): string {
-	return text.replace(/\u001B\[[0-9;]*m/g, "");
+function makeEventsFile(dir: string, events: Array<Record<string, unknown>>): void {
+	fs.writeFileSync(path.join(dir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
 describe("SubagentsStatusComponent", () => {
-	it("auto-refreshes and keeps the same async run selected when it moves to recent", async () => {
-		const states: AsyncRunOverlayData[] = [
-			{ active: [createRun("run-a", "running")], recent: [] },
-			{ active: [], recent: [createRun("run-a", "complete")] },
-		];
-		let callCount = 0;
+	it("shows 'No subagent runs' when nothing is active", () => {
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			const output = component.render(120).join("\n");
+			assert.match(output, /No subagent runs/);
+			assert.match(output, /Subagent runs · 0 total/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("renders header, a left-pane row, and right-pane event log for a single async run", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-"));
+		try {
+			makeEventsFile(dir, [
+				{ type: "subagent.step.started", stepIndex: 0, agent: "waiter", ts: 1000 },
+				{ type: "tool_execution_start", subagentStepIndex: 0, toolName: "bash", toolCallId: "t1", args: { cmd: "ls" }, observedAt: 1500 },
+				{ type: "tool_execution_end", subagentStepIndex: 0, toolCallId: "t1", observedAt: 1900 },
+				{ type: "subagent.step.completed", stepIndex: 0, agent: "waiter", ts: 2000, durationMs: 1000, tokens: { total: 150 }, status: "completed" },
+			]);
+			const run = createRun("run-a", "running", { asyncDir: dir });
+			const component = new SubagentsStatusComponent(
+				createTestTui(() => {}),
+				createTestTheme(),
+				() => {},
+				{
+					listRunsForOverlay: () => ({ active: [run], recent: [] }),
+					refreshMs: 1000,
+				},
+			);
+
+			try {
+				const output = component.render(120).join("\n");
+				assert.match(output, /Subagent runs · 1 total · use j\/k to navigate/);
+				assert.match(output, /> .* waiter · running/);
+				assert.match(output, /─── Step 1: waiter ───/);
+				assert.match(output, /→ bash .* · 400ms/);
+				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
+				assert.match(output, /j\/k move · J\/K scroll · q close/);
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("sorts running before complete and places cursor on the first row by default", () => {
+		const running = createRun("run-running", "running");
+		const complete = createRun("run-done", "complete");
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [running], recent: [complete] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			const output = component.render(120);
+			const bodyLines = output.slice(1, -1).map(stripBorders);
+			const runIndex = bodyLines.findIndex((line) => line.includes("running"));
+			const doneIndex = bodyLines.findIndex((line) => line.includes("complete"));
+			assert.ok(runIndex >= 0 && doneIndex >= 0, "both rows present");
+			assert.ok(runIndex < doneIndex, "running row sorts above complete row");
+			assert.match(bodyLines[runIndex]!, /^> /);
+			assert.doesNotMatch(bodyLines[doneIndex]!, /^> /);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("j moves selection down and k moves it up, bounded at edges", () => {
+		const a = createRun("run-a", "running");
+		const b = createRun("run-b", "complete");
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [a], recent: [b] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			const initial = component.render(120).join("\n");
+			assert.match(initial, /> .*run-a-agent|> .* waiter · running/);
+
+			component.handleInput("j");
+			const afterDown = component.render(120);
+			const bodyAfterDown = afterDown.slice(1, -1).map(stripBorders);
+			const completeRow = bodyAfterDown.find((line) => line.includes("complete"));
+			assert.ok(completeRow && completeRow.startsWith(">"), `cursor should be on complete row after j; got: ${completeRow}`);
+
+			// j past the end should stay at the bottom.
+			component.handleInput("j");
+			const bodyAfterDown2 = component.render(120).slice(1, -1).map(stripBorders);
+			const completeRow2 = bodyAfterDown2.find((line) => line.includes("complete"));
+			assert.ok(completeRow2 && completeRow2.startsWith(">"), "selection bounded at last row");
+
+			component.handleInput("k");
+			const bodyAfterUp = component.render(120).slice(1, -1).map(stripBorders);
+			const runningRow = bodyAfterUp.find((line) => line.includes("running"));
+			assert.ok(runningRow && runningRow.startsWith(">"), "k moves selection up");
+
+			// k past the top should stay at row 0.
+			component.handleInput("k");
+			const bodyAfterUp2 = component.render(120).slice(1, -1).map(stripBorders);
+			const runningRow2 = bodyAfterUp2.find((line) => line.includes("running"));
+			assert.ok(runningRow2 && runningRow2.startsWith(">"), "selection bounded at first row");
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("renders step-start, tool with duration, step-end, and final-text for the selected run", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-events-"));
+		try {
+			makeEventsFile(dir, [
+				{ type: "subagent.step.started", stepIndex: 0, agent: "planner", ts: 1000 },
+				{ type: "tool_execution_start", subagentStepIndex: 0, toolName: "read", toolCallId: "t1", args: { path: "a.ts" }, observedAt: 1100 },
+				{ type: "tool_execution_end", subagentStepIndex: 0, toolCallId: "t1", observedAt: 1350 },
+				{
+					type: "message_end",
+					subagentStepIndex: 0,
+					subagentAgent: "planner",
+					message: { role: "assistant", content: [{ type: "text", text: "Wrapped final answer text." }] },
+				},
+				{ type: "subagent.step.completed", stepIndex: 0, agent: "planner", ts: 1400, durationMs: 400, tokens: { total: 42 }, status: "completed" },
+			]);
+			const run = createRun("run-e", "running", { asyncDir: dir });
+			const component = new SubagentsStatusComponent(
+				createTestTui(() => {}),
+				createTestTheme(),
+				() => {},
+				{
+					listRunsForOverlay: () => ({ active: [run], recent: [] }),
+					refreshMs: 1000,
+				},
+			);
+
+			try {
+				const lines = component.render(160).map(stripBorders);
+				const joined = lines.join("\n");
+				const stepIdx = lines.findIndex((line) => line.includes("Step 1: planner"));
+				const toolIdx = lines.findIndex((line) => /→ read .* · 250ms/.test(line));
+				const finalIdx = lines.findIndex((line) => line.includes("Wrapped final answer text."));
+				const endIdx = lines.findIndex((line) => line.includes("done · completed · 42t · 400ms"));
+				assert.ok(stepIdx >= 0 && toolIdx > stepIdx && finalIdx > toolIdx && endIdx > toolIdx, `order wrong: ${stepIdx}/${toolIdx}/${finalIdx}/${endIdx}\n${joined}`);
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("renders '(sync run — no event log)' in the right pane for a foreground sync run", () => {
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [], recent: [] }),
+				listForegroundRuns: () => [createSyncRun()],
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			const output = component.render(120).join("\n");
+			assert.match(output, /\(sync run — no event log\)/);
+			assert.match(output, /reviewer · running/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("keeps selection sticky by id across refreshes", async () => {
+		const a = createRun("run-a", "running");
+		const b = createRun("run-b", "running");
+		let snapshot: AsyncRunOverlayData = { active: [a, b], recent: [] };
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => snapshot,
+				refreshMs: 10,
+			},
+		);
+
+		try {
+			component.handleInput("j");
+			const before = component.render(120).join("\n");
+			assert.match(before, />.*run-b agent|> .* waiter · running/);
+			snapshot = { active: [createRun("run-c", "running"), b, a], recent: [] };
+			await wait(25);
+			const lines = component.render(120).map(stripBorders);
+			// The previously selected run was run-b (second of two waiter rows). After refresh
+			// the order of rows changes; cursor should still be on a 'waiter · running' row,
+			// not on the brand-new run-c row at index 0.
+			const cursorRowIndex = lines.findIndex((line) => line.startsWith(">"));
+			assert.ok(cursorRowIndex > 0, `cursor should not reset to the top after refresh; got index ${cursorRowIndex}`);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("q and escape both call the done callback", () => {
+		let doneCalls = 0;
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => { doneCalls++; },
+			{
+				listRunsForOverlay: () => ({ active: [createRun("run-a", "running")], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			component.handleInput("q");
+			assert.equal(doneCalls, 1);
+			component.handleInput("\u001b");
+			assert.equal(doneCalls, 2);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("smoke-renders the two-pane layout with two mock runs", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-smoke-"));
+		try {
+			makeEventsFile(dir, [
+				{ type: "subagent.step.started", stepIndex: 0, agent: "scout", ts: 1000 },
+			]);
+			const running = createRun("run-running", "running", { asyncDir: dir });
+			const done = createRun("run-done", "complete");
+			const component = new SubagentsStatusComponent(
+				createTestTui(() => {}),
+				createTestTheme(),
+				() => {},
+				{
+					listRunsForOverlay: () => ({ active: [running], recent: [done] }),
+					refreshMs: 1000,
+				},
+			);
+
+			try {
+				const lines = component.render(120);
+				for (const line of lines) {
+					assert.ok(visibleWidth(line) <= 120, `line too wide: ${visibleWidth(line)} ${line}`);
+				}
+				const joined = lines.join("\n");
+				assert.match(joined, /Subagent runs · 2 total/);
+				assert.match(joined, /Step 1: scout/);
+				assert.match(joined, /running/);
+				assert.match(joined, /complete/);
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("auto-refresh requests render and stops after dispose", async () => {
 		let renderRequests = 0;
 		const component = new SubagentsStatusComponent(
 			createTestTui(() => { renderRequests++; }),
 			createTestTheme(),
 			() => {},
 			{
-				listRunsForOverlay: () => states[Math.min(callCount++, states.length - 1)]!,
+				listRunsForOverlay: () => ({ active: [createRun("run-a", "running")], recent: [] }),
 				refreshMs: 10,
 			},
 		);
 
-		try {
-			await wait(25);
-			const output = component.render(120).join("\n");
-			assert.match(output, /Recent async/);
-			assert.match(output, /Selected async: run-a/);
-			assert.doesNotMatch(output, /Timeline:/);
-			assert.match(output, /150 tok/);
-			assert.match(output, /output: \/tmp\/run-a\/output-0\.log/);
-			assert.match(output, /0 sync \/ 0 async \/ 1 recent/);
-			assert.match(output, /enter detail/);
-			assert.ok(renderRequests >= 1, "expected auto-refresh to request a render");
-		} finally {
-			component.dispose();
-		}
-	});
-
-	it("shows foreground sync runs as live selectable sessions", () => {
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [], recent: [] }),
-				listForegroundRuns: () => [createSyncRun()],
-				refreshMs: 1000,
-			},
-		);
-
-		try {
-			const output = component.render(120).join("\n");
-			assert.match(output, /Subagents Live/);
-			assert.match(output, /Live now \(1 sync \/ 0 async\)/);
-			assert.match(output, /sync \| running \| parallel \| step 2/);
-			assert.match(output, /Selected sync: sync-a/);
-			assert.match(output, /Now: reviewer \| parallel \| step 2 \| tool read/);
-			assert.doesNotMatch(output, /Timeline:/);
-		} finally {
-			component.dispose();
-		}
-	});
-
-	it("opens compact async detail with tools and output tail", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-"));
-		const run = {
-			...createRun("run-detail", "running"),
-			asyncDir: dir,
-			outputFile: "output-0.log",
-		};
-		fs.writeFileSync(path.join(dir, "output-0.log"), "first line\nlatest transcript line\n");
-		fs.writeFileSync(path.join(dir, "events.jsonl"), `${JSON.stringify({ type: "tool_call", ts: 1000, agent: "waiter", stepIndex: 0, message: "read file" })}\n`);
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [run], recent: [] }),
-				refreshMs: 1000,
-			},
-		);
-
-		try {
-			component.handleInput("\r");
-			const output = component.render(120).join("\n");
-			assert.match(output, /Subagent Run run-deta/);
-			assert.match(output, /Recent tools/);
-			assert.match(output, /tool_call/);
-			assert.match(output, /Compact output tail/);
-			assert.match(output, /latest transcript line/);
-			assert.match(output, /Paths/);
-			assert.doesNotMatch(output, /Recent events/);
-		} finally {
-			component.dispose();
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("opens compact sync detail with tools and output tail", () => {
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [], recent: [] }),
-				listForegroundRuns: () => [createSyncRun()],
-				refreshMs: 1000,
-			},
-		);
-
-		try {
-			component.handleInput("\r");
-			const output = component.render(140).join("\n");
-			assert.match(output, /Recent tools/);
-			assert.match(output, /read subagents-status\.ts/);
-			assert.match(output, /Compact output tail/);
-			assert.match(output, /sync compact tail line/);
-			assert.match(output, /compact sync digest/);
-		} finally {
-			component.dispose();
-		}
-	});
-
-	it("keeps every rendered detail line within the overlay width", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-width-"));
-		const longText = "x".repeat(500);
-		const run = {
-			...createRun(longText, "running"),
-			asyncDir: dir,
-			cwd: path.join(dir, longText),
-			outputFile: "output-0.log",
-			sessionFile: path.join(dir, `${longText}.jsonl`),
-			steps: [{
-				index: 0,
-				agent: longText,
-				status: "running",
-				currentTool: longText,
-				currentToolStartedAt: Date.now() - 1000,
-				error: longText,
-			}],
-		};
-		fs.writeFileSync(path.join(dir, "output-0.log"), `${longText}\n\t}${longText}\n`);
-		fs.writeFileSync(path.join(dir, "events.jsonl"), `${JSON.stringify({ type: longText, ts: 1000, agent: longText, message: `\t${longText}` })}\n`);
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [run], recent: [] }),
-				refreshMs: 1000,
-			},
-		);
-
-		try {
-			component.handleInput("\r");
-			const lines = component.render(202);
-			for (const line of lines) assert.ok(visibleWidth(line) <= 140, `line too wide: ${visibleWidth(line)} ${line}`);
-		} finally {
-			component.dispose();
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("preserves ANSI colors while normalizing tabs in detail output", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-ansi-"));
-		const run = {
-			...createRun("ansi-run", "running"),
-			asyncDir: dir,
-			outputFile: "output-0.log",
-		};
-		fs.writeFileSync(path.join(dir, "output-0.log"), "\tcolored tail line\n");
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createAnsiTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [run], recent: [] }),
-				refreshMs: 1000,
-			},
-		);
-
-		try {
-			component.handleInput("\r");
-			const output = component.render(202).join("\n");
-			assert.match(output, /\u001B\[38;2;138;190;183m/);
-			assert.doesNotMatch(stripSgr(output), /\[38;2;/);
-			assert.doesNotMatch(stripSgr(output), /\t/);
-		} finally {
-			component.dispose();
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("uses a wider overlay when terminal space is available", () => {
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [createRun("wide-run", "running")], recent: [] }),
-				refreshMs: 1000,
-			},
-		);
-
-		try {
-			const lines = component.render(202);
-			assert.ok(lines.some((line) => visibleWidth(line) === 140), "expected overlay to grow beyond the old 84-column width");
-		} finally {
-			component.dispose();
-		}
-	});
-
-	it("renders a clearer empty dashboard state", () => {
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [], recent: [] }),
-				refreshMs: 1000,
-			},
-		);
-
-		try {
-			const output = component.render(120).join("\n");
-			assert.match(output, /No subagent sessions found/);
-			assert.match(output, /No live or recent subagent runs yet/);
-			assert.match(output, /Start one with \/run, \/chain, \/parallel/);
-		} finally {
-			component.dispose();
-		}
+		await wait(25);
+		assert.ok(renderRequests >= 1, "expected auto-refresh to request a render");
+		component.dispose();
+		const before = renderRequests;
+		await wait(25);
+		assert.equal(renderRequests, before, "auto-refresh stops after dispose");
 	});
 
 	it("converts foreground controls from state in most-recent order", () => {
@@ -334,24 +402,5 @@ describe("SubagentsStatusComponent", () => {
 		const runs = foregroundRunsFromState({ foregroundControls: controls } as Pick<SubagentState, "foregroundControls">);
 		assert.deepEqual(runs.map((run) => run.id), ["newer", "older"]);
 		assert.equal(runs[0]?.currentTool, "bash");
-	});
-
-	it("stops auto-refreshing after dispose", async () => {
-		let renderRequests = 0;
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => { renderRequests++; }),
-			createTestTheme(),
-			() => {},
-			{
-				listRunsForOverlay: () => ({ active: [createRun("run-a", "running")], recent: [] }),
-				refreshMs: 10,
-			},
-		);
-
-		await wait(25);
-		component.dispose();
-		const before = renderRequests;
-		await wait(25);
-		assert.equal(renderRequests, before);
 	});
 });

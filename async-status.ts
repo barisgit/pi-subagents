@@ -141,7 +141,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 	};
 }
 
-function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
+export function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
 	const rank = (state: AsyncRunSummary["state"]): number => {
 		switch (state) {
 			case "running": return 0;

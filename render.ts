@@ -137,7 +137,7 @@ const AGENT_COLOR_MAP: Record<string, number> = {
 	crimson: 161,
 };
 
-function tintAgentName(name: string, color: string | undefined): string {
+export function tintAgentName(name: string, color: string | undefined): string {
 	if (!color) return name;
 	const trimmed = color.trim().toLowerCase();
 	let ansi = AGENT_COLOR_MAP[trimmed];
@@ -154,7 +154,7 @@ function tintAgentName(name: string, color: string | undefined): string {
 // Used only on the top-level parallel/chain/single header so the headline reads as
 // "the container is alive" without making every per-agent row spin too.
 const MULTI_SPINNER = ["\u2733", "\u2734", "\u2735", "\u2736", "\u2737", "\u2738", "\u2739", "\u273A", "\u273B", "\u273C", "\u273D"];
-function multiSpinnerFrame(): string {
+export function multiSpinnerFrame(): string {
 	return MULTI_SPINNER[Math.floor(Date.now() / WIDGET_ANIMATION_MS) % MULTI_SPINNER.length]!;
 }
 
