@@ -590,7 +590,7 @@ export class SubagentsStatusComponent implements Component {
 		this.lastRightWidth = rightWidth;
 
 		const scopeMarker = this.showAllSessions || !this.sessionCwd ? " · [all sessions]" : "";
-		const headerText = `Subagent runs · ${this.runs.length} total${scopeMarker} · use j/k to navigate · a all`;
+		const headerText = `Subagent runs · ${this.runs.length} total${scopeMarker}`;
 		const header = renderHeader(headerText, w, this.theme);
 
 		const now = Date.now();
@@ -642,7 +642,7 @@ export class SubagentsStatusComponent implements Component {
 		const above = rightTop;
 		const below = Math.max(0, rightLines.length - (rightTop + visibleRight.length));
 		const scrollInfo = formatScrollInfo(above, below);
-		const hints = "j/k move · J/K scroll · a all · q close";
+		const hints = "j/k move · g/G top/bot · J/K line · d/u half-pg · PgUp/PgDn page · enter open · a all · q close";
 		const footerText = scrollInfo ? `${scrollInfo}  ${hints}` : hints;
 		rows.push(renderFooter(truncateToWidth(footerText, Math.max(0, w - 2)), w, this.theme));
 		return rows;

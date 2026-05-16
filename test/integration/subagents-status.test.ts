@@ -124,12 +124,14 @@ describe("SubagentsStatusComponent", () => {
 			try {
 				const output = component.render(120).join("\n");
 				assert.match(output, /Subagent runs · 1 total/);
-				assert.match(output, /use j\/k to navigate/);
 				assert.match(output, /> .* waiter · running/);
 				assert.match(output, /─── Step 1: waiter ───/);
 				assert.match(output, /→ bash .* · 400ms/);
 				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
-				assert.match(output, /j\/k move · J\/K scroll · a all · q close/);
+				assert.match(output, /j\/k move/);
+				assert.match(output, /PgUp\/PgDn page/);
+				assert.match(output, /a all/);
+				assert.match(output, /q close/);
 			} finally {
 				component.dispose();
 			}
