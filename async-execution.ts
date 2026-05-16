@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { resolveAgentColor, type AgentConfig } from "./agents.ts";
+import { formatRunHandle } from "./run-shape.ts";
 import { applyThinkingSuffix } from "./pi-args.ts";
 import { injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.ts";
 import { isParallelStep, resolveStepBehavior, type ChainStep, type SequentialStep, type StepOverrides } from "./settings.ts";
@@ -394,11 +395,23 @@ export function executeAsyncChain(
 		});
 	}
 
-	const chainDesc = chain
-		.map((s) =>
-			isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : (s as SequentialStep).agent,
-		)
-		.join(" -> ");
+	// A 'chain' of one parallel-only step is really top-level parallel — label and
+	// type it as such so the spawn confirmation and downstream UI don't lie.
+	const onlyStep = chain.length === 1 ? chain[0]! : undefined;
+	if (onlyStep && isParallelStep(onlyStep)) {
+		const parallelAgents = onlyStep.parallel.map((t) => t.agent);
+		const handle = formatRunHandle({ mode: "parallel", agents: parallelAgents, style: "verbose" });
+		return {
+			content: [{ type: "text", text: `Async parallel: ${handle} [${id}]` }],
+			details: { mode: "parallel", results: [], asyncId: id, asyncDir },
+		};
+	}
+
+	// Pre-render any nested parallel sub-step so chain agents[] contains one token per step.
+	const chainTokens = chain.map((s) =>
+		isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : (s as SequentialStep).agent,
+	);
+	const chainDesc = formatRunHandle({ mode: "chain", agents: chainTokens, style: "verbose" });
 
 	return {
 		content: [{ type: "text", text: `Async chain: ${chainDesc} [${id}]` }],

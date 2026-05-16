@@ -275,7 +275,9 @@ export interface LiveStepProgress {
 
 export interface AsyncStatus {
 	runId: string;
-	mode: "single" | "chain";
+	// 'parallel' is used when the runner is invoked with a single parallel-only step;
+	// distinguishes top-level parallel from a real multi-step chain for display.
+	mode: "single" | "chain" | "parallel";
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -319,7 +321,7 @@ export interface AsyncJobState {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
-	mode?: "single" | "chain";
+	mode?: "single" | "chain" | "parallel";
 	agents?: string[];
 	currentStep?: number;
 	stepsTotal?: number;
@@ -339,6 +341,9 @@ export interface AsyncJobState {
 	 */
 	currentAgent?: string;
 	agentColor?: string;
+	// Per-step colors aligned by index with `agents[]`. Used for parallel runs where
+	// each sibling has its own theme color. Populated from status.steps[i].live.color.
+	agentColors?: string[];
 	thinking?: string;
 	currentToolArgs?: string;
 	recentTools?: Array<{ tool: string; args?: string; endMs: number; durationMs?: number }>;

@@ -19,6 +19,8 @@ export interface AsyncRunStepSummary {
 	model?: string;
 	attemptedModels?: string[];
 	error?: string;
+	// Theme color token for the agent name; mirrored from status.steps[i].live.color.
+	color?: string;
 }
 
 export interface AsyncRunSummary {
@@ -29,7 +31,7 @@ export interface AsyncRunSummary {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
-	mode: "single" | "chain";
+	mode: "single" | "chain" | "parallel";
 	cwd?: string;
 	startedAt: number;
 	lastUpdate?: number;
@@ -132,6 +134,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 				...(step.model ? { model: step.model } : {}),
 				...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 				...(step.error ? { error: step.error } : {}),
+				...(step.live?.color ? { color: step.live.color } : {}),
 			};
 		}),
 		...(status.sessionDir ? { sessionDir: status.sessionDir } : {}),
@@ -154,9 +157,10 @@ export function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
 	return [...runs].sort((a, b) => {
 		const byState = rank(a.state) - rank(b.state);
 		if (byState !== 0) return byState;
-		const aTime = a.lastUpdate ?? a.endedAt ?? a.startedAt;
-		const bTime = b.lastUpdate ?? b.endedAt ?? b.startedAt;
-		return bTime - aTime;
+		// Stable order by spawn time (newest first). Using updatedAt makes rows leap
+		// every poll tick as activity bumps them up; startedAt is the natural mental
+		// model for users tracking 'the run I just spawned'.
+		return b.startedAt - a.startedAt;
 	});
 }
 
@@ -190,7 +194,7 @@ export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): 
 	const all = listAsyncRuns(asyncDirRoot);
 	const recent = all
 		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused")
-		.sort((a, b) => (b.lastUpdate ?? b.endedAt ?? b.startedAt) - (a.lastUpdate ?? a.endedAt ?? a.startedAt))
+		.sort((a, b) => b.startedAt - a.startedAt)
 		.slice(0, recentLimit);
 	return {
 		active: all.filter((run) => run.state === "queued" || run.state === "running"),

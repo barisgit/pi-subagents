@@ -380,7 +380,7 @@ describe("SubagentsStatusComponent", () => {
 		assert.equal(renderRequests, before, "auto-refresh stops after dispose");
 	});
 
-	it("converts foreground controls from state in most-recent order", () => {
+	it("converts foreground controls from state in spawn-time order (newest first)", () => {
 		const controls = new Map<string, SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never>();
 		controls.set("older", {
 			runId: "older",
@@ -392,7 +392,7 @@ describe("SubagentsStatusComponent", () => {
 		controls.set("newer", {
 			runId: "newer",
 			mode: "chain",
-			startedAt: 100,
+			startedAt: 200,
 			updatedAt: 300,
 			currentAgent: "planner",
 			currentTool: "bash",

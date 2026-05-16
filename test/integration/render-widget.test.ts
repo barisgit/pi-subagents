@@ -43,26 +43,48 @@ describe("subagent async widget rendering", () => {
 		assert.deepEqual(buildWidgetLines([], theme, 120), []);
 	});
 
-	it("shows header and summary with running and queued counts", () => {
+	it("renders one row per job under the header", () => {
 		const lines = buildWidgetLines([
-			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["scout"] },
-			{ asyncId: "run-2", asyncDir: "/tmp/2", status: "running", agents: ["planner"] },
-			{ asyncId: "queued-1", asyncDir: "/tmp/q", status: "queued", agents: ["reviewer"] },
-		], theme, 120);
+			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["scout"], currentAgent: "scout" },
+			{ asyncId: "run-2", asyncDir: "/tmp/2", status: "running", agents: ["planner"], currentAgent: "planner" },
+			{ asyncId: "queued-1", asyncDir: "/tmp/q", status: "queued", agents: ["reviewer"], currentAgent: "reviewer" },
+		], theme, 200);
 
-		assert.equal(lines.length, 2);
+		// header + 3 job rows + trailing blank for vertical breathing room.
+		assert.equal(lines.length, 5);
 		assert.ok(lines[0]!.includes("Agents"), "header should include 'Agents'");
-		assert.match(lines[1]!, /2 running/);
-		assert.match(lines[1]!, /1 queued/);
+		assert.match(lines[1]!, /scout/);
+		assert.match(lines[2]!, /planner/);
+		assert.match(lines[3]!, /reviewer/);
+		assert.equal(lines[4], "", "trailing newline");
 	});
 
-	it("shows need-attention count when any running job is in needs_attention", () => {
-		const lines = buildWidgetLines([
-			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["scout"], activityState: "needs_attention" },
-		], theme, 120);
+	it("caps visible rows at MAX_WIDGET_JOBS and adds an overflow line", () => {
+		const jobs = Array.from({ length: 7 }, (_, i) => ({
+			asyncId: `run-${i}`,
+			asyncDir: `/tmp/${i}`,
+			status: "running" as const,
+			agents: [`agent${i}`],
+			currentAgent: `agent${i}`,
+		}));
+		const lines = buildWidgetLines(jobs, theme, 200);
+		// header + 4 visible + 1 overflow line + 1 trailing blank = 7.
+		assert.equal(lines.length, 7);
+		assert.match(lines[5]!, /\+3 more/);
+		assert.equal(lines[6], "");
+	});
 
-		assert.equal(lines.length, 2);
-		assert.match(lines[1]!, /1 need attention/);
+	it("pins needs_attention rows to the top of the running bucket", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "calm", asyncDir: "/tmp/a", status: "running", agents: ["calm"], currentAgent: "calm" },
+			{ asyncId: "alert", asyncDir: "/tmp/b", status: "running", agents: ["alert"], currentAgent: "alert", activityState: "needs_attention" },
+		], theme, 200);
+
+		// header + 2 rows + trailing blank.
+		assert.equal(lines.length, 4);
+		assert.match(lines[1]!, /alert/, "needs_attention row should come first");
+		assert.match(lines[2]!, /calm/);
+		assert.equal(lines[3], "");
 	});
 
 	it("does not animate queued-only widgets", async () => {
@@ -129,16 +151,19 @@ describe("subagent async widget rendering", () => {
 		const ui = createUiContext();
 		try {
 			renderWidget(ui.ctx as never, [{ asyncId: "run-anim", asyncDir: "/tmp/run", status: "running", agents: ["scout"] }]);
-			const initialWidgetCount = ui.widgets.length;
+			// Widget is now installed via a factory: a single setWidget call registers
+			// the component, and the animation loop just calls requestRender(). So we
+			// assert renderRequests grow instead of widgets growing.
+			assert.equal(ui.widgets.length, 1, "factory should be registered exactly once");
+			const initialRenderRequests = ui.renderRequests;
 			await new Promise((resolve) => setTimeout(resolve, 190));
-			assert.ok(ui.widgets.length > initialWidgetCount, "animation should refresh widget lines");
-			assert.ok(ui.renderRequests > 0, "animation should request UI renders");
+			assert.ok(ui.renderRequests > initialRenderRequests, "animation should request UI renders");
 
 			renderWidget(ui.ctx as never, []);
-			const afterClearCount = ui.widgets.length;
+			const clearedRenderRequests = ui.renderRequests;
 			await new Promise((resolve) => setTimeout(resolve, 190));
-			assert.equal(ui.widgets.length, afterClearCount, "cleared widget should stop animating");
-			assert.equal(ui.widgets.at(-1), undefined);
+			assert.equal(ui.renderRequests, clearedRenderRequests, "cleared widget should stop animating");
+			assert.equal(ui.widgets.at(-1), undefined, "clearing should send undefined");
 		} finally {
 			stopWidgetAnimation();
 		}

@@ -137,6 +137,9 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.updatedAt = status.lastUpdate ?? Date.now();
 						if (status.steps?.length) {
 							job.agents = status.steps.map((step) => step.agent);
+							// Mirror per-step colors so widget/dashboard can tint each sibling in a
+							// parallel run with its own color. Undefined slots stay undefined.
+							job.agentColors = status.steps.map((step) => step.live?.color);
 						}
 						job.sessionDir = status.sessionDir ?? job.sessionDir;
 						job.outputFile = status.outputFile ?? job.outputFile;

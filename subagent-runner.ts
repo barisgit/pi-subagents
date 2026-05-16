@@ -44,6 +44,7 @@ import { formatModelAttemptNote, isRetryableModelFailure } from "./model-fallbac
 import { attachPostExitStdioGuard, trySignalChild } from "./post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "./utils.ts";
 import { parseSessionTokens, type TokenUsage } from "./session-tokens.ts";
+import { formatRunHandle } from "./run-shape.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -535,7 +536,7 @@ function writeRunLog(
 	logPath: string,
 	input: {
 		id: string;
-		mode: "single" | "chain";
+		mode: "single" | "chain" | "parallel";
 		cwd: string;
 		startedAt: number;
 		endedAt: number;
@@ -765,7 +766,7 @@ async function runSingleStep(
 
 type RunnerStatusPayload = {
 	runId: string;
-	mode: "single" | "chain";
+	mode: "single" | "chain" | "parallel";
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -926,9 +927,16 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const sessionEnabled = Boolean(config.sessionDir)
 		|| shareEnabled
 		|| flatSteps.some((step) => Boolean(step.sessionFile));
+	// 'parallel' when the input is a single parallel group; 'chain' for multi-step;
+	// 'single' otherwise. Distinguishes top-level parallel from a real chain so the UI
+	// can label it correctly.
+	const runMode: "single" | "chain" | "parallel" =
+		steps.length === 1 && isParallelGroup(steps[0]!) ? "parallel"
+			: flatSteps.length > 1 ? "chain"
+				: "single";
 	const statusPayload: RunnerStatusPayload = {
 		runId: id,
-		mode: flatSteps.length > 1 ? "chain" : "single",
+		mode: runMode,
 		state: "running",
 		lastActivityAt: overallStartTime,
 		startedAt: overallStartTime,
@@ -1196,6 +1204,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 						appendJsonl(eventsPath, JSON.stringify({
 							type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent,
+							task: task.task,
 						}));
 
 						const taskSessionDir = config.sessionDir
@@ -1329,6 +1338,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				runId: id,
 				stepIndex: flatIndex,
 				agent: seqStep.agent,
+				task: seqStep.task,
 			}));
 
 			const singleResult = await runSingleStep(seqStep, {
@@ -1430,9 +1440,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		}
 	}
 
-	const agentName = flatSteps.length === 1
-		? flatSteps[0].agent
-		: `chain:${flatSteps.map((s) => s.agent).join("->")}`;
+	// Shape-aware label so the completion notification matches the runtime mode
+	// (parallel uses 'parallel:' with '+', chain uses 'chain:' with '->').
+	const agentName = formatRunHandle({ mode: runMode, agents: flatSteps.map((s) => s.agent) });
 	let sessionFile: string | undefined;
 	let shareUrl: string | undefined;
 	let gistUrl: string | undefined;

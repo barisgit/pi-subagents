@@ -9,9 +9,11 @@ import {
 	type AgentProgress,
 	type AsyncJobState,
 	type Details,
+	MAX_WIDGET_JOBS,
 	WIDGET_KEY,
 } from "./types.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
+import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { getDisplayItems, getSingleResultOutput } from "./utils.ts";
 
 type Theme = ExtensionContext["ui"]["theme"];
@@ -535,32 +537,111 @@ function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
 	return jobs.some((job) => job.status === "running");
 }
 
+function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
+	if (job.activityState === "needs_attention") return theme.fg("warning", "!");
+	if (job.status === "running") return theme.fg("accent", multiSpinnerFrame());
+	if (job.status === "queued") return theme.fg("dim", "·");
+	if (job.status === "paused") return theme.fg("warning", "⏸");
+	if (job.status === "failed") return theme.fg("error", "×");
+	return theme.fg("success", "✓");
+}
+
+function widgetJobName(job: AsyncJobState, theme: Theme): string {
+	// Parallel runs race N children; `currentAgent` would be misleading (it's just the
+	// most recent step's agent). Show the parallel shape and unique agents instead, with
+	// each agent piece tinted by its own color when available.
+	const desc = describeAgentLabel({
+		mode: job.mode,
+		agents: job.agents ?? [],
+		agentColors: job.agentColors,
+		fallbackName: job.currentAgent ?? job.agents?.[0] ?? "agent",
+		fallbackColor: job.agentColor,
+	});
+	const tint = (text: string, color: string | undefined): string => {
+		const bold = theme.bold(text);
+		return color ? tintAgentName(bold, color) : theme.fg("toolTitle", bold);
+	};
+	if (desc.kind === "uniformParallel") return tint(`parallel(${desc.total})`, desc.color);
+	if (desc.kind === "mixedParallel") {
+		return desc.agents.map((a) => tint(a.name, a.color)).join(theme.fg("dim", "+"));
+	}
+	return tint(desc.name, desc.color);
+}
+
+function widgetJobStats(job: AsyncJobState, theme: Theme): string {
+	const parts: string[] = [];
+	const stepsTotal = job.stepsTotal ?? job.agents?.length ?? 1;
+	// Label distinguishes chain (sequential multi-step) from parallel (concurrent children).
+	const badge = formatShapeBadge({
+		mode: job.mode,
+		total: stepsTotal,
+		current: (job.currentStep ?? 0) + 1,
+		fallbackLabel: "step",
+	});
+	if (badge) parts.push(badge);
+	if (job.totalTokens?.total) parts.push(formatTokenStat(job.totalTokens.total));
+	if (job.startedAt) {
+		const endTs = job.status === "running" || job.status === "queued" ? Date.now() : (job.updatedAt ?? Date.now());
+		parts.push(formatDuration(Math.max(0, endTs - job.startedAt)));
+	}
+	return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
+}
+
 export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = getTermWidth()): string[] {
 	if (jobs.length === 0) return [];
-	const running = jobs.filter((job) => job.status === "running");
-	const queued = jobs.filter((job) => job.status === "queued");
-	const finished = jobs.filter((job) => job.status !== "running" && job.status !== "queued");
-	const needsAttention = jobs.filter((job) => job.status === "running" && job.activityState === "needs_attention").length;
 
-	const hasActive = running.length > 0 || queued.length > 0;
-	const header = truncLine(`${theme.fg(hasActive ? "accent" : "dim", hasActive ? "●" : "○")} ${theme.fg(hasActive ? "accent" : "dim", "Agents")} ${theme.fg("dim", "· /subagents-status")}`, width);
+	// Single ordering rule: needs_attention pinned to the very top, then strictly by
+	// spawn time (newest first). Bucket-by-status would pin old failures above
+	// recently completed/running runs, which fights the user's mental model. The
+	// glyph on each row already communicates status.
+	const sorted = [...jobs].sort((a, b) => {
+		const attnA = a.activityState === "needs_attention" ? 0 : 1;
+		const attnB = b.activityState === "needs_attention" ? 0 : 1;
+		if (attnA !== attnB) return attnA - attnB;
+		return (b.startedAt ?? 0) - (a.startedAt ?? 0);
+	});
+	const visible = sorted.slice(0, MAX_WIDGET_JOBS);
+	const overflow = sorted.length - visible.length;
 
-	const parts: string[] = [theme.fg("dim", `${running.length} running`)];
-	if (queued.length > 0) parts.push(theme.fg("dim", `${queued.length} queued`));
-	if (finished.length > 0) parts.push(theme.fg("dim", `${finished.length} done`));
-	if (needsAttention > 0) parts.push(theme.fg("warning", `${needsAttention} need attention`));
-	const summaryText = parts.join(" · ");
-	const spinnerOrGlyph = running.length > 0
-		? theme.fg("accent", multiSpinnerFrame())
-		: theme.fg("dim", "○");
-	const summary = truncLine(`${theme.fg("dim", "└─")} ${spinnerOrGlyph} ${summaryText}`, width);
+	const running = jobs.filter((job) => job.status === "running").length;
+	const queued = jobs.filter((job) => job.status === "queued").length;
+	const hasActive = running > 0 || queued > 0;
+	const headerGlyph = theme.fg(hasActive ? "accent" : "dim", hasActive ? "●" : "○");
+	const headerText = `${headerGlyph} ${theme.fg(hasActive ? "accent" : "dim", "Agents")} ${theme.fg("dim", "· /subagents-status")}`;
+	const lines: string[] = [truncLine(headerText, width)];
 
-	return [header, summary];
+	for (let i = 0; i < visible.length; i++) {
+		const job = visible[i]!;
+		const isLast = i === visible.length - 1 && overflow === 0;
+		const branch = theme.fg("dim", isLast ? "└─" : "├─");
+		const glyph = widgetJobGlyph(job, theme);
+		const name = widgetJobName(job, theme);
+		const stats = widgetJobStats(job, theme);
+		const statsPart = stats ? ` ${theme.fg("dim", "·")} ${stats}` : "";
+		lines.push(truncLine(`${branch} ${glyph} ${name}${statsPart}`, width));
+	}
+
+	if (overflow > 0) {
+		lines.push(truncLine(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${overflow} more`)}`, width));
+	}
+	// Trailing blank line for vertical breathing room between widget and prompt.
+	lines.push("");
+
+	return lines;
+}
+
+// Widget is registered via a factory so the returned Component's render() lines
+// pass through unwrapped (no `Text(line, 1, 0)` margin-collapse that would eat
+// trailing blank rows). Mirrors the pi-dag-tasks pattern.
+function buildWidgetComponent(theme: Theme): Component {
+	return {
+		render: (width: number) => buildWidgetLines(latestWidgetJobs, theme, width),
+		invalidate: () => { /* no cached state */ },
+	};
 }
 
 function refreshAnimatedWidget(): void {
 	if (!latestWidgetCtx?.hasUI || latestWidgetJobs.length === 0) return;
-	latestWidgetCtx.ui.setWidget(WIDGET_KEY, buildWidgetLines(latestWidgetJobs, latestWidgetCtx.ui.theme));
 	latestWidgetCtx.ui.requestRender?.();
 }
 
@@ -609,7 +690,9 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 	latestWidgetCtx = ctx;
 	latestWidgetJobs = [...jobs];
 
-	ctx.ui.setWidget(WIDGET_KEY, buildWidgetLines(jobs, ctx.ui.theme));
+	// Factory delivers a Component; latestWidgetJobs is captured by closure so the
+	// same factory continues to render fresh data on each animation tick.
+	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => buildWidgetComponent(theme));
 	if (hasAnimatedWidgetJobs(jobs)) ensureWidgetAnimation();
 	else stopWidgetAnimation();
 }
