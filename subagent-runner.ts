@@ -767,6 +767,12 @@ async function runSingleStep(
 type RunnerStatusPayload = {
 	runId: string;
 	mode: "single" | "chain" | "parallel";
+	/**
+	 * Caller-provided run-level summary. Set when the run is single, or when every
+	 * parallel step shares the same label; otherwise undefined and per-step labels
+	 * carry the meaning.
+	 */
+	label?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -780,6 +786,7 @@ type RunnerStatusPayload = {
 	currentStep: number;
 	steps: Array<{
 		agent: string;
+		label?: string;
 		status: "pending" | "running" | "complete" | "failed";
 		activityState?: ActivityState;
 		lastActivityAt?: number;
@@ -934,9 +941,21 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		steps.length === 1 && isParallelGroup(steps[0]!) ? "parallel"
 			: flatSteps.length > 1 ? "chain"
 				: "single";
+	// Run-level label: present for single runs and uniform-label parallel runs.
+	// For chains or mixed-label parallel groups the per-step labels carry the meaning.
+	const runLabel: string | undefined = (() => {
+		if (runMode === "single") return flatSteps[0]?.label || undefined;
+		if (runMode === "parallel") {
+			const first = flatSteps[0]?.label;
+			if (!first) return undefined;
+			return flatSteps.every((s) => s.label === first) ? first : undefined;
+		}
+		return undefined;
+	})();
 	const statusPayload: RunnerStatusPayload = {
 		runId: id,
 		mode: runMode,
+		...(runLabel ? { label: runLabel } : {}),
 		state: "running",
 		lastActivityAt: overallStartTime,
 		startedAt: overallStartTime,
@@ -946,6 +965,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		currentStep: 0,
 		steps: flatSteps.map((step) => ({
 			agent: step.agent,
+			...(step.label ? { label: step.label } : {}),
 			status: "pending",
 			skills: step.skills,
 			model: step.model,
@@ -1205,6 +1225,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						appendJsonl(eventsPath, JSON.stringify({
 							type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent,
 							task: task.task,
+							...(task.label ? { label: task.label } : {}),
 						}));
 
 						const taskSessionDir = config.sessionDir
@@ -1339,6 +1360,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				stepIndex: flatIndex,
 				agent: seqStep.agent,
 				task: seqStep.task,
+				...(seqStep.label ? { label: seqStep.label } : {}),
 			}));
 
 			const singleResult = await runSingleStep(seqStep, {

@@ -181,6 +181,8 @@ export interface ModelAttempt {
 export interface SingleResult {
 	agent: string;
 	task: string;
+	/** Caller-provided short label (5-10 words) describing this step. Optional. */
+	label?: string;
 	exitCode: number;
 	detached?: boolean;
 	detachedReason?: string;
@@ -208,6 +210,8 @@ export interface SingleResult {
 export interface Details {
 	mode: "single" | "parallel" | "chain" | "management";
 	context?: "fresh" | "fork";
+	/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
+	label?: string;
 	results: SingleResult[];
 	controlEvents?: ControlEvent[];
 	asyncId?: string;
@@ -278,6 +282,8 @@ export interface AsyncStatus {
 	// 'parallel' is used when the runner is invoked with a single parallel-only step;
 	// distinguishes top-level parallel from a real multi-step chain for display.
 	mode: "single" | "chain" | "parallel";
+	/** Run-level caller-provided summary; populated for single runs and uniform-label parallel runs. */
+	label?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -291,6 +297,7 @@ export interface AsyncStatus {
 	currentStep?: number;
 	steps?: Array<{
 		agent: string;
+		label?: string;
 		status: string;
 		activityState?: ActivityState;
 		lastActivityAt?: number;
@@ -323,6 +330,10 @@ export interface AsyncJobState {
 	currentToolStartedAt?: number;
 	mode?: "single" | "chain" | "parallel";
 	agents?: string[];
+	/** Run-level caller-provided summary; populated for single runs and uniform-label parallel runs. */
+	label?: string;
+	/** Per-step caller-provided labels aligned by index with `agents[]`. */
+	agentLabels?: string[];
 	currentStep?: number;
 	stepsTotal?: number;
 	startedAt?: number;
@@ -360,6 +371,10 @@ export interface SubagentState {
 		mode: "single" | "parallel" | "chain";
 		startedAt: number;
 		updatedAt: number;
+		/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
+		label?: string;
+		/** Per-step caller-provided labels aligned by index. */
+		agentLabels?: string[];
 		currentAgent?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
@@ -435,6 +450,8 @@ export interface ForkReuseConfig {
 export interface RunSyncOptions {
 	cwd?: string;
 	signal?: AbortSignal;
+	/** Caller-provided short label for this step. Stamped onto the produced SingleResult. */
+	label?: string;
 	interruptSignal?: AbortSignal;
 	allowIntercomDetach?: boolean;
 	intercomEvents?: IntercomEventBus;

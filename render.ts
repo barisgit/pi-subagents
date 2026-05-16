@@ -561,11 +561,21 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 		const bold = theme.bold(text);
 		return color ? tintAgentName(bold, color) : theme.fg("toolTitle", bold);
 	};
-	if (desc.kind === "uniformParallel") return tint(`parallel(${desc.total})`, desc.color);
-	if (desc.kind === "mixedParallel") {
-		return desc.agents.map((a) => tint(a.name, a.color)).join(theme.fg("dim", "+"));
+	let base: string;
+	if (desc.kind === "uniformParallel") base = tint(`parallel(${desc.total})`, desc.color);
+	else if (desc.kind === "mixedParallel") {
+		base = desc.agents.map((a) => tint(a.name, a.color)).join(theme.fg("dim", "+"));
+	} else {
+		base = tint(desc.name, desc.color);
 	}
-	return tint(desc.name, desc.color);
+	// Run-level label: shown for single runs and uniform-label parallel runs.
+	// Per-step labels surface in the dashboard right pane and in mixed-parallel
+	// widget rows where a single run-level label would be a lie.
+	if (job.label) {
+		const trimmed = truncLine(job.label, 30);
+		base += ` ${theme.fg("dim", "·")} ${theme.fg("muted", trimmed)}`;
+	}
+	return base;
 }
 
 function widgetJobStats(job: AsyncJobState, theme: Theme): string {
@@ -722,7 +732,8 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const headGlyph = isRunning ? theme.fg("accent", multiSpinnerFrame()) : resultGlyph(r, output, theme, isRunning);
 	const boldName = theme.bold(r.agent);
 	const tintedName = r.progress?.color ? tintAgentName(boldName, r.progress.color) : theme.fg("toolTitle", boldName);
-	const headBase = `${headGlyph} ${tintedName}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
+	const labelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
+	const headBase = `${headGlyph} ${tintedName}${contextBadge}${labelTail}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
 	c.addChild(new Text(truncLine(rightAlignSuffix(headBase, spark, width), width), 0, 0));
 
 	if (isRunning && r.progress) {
@@ -797,7 +808,14 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	// Only emit the '· stats' tail when stats is non-empty (prevents a hanging '· ' on empty early frames).
 	const statsTail = stats ? ` ${theme.fg("dim", "·")} ${stats}` : "";
 	const headlinePrefix = chainBarPrefix ? ` ${chainBarPrefix}` : "";
-	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${headlinePrefix}${statsTail}`, width), 0, 0));
+	const uniformLabel = (() => {
+		if (d.label) return d.label;
+		const first = d.results[0]?.label;
+		if (!first) return undefined;
+		return d.results.every((r) => r.label === first) ? first : undefined;
+	})();
+	const headLabelTail = uniformLabel ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(uniformLabel, 30))}` : "";
+	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`, width), 0, 0));
 
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
@@ -845,7 +863,8 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		const rowColor = r.progress?.color
 			?? (progressFromArray && "color" in progressFromArray ? (progressFromArray as { color?: string }).color : undefined);
 		const coloredName = rowColor ? tintAgentName(rowBoldName, rowColor) : rowBoldName;
-		const lineBase = `  ${glyph} ${itemTitle} ${stepNumber}: ${coloredName}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
+		const rowLabelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
+		const lineBase = `  ${glyph} ${itemTitle} ${stepNumber}: ${coloredName}${rowLabelTail}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
 		c.addChild(new Text(truncLine(rightAlignSuffix(lineBase, spark, width), width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
 			const fullProg = r.progress ?? (progressFromArray && "recentTools" in progressFromArray ? progressFromArray as AgentProgress : undefined);

@@ -160,6 +160,7 @@ async function runSingleAttempt(
 	const result: SingleResult = {
 		agent: agent.name,
 		task,
+		...(options.label ? { label: options.label } : {}),
 		exitCode: 0,
 		messages: [],
 		usage: emptyUsage(),

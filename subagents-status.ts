@@ -36,6 +36,10 @@ export interface ForegroundRunSummary {
 	mode: "single" | "parallel" | "chain";
 	startedAt: number;
 	lastUpdate?: number;
+	/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
+	label?: string;
+	/** Per-step caller-provided labels aligned by index. */
+	agentLabels?: string[];
 	currentAgent?: string;
 	currentIndex?: number;
 	recentTools?: Array<{ tool: string; args?: string; endMs?: number }>;
@@ -66,6 +70,8 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 			mode: control.mode,
 			startedAt: control.startedAt,
 			lastUpdate: control.updatedAt,
+			...(control.label ? { label: control.label } : {}),
+			...(control.agentLabels ? { agentLabels: control.agentLabels } : {}),
 			...(control.currentAgent ? { currentAgent: control.currentAgent } : {}),
 			...(control.currentIndex !== undefined ? { currentIndex: control.currentIndex } : {}),
 			...(control.recentTools ? { recentTools: control.recentTools } : {}),
@@ -200,7 +206,10 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const elapsed = runElapsed(run, now);
 	const badge = runShapeBadge(run);
 	const badgePart = badge ? ` · ${theme.fg("dim", badge)}` : "";
-	const text = `${cursor}${glyph} ${agent} · ${status}${badgePart} · ${elapsed}`;
+	const labelPart = run.run.label
+		? ` · ${theme.fg("muted", truncateToWidth(run.run.label, 30))}`
+		: "";
+	const text = `${cursor}${glyph} ${agent} · ${status}${badgePart}${labelPart} · ${elapsed}`;
 	return truncateToWidth(text, width);
 }
 
@@ -213,7 +222,7 @@ function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number):
 	// Parallel runs share one events.jsonl with N children writing concurrently,
 	// each tagged with its own stepIndex. Render order chronological-within-step
 	// so each step reads as a coherent block instead of interleaved noise.
-	type Step = { index: number; agent: string; startTs?: number; lines: string[]; final?: string; ended?: boolean; task?: string };
+	type Step = { index: number; agent: string; startTs?: number; lines: string[]; final?: string; ended?: boolean; task?: string; label?: string };
 	const steps = new Map<number, Step>();
 	const ensureStep = (index: number, agent: string): Step => {
 		let s = steps.get(index);
@@ -230,6 +239,7 @@ function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number):
 			const step = ensureStep(event.stepIndex, event.agent);
 			if (!step.startTs) step.startTs = event.ts;
 			if (event.task && !step.task) step.task = event.task;
+			if (event.label && !step.label) step.label = event.label;
 			continue;
 		}
 		if (event.kind === "tool") {
@@ -273,6 +283,9 @@ function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number):
 	const stepWord = run.source === "async" && run.run.mode === "parallel" ? "Task" : "Step";
 	for (const step of ordered) {
 		out.push(theme.fg("accent", truncateToWidth(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
+		if (step.label) {
+			out.push(theme.fg("muted", truncateToWidth(`Label: ${step.label}`, width)));
+		}
 		if (step.task) {
 			out.push(theme.fg("dim", truncateToWidth("→ prompt:", width)));
 			for (const wrapped of wrapText(step.task, width)) out.push(theme.fg("muted", wrapped));

@@ -8,6 +8,7 @@ import { readStatus } from "./utils.ts";
 export interface AsyncRunStepSummary {
 	index: number;
 	agent: string;
+	label?: string;
 	status: string;
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -26,6 +27,7 @@ export interface AsyncRunStepSummary {
 export interface AsyncRunSummary {
 	id: string;
 	asyncDir: string;
+	label?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -106,6 +108,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 	return {
 		id: status.runId || path.basename(asyncDir),
 		asyncDir,
+		...(status.label ? { label: status.label } : {}),
 		state: status.state,
 		activityState,
 		lastActivityAt,
@@ -123,6 +126,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			return {
 				index,
 				agent: step.agent,
+				...(step.label ? { label: step.label } : {}),
 				status: step.status,
 				...(stepActivityState ? { activityState: stepActivityState } : {}),
 				...(stepLastActivityAt ? { lastActivityAt: stepLastActivityAt } : {}),

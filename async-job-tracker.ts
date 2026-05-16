@@ -131,6 +131,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.currentTool = isTerminalAsyncStatus(job.status) ? undefined : (status.currentTool ?? job.currentTool);
 						job.currentToolStartedAt = isTerminalAsyncStatus(job.status) ? undefined : (status.currentToolStartedAt ?? job.currentToolStartedAt);
 						job.mode = status.mode;
+						if (status.label !== undefined) job.label = status.label;
 						job.currentStep = status.currentStep ?? job.currentStep;
 						job.stepsTotal = status.steps?.length ?? job.stepsTotal;
 						job.startedAt = status.startedAt ?? job.startedAt;
@@ -140,6 +141,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 							// Mirror per-step colors so widget/dashboard can tint each sibling in a
 							// parallel run with its own color. Undefined slots stay undefined.
 							job.agentColors = status.steps.map((step) => step.live?.color);
+							job.agentLabels = status.steps.map((step) => step.label);
 						}
 						job.sessionDir = status.sessionDir ?? job.sessionDir;
 						job.outputFile = status.outputFile ?? job.outputFile;

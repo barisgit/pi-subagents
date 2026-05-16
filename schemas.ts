@@ -33,6 +33,7 @@ const MetadataSchema = Type.Record(Type.String(), Type.Any(), {
 export const TaskItem = Type.Object({ 
 	agent: Type.Optional(Type.String({ description: "Agent; optional with top-level agent." })), 
 	task: Type.String(), 
+	label: Type.Optional(Type.String({ description: "Short 5-10 word summary of what this subagent will do. Shown in widgets and status overlays. Optional." })),
 	cwd: Type.Optional(Type.String()),
 	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat task N times." })),
 	model: Type.Optional(Type.String({ description: "Model override" })),
@@ -43,6 +44,7 @@ export const TopLevelTaskItem = Type.Union([
 	Type.Object({
 		agent: Type.Optional(Type.String({ description: "Agent; optional with top-level agent." })),
 		task: Type.String(),
+		label: Type.Optional(Type.String({ description: "Short 5-10 word summary of what this subagent will do. Shown in widgets and status overlays. Optional." })),
 		cwd: Type.Optional(Type.String()),
 		count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat task N times." })),
 		model: Type.Optional(Type.String({ description: "Model override" })),
@@ -59,6 +61,7 @@ export const SequentialStepSchema = Type.Object({
 	task: Type.Optional(Type.String({ 
 		description: "Task template; supports {task}, {previous}, {chain_dir}." 
 	})),
+	label: Type.Optional(Type.String({ description: "Short 5-10 word summary of what this subagent will do. Shown in widgets and status overlays. Optional." })),
 	cwd: Type.Optional(Type.String()),
 	output: Type.Optional(OutputOverride),
 	reads: Type.Optional(ReadsOverride),
@@ -71,6 +74,7 @@ export const SequentialStepSchema = Type.Object({
 export const ParallelTaskSchema = Type.Object({
 	agent: Type.String(),
 	task: Type.Optional(Type.String({ description: "Task template; supports {task}, {previous}, {chain_dir}." })),
+	label: Type.Optional(Type.String({ description: "Short 5-10 word summary of what this subagent will do. Shown in widgets and status overlays. Optional." })),
 	cwd: Type.Optional(Type.String()),
 	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat task N times." })),
 	output: Type.Optional(OutputOverride),
@@ -97,6 +101,7 @@ export const ChainItem = Type.Object({
 	task: Type.Optional(Type.String({
 		description: "Task template; supports {task}, {previous}, {chain_dir}."
 	})),
+	label: Type.Optional(Type.String({ description: "Short 5-10 word summary of what this subagent will do. Shown in widgets and status overlays. Optional." })),
 	cwd: Type.Optional(Type.String()),
 	output: Type.Optional(OutputOverride),
 	reads: Type.Optional(ReadsOverride),
@@ -125,6 +130,7 @@ export const ControlOverrides = Type.Object({
 export const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent name or management target" })),
 	task: Type.Optional(Type.String({ description: "Single-agent task; optional for self-contained agents" })),
+	label: Type.Optional(Type.String({ description: "Short 5-10 word summary of what this subagent will do. Shown in widgets and status overlays. Optional." })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({
 		description: "Action: list/get/create/update/delete/status/interrupt; omit for execution."

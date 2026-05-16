@@ -37,6 +37,8 @@ export interface StepOverrides {
 export interface SequentialStep {
 	agent: string;
 	task?: string;
+	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
+	label?: string;
 	cwd?: string;
 	output?: string | false;
 	reads?: string[] | false;
@@ -49,6 +51,8 @@ export interface SequentialStep {
 export interface ParallelTaskItem {
 	agent: string;
 	task?: string;
+	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
+	label?: string;
 	cwd?: string;
 	count?: number;
 	output?: string | false;

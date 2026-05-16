@@ -92,6 +92,8 @@ export interface AsyncChainParams {
 export interface AsyncSingleParams {
 	agent: string;
 	task?: string;
+	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
+	label?: string;
 	agentConfig: AgentConfig;
 	ctx: AsyncExecutionContext;
 	cwd?: string;
@@ -242,6 +244,7 @@ export function executeAsyncChain(
 			return {
 				agent: s.agent,
 				task,
+				...(s.label ? { label: s.label } : {}),
 				cwd: stepCwd,
 				inheritProjectContext: true,
 				inheritSkills: true,
@@ -277,6 +280,7 @@ export function executeAsyncChain(
 		return {
 			agent: s.agent,
 			task,
+			...(s.label ? { label: s.label } : {}),
 			cwd: stepCwd,
 			model: applyThinkingSuffix(primaryModel, a.thinking),
 			modelCandidates: buildModelCandidates(s.model ?? a.model, a.fallbackModels, availableModels, ctx.currentModelProvider).map((candidate) =>
@@ -317,6 +321,7 @@ export function executeAsyncChain(
 				parallel: s.parallel.map((t) => buildSeqStep({
 					agent: t.agent,
 					task: t.task,
+					label: t.label,
 					cwd: t.cwd,
 					skill: t.skill,
 					model: t.model,
@@ -327,7 +332,7 @@ export function executeAsyncChain(
 				worktree: s.worktree,
 			};
 		}
-		return buildSeqStep(s as SequentialStep, nextSessionFile());
+			return buildSeqStep(s as SequentialStep, nextSessionFile());
 	});
 	let childTargetIndex = 0;
 	const childIntercomTargets = childIntercomTarget ? steps.flatMap((step) => {
@@ -481,6 +486,7 @@ export function executeAsyncSingle(
 					{
 						agent,
 						task: taskWithOutputInstruction,
+						...(params.label ? { label: params.label } : {}),
 						cwd: runnerCwd,
 						model: forkReuse
 							? undefined

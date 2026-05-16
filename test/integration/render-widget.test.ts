@@ -74,6 +74,15 @@ describe("subagent async widget rendering", () => {
 		assert.equal(lines[6], "");
 	});
 
+	it("appends a caller-provided label to job rows when present", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "run-labeled", asyncDir: "/tmp/labeled", status: "running", agents: ["scout"], currentAgent: "scout", label: "fix null check" },
+			{ asyncId: "run-plain", asyncDir: "/tmp/plain", status: "running", agents: ["planner"], currentAgent: "planner" },
+		], theme, 200);
+		assert.match(lines[1]!, /fix null check/, "labeled row should include the caller-provided label");
+		assert.doesNotMatch(lines[2]!, /fix null check/);
+	});
+
 	it("pins needs_attention rows to the top of the running bucket", () => {
 		const lines = buildWidgetLines([
 			{ asyncId: "calm", asyncDir: "/tmp/a", status: "running", agents: ["calm"], currentAgent: "calm" },

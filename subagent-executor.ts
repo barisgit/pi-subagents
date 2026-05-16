@@ -72,6 +72,8 @@ const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "S
 interface TaskParam {
 	agent: string;
 	task: string;
+	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
+	label?: string;
 	cwd?: string;
 	count?: number;
 	model?: string;
@@ -87,6 +89,8 @@ export interface SubagentParamsLike {
 	dir?: string;
 	agent?: string;
 	task?: string;
+	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
+	label?: string;
 	chain?: ChainStep[];
 	tasks?: RawTaskParam[];
 	prompt?: string;
@@ -686,6 +690,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const parallelTasks = tasks.map((task, index) => ({
 			agent: task.agent,
 			task: params.context === "fork" ? wrapForkTask(task.task) : task.task,
+			...(task.label ? { label: task.label } : {}),
 			cwd: task.cwd,
 			...(modelOverrides[index] ? { model: modelOverrides[index] } : {}),
 			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
@@ -768,6 +773,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
 			task: params.context === "fork" ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
+			...(params.label ? { label: params.label } : {}),
 			agentConfig: a,
 			ctx: asyncCtx,
 			availableModels,
@@ -1053,6 +1059,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 		}
 		const result = await runSync(input.ctx.cwd, input.agents, task.agent, input.taskTexts[index]!, {
 			cwd: taskCwd,
+			...(task.label ? { label: task.label } : {}),
 			signal: input.signal,
 			interruptSignal: interruptController.signal,
 			runId: input.runId,
@@ -1492,6 +1499,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
 				task: params.context === "fork" ? wrapForkTask(task) : task,
+				...(params.label ? { label: params.label } : {}),
 				agentConfig,
 				ctx: asyncCtx,
 				availableModels,
@@ -1576,6 +1584,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
 		cwd: effectiveCwd,
+		...(params.label ? { label: params.label } : {}),
 		signal,
 		interruptSignal: interruptController.signal,
 		allowIntercomDetach: agentConfig.systemPrompt?.includes("Intercom orchestration channel:") === true,
@@ -1910,6 +1919,25 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		};
 
 		const foregroundMode: "single" | "parallel" | "chain" = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+		// Compute run-level label and per-step labels for foreground runs so the
+		// dashboard's sync-run summary mirrors what the async tracker writes to
+		// status.json. Run-level label applies for single runs and uniform-label parallel
+		// runs; otherwise per-step labels carry the meaning.
+		const foregroundAgentLabels: string[] | undefined = hasTasks && effectiveParams.tasks
+			? (normalizeTopLevelTasks(effectiveParams).tasks ?? []).map((t) => t.label ?? "")
+			: hasChain && effectiveParams.chain
+				? effectiveParams.chain.flatMap((step) => {
+					if (isParallelStep(step)) return step.parallel.map((t) => t.label ?? "");
+					return [(step as SequentialStep).label ?? ""];
+				})
+				: undefined;
+		let foregroundRunLabel: string | undefined;
+		if (foregroundMode === "single") {
+			foregroundRunLabel = effectiveParams.label || undefined;
+		} else if (foregroundMode === "parallel" && foregroundAgentLabels && foregroundAgentLabels.length > 0) {
+			const first = foregroundAgentLabels[0];
+			if (first && foregroundAgentLabels.every((l) => l === first)) foregroundRunLabel = first;
+		}
 		const foregroundControl = effectiveAsync
 			? undefined
 			: {
@@ -1917,6 +1945,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				mode: foregroundMode,
 				startedAt: Date.now(),
 				updatedAt: Date.now(),
+				...(foregroundRunLabel ? { label: foregroundRunLabel } : {}),
+				...(foregroundAgentLabels && foregroundAgentLabels.some((l) => l) ? { agentLabels: foregroundAgentLabels } : {}),
 				currentAgent: undefined,
 				currentIndex: undefined,
 				currentActivityState: undefined,

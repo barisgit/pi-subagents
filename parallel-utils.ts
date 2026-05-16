@@ -1,6 +1,8 @@
 export interface RunnerSubagentStep {
 	agent: string;
 	task: string;
+	/** Caller-provided short summary (~5-10 words) displayed in widgets and status overlays. */
+	label?: string;
 	cwd?: string;
 	model?: string;
 	modelCandidates?: string[];

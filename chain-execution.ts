@@ -222,6 +222,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 
 			const result = await runSync(input.ctx.cwd, input.agents, task.agent, taskStr, {
 				cwd: taskCwd,
+				...(task.label ? { label: task.label } : {}),
 				signal: input.signal,
 				interruptSignal: interruptController.signal,
 				runId: input.runId,
@@ -718,6 +719,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
 				cwd: resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
+				...(seqStep.label ? { label: seqStep.label } : {}),
 				signal,
 				interruptSignal: interruptController.signal,
 				runId,

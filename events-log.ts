@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 type EventLogLine =
-	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string }
+	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string; label?: string }
 	| { kind: "tool"; stepIndex: number; toolName: string; argsPreview: string; durationMs?: number; ts: number }
 	| { kind: "step-end"; stepIndex: number; agent: string; ts: number; durationMs?: number; tokens?: number; status?: string }
 	| { kind: "final-text"; stepIndex: number; agent: string; text: string };
@@ -96,9 +96,10 @@ export function readEventLog(asyncDir: string): EventLogLine[] {
 			const agent = typeof event.agent === "string" ? event.agent : "";
 			const ts = typeof event.ts === "number" ? event.ts : 0;
 			const task = typeof event.task === "string" ? event.task : undefined;
+			const label = typeof event.label === "string" ? event.label : undefined;
 			if (stepIndex < 0) continue;
 			rememberAgentByStep.set(stepIndex, agent);
-			out.push({ kind: "step-start", stepIndex, agent, ts, ...(task ? { task } : {}) });
+			out.push({ kind: "step-start", stepIndex, agent, ts, ...(task ? { task } : {}), ...(label ? { label } : {}) });
 			continue;
 		}
 
