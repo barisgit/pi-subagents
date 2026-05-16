@@ -39,42 +39,30 @@ function createUiContext() {
 }
 
 describe("subagent async widget rendering", () => {
-	it("orders running jobs before queued summaries and completions", () => {
-		const lines = buildWidgetLines([
-			{ asyncId: "done-1", asyncDir: "/tmp/done", status: "complete", agents: ["reviewer"], startedAt: 0, updatedAt: 1000 },
-			{ asyncId: "queued-1", asyncDir: "/tmp/queued", status: "queued", agents: ["planner"], startedAt: 0, updatedAt: 1000 },
-			{ asyncId: "run-1", asyncDir: "/tmp/run", status: "running", agents: ["scout"], currentStep: 0, stepsTotal: 2, startedAt: Date.now() - 1000, updatedAt: Date.now(), currentTool: "read", currentToolStartedAt: Date.now() - 500 },
-		], theme, 120);
-
-		const text = lines.join("\n");
-		assert.match(text, /^● Agents/);
-		assert.ok(text.indexOf("scout") < text.indexOf("queued"), "running row should precede queued summary");
-		assert.ok(text.indexOf("queued") < text.indexOf("reviewer"), "queued summary should precede completions");
-		assert.match(text, /⎿  read/);
+	it("returns empty for no jobs", () => {
+		assert.deepEqual(buildWidgetLines([], theme, 120), []);
 	});
 
-	it("shows explicit overflow counts for hidden work", () => {
+	it("shows header and summary with running and queued counts", () => {
 		const lines = buildWidgetLines([
-			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["a1"] },
-			{ asyncId: "run-2", asyncDir: "/tmp/2", status: "running", agents: ["a2"] },
-			{ asyncId: "run-3", asyncDir: "/tmp/3", status: "running", agents: ["a3"] },
-			{ asyncId: "run-4", asyncDir: "/tmp/4", status: "running", agents: ["a4"] },
-			{ asyncId: "run-5", asyncDir: "/tmp/5", status: "running", agents: ["a5"] },
+			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["scout"] },
+			{ asyncId: "run-2", asyncDir: "/tmp/2", status: "running", agents: ["planner"] },
+			{ asyncId: "queued-1", asyncDir: "/tmp/q", status: "queued", agents: ["reviewer"] },
 		], theme, 120);
 
-		assert.match(lines.join("\n"), /\+1 more \(1 running\)/);
+		assert.equal(lines.length, 2);
+		assert.ok(lines[0]!.includes("Agents"), "header should include 'Agents'");
+		assert.match(lines[1]!, /2 running/);
+		assert.match(lines[1]!, /1 queued/);
 	});
 
-	it("counts hidden queued work even when a visible running agent name contains queued", () => {
+	it("shows need-attention count when any running job is in needs_attention", () => {
 		const lines = buildWidgetLines([
-			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["queued-scanner"] },
-			{ asyncId: "run-2", asyncDir: "/tmp/2", status: "running", agents: ["a2"] },
-			{ asyncId: "run-3", asyncDir: "/tmp/3", status: "running", agents: ["a3"] },
-			{ asyncId: "run-4", asyncDir: "/tmp/4", status: "running", agents: ["a4"] },
-			{ asyncId: "queued-1", asyncDir: "/tmp/q", status: "queued", agents: ["planner"] },
+			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["scout"], activityState: "needs_attention" },
 		], theme, 120);
 
-		assert.match(lines.join("\n"), /\+1 more \(1 queued\)/);
+		assert.equal(lines.length, 2);
+		assert.match(lines[1]!, /1 need attention/);
 	});
 
 	it("does not animate queued-only widgets", async () => {

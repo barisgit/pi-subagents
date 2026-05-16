@@ -9,11 +9,10 @@ import {
 	type AgentProgress,
 	type AsyncJobState,
 	type Details,
-	MAX_WIDGET_JOBS,
 	WIDGET_KEY,
 } from "./types.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
-import { getDisplayItems, getLastActivity, getSingleResultOutput } from "./utils.ts";
+import { getDisplayItems, getSingleResultOutput } from "./utils.ts";
 
 type Theme = ExtensionContext["ui"]["theme"];
 
@@ -102,7 +101,6 @@ let latestWidgetCtx: ExtensionContext | undefined;
 let latestWidgetJobs: AsyncJobState[] = [];
 
 const resultAnimationTimers = new Map<ReturnType<typeof setInterval>, ResultAnimationContext["state"]>();
-const outputActivityCache = new Map<string, { checkedAt: number; text: string }>();
 
 export interface ResultAnimationContext {
 	state: { subagentResultAnimationTimer?: ReturnType<typeof setInterval> };
@@ -537,188 +535,27 @@ function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
 	return jobs.some((job) => job.status === "running");
 }
 
-function widgetJobName(job: AsyncJobState): string {
-	if (job.agents?.length) return job.agents.join(" → ");
-	return job.mode ?? "subagent";
-}
-
-function getCachedLastActivity(outputFile: string | undefined): string {
-	if (!outputFile) return "";
-	const now = Date.now();
-	const cached = outputActivityCache.get(outputFile);
-	if (cached && now - cached.checkedAt < 1000) return cached.text;
-	const text = getLastActivity(outputFile);
-	outputActivityCache.set(outputFile, { checkedAt: now, text });
-	return text;
-}
-
-function widgetActivity(job: AsyncJobState): string {
-	if (job.currentTool && job.currentToolStartedAt !== undefined) {
-		return `${job.currentTool} ${formatDuration(Math.max(0, Date.now() - job.currentToolStartedAt))}`;
-	}
-	const activity = formatActivityLabel(job.lastActivityAt, job.activityState === "needs_attention")
-		?? (job.status === "running" ? getCachedLastActivity(job.outputFile) : "");
-	if (activity) return activity;
-	if (job.status === "queued") return "queued…";
-	if (job.status === "paused") return "Paused";
-	if (job.status === "failed") return "Failed";
-	return "Done";
-}
-
-function widgetStatusGlyph(job: AsyncJobState, theme: Theme): string {
-	// Running rows get the distinctive sparkle spinner (same family as the multi-headline
-	// spinner inline). The old ASCII `- \ | /` read as a dash, not a spinner.
-	if (job.status === "running") return theme.fg("accent", multiSpinnerFrame());
-	if (job.status === "queued") return theme.fg("muted", "◦");
-	if (job.status === "complete") return theme.fg("success", "✓");
-	if (job.status === "paused") return theme.fg("warning", "■");
-	return theme.fg("error", "✗");
-}
-
-function widgetStats(job: AsyncJobState, theme: Theme): string {
-	const parts: string[] = [];
-	const stepsTotal = job.stepsTotal ?? (job.agents?.length ?? 1);
-	if (job.currentStep !== undefined) parts.push(`step ${job.currentStep + 1}/${stepsTotal}`);
-	else if (stepsTotal > 1) parts.push(`steps ${stepsTotal}`);
-	if (job.totalTokens?.total) parts.push(formatTokenStat(job.totalTokens.total));
-	const endTime = job.status === "complete" || job.status === "failed" || job.status === "paused" ? (job.updatedAt ?? Date.now()) : Date.now();
-	if (job.startedAt) parts.push(formatDuration(Math.max(0, endTime - job.startedAt)));
-	return statJoin(theme, parts);
-}
-
-/**
- * Synthesize an AgentProgress-shaped object from AsyncJobState so the widget can reuse
- * buildLiveCurrentLine / buildLiveHistoryLines / buildSparkline verbatim. Only the fields
- * those helpers read are populated; the rest are stubs.
- */
-function widgetProgressFromJob(job: AsyncJobState): AgentProgress {
-	return {
-		index: job.currentStep ?? 0,
-		agent: job.currentAgent ?? job.agents?.[job.currentStep ?? 0] ?? "subagent",
-		status: job.status === "running" ? "running" : job.status === "complete" ? "completed" : job.status === "failed" ? "failed" : "pending",
-		activityState: job.activityState,
-		task: "",
-		lastActivityAt: job.lastActivityAt,
-		currentTool: job.currentTool,
-		currentToolArgs: job.currentToolArgs,
-		currentToolStartedAt: job.currentToolStartedAt,
-		lastToolEndAt: job.lastToolEndAt,
-		recentTools: (job.recentTools ?? []).map((t) => ({ tool: t.tool, args: t.args ?? "", endMs: t.endMs ?? 0, durationMs: t.durationMs })),
-		recentOutput: [],
-		tokenSamples: job.tokenSamples,
-		thinking: job.thinking,
-		color: job.agentColor,
-		toolCount: job.recentTools?.length ?? 0,
-		tokens: job.totalTokens?.total ?? 0,
-		durationMs: job.startedAt ? Date.now() - job.startedAt : 0,
-	};
-}
-
-/**
- * Widget-specific history density: stricter than inline (`historyLinesForRunningCount`)
- * because the sidebar is narrow and per-job height is precious.
- * 1 running -> 2 lines, 2 -> 1, 3+ -> 0.
- */
-function widgetHistoryLines(runningCount: number): number {
-	if (runningCount <= 1) return 2;
-	if (runningCount === 2) return 1;
-	return 0;
-}
-
-const WIDGET_SPARK_WIDTH = 8;
-
-function widgetSparkline(samples: ReadonlyArray<{ ts: number; tokens: number }> | undefined, theme: Theme, now: number): string {
-	if (!samples || samples.length < 2) return "";
-	return buildSparkline(samples, WIDGET_SPARK_WIDTH, theme, now);
-}
-
 export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = getTermWidth()): string[] {
 	if (jobs.length === 0) return [];
 	const running = jobs.filter((job) => job.status === "running");
 	const queued = jobs.filter((job) => job.status === "queued");
 	const finished = jobs.filter((job) => job.status !== "running" && job.status !== "queued");
+	const needsAttention = jobs.filter((job) => job.status === "running" && job.activityState === "needs_attention").length;
 
-	const lines: string[] = [];
 	const hasActive = running.length > 0 || queued.length > 0;
-	lines.push(truncLine(`${theme.fg(hasActive ? "accent" : "dim", hasActive ? "●" : "○")} ${theme.fg(hasActive ? "accent" : "dim", "Agents")} ${theme.fg("dim", "· /subagents-status")}`, width));
+	const header = truncLine(`${theme.fg(hasActive ? "accent" : "dim", hasActive ? "●" : "○")} ${theme.fg(hasActive ? "accent" : "dim", "Agents")} ${theme.fg("dim", "· /subagents-status")}`, width);
 
-	const items: string[][] = [];
-	let hiddenRunning = 0;
-	let hiddenFinished = 0;
-	let queuedSummaryShown = false;
-	let slots = MAX_WIDGET_JOBS;
-	const historyN = widgetHistoryLines(running.length);
+	const parts: string[] = [theme.fg("dim", `${running.length} running`)];
+	if (queued.length > 0) parts.push(theme.fg("dim", `${queued.length} queued`));
+	if (finished.length > 0) parts.push(theme.fg("dim", `${finished.length} done`));
+	if (needsAttention > 0) parts.push(theme.fg("warning", `${needsAttention} need attention`));
+	const summaryText = parts.join(" · ");
+	const spinnerOrGlyph = running.length > 0
+		? theme.fg("accent", multiSpinnerFrame())
+		: theme.fg("dim", "○");
+	const summary = truncLine(`${theme.fg("dim", "└─")} ${spinnerOrGlyph} ${summaryText}`, width);
 
-	for (const job of running) {
-		if (slots <= 0) { hiddenRunning++; continue; }
-		const stats = widgetStats(job, theme);
-		const progress = widgetProgressFromJob(job);
-		const boldName = themeBold(theme, widgetJobName(job));
-		const tintedName = job.agentColor ? tintAgentName(boldName, job.agentColor) : boldName;
-		// Inline sparkline immediately after stats (no right-align). The widget panel is
-		// narrower than the terminal, so right-padding to full width pushed the spark off
-		// the right edge where truncLine then chopped it (visible as a trailing ellipsis).
-		const spark = widgetSparkline(job.tokenSamples, theme, Date.now());
-		const sparkTail = spark ? ` ${spark}` : "";
-		const headLine = `${widgetStatusGlyph(job, theme)} ${tintedName}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}${sparkTail}`;
-		const rows: string[] = [headLine];
-		const innerWidth = Math.max(20, width - 6);
-		const history = buildLiveHistoryLines(progress, historyN, innerWidth);
-		for (const h of history) {
-			rows.push(`  ${theme.fg("dim", `├─ ${h}`)}`);
-		}
-		const current = buildLiveCurrentLine(progress, innerWidth);
-		rows.push(`  ${theme.fg("dim", "└─")} ${theme.fg(current.tone, current.text)}`);
-		items.push(rows);
-		slots--;
-	}
-
-	if (queued.length > 0 && slots > 0) {
-		items.push([`${theme.fg("muted", "◦")} ${theme.fg("dim", `${queued.length} queued`)}`]);
-		queuedSummaryShown = true;
-		slots--;
-	}
-
-	for (const job of finished) {
-		if (slots <= 0) { hiddenFinished++; continue; }
-		const stats = widgetStats(job, theme);
-		const boldName = themeBold(theme, widgetJobName(job));
-		// Keep tint for finished jobs (terminal step persists agentColor).
-		const tintedName = job.agentColor ? tintAgentName(boldName, job.agentColor) : boldName;
-		// Frozen sparkline: anchor `now` at the last sample so finished bars don't crawl.
-		const lastTs = job.tokenSamples?.[job.tokenSamples.length - 1]?.ts;
-		const spark = lastTs !== undefined ? widgetSparkline(job.tokenSamples, theme, lastTs) : "";
-		const sparkTail = spark ? ` ${spark}` : "";
-		const headLine = `${widgetStatusGlyph(job, theme)} ${tintedName}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}${sparkTail}`;
-		items.push([
-			headLine,
-			`  ${theme.fg("dim", `└─ ${widgetActivity(job)}`)}`,
-		]);
-		slots--;
-	}
-
-	const hiddenQueued = queued.length > 0 && !queuedSummaryShown ? queued.length : 0;
-	const hiddenTotal = hiddenRunning + hiddenFinished + hiddenQueued;
-	if (hiddenTotal > 0) {
-		const parts: string[] = [];
-		if (hiddenRunning > 0) parts.push(`${hiddenRunning} running`);
-		if (hiddenQueued > 0) parts.push(`${hiddenQueued} queued`);
-		if (hiddenFinished > 0) parts.push(`${hiddenFinished} finished`);
-		items.push([theme.fg("dim", `+${hiddenTotal} more (${parts.join(", ")})`)]);
-	}
-
-	for (let i = 0; i < items.length; i++) {
-		const item = items[i]!;
-		const last = i === items.length - 1;
-		const branch = last ? "└─" : "├─";
-		const continuation = last ? "   " : "│  ";
-		lines.push(truncLine(`${theme.fg("dim", branch)} ${item[0]}`, width));
-		for (const detail of item.slice(1)) {
-			lines.push(truncLine(`${theme.fg("dim", continuation)} ${detail}`, width));
-		}
-	}
-
-	return lines;
+	return [header, summary];
 }
 
 function refreshAnimatedWidget(): void {
@@ -746,7 +583,6 @@ export function stopWidgetAnimation(): void {
 	}
 	latestWidgetCtx = undefined;
 	latestWidgetJobs = [];
-	outputActivityCache.clear();
 }
 
 export function stopResultAnimations(): void {

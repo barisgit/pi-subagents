@@ -794,6 +794,7 @@ type RunnerStatusPayload = {
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
 		error?: string;
+		live?: LiveStepProgress;
 	}>;
 	artifactsDir?: string;
 	sessionDir?: string;
