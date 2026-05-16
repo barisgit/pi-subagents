@@ -17,12 +17,12 @@
 
 ### Live Rendering (`render.ts`, `formatters.ts`)
 - `render.ts` is the 1100-line main renderer
-  - `buildSparkline()` — token-rate sparkline, 8-block chars, wall-clock quantized cells, 40s window, normalized per-bucket peak
-  - `buildThinkingBar()` — soft-log fill bar, tone flips warning past thinkingBarMaxMs (effort level → 5s/8s/15s/30s/60s)
+  - `buildSparkline()` — token-rate sparkline, 8-block chars, wall-clock quantized cells, 240s window, normalized per-bucket peak
+  - `buildThinkingBar()` (inert — no longer called by buildLiveCurrentLine) — soft-log fill bar, tone flips warning past thinkingBarMaxMs (effort level → 5s/8s/15s/30s/60s)
   - `buildChainBar()` — step progress using filled/empty triangle chars
   - `buildLiveCurrentLine()` — priority: needs_attention warning → current tool → thinking timer → starting
   - `buildLiveHistoryLines()` — renders `recentTools.slice(-count).reverse()` with `← tool: args  Nms` format
-  - `adaptiveSparkWidth()` — floor(termWidth/7), cap 60
+  - `adaptiveSparkWidth()` — floor(termWidth/6), cap 80
   - `adaptiveBarWidth()` — floor(termWidth/8), cap 40
   - `adaptiveSingleHistoryCount()` — floor((rows-10)/4), cap 10, floor 2
   - `historyLinesForRunningCount()` — 1 running → 2 lines, 2-4 → 1, 5+ → 0
@@ -39,10 +39,15 @@
 
 ## Supporting Modules
 - `render-helpers.ts` — fuzzyFilter, row/renderHeader/renderFooter box builders, formatPath, formatScrollInfo
+- `run-shape.ts` — pure helpers `formatRunHandle`, `describeAgentLabel`, `formatShapeBadge`, and `RunMode` type centralizing chain/parallel/single run-shape labeling across spawn confirmations, completion notifications, widget, and dashboard
 - `chain-execution.ts` — sequential step runner with worktree setup, foregroundControl per step, fail-fast
 - `subagent-control.ts` — needs_attention event derivation, notification claiming, shouldEmit/shouldNotify guards
-- `subagent-runner.ts` — async job persistence (status.json, result.json), JSONL aggregation, worktree lifecycle
+- `subagent-runner.ts` — async job persistence (status.json, result.json), JSONL aggregation, worktree lifecycle; `runMode` is `parallel`|`chain`|`single`, and `subagent.step.started` events carry `task`
 - `slash-live-state.ts` — builds initial placeholder results for slash-command live cards
+- `async-status.ts` — async status reporting; `AsyncRunStepSummary.color` carries the per-step agent color
+- `async-job-tracker.ts` — in-memory tracker for async jobs; `AsyncJobState.agentColors[]` mirrors per-step colors into the job tracker
+- `subagents-status.ts` — `/subagents-status` overlay; `sortLiveRuns` pins `needs_attention` rows to top, remaining strictly `startedAt` desc; `buildRightLines` groups events by `stepIndex` and renders each step's task prompt
+- `events-log.ts` — `EventLogLine` types; `step-start` events carry the `task` field
 - `prompt-template-bridge.ts` — bridges progress updates to prompt-template consumers, sanitizes recentTools for delegation
 - `skills.ts` — skill resolution and injection
 - `artifacts.ts` — writeArtifact, writeMetadata, artifact path management
@@ -74,3 +79,7 @@
 - session-tokens.ts (token usage)
 - worktree.ts (worktree setup/diff)
 - parallel-utils.ts (concurrency helpers)
+- run-shape.ts (run-shape labeling helpers)
+- fork-context.ts (subagent execution context resolver — `fresh` vs `fork` session branching)
+- subagent-prompt-runtime.ts (runtime helpers for stripping inherited project-context/skills sections from subagent prompts)
+- chain-execution.ts (sequential chain step runner)

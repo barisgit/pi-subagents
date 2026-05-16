@@ -110,6 +110,7 @@ thinking: high               # off, minimal, low, medium, high, xhigh
 systemPromptMode: replace    # replace by default, except builtin delegate
 inheritProjectContext: false # custom agents default false; builtins opt into true
 inheritSkills: false         # strip Pi's discovered skills section
+color: cyan                  # optional per-agent tint; named key or ANSI 256 code 0-255
 skill: safe-bash, chrome-devtools  # comma-separated skills to inject
 output: context.md           # writes to {chain_dir}/context.md
 defaultReads: context.md     # comma-separated files to read
@@ -124,6 +125,8 @@ Your system prompt goes here (the markdown body after frontmatter).
 The `thinking` field sets a default extended thinking level for the agent. At runtime it's appended as a `:level` suffix to the model string (e.g., `claude-sonnet-4-5:high`). If the model already has a thinking suffix (from a chain-clarify override), the agent's default is not double-applied.
 
 `fallbackModels` is an optional ordered list of backup models to try when the primary model fails with a provider/model-style error such as quota, auth, timeout, or provider/model unavailable. In markdown frontmatter, declare it as a comma-separated string. In management `config` objects, you can pass either a comma-separated string or a string array.
+
+`color` is an optional per-agent tint used by the live widget and `/subagents-status` overlay to color the agent name. Accepts a named key (one of `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`, `pink`, `purple`, `teal`, `gold`, `sky`, `mint`, `coral`, `lavender`, `crimson`, `gray`, `white`, `brown`, `lime` — see `AGENT_COLOR_MAP` in `render.ts`) or a raw ANSI 256 code in the range `0`–`255`.
 
 `systemPromptMode` — How the agent markdown body is passed to Pi:
 - **`replace`** (default) — The agent's markdown body becomes the system prompt. Clean slate, no Pi base prompt baggage.
@@ -225,7 +228,7 @@ Subagents inherit the parent process's direct MCP tool surface by default. If an
 | `/run <agent> [task]` | Run a single agent; omit the task for self-contained agents |
 | `/chain agent1 "task1" -> agent2 "task2"` | Run agents in sequence with per-step tasks |
 | `/parallel agent1 "task1" -> agent2 "task2"` | Run agents in parallel with per-step tasks |
-| `/subagents-status` | Open the async status overlay for active and recent runs |
+| `/subagents-status` | Open the async status overlay for active and recent runs (also bound to `Ctrl+Shift+S`) |
 | `/agents` | Open the Agents Manager overlay |
 
 All commands validate agent names locally and tab-complete them, then route through the tool framework for full live progress rendering. Results are sent to the conversation for the LLM to discuss.
@@ -444,6 +447,7 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 - **Worktree Isolation**: `worktree: true` gives each parallel agent its own git worktree, preventing filesystem conflicts during concurrent execution
 - **Chain Clarification TUI**: Interactive preview/edit of chain templates and behaviors before execution
 - **Agent Frontmatter Extensions**: Agents declare default chain behavior (`output`, `defaultReads`, `defaultProgress`, `skill`) plus optional recursion limits via `maxSubagentDepth`
+- **Run-shape Helpers**: `run-shape.ts` centralizes chain/parallel/single labeling (via `formatRunHandle`, `describeAgentLabel`, `formatShapeBadge`) across spawn confirmations, completion notifications, the live widget, and the `/subagents-status` dashboard
 - **Chain Artifacts**: Shared directory at a user-scoped temp path like `<tmpdir>/pi-subagents-<scope>/chain-runs/{runId}/` for inter-step files
 - **Solo Agent Output**: Agents with `output` write to temp dir and return path to caller
 - **Live Progress Display**: Real-time visibility during sync execution showing current tool, recent output, tokens, and duration

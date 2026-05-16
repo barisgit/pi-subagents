@@ -18,8 +18,14 @@
 
 9. **Live current line** — `buildLiveCurrentLine(progress, width)` returns `{text, tone}` with priority: `needs_attention` warning → current tool line → thinking timer → starting.
 
+10. **Agent name tinting** — `tintAgentName` renders agent names with per-agent ANSI 256 color from `agent.color` / `step.color`; `AsyncJobState.agentColors[]` mirrors per-step colors into the job tracker so widget rows pick up the same hue as the dashboard.
+
 10. **History lines** — `buildLiveHistoryLines()` renders `recentTools.slice(-count).reverse()` as `← tool: args  Nms` breadcrumb lines. `historyLinesForRunningCount()` adapts density: 1 running → 2 lines, 2-4 → 1, 5+ → 0 to avoid overflow in parallel views.
 
-11. **Render dispatch** — `renderSubagentResult()` routes to `renderSingleCompact()` (single agent: sparkle spinner glyph, sparkline, current, history) or `renderMultiCompact()` (chain/parallel: chainBar, per-step glyphs, per-step spark+current+history). Completion state freezes sparkline at last sample timestamp.
+11. **Widget assembly** — `buildWidgetLines` uses the `sortLiveRuns` rule: `needs_attention` rows are pinned to the top, remaining rows are strictly `startedAt` desc (no state-bucket sort). `buildWidgetComponent` is a factory `(_tui, theme) => Component` that returns a Component with no pi-tui margin-collapse wrapping `buildWidgetLines`, mirroring the pattern in pi-dag-tasks.
 
-12. **Output assembly** — each card line goes through `truncLine()` which computes visual width via `visibleWidth()` while preserving ANSI styling through the ellipsis using `Intl.Segmenter` for proper Unicode/emoji handling.
+12. **Status overlay right pane** — `buildRightLines` (subagents-status.ts) groups events by `stepIndex` and renders each step's task prompt as `→ prompt:` followed by wrapped text. The step word is `Task N` when run mode is `parallel`, otherwise `Step N`.
+
+13. **Render dispatch** — `renderSubagentResult()` routes to `renderSingleCompact()` (single agent: sparkle spinner glyph, sparkline, current, history) or `renderMultiCompact()` (chain/parallel: chainBar, per-step glyphs, per-step spark+current+history). Completion state freezes sparkline at last sample timestamp.
+
+14. **Output assembly** — each card line goes through `truncLine()` which computes visual width via `visibleWidth()` while preserving ANSI styling through the ellipsis using `Intl.Segmenter` for proper Unicode/emoji handling.

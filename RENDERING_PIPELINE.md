@@ -11,3 +11,6 @@
 6. `buildSparkline(samples, width, theme, now)` — token-rate sparkline using 8 block chars, wall-clock quantized cells (240s window), normalized to per-bucket peak; freezes at last sample timestamp on completion
 7. `buildLiveCurrentLine(progress, width)` — priority: needs_attention warning → current tool → thinking timer → starting; returns `{text, tone}`
 8. `buildLiveHistoryLines()` — renders `recentTools.slice(-count).reverse()` as `← tool: args  Nms` breadcrumb lines
+9. `buildWidgetLines()` — assembles the async-jobs widget rows from live runs (sort via `sortLiveRuns`)
+10. `buildWidgetComponent()` — factory `(_tui, theme) => Component` returning a no-margin-collapse Component wrapping `buildWidgetLines`
+11. Imports `describeAgentLabel` / `formatShapeBadge` from `run-shape.ts` for centralized label/badge formatting
