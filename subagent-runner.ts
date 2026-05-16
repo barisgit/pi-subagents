@@ -11,6 +11,7 @@ import {
 	type ActivityState,
 	type ArtifactConfig,
 	type ArtifactPaths,
+	type LiveStepProgress,
 	type ModelAttempt,
 	type ResolvedControlConfig,
 	type Usage,
@@ -165,6 +166,39 @@ interface RunPiStreamingResult {
 	interrupted?: boolean;
 }
 
+/**
+ * Live progress sink mutated by runPiStreaming on tool start/end and message_end.
+ * Mirrors what execution.ts does for inline AgentProgress, written to status.json by
+ * the parent so the widget poller can render inline-parity (color, sparkline, recent
+ * tools, current activity). Sink owns the buffer caps; runner just stamps fields and
+ * calls onUpdate so the parent can coalesce status writes.
+ */
+interface LiveProgressSink {
+	live: LiveStepProgress;
+	/** Called after every meaningful mutation (start, end, sample). */
+	onUpdate: () => void;
+	/** Current tool name kept here (not in LiveStepProgress) to drive recentTools push on end. */
+	currentTool?: string;
+	currentToolStartedAt?: number;
+}
+
+/** 240s sparkline window + safety margin; matches execution.ts's inline path. */
+const LIVE_SAMPLE_RETENTION_MS = 250_000;
+const LIVE_SAMPLE_CAP = 300;
+const LIVE_RECENT_TOOL_CAP = 8;
+
+function pushTokenSample(live: LiveStepProgress, ts: number, tokens: number): void {
+	if (!live.tokenSamples) live.tokenSamples = [];
+	live.tokenSamples.push({ ts, tokens });
+	const cutoff = ts - LIVE_SAMPLE_RETENTION_MS;
+	while (live.tokenSamples.length > 0 && live.tokenSamples[0]!.ts < cutoff) {
+		live.tokenSamples.shift();
+	}
+	if (live.tokenSamples.length > LIVE_SAMPLE_CAP) {
+		live.tokenSamples.splice(0, live.tokenSamples.length - LIVE_SAMPLE_CAP);
+	}
+}
+
 function runPiStreaming(
 	args: string[],
 	cwd: string,
@@ -174,6 +208,7 @@ function runPiStreaming(
 	piArgv1?: string,
 	maxSubagentDepth?: number,
 	childEventContext?: ChildEventContext,
+	liveSink?: LiveProgressSink,
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void,
 ): Promise<RunPiStreamingResult> {
 	return new Promise((resolve) => {
@@ -238,7 +273,40 @@ function runPiStreaming(
 			if (event.type === "tool_execution_start" && event.toolName) {
 				const toolArgs = extractToolArgsPreview(event.args ?? {});
 				writeOutputLine(toolArgs ? `${event.toolName}: ${toolArgs}` : event.toolName);
+				if (liveSink) {
+					const now = Date.now();
+					liveSink.live.toolCount = (liveSink.live.toolCount ?? 0) + 1;
+					liveSink.currentTool = event.toolName;
+					liveSink.currentToolStartedAt = now;
+					liveSink.live.currentToolArgs = toolArgs || undefined;
+					liveSink.onUpdate();
+				}
 				return;
+			}
+
+			if (event.type === "tool_execution_end" && liveSink) {
+				const now = Date.now();
+				if (liveSink.currentTool) {
+					const durationMs = liveSink.currentToolStartedAt !== undefined
+						? Math.max(0, now - liveSink.currentToolStartedAt)
+						: undefined;
+					if (!liveSink.live.recentTools) liveSink.live.recentTools = [];
+					liveSink.live.recentTools.push({
+						tool: liveSink.currentTool,
+						args: liveSink.live.currentToolArgs,
+						endMs: now,
+						durationMs,
+					});
+					if (liveSink.live.recentTools.length > LIVE_RECENT_TOOL_CAP) {
+						liveSink.live.recentTools.splice(0, liveSink.live.recentTools.length - LIVE_RECENT_TOOL_CAP);
+					}
+				}
+				liveSink.currentTool = undefined;
+				liveSink.currentToolStartedAt = undefined;
+				liveSink.live.currentToolArgs = undefined;
+				liveSink.live.lastToolEndAt = now;
+				liveSink.onUpdate();
+				// fallthrough -- tool_result_end branch handles message accumulation below.
 			}
 
 			if ((event.type === "message_end" || event.type === "tool_result_end") && event.message) {
@@ -257,6 +325,13 @@ function runPiStreaming(
 					usage.cacheRead += eventUsage.cacheRead ?? 0;
 					usage.cacheWrite += eventUsage.cacheWrite ?? 0;
 					usage.cost += eventUsage.cost?.total ?? 0;
+					if (liveSink) {
+						const nowTs = Date.now();
+						const totalTokens = usage.input + usage.output;
+						liveSink.live.tokens = totalTokens;
+						pushTokenSample(liveSink.live, nowTs, totalTokens);
+						liveSink.onUpdate();
+					}
 				}
 				const stopReason = (event.message as { stopReason?: string }).stopReason;
 				const hasToolCall = Array.isArray(event.message.content)
@@ -525,6 +600,7 @@ interface SingleStepContext {
 	piArgv1?: string;
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void;
 	childIntercomTarget?: string;
+	liveSink?: LiveProgressSink;
 }
 
 /** Run a single pi agent step, returning output and metadata */
@@ -605,6 +681,7 @@ async function runSingleStep(
 			ctx.piArgv1,
 			step.maxSubagentDepth,
 			{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
+			ctx.liveSink,
 			ctx.registerInterrupt,
 		);
 		cleanupTempDir(tempDir);
@@ -870,8 +947,53 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		outputFile: path.join(asyncDir, "output-0.log"),
 	};
 
+	const liveByIndex: LiveStepProgress[] = flatSteps.map((step) => ({
+		color: step.color,
+		thinking: step.thinking,
+		// Seed a zero-token sample at run start so the very first message_end delta produces
+		// a visible sparkline bar (mirrors inline execution.ts; see commit 054e21b).
+		tokenSamples: [{ ts: overallStartTime, tokens: 0 }],
+	}));
+	// Seed step.live before the first writeJson so the tracker mirrors agentColor on its
+	// very first poll — otherwise the widget renders the agent name untinted for ~500ms
+	// before any tool/usage event flushes a live update.
+	for (let i = 0; i < liveByIndex.length; i++) {
+		statusPayload.steps[i].live = liveByIndex[i];
+	}
+
 	fs.mkdirSync(asyncDir, { recursive: true });
 	writeJson(statusPath, statusPayload);
+
+	// Live progress: liveByIndex is mutated from runPiStreaming via a LiveProgressSink and
+	// ferried into statusPayload.steps[i].live on a coalesced timer so the widget poller
+	// (250ms cadence) sees fresh deltas without thrashing the status.json file.
+	let liveDirty = false;
+	let liveFlushTimer: NodeJS.Timeout | undefined;
+	const flushLive = () => {
+		liveDirty = false;
+		if (liveFlushTimer) {
+			clearTimeout(liveFlushTimer);
+			liveFlushTimer = undefined;
+		}
+		for (let i = 0; i < liveByIndex.length; i++) {
+			const step = statusPayload.steps[i];
+			if (!step) continue;
+			step.live = liveByIndex[i];
+		}
+		statusPayload.lastUpdate = Date.now();
+		writeJson(statusPath, statusPayload);
+	};
+	const LIVE_COALESCE_MS = 500;
+	const scheduleLiveFlush = () => {
+		liveDirty = true;
+		if (liveFlushTimer) return;
+		liveFlushTimer = setTimeout(flushLive, LIVE_COALESCE_MS);
+		liveFlushTimer.unref?.();
+	};
+	const buildLiveSink = (flatStepIdx: number): LiveProgressSink => ({
+		live: liveByIndex[flatStepIdx]!,
+		onUpdate: scheduleLiveFlush,
+	});
 
 	const currentStepAgent = () => statusPayload.steps[statusPayload.currentStep]?.agent ?? flatSteps[statusPayload.currentStep]?.agent ?? "subagent";
 	const currentOutputActivityAt = (): number => {
@@ -1089,6 +1211,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							piPackageRoot: config.piPackageRoot,
 							piArgv1: config.piArgv1,
 							childIntercomTarget: config.childIntercomTargets?.[fi],
+							liveSink: buildLiveSink(fi),
 							registerInterrupt: (interrupt) => {
 								activeChildInterrupt = interrupt;
 							},
@@ -1100,6 +1223,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						const taskEndTime = Date.now();
 						const taskDuration = taskEndTime - taskStartTime;
 
+						// Make sure the final live snapshot lands before the terminal step write; otherwise
+						// the 500ms debounce can swallow the last tool/usage sample.
+						statusPayload.steps[fi].live = liveByIndex[fi];
 						statusPayload.steps[fi].status = singleResult.exitCode === 0 ? "complete" : "failed";
 						statusPayload.steps[fi].endedAt = taskEndTime;
 						statusPayload.steps[fi].durationMs = taskDuration;
@@ -1213,6 +1339,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				piPackageRoot: config.piPackageRoot,
 				piArgv1: config.piArgv1,
 				childIntercomTarget: config.childIntercomTargets?.[flatIndex],
+				liveSink: buildLiveSink(flatIndex),
 				registerInterrupt: (interrupt) => {
 					activeChildInterrupt = interrupt;
 				},
@@ -1254,6 +1381,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			const stepEndTime = Date.now();
+			// Final live snapshot lands with the terminal step write (see parallel branch for rationale).
+			statusPayload.steps[flatIndex].live = liveByIndex[flatIndex];
 			statusPayload.steps[flatIndex].status = singleResult.exitCode === 0 ? "complete" : "failed";
 			statusPayload.steps[flatIndex].endedAt = stepEndTime;
 			statusPayload.steps[flatIndex].durationMs = stepEndTime - stepStartTime;
@@ -1339,6 +1468,13 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	}
 	const effectiveSessionFile = sessionFile ?? latestSessionFile;
 	const runEndedAt = Date.now();
+	// Cancel any pending live-progress flush; final step.live snapshots were written inline at
+	// each step boundary, so we don't want a late timer firing after the run state writeJson.
+	if (liveFlushTimer) {
+		clearTimeout(liveFlushTimer);
+		liveFlushTimer = undefined;
+	}
+	liveDirty = false;
 	statusPayload.state = interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed";
 	statusPayload.activityState = undefined;
 	statusPayload.endedAt = runEndedAt;

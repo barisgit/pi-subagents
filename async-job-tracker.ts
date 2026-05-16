@@ -142,6 +142,34 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.outputFile = status.outputFile ?? job.outputFile;
 						job.totalTokens = status.totalTokens ?? job.totalTokens;
 						job.sessionFile = status.sessionFile ?? job.sessionFile;
+						// Mirror LiveStepProgress from currentStep onto flat job fields so the widget
+						// can render color/sparkline/recent-tools without re-reading status.json shape.
+						const currentStepRecord = status.steps?.[status.currentStep ?? 0];
+						const live = currentStepRecord?.live;
+						const terminal = isTerminalAsyncStatus(job.status);
+						if (live) {
+							job.currentAgent = currentStepRecord?.agent ?? job.currentAgent;
+							// agentColor and tokenSamples persist past terminal so the widget can keep
+							// the tint and freeze the sparkline at its last sample.
+							if (live.color !== undefined) job.agentColor = live.color;
+							if (live.tokenSamples) job.tokenSamples = live.tokenSamples;
+							if (terminal) {
+								job.thinking = undefined;
+								job.currentToolArgs = undefined;
+								job.recentTools = undefined;
+								job.lastToolEndAt = undefined;
+							} else {
+								job.thinking = live.thinking;
+								job.currentToolArgs = live.currentToolArgs;
+								job.recentTools = live.recentTools;
+								job.lastToolEndAt = live.lastToolEndAt;
+							}
+						} else if (terminal) {
+							job.thinking = undefined;
+							job.currentToolArgs = undefined;
+							job.recentTools = undefined;
+							job.lastToolEndAt = undefined;
+						}
 						if (isTerminalAsyncStatus(job.status)) {
 							if (previousStatus !== job.status) scheduleCleanup(job.asyncId);
 							continue;

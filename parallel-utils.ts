@@ -22,6 +22,10 @@ export interface RunnerSubagentStep {
 	parentAgentName?: string;
 	canDelegate?: boolean;
 	allowedDelegateAgents?: string[];
+	/** Agent name tint stamped onto LiveStepProgress for widget rendering. */
+	color?: string;
+	/** Thinking level (off/low/medium/high/xhigh) stamped onto LiveStepProgress. */
+	thinking?: string;
 }
 
 export interface ParallelStepGroup {

@@ -254,6 +254,25 @@ export interface ArtifactConfig {
 // Async Execution
 // ============================================================================
 
+/**
+ * Slim live-progress snapshot stamped onto a running async step by the runner so
+ * the widget poller (async-job-tracker) can render the same color/sparkline/history
+ * UI that inline (renderSingleCompact/renderMultiCompact) gets from AgentProgress.
+ *
+ * Persisted into status.json. Capped buffers keep the JSON small and writes cheap:
+ * we coalesce writes at ~2Hz and prune tokenSamples to a 240s+margin window.
+ */
+export interface LiveStepProgress {
+	color?: string;
+	thinking?: string;
+	currentToolArgs?: string;
+	recentTools?: Array<{ tool: string; args?: string; endMs: number; durationMs?: number }>;
+	tokenSamples?: Array<{ ts: number; tokens: number }>;
+	lastToolEndAt?: number;
+	toolCount?: number;
+	tokens?: number;
+}
+
 export interface AsyncStatus {
 	runId: string;
 	mode: "single" | "chain";
@@ -284,6 +303,7 @@ export interface AsyncStatus {
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
 		error?: string;
+		live?: LiveStepProgress;
 	}>;
 	sessionDir?: string;
 	outputFile?: string;
@@ -310,6 +330,20 @@ export interface AsyncJobState {
 	totalTokens?: TokenUsage;
 	sessionFile?: string;
 	controlEventCursor?: number;
+	/**
+	 * Live progress mirrored from status.json's running step (LiveStepProgress).
+	 * Drives the widget's per-job color/sparkline/current/history rendering --
+	 * inline parity. Cleared on terminal lifecycle states except color/tokenSamples,
+	 * which persist so the sparkline freezes at last sample and the name stays tinted
+	 * after completion (mirroring the inline compactForegroundResult slim contract).
+	 */
+	currentAgent?: string;
+	agentColor?: string;
+	thinking?: string;
+	currentToolArgs?: string;
+	recentTools?: Array<{ tool: string; args?: string; endMs: number; durationMs?: number }>;
+	tokenSamples?: Array<{ ts: number; tokens: number }>;
+	lastToolEndAt?: number;
 }
 
 export interface SubagentState {

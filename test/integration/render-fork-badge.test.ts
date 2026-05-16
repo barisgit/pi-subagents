@@ -56,6 +56,18 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.match(text, /\[fork\]/);
 	});
 
+	it("renders multiline empty-result management output line by line", () => {
+		const widget = withTerminalWidth(80, () => renderSubagentResult!({
+			content: [{ type: "text", text: "Executable agents:\n- explorer (user): read-only recon with a long description that truncates\n- fixer (user): focused implementation" }],
+			details: { mode: "management", results: [] },
+		}, { expanded: false }, theme));
+
+		const text = widget.render(120).join("\n");
+		assert.match(text, /Executable agents:/);
+		assert.match(text, /- explorer/);
+		assert.match(text, /- fixer/);
+	});
+
 	it("shows [fork] on single-result header", () => {
 		const widget = renderSubagentResult!({
 			content: [{ type: "text", text: "done" }],

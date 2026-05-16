@@ -9,7 +9,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig } from "./agents.ts";
+import { resolveAgentColor, type AgentConfig } from "./agents.ts";
 import { applyThinkingSuffix } from "./pi-args.ts";
 import { injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.ts";
 import { isParallelStep, resolveStepBehavior, type ChainStep, type SequentialStep, type StepOverrides } from "./settings.ts";
@@ -254,6 +254,9 @@ export function executeAsyncChain(
 				parentAgentName: ctx.parentAgentName,
 				canDelegate: a.canDelegate,
 				allowedDelegateAgents: a.allowedDelegateAgents,
+				// Widget rendering hints (LiveStepProgress seed).
+				color: resolveAgentColor(a),
+				thinking: a.thinking,
 			};
 		}
 
@@ -294,6 +297,9 @@ export function executeAsyncChain(
 			parentAgentName: ctx.parentAgentName,
 			canDelegate: a.canDelegate,
 			allowedDelegateAgents: a.allowedDelegateAgents,
+			// Widget rendering hints (LiveStepProgress seed).
+			color: resolveAgentColor(a),
+			thinking: a.thinking,
 		};
 	};
 
@@ -489,6 +495,9 @@ export function executeAsyncSingle(
 						parentAgentName: ctx.parentAgentName,
 						canDelegate: agentConfig.canDelegate,
 						allowedDelegateAgents: agentConfig.allowedDelegateAgents,
+						// Widget rendering hints (LiveStepProgress seed).
+						color: resolveAgentColor(agentConfig),
+						thinking: agentConfig.thinking,
 					},
 				],
 				resultPath: path.join(RESULTS_DIR, `${id}.json`),
