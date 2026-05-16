@@ -549,9 +549,11 @@ export function registerSlashCommands(
 
 	// Shared opener so the slash command and the shortcut stay in sync.
 	const openSubagentsStatus = async (ctx: Parameters<Parameters<typeof pi.registerCommand>[1]["handler"]>[1]) => {
+		const sessionCwd = (ctx as { cwd?: string }).cwd ?? state.baseCwd;
 		await ctx.ui.custom<void>(
 			(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
 				listForegroundRuns: () => foregroundRunsFromState(state),
+				sessionCwd,
 			}),
 			{ overlay: true, overlayOptions: { anchor: "center", width: "95%", maxHeight: "95%" } },
 		);

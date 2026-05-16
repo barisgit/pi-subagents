@@ -123,12 +123,13 @@ describe("SubagentsStatusComponent", () => {
 
 			try {
 				const output = component.render(120).join("\n");
-				assert.match(output, /Subagent runs · 1 total · use j\/k to navigate/);
+				assert.match(output, /Subagent runs · 1 total/);
+				assert.match(output, /use j\/k to navigate/);
 				assert.match(output, /> .* waiter · running/);
 				assert.match(output, /─── Step 1: waiter ───/);
 				assert.match(output, /→ bash .* · 400ms/);
 				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
-				assert.match(output, /j\/k move · J\/K scroll · q close/);
+				assert.match(output, /j\/k move · J\/K scroll · a all · q close/);
 			} finally {
 				component.dispose();
 			}
@@ -378,6 +379,62 @@ describe("SubagentsStatusComponent", () => {
 		const before = renderRequests;
 		await wait(25);
 		assert.equal(renderRequests, before, "auto-refresh stops after dispose");
+	});
+
+	it("filters async runs by sessionCwd by default and shows all when toggled", () => {
+		const here = createRun("run-here", "running", { cwd: "/proj/here" });
+		const other = createRun("run-other", "running", { cwd: "/proj/other" });
+		const unknown = createRun("run-unknown", "running", { cwd: undefined });
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [here, other, unknown], recent: [] }),
+				refreshMs: 1000,
+				sessionCwd: "/proj/here",
+			},
+		);
+
+		try {
+			const scoped = component.render(140).join("\n");
+			assert.match(scoped, /Subagent runs · 1 total/);
+			assert.match(scoped, /run-here|here/);
+			assert.doesNotMatch(scoped, /run-other|other/);
+
+			component.handleInput("a");
+			const all = component.render(140).join("\n");
+			assert.match(all, /Subagent runs · 3 total/);
+			assert.match(all, /\[all sessions\]/);
+
+			component.setShowAllSessions(false);
+			const rescoped = component.render(140).join("\n");
+			assert.match(rescoped, /Subagent runs · 1 total/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("shows all runs when no sessionCwd is provided (no filtering)", () => {
+		const a = createRun("run-a", "running", { cwd: "/proj/a" });
+		const b = createRun("run-b", "running", { cwd: "/proj/b" });
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [a, b], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			const out = component.render(140).join("\n");
+			assert.match(out, /Subagent runs · 2 total/);
+			assert.match(out, /\[all sessions\]/);
+		} finally {
+			component.dispose();
+		}
 	});
 
 	it("converts foreground controls from state in spawn-time order (newest first)", () => {

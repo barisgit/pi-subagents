@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import * as path from "node:path";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
@@ -34,6 +35,7 @@ export interface ForegroundRunSummary {
 	currentTool?: string;
 	currentToolStartedAt?: number;
 	mode: "single" | "parallel" | "chain";
+	cwd?: string;
 	startedAt: number;
 	lastUpdate?: number;
 	/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
@@ -47,7 +49,7 @@ export interface ForegroundRunSummary {
 	finalOutput?: string;
 }
 
-type LiveRun =
+export type LiveRun =
 	| { source: "sync"; run: ForegroundRunSummary }
 	| { source: "async"; run: AsyncRunSummary };
 
@@ -56,9 +58,22 @@ interface StatusOverlayDeps {
 	listForegroundRuns?: () => ForegroundRunSummary[];
 	refreshMs?: number;
 	leftPaneCap?: number;
+	sessionCwd?: string;
 }
 
-export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundControls">): ForegroundRunSummary[] {
+// Decides whether a run belongs to the current session. Sync runs always belong
+// to the current session (they share the in-process cwd). Async runs are
+// included only when their recorded cwd matches sessionCwd; unknown cwd is
+// conservatively hidden in scoped mode.
+export function runMatchesSession(run: LiveRun, sessionCwd: string | undefined): boolean {
+	if (!sessionCwd) return true;
+	if (run.source === "sync") return true;
+	const runCwd = run.run.cwd;
+	if (!runCwd) return false;
+	return runCwd === sessionCwd;
+}
+
+export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundControls"> & { baseCwd?: string }): ForegroundRunSummary[] {
 	return Array.from(state.foregroundControls.values())
 		.map((control: ForegroundControl) => ({
 			id: control.runId,
@@ -68,6 +83,7 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 			...(control.currentTool ? { currentTool: control.currentTool } : {}),
 			...(control.currentToolStartedAt !== undefined ? { currentToolStartedAt: control.currentToolStartedAt } : {}),
 			mode: control.mode,
+			...(state.baseCwd ? { cwd: state.baseCwd } : {}),
 			startedAt: control.startedAt,
 			lastUpdate: control.updatedAt,
 			...(control.label ? { label: control.label } : {}),
@@ -198,6 +214,16 @@ function wrapText(text: string, width: number): string[] {
 	return out;
 }
 
+// Compact cwd badge (rightmost path segment, capped) for async rows. Sync runs
+// always share the current session cwd, so a per-row badge would just be noise.
+function runCwdBadge(run: LiveRun): string {
+	if (run.source !== "async") return "";
+	const cwd = run.run.cwd;
+	if (!cwd) return "";
+	const base = path.basename(cwd) || cwd;
+	return base.length > 15 ? base.slice(0, 14) + "…" : base;
+}
+
 function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
 	const glyph = statusGlyph(theme, run.run.state, run.run.activityState);
@@ -209,7 +235,9 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const labelPart = run.run.label
 		? ` · ${theme.fg("muted", truncateToWidth(run.run.label, 30))}`
 		: "";
-	const text = `${cursor}${glyph} ${agent} · ${status}${badgePart}${labelPart} · ${elapsed}`;
+	const cwdBadge = runCwdBadge(run);
+	const cwdPart = cwdBadge ? ` · ${theme.fg("dim", cwdBadge)}` : "";
+	const text = `${cursor}${glyph} ${agent} · ${status}${badgePart}${labelPart}${cwdPart} · ${elapsed}`;
 	return truncateToWidth(text, width);
 }
 
@@ -321,6 +349,8 @@ export class SubagentsStatusComponent implements Component {
 	private lastRightHeight = MIN_VIEWPORT_HEIGHT;
 	private lastRightWidth = 0;
 	private errorMessage?: string;
+	private sessionCwd: string | undefined;
+	private showAllSessions = false;
 
 	constructor(
 		tui: TUI,
@@ -334,6 +364,7 @@ export class SubagentsStatusComponent implements Component {
 		this.listRunsForOverlay = deps.listRunsForOverlay ?? listAsyncRunsForOverlay;
 		this.listForegroundRuns = deps.listForegroundRuns ?? (() => []);
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
+		this.sessionCwd = deps.sessionCwd;
 		const refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.reload();
 		this.refreshTimer = setInterval(() => {
@@ -349,12 +380,21 @@ export class SubagentsStatusComponent implements Component {
 			const sync = this.listForegroundRuns();
 			const combined = [...overlay.active, ...overlay.recent];
 			this.runs = sortLiveRuns(sync, combined);
+			if (!this.showAllSessions && this.sessionCwd) {
+				this.runs = this.runs.filter((r) => runMatchesSession(r, this.sessionCwd));
+			}
 			this.errorMessage = undefined;
 		} catch (error) {
 			this.runs = [];
 			this.errorMessage = error instanceof Error ? error.message : String(error);
 		}
 		this.reconcileSelection();
+	}
+
+	// Visible only to tests; mirrors the `a` keybinding for direct invocation.
+	setShowAllSessions(value: boolean): void {
+		this.showAllSessions = value;
+		this.reload();
 	}
 
 	private reconcileSelection(): void {
@@ -484,6 +524,12 @@ export class SubagentsStatusComponent implements Component {
 			this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
 			return;
 		}
+		if (matchesKey(data, "a")) {
+			this.showAllSessions = !this.showAllSessions;
+			this.reload();
+			this.tui.requestRender();
+			return;
+		}
 		if (matchesKey(data, "return") || matchesKey(data, "o")) {
 			this.openSessionFile();
 		}
@@ -502,7 +548,8 @@ export class SubagentsStatusComponent implements Component {
 		const rightWidth = Math.max(MIN_RIGHT_PANE, w - 3 - leftWidth);
 		this.lastRightWidth = rightWidth;
 
-		const headerText = `Subagent runs · ${this.runs.length} total · use j/k to navigate`;
+		const scopeMarker = this.showAllSessions || !this.sessionCwd ? " · [all sessions]" : "";
+		const headerText = `Subagent runs · ${this.runs.length} total${scopeMarker} · use j/k to navigate · a all`;
 		const header = renderHeader(headerText, w, this.theme);
 
 		const now = Date.now();
@@ -554,7 +601,7 @@ export class SubagentsStatusComponent implements Component {
 		const above = rightTop;
 		const below = Math.max(0, rightLines.length - (rightTop + visibleRight.length));
 		const scrollInfo = formatScrollInfo(above, below);
-		const hints = "j/k move · J/K scroll · q close";
+		const hints = "j/k move · J/K scroll · a all · q close";
 		const footerText = scrollInfo ? `${scrollInfo}  ${hints}` : hints;
 		rows.push(renderFooter(truncateToWidth(footerText, Math.max(0, w - 2)), w, this.theme));
 		return rows;
