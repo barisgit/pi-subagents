@@ -58,6 +58,11 @@ import {
 interface SubagentRunConfig {
 	id: string;
 	steps: RunnerStep[];
+	/**
+	 * Caller-provided run-level summary for the whole spawn (single, parallel, or chain).
+	 * When set, this wins over any per-step label inference for the run-level label.
+	 */
+	label?: string;
 	resultPath: string;
 	cwd: string;
 	placeholder: string;
@@ -78,6 +83,27 @@ interface SubagentRunConfig {
 	controlIntercomTarget?: string;
 	childIntercomTargets?: Array<string | undefined>;
 	metadata?: Record<string, unknown>;
+}
+
+/**
+ * Compute the run-level label shown on the widget row and dashboard left-pane row.
+ *
+ * Precedence:
+ *   1. Caller-provided top-level `topLevelLabel` (from SubagentParams.label) wins for any run shape.
+ *   2. Single runs fall back to the single step's label.
+ *   3. Parallel/chain runs fall back to the shared per-step label when uniform.
+ *   4. Otherwise undefined; per-step labels carry the meaning.
+ */
+export function computeRunLabel(
+	runMode: "single" | "chain" | "parallel",
+	topLevelLabel: string | undefined,
+	stepLabels: Array<string | undefined>,
+): string | undefined {
+	if (topLevelLabel && topLevelLabel.trim().length > 0) return topLevelLabel;
+	if (runMode === "single") return stepLabels[0] || undefined;
+	const first = stepLabels[0];
+	if (!first) return undefined;
+	return stepLabels.every((s) => s === first) ? first : undefined;
 }
 
 interface StepResult {
@@ -781,6 +807,7 @@ type RunnerStatusPayload = {
 	startedAt: number;
 	endedAt?: number;
 	lastUpdate: number;
+	runnerHeartbeatAt: number;
 	pid: number;
 	cwd: string;
 	currentStep: number;
@@ -839,6 +866,7 @@ function markParallelGroupSetupFailure(input: {
 	}
 	input.statusPayload.currentStep = input.groupStartFlatIndex;
 	input.statusPayload.lastUpdate = input.failedAt;
+	input.statusPayload.runnerHeartbeatAt = input.failedAt;
 	input.statusPayload.outputFile = path.join(input.asyncDir, `output-${input.groupStartFlatIndex}.log`);
 	writeJson(input.statusPath, input.statusPayload);
 	appendJsonl(input.eventsPath, JSON.stringify({
@@ -871,6 +899,7 @@ function markParallelGroupRunning(input: {
 	input.statusPayload.activityState = undefined;
 	input.statusPayload.lastActivityAt = input.groupStartTime;
 	input.statusPayload.lastUpdate = input.groupStartTime;
+	input.statusPayload.runnerHeartbeatAt = input.groupStartTime;
 	input.statusPayload.outputFile = path.join(input.asyncDir, `output-${input.groupStartFlatIndex}.log`);
 	writeJson(input.statusPath, input.statusPayload);
 	appendJsonl(input.eventsPath, JSON.stringify({
@@ -941,17 +970,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		steps.length === 1 && isParallelGroup(steps[0]!) ? "parallel"
 			: flatSteps.length > 1 ? "chain"
 				: "single";
-	// Run-level label: present for single runs and uniform-label parallel runs.
-	// For chains or mixed-label parallel groups the per-step labels carry the meaning.
-	const runLabel: string | undefined = (() => {
-		if (runMode === "single") return flatSteps[0]?.label || undefined;
-		if (runMode === "parallel") {
-			const first = flatSteps[0]?.label;
-			if (!first) return undefined;
-			return flatSteps.every((s) => s.label === first) ? first : undefined;
-		}
-		return undefined;
-	})();
+	const runLabel: string | undefined = computeRunLabel(runMode, config.label, flatSteps.map((s) => s.label));
 	const statusPayload: RunnerStatusPayload = {
 		runId: id,
 		mode: runMode,
@@ -960,6 +979,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		lastActivityAt: overallStartTime,
 		startedAt: overallStartTime,
 		lastUpdate: overallStartTime,
+		runnerHeartbeatAt: overallStartTime,
 		pid: process.pid,
 		cwd,
 		currentStep: 0,
@@ -1009,7 +1029,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			if (!step) continue;
 			step.live = liveByIndex[i];
 		}
-		statusPayload.lastUpdate = Date.now();
+		const now = Date.now();
+		statusPayload.lastUpdate = now;
+		statusPayload.runnerHeartbeatAt = now;
 		writeJson(statusPath, statusPayload);
 	};
 	const LIVE_COALESCE_MS = 500;
@@ -1078,6 +1100,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 		}
 		statusPayload.lastUpdate = now;
+		statusPayload.runnerHeartbeatAt = now;
 		if (shouldEmitControlEvent(controlConfig, previous, next)) {
 			const event = buildControlEvent({
 				from: previous,
@@ -1093,14 +1116,17 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		writeJson(statusPath, statusPayload);
 		return true;
 	};
-	if (controlConfig.enabled) {
-		activityTimer = setInterval(() => {
-			if (statusPayload.state !== "running") return;
-			const now = Date.now();
-			updateRunnerActivityState(now);
-		}, 1000);
-		activityTimer.unref?.();
-	}
+	activityTimer = setInterval(() => {
+		if (statusPayload.state !== "running") return;
+		const now = Date.now();
+		const wroteActivity = controlConfig.enabled ? updateRunnerActivityState(now) : false;
+		if (!wroteActivity) {
+			statusPayload.lastUpdate = now;
+			statusPayload.runnerHeartbeatAt = now;
+			writeJson(statusPath, statusPayload);
+		}
+	}, 1000);
+	activityTimer.unref?.();
 
 	const interruptRunner = () => {
 		if (interrupted || statusPayload.state !== "running") return;
@@ -1110,6 +1136,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		currentActivityState = undefined;
 		statusPayload.activityState = undefined;
 		statusPayload.lastUpdate = now;
+		statusPayload.runnerHeartbeatAt = now;
 		const current = statusPayload.steps[statusPayload.currentStep];
 		if (current?.status === "running") {
 			current.activityState = undefined;
@@ -1266,6 +1293,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						statusPayload.steps[fi].modelAttempts = singleResult.modelAttempts;
 						statusPayload.steps[fi].error = singleResult.error;
 						statusPayload.lastUpdate = taskEndTime;
+						statusPayload.runnerHeartbeatAt = taskEndTime;
 						writeJson(statusPath, statusPayload);
 
 						appendJsonl(eventsPath, JSON.stringify({
@@ -1297,6 +1325,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				}
 				statusPayload.totalTokens = { ...previousCumulativeTokens };
 				statusPayload.lastUpdate = Date.now();
+				statusPayload.runnerHeartbeatAt = statusPayload.lastUpdate;
 				writeJson(statusPath, statusPayload);
 
 				for (const pr of parallelResults) {
@@ -1350,6 +1379,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.steps[flatIndex].lastActivityAt = stepStartTime;
 			statusPayload.lastActivityAt = stepStartTime;
 			statusPayload.lastUpdate = stepStartTime;
+			statusPayload.runnerHeartbeatAt = stepStartTime;
 			statusPayload.outputFile = path.join(asyncDir, `output-${flatIndex}.log`);
 			writeJson(statusPath, statusPayload);
 
@@ -1429,6 +1459,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				statusPayload.totalTokens = { ...previousCumulativeTokens };
 			}
 			statusPayload.lastUpdate = stepEndTime;
+			statusPayload.runnerHeartbeatAt = stepEndTime;
 			writeJson(statusPath, statusPayload);
 
 			appendJsonl(eventsPath, JSON.stringify({
@@ -1512,6 +1543,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	statusPayload.activityState = undefined;
 	statusPayload.endedAt = runEndedAt;
 	statusPayload.lastUpdate = runEndedAt;
+	statusPayload.runnerHeartbeatAt = runEndedAt;
 	statusPayload.sessionFile = effectiveSessionFile;
 	statusPayload.shareUrl = shareUrl;
 	statusPayload.gistUrl = gistUrl;

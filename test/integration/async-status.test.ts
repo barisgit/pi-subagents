@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { formatAsyncRunList, listAsyncRuns, listAsyncRunsForOverlay } from "../../async-status.ts";
+import { computeRunLabel } from "../../subagent-runner.ts";
 
 function createAsyncDir(root: string, id: string, status: Record<string, unknown>): string {
 	const dir = path.join(root, id);
@@ -104,6 +105,58 @@ describe("async status helpers", () => {
 		}
 	});
 
+	it("marks stale running statuses with dead runner pids as lost", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-lost-status-"));
+		try {
+			const now = Date.now();
+			createAsyncDir(root, "run-lost", {
+				runId: "run-lost",
+				mode: "single",
+				state: "running",
+				startedAt: now - 120_000,
+				lastUpdate: now - 60_000,
+				runnerHeartbeatAt: now - 60_000,
+				pid: 999999999,
+				steps: [{ agent: "worker", status: "running" }],
+			});
+
+			const runs = listAsyncRuns(root, { states: ["running"] });
+			assert.equal(runs[0]?.displayState, "lost");
+			const text = formatAsyncRunList(runs, "Active async runs");
+			assert.match(text, /run-lost \| running\/lost/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("marks active tool execution separately from quiet running state", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-tool-state-"));
+		try {
+			const now = Date.now();
+			createAsyncDir(root, "run-tool", {
+				runId: "run-tool",
+				mode: "single",
+				state: "running",
+				startedAt: now - 10_000,
+				lastUpdate: now,
+				runnerHeartbeatAt: now,
+				currentTool: "bash",
+				currentToolStartedAt: now - 2_000,
+				pid: process.pid,
+				steps: [{ agent: "worker", status: "running", currentTool: "bash", currentToolStartedAt: now - 2_000 }],
+			});
+
+			const runs = listAsyncRuns(root, { states: ["running"] });
+			assert.equal(runs[0]?.displayState, "tool_running");
+			assert.equal(runs[0]?.steps[0]?.displayState, "tool_running");
+			const text = formatAsyncRunList(runs, "Active async runs");
+			assert.match(text, /run-tool \| running\/tool_running/);
+			assert.match(text, /1\. worker \| running\/tool_running/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("formats paused runs as lifecycle state without activity state", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-paused-status-"));
 		try {
@@ -190,5 +243,55 @@ describe("async status helpers", () => {
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("computeRunLabel", () => {
+	it("caller top-level label wins over per-step labels for single runs", () => {
+		assert.equal(computeRunLabel("single", "group title", ["step label"]), "group title");
+	});
+
+	it("caller top-level label wins over uniform per-step labels for parallel runs", () => {
+		assert.equal(
+			computeRunLabel("parallel", "group title", ["step a", "step a", "step a"]),
+			"group title",
+		);
+	});
+
+	it("caller top-level label wins over mixed per-step labels for parallel runs", () => {
+		assert.equal(
+			computeRunLabel("parallel", "group title", ["step a", "step b", "step c"]),
+			"group title",
+		);
+	});
+
+	it("caller top-level label wins over per-step labels for chain runs", () => {
+		assert.equal(
+			computeRunLabel("chain", "group title", ["phase a", "phase b"]),
+			"group title",
+		);
+	});
+
+	it("falls back to the single step label when no top-level label is given", () => {
+		assert.equal(computeRunLabel("single", undefined, ["step label"]), "step label");
+	});
+
+	it("falls back to shared per-step label for uniform parallel runs", () => {
+		assert.equal(
+			computeRunLabel("parallel", undefined, ["shared", "shared", "shared"]),
+			"shared",
+		);
+	});
+
+	it("returns undefined for mixed-label parallel runs with no top-level label", () => {
+		assert.equal(
+			computeRunLabel("parallel", undefined, ["a", "b"]),
+			undefined,
+		);
+	});
+
+	it("ignores blank top-level labels and falls through to per-step inference", () => {
+		assert.equal(computeRunLabel("single", "   ", ["step label"]), "step label");
+		assert.equal(computeRunLabel("single", "", ["step label"]), "step label");
 	});
 });

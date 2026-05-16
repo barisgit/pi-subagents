@@ -83,6 +83,17 @@ describe("subagent async widget rendering", () => {
 		assert.doesNotMatch(lines[2]!, /fix null check/);
 	});
 
+	it("renders explicit display state labels for running jobs", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "lost", asyncDir: "/tmp/lost", status: "running", displayState: "lost", agents: ["lost"], currentAgent: "lost", startedAt: 10 },
+			{ asyncId: "tool", asyncDir: "/tmp/tool", status: "running", displayState: "tool_running", currentTool: "bash", agents: ["tool"], currentAgent: "tool", startedAt: 20 },
+		], theme, 200);
+
+		assert.match(lines[1]!, /tool bash|lost/);
+		assert.match(lines.join("\n"), /lost/);
+		assert.match(lines.join("\n"), /tool bash/);
+	});
+
 	it("pins needs_attention rows to the top of the running bucket", () => {
 		const lines = buildWidgetLines([
 			{ asyncId: "calm", asyncDir: "/tmp/a", status: "running", agents: ["calm"], currentAgent: "calm" },

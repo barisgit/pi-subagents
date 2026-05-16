@@ -7,9 +7,10 @@ import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay
 import { readEventLog } from "./events-log.ts";
 import { formatDuration } from "./formatters.ts";
 import { multiSpinnerFrame, tintAgentName } from "./render.ts";
+import { deriveRunDisplayState, displayStatePriority } from "./run-liveness.ts";
 import { formatScrollInfo, pad, renderFooter, renderHeader } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
-import { ASYNC_DIR, type ActivityState, type SubagentState } from "./types.ts";
+import { ASYNC_DIR, type ActivityState, type RunDisplayState, type SubagentState } from "./types.ts";
 
 const AUTO_REFRESH_MS = 1000;
 const RECENT_LIMIT = 20;
@@ -31,6 +32,7 @@ export interface ForegroundRunSummary {
 	id: string;
 	state: "running";
 	activityState?: ActivityState;
+	displayState?: RunDisplayState;
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
@@ -75,10 +77,19 @@ export function runMatchesSession(run: LiveRun, sessionCwd: string | undefined):
 
 export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundControls"> & { baseCwd?: string }): ForegroundRunSummary[] {
 	return Array.from(state.foregroundControls.values())
-		.map((control: ForegroundControl) => ({
-			id: control.runId,
-			state: "running" as const,
-			...(control.currentActivityState ? { activityState: control.currentActivityState } : {}),
+		.map((control: ForegroundControl) => {
+			const displayState = deriveRunDisplayState({
+				state: "running",
+				activityState: control.currentActivityState,
+				currentTool: control.currentTool,
+				lastActivityAt: control.lastActivityAt,
+				lastUpdate: control.updatedAt,
+			});
+			return {
+				id: control.runId,
+				state: "running" as const,
+				...(control.currentActivityState ? { activityState: control.currentActivityState } : {}),
+				...(displayState ? { displayState } : {}),
 			...(control.lastActivityAt !== undefined ? { lastActivityAt: control.lastActivityAt } : {}),
 			...(control.currentTool ? { currentTool: control.currentTool } : {}),
 			...(control.currentToolStartedAt !== undefined ? { currentToolStartedAt: control.currentToolStartedAt } : {}),
@@ -92,8 +103,9 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 			...(control.currentIndex !== undefined ? { currentIndex: control.currentIndex } : {}),
 			...(control.recentTools ? { recentTools: control.recentTools } : {}),
 			...(control.recentOutput ? { recentOutput: control.recentOutput } : {}),
-			...(control.finalOutput ? { finalOutput: control.finalOutput } : {}),
-		}))
+				...(control.finalOutput ? { finalOutput: control.finalOutput } : {}),
+			};
+		})
 		.sort((a, b) => b.startedAt - a.startedAt);
 }
 
@@ -162,15 +174,16 @@ function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummary[]): L
 	for (const run of sync) all.push({ source: "sync", run });
 	for (const run of async) all.push({ source: "async", run });
 	return all.sort((a, b) => {
-		const attnA = a.run.activityState === "needs_attention" ? 0 : 1;
-		const attnB = b.run.activityState === "needs_attention" ? 0 : 1;
-		if (attnA !== attnB) return attnA - attnB;
+		const displayA = displayStatePriority(a.run.displayState ?? (a.run.activityState === "needs_attention" ? "needs_attention" : undefined));
+		const displayB = displayStatePriority(b.run.displayState ?? (b.run.activityState === "needs_attention" ? "needs_attention" : undefined));
+		if (displayA !== displayB) return displayA - displayB;
 		return b.run.startedAt - a.run.startedAt;
 	});
 }
 
-function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: ActivityState | undefined): string {
-	if (activity === "needs_attention") return theme.fg("warning", "!");
+function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: ActivityState | undefined, displayState?: RunDisplayState): string {
+	if (displayState === "lost") return theme.fg("error", "!");
+	if (displayState === "needs_attention" || activity === "needs_attention") return theme.fg("warning", "!");
 	switch (state) {
 		case "running": return theme.fg("accent", multiSpinnerFrame());
 		case "queued": return theme.fg("dim", "○");
@@ -226,9 +239,9 @@ function runCwdBadge(run: LiveRun): string {
 
 function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
-	const glyph = statusGlyph(theme, run.run.state, run.run.activityState);
+	const glyph = statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
 	const agent = runAgentLabel(run, theme);
-	const status = run.run.state;
+	const status = run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
 	const elapsed = runElapsed(run, now);
 	const badge = runShapeBadge(run);
 	const badgePart = badge ? ` · ${theme.fg("dim", badge)}` : "";
@@ -472,6 +485,26 @@ export class SubagentsStatusComponent implements Component {
 		this.tui.requestRender();
 	}
 
+	/**
+	 * Scroll the right pane by a full page in the given direction (+1 down, -1 up).
+	 * Exposed for tests so PgUp/PgDn behavior can be exercised without simulating keys.
+	 */
+	scrollRightPaneByPage(direction: 1 | -1): void {
+		this.scrollRightByPage(direction);
+	}
+
+	/** Test-only accessor for the right-pane scroll offset of the currently selected run. */
+	getRightPaneScrollTop(): number {
+		const run = this.selectedRun();
+		if (!run) return 0;
+		return this.rightScroll.get(runKey(run))?.top ?? 0;
+	}
+
+	private scrollRightByPage(direction: 1 | -1): void {
+		const page = Math.max(1, this.lastRightHeight);
+		this.scrollRight(direction * page);
+	}
+
 	private openSessionFile(): void {
 		const run = this.selectedRun();
 		if (!run || run.source !== "async") return;
@@ -516,11 +549,19 @@ export class SubagentsStatusComponent implements Component {
 			this.scrollRight(-1);
 			return;
 		}
-		if (matchesKey(data, "d") || matchesKey(data, "pageDown")) {
+		if (matchesKey(data, "pageDown")) {
+			this.scrollRightByPage(1);
+			return;
+		}
+		if (matchesKey(data, "pageUp")) {
+			this.scrollRightByPage(-1);
+			return;
+		}
+		if (matchesKey(data, "d") || matchesKey(data, "space")) {
 			this.scrollRight(Math.max(1, Math.floor(this.lastRightHeight / 2)));
 			return;
 		}
-		if (matchesKey(data, "u") || matchesKey(data, "pageUp")) {
+		if (matchesKey(data, "u") || matchesKey(data, "shift+space")) {
 			this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
 			return;
 		}

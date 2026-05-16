@@ -41,6 +41,7 @@ export interface TokenUsage {
 }
 
 export type ActivityState = "needs_attention";
+export type RunDisplayState = "working" | "tool_running" | "quiet" | "needs_attention" | "lost";
 export type ControlEventType = "needs_attention";
 export type ControlNotificationChannel = "event" | "async" | "intercom";
 
@@ -286,12 +287,14 @@ export interface AsyncStatus {
 	label?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
+	displayState?: RunDisplayState;
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
 	startedAt: number;
 	endedAt?: number;
 	lastUpdate?: number;
+	runnerHeartbeatAt?: number;
 	pid?: number;
 	cwd?: string;
 	currentStep?: number;
@@ -300,6 +303,7 @@ export interface AsyncStatus {
 		label?: string;
 		status: string;
 		activityState?: ActivityState;
+		displayState?: RunDisplayState;
 		lastActivityAt?: number;
 		currentTool?: string;
 		currentToolStartedAt?: number;
@@ -325,6 +329,7 @@ export interface AsyncJobState {
 	asyncDir: string;
 	status: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
+	displayState?: RunDisplayState;
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
@@ -338,6 +343,8 @@ export interface AsyncJobState {
 	stepsTotal?: number;
 	startedAt?: number;
 	updatedAt?: number;
+	runnerHeartbeatAt?: number;
+	pid?: number;
 	sessionDir?: string;
 	outputFile?: string;
 	totalTokens?: TokenUsage;

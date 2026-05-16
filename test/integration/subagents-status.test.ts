@@ -460,4 +460,75 @@ describe("SubagentsStatusComponent", () => {
 		assert.deepEqual(runs.map((run) => run.id), ["newer", "older"]);
 		assert.equal(runs[0]?.currentTool, "bash");
 	});
+
+	it("PgDn key scrolls the right pane by a full page", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-pgdn-"));
+		try {
+			// Build a long event log so the right pane has room to scroll.
+			const events: Array<Record<string, unknown>> = [
+				{ type: "subagent.step.started", stepIndex: 0, agent: "waiter", ts: 1000 },
+			];
+			for (let i = 0; i < 200; i++) {
+				events.push({
+					type: "tool_execution_start",
+					subagentStepIndex: 0,
+					toolName: "bash",
+					toolCallId: `t${i}`,
+					args: { cmd: `echo ${i}` },
+					observedAt: 1500 + i * 10,
+				});
+				events.push({
+					type: "tool_execution_end",
+					subagentStepIndex: 0,
+					toolCallId: `t${i}`,
+					observedAt: 1500 + i * 10 + 5,
+				});
+			}
+			makeEventsFile(dir, events);
+
+			const run = createRun("run-pgdn", "running", { asyncDir: dir });
+			const component = new SubagentsStatusComponent(
+				createTestTui(() => {}),
+				createTestTheme(),
+				() => {},
+				{
+					listRunsForOverlay: () => ({ active: [run], recent: [] }),
+					refreshMs: 1000,
+				},
+			);
+
+			try {
+				// First render establishes lastRightHeight/lastRightWidth for the scroller.
+				// The right pane is sticky-to-bottom by design (tail-style transcript), so
+				// the initial scroll offset is at the bottom, not the top.
+				component.render(120);
+				const bottom = component.getRightPaneScrollTop();
+				assert.ok(bottom > 0, `right pane should start sticky-at-bottom, got ${bottom}`);
+
+				// Scroll back to the top using PgUp (CSI 5~). Need multiple presses to clear
+				// the full transcript depth; loop until we hit 0 or run out of iterations.
+				for (let i = 0; i < 50 && component.getRightPaneScrollTop() > 0; i++) {
+					component.handleInput("\x1b[5~");
+				}
+				assert.equal(component.getRightPaneScrollTop(), 0, "PgUp should walk back to the top");
+
+				// PgDn legacy sequence (CSI 6~) advances by a full page.
+				component.handleInput("\x1b[6~");
+				const afterPgDn = component.getRightPaneScrollTop();
+				assert.ok(afterPgDn > 0, `PgDn should advance the right-pane offset, got ${afterPgDn}`);
+
+				// Walk back to top again and verify the direct API matches the keypress delta.
+				for (let i = 0; i < 50 && component.getRightPaneScrollTop() > 0; i++) {
+					component.handleInput("\x1b[5~");
+				}
+				component.scrollRightPaneByPage(1);
+				const afterApiPage = component.getRightPaneScrollTop();
+				assert.equal(afterApiPage, afterPgDn, "scrollRightPaneByPage(1) matches PgDn keypress");
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

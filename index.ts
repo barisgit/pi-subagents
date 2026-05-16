@@ -734,6 +734,7 @@ EXECUTION (use exactly ONE mode):
 • ASYNC: add async:true for background work; inspect with action:"status" or /subagents-status.
 • Optional: context "fresh"|"fork" (default fresh), preset "name". Use fork only for same-role session branching; use fresh for specialists.
 • Always include a short \`label\` (5-10 words) summarizing what each subagent will do, e.g. "recon run-shape call sites" or "fix null check in foo.ts". Used in live widgets and status overlays.
+• Top-level \`label\` summarizes the WHOLE spawn (widget row title, dashboard left-pane row); per-task \`label\` inside \`tasks[]\` / \`chain[]\` summarizes EACH individual subagent (dashboard right-pane step header). Both are optional; agent name is used when absent.
 
 MODE SELECTION:
 • Use CHAIN for dependent phases, PARALLEL/SWARM for independent branches or review diversity, ASYNC only when the parent can continue.

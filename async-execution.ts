@@ -68,6 +68,11 @@ export interface AsyncExecutionContext {
 
 export interface AsyncChainParams {
 	chain: ChainStep[];
+	/**
+	 * Caller-provided top-level label for the whole run (parallel/chain group title).
+	 * When set, this wins over any per-step label inference for the run-level label.
+	 */
+	label?: string;
 	agents: AgentConfig[];
 	ctx: AsyncExecutionContext;
 	availableModels?: AvailableModelInfo[];
@@ -348,6 +353,7 @@ export function executeAsyncChain(
 			{
 				id,
 				steps,
+				...(params.label ? { label: params.label } : {}),
 				resultPath: path.join(RESULTS_DIR, `${id}.json`),
 				cwd: runnerCwd,
 				placeholder: "{previous}",

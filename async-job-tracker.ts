@@ -2,12 +2,14 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { renderWidget } from "./render.ts";
+import { deriveRunDisplayState } from "./run-liveness.ts";
 import { formatControlNoticeMessage } from "./subagent-control.ts";
 import {
 	type AsyncJobState,
 	type ControlEvent,
 	type SubagentState,
 	POLL_INTERVAL_MS,
+	RESULTS_DIR,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 } from "./types.ts";
@@ -136,6 +138,18 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.stepsTotal = status.steps?.length ?? job.stepsTotal;
 						job.startedAt = status.startedAt ?? job.startedAt;
 						job.updatedAt = status.lastUpdate ?? Date.now();
+						job.runnerHeartbeatAt = status.runnerHeartbeatAt ?? job.runnerHeartbeatAt;
+						job.pid = status.pid ?? job.pid;
+						job.displayState = deriveRunDisplayState({
+							state: job.status,
+							activityState: job.activityState,
+							currentTool: job.currentTool,
+							lastActivityAt: job.lastActivityAt,
+							lastUpdate: status.lastUpdate,
+							runnerHeartbeatAt: status.runnerHeartbeatAt,
+							pid: status.pid,
+							resultPath: path.join(RESULTS_DIR, `${status.runId || job.asyncId}.json`),
+						});
 						if (status.steps?.length) {
 							job.agents = status.steps.map((step) => step.agent);
 							// Mirror per-step colors so widget/dashboard can tint each sibling in a
@@ -185,10 +199,20 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					if (isTerminalAsyncStatus(job.status)) continue;
 					emitNewControlEvents(job);
 					job.status = job.status === "queued" ? "running" : job.status;
-					job.updatedAt = Date.now();
+					job.displayState = deriveRunDisplayState({
+						state: job.status,
+						activityState: job.activityState,
+						currentTool: job.currentTool,
+						lastActivityAt: job.lastActivityAt,
+						lastUpdate: job.updatedAt,
+						runnerHeartbeatAt: job.runnerHeartbeatAt,
+						pid: job.pid,
+						resultPath: path.join(RESULTS_DIR, `${job.asyncId}.json`),
+					});
 				} catch (error) {
 					console.error(`Failed to read async status for '${job.asyncDir}':`, error);
 					job.status = "failed";
+					job.displayState = undefined;
 					job.updatedAt = Date.now();
 				}
 			}
@@ -213,6 +237,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			asyncId: info.id,
 			asyncDir,
 			status: "queued",
+			displayState: "quiet",
 			mode: info.chain ? "chain" : "single",
 			agents,
 			stepsTotal: agents?.length,
@@ -232,6 +257,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		const job = state.asyncJobs.get(asyncId);
 		if (job) {
 			job.status = result.success ? "complete" : "failed";
+			job.displayState = undefined;
 			job.updatedAt = Date.now();
 			if (result.asyncDir) job.asyncDir = result.asyncDir;
 		}

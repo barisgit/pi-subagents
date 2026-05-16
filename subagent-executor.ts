@@ -705,6 +705,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				),
 				worktree: params.worktree,
 			}],
+			...(params.label ? { label: params.label } : {}),
 			agents,
 			ctx: asyncCtx,
 			availableModels,
@@ -733,6 +734,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
 		return executeAsyncChain(id, {
 			chain,
+			...(params.label ? { label: params.label } : {}),
 			agents,
 			ctx: asyncCtx,
 			availableModels,
@@ -875,6 +877,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
 		return executeAsyncChain(id, {
 			chain: asyncChain,
+			...(params.label ? { label: params.label } : {}),
 			agents,
 			ctx: asyncCtx,
 			availableModels: ctx.modelRegistry.getAvailable().map((m) => ({
@@ -1266,6 +1269,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			}));
 			return executeAsyncChain(id, {
 				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
+				...(params.label ? { label: params.label } : {}),
 				agents,
 				ctx: asyncCtx,
 				availableModels,
@@ -1931,10 +1935,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					return [(step as SequentialStep).label ?? ""];
 				})
 				: undefined;
+		// Run-level label precedence: top-level params.label wins over per-step inference;
+		// single -> step label; parallel/chain with uniform per-step labels -> shared label.
 		let foregroundRunLabel: string | undefined;
-		if (foregroundMode === "single") {
-			foregroundRunLabel = effectiveParams.label || undefined;
-		} else if (foregroundMode === "parallel" && foregroundAgentLabels && foregroundAgentLabels.length > 0) {
+		if (effectiveParams.label) {
+			foregroundRunLabel = effectiveParams.label;
+		} else if (foregroundMode === "single") {
+			foregroundRunLabel = foregroundAgentLabels?.[0] || undefined;
+		} else if (foregroundAgentLabels && foregroundAgentLabels.length > 0) {
 			const first = foregroundAgentLabels[0];
 			if (first && foregroundAgentLabels.every((l) => l === first)) foregroundRunLabel = first;
 		}

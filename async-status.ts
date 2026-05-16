@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
-import { type ActivityState, type AsyncStatus, type TokenUsage } from "./types.ts";
+import { type ActivityState, type AsyncStatus, RESULTS_DIR, type RunDisplayState, type TokenUsage } from "./types.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
+import { deriveRunDisplayState } from "./run-liveness.ts";
 import { readStatus } from "./utils.ts";
 
 export interface AsyncRunStepSummary {
@@ -11,6 +12,7 @@ export interface AsyncRunStepSummary {
 	label?: string;
 	status: string;
 	activityState?: ActivityState;
+	displayState?: RunDisplayState;
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
@@ -30,6 +32,7 @@ export interface AsyncRunSummary {
 	label?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
+	displayState?: RunDisplayState;
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
@@ -38,6 +41,8 @@ export interface AsyncRunSummary {
 	startedAt: number;
 	lastUpdate?: number;
 	endedAt?: number;
+	runnerHeartbeatAt?: number;
+	pid?: number;
 	currentStep?: number;
 	steps: AsyncRunStepSummary[];
 	sessionDir?: string;
@@ -105,12 +110,24 @@ function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { acti
 
 function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string }): AsyncRunSummary {
 	const { activityState, lastActivityAt } = deriveAsyncActivityState(asyncDir, status);
+	const id = status.runId || path.basename(asyncDir);
+	const displayState = deriveRunDisplayState({
+		state: status.state,
+		activityState,
+		currentTool: status.currentTool,
+		lastActivityAt,
+		lastUpdate: status.lastUpdate,
+		runnerHeartbeatAt: status.runnerHeartbeatAt,
+		pid: status.pid,
+		resultPath: path.join(RESULTS_DIR, `${id}.json`),
+	});
 	return {
-		id: status.runId || path.basename(asyncDir),
+		id,
 		asyncDir,
 		...(status.label ? { label: status.label } : {}),
 		state: status.state,
 		activityState,
+		...(displayState ? { displayState } : {}),
 		lastActivityAt,
 		currentTool: status.currentTool,
 		currentToolStartedAt: status.currentToolStartedAt,
@@ -119,16 +136,31 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		startedAt: status.startedAt,
 		lastUpdate: status.lastUpdate,
 		endedAt: status.endedAt,
+		runnerHeartbeatAt: status.runnerHeartbeatAt,
+		pid: status.pid,
 		currentStep: status.currentStep,
 		steps: (status.steps ?? []).map((step, index) => {
 			const stepActivityState = step.activityState ?? (step.status === "running" ? activityState : undefined);
 			const stepLastActivityAt = step.lastActivityAt ?? (step.status === "running" ? lastActivityAt : undefined);
+			const stepDisplayState = displayState === "lost" && step.status === "running"
+				? "lost"
+				: deriveRunDisplayState({
+					state: step.status,
+					activityState: stepActivityState,
+					currentTool: step.currentTool,
+					lastActivityAt: stepLastActivityAt,
+					lastUpdate: status.lastUpdate,
+					runnerHeartbeatAt: status.runnerHeartbeatAt,
+					pid: status.pid,
+					resultPath: path.join(RESULTS_DIR, `${id}.json`),
+				});
 			return {
 				index,
 				agent: step.agent,
 				...(step.label ? { label: step.label } : {}),
 				status: step.status,
 				...(stepActivityState ? { activityState: stepActivityState } : {}),
+				...(stepDisplayState ? { displayState: stepDisplayState } : {}),
 				...(stepLastActivityAt ? { lastActivityAt: stepLastActivityAt } : {}),
 				...(step.currentTool ? { currentTool: step.currentTool } : {}),
 				...(step.currentToolStartedAt ? { currentToolStartedAt: step.currentToolStartedAt } : {}),
@@ -214,7 +246,7 @@ function formatActivityFacts(input: { activityState?: ActivityState; lastActivit
 }
 
 function formatStepLine(step: AsyncRunStepSummary): string {
-	const parts = [`${step.index + 1}. ${step.agent}`, step.status];
+	const parts = [`${step.index + 1}. ${step.agent}`, step.displayState ? `${step.status}/${step.displayState}` : step.status];
 	const activity = formatActivityFacts(step);
 	if (activity) parts.push(activity);
 	if (step.model) parts.push(step.model);
@@ -228,7 +260,8 @@ function formatRunHeader(run: AsyncRunSummary): string {
 	const stepLabel = run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
 	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir);
 	const activity = formatActivityFacts(run);
-	return `${run.id} | ${run.state}${activity ? ` | ${activity}` : ""} | ${run.mode} | ${stepLabel} | ${cwd}`;
+	const state = run.displayState ? `${run.state}/${run.displayState}` : run.state;
+	return `${run.id} | ${state}${activity ? ` | ${activity}` : ""} | ${run.mode} | ${stepLabel} | ${cwd}`;
 }
 
 export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {
