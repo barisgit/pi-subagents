@@ -1,32 +1,35 @@
 ---
 name: pi-subagents
 description: |
-  Delegate work to builtin or custom subagents with single-agent, chain,
-  parallel, async, forked-context, and intercom-coordinated workflows. Use
-  for advisory review, implementation handoffs, and multi-step tasks where a
-  single agent should stay in control while other agents contribute context,
-  planning, or execution.
+  Delegate work to available subagents with single-agent, chain, parallel,
+  swarm, async, fresh-context, and same-role fork workflows. Use when composing
+  delegated execution, review, QA, research, or agent/chain management without
+  assuming any particular builtin agent is enabled.
 ---
 
 # Pi Subagents
 
-Use this skill when you need to launch a specialized subagent, compose multiple
-agents into a workflow, or create/edit agents and chains on demand.
+Use this skill when you need to launch subagents, compose several delegated
+steps, inspect async runs, or create/update agent and chain definitions. This
+reference is user-config agnostic: agent names vary by installation, and builtin
+agents may be disabled or overridden.
 
-## When to Use
+## First Principle: Discover Before Naming
 
-- **Advisory review**: fork to `oracle` or `reviewer` for a branched review thread
-- **Implementation handoff**: have `oracle` advise, then `oracle-executor` or `worker` implement
-- **Recon and planning**: use `scout` or `context-builder`, then `planner`
-- **Parallel exploration**: run multiple non-conflicting tasks concurrently
-- **Long-running work**: launch async/background runs and inspect them later
-- **Subagent control**: watch needs-attention signals and soft-interrupt only when a delegated run is genuinely blocked
-- **Agent authoring**: create, update, or override agents and chains for a project
+If you are not certain an agent or chain exists and is enabled, list available
+agents first:
+
+```typescript
+subagent({ action: "list" })
+```
+
+Then choose an available agent whose description matches the role you need. Do
+not assume package-shipped agent names are available in the user's setup.
 
 ## Tool vs Slash Commands
 
-Agents can use the `subagent(...)` tool directly for execution, management, status, and control.
-Humans often use the slash-command layer instead:
+Agents use the `subagent(...)` tool directly for execution, management, status,
+and control. Humans often use slash commands instead:
 
 - `/run` — launch a single agent
 - `/chain` — launch a chain of steps
@@ -34,38 +37,10 @@ Humans often use the slash-command layer instead:
 - `/agents` — open the agents manager TUI
 - `/subagents-status` — inspect active/recent async runs
 
-Prefer the tool when you are writing agent logic. Prefer the slash commands when
-you are guiding a human through an interactive flow.
+Prefer the tool when writing agent logic. Prefer slash commands when guiding a
+human through an interactive flow.
 
-## Builtin Agents
-
-Builtin agents load at the lowest priority. Project agents override user agents,
-and user/project agents override builtins with the same name.
-
-| Agent | Purpose | Model | Typical output / role |
-|-------|---------|-------|------------------------|
-| `scout` | Fast codebase recon | `openai-codex/gpt-5.4-mini` | Writes `context.md` handoff material |
-| `planner` | Creates implementation plans | `openai-codex/gpt-5.5` | Writes `plan.md` |
-| `worker` | General implementation | `openai-codex/gpt-5.5` | Edits code directly |
-| `reviewer` | Review-and-fix specialist | `openai-codex/gpt-5.5` | Can edit/fix reviewed code |
-| `context-builder` | Requirements/codebase handoff builder | `openai-codex/gpt-5.5` | Writes structured context files |
-| `researcher` | Web research brief generator | `openai-codex/gpt-5.5` | Writes `research.md` |
-| `delegate` | Lightweight generic delegate | inherits parent model | No fixed output; generic delegated work |
-| `oracle` | Decision-consistency advisory review | `openai-codex/gpt-5.5` | Advisory review, intercom coordination |
-| `oracle-executor` | Implementation after approval | `openai-codex/gpt-5.5` | Single-writer implementation after approval |
-
-Override builtin defaults via settings before copying full agent files when a
-small tweak is enough.
-
-Settings locations:
-- User scope: `~/.pi/agent/settings.json`
-- Project scope: `.pi/settings.json`
-
-Useful override fields: `model`, `fallbackModels`, `thinking`,
-`systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `disabled`,
-`skills`, `tools`, and `systemPrompt`.
-
-## Discovery and Scope Rules
+## Agent and Chain Discovery
 
 Agent files can live in:
 - `~/.pi/agent/agents/*.md` — user scope
@@ -80,122 +55,172 @@ Chains live in:
 Precedence is:
 1. project scope
 2. user scope
-3. builtin agents
+3. extension/builtin scope
 
-## Running Subagents
+Builtin agents, when enabled, load at the lowest priority and are implementation
+details of the package. Treat them as optional examples, not a workflow contract.
 
-### Mode selection heuristics
+## Choosing a Delegation Shape
 
-- Use **single** for one small, bounded task.
-- Use **chain** instead of manual serial calls when stages depend on each other, e.g. explore → plan → build → review.
-- Use **parallel** when branches are independent, especially read-only recon or non-overlapping implementation work.
-- Use **swarm** (`prompt` + `tasks`) when you want multiple perspectives, approach comparisons, review diversity, or one common prompt applied to several focus areas.
-- Use **async** when the parent agent/main thread can keep working while child agents run; inspect with `subagent({ action: "status" })` or `/subagents-status`.
-- Use `worktree: true` for concurrent edits that might otherwise collide.
-- Do not use `clarify` unless a human explicitly requested an interactive launch preview.
+- Use **single** for one bounded task.
+- Use **chain** when later steps depend on earlier output, e.g. recon → plan → implementation → review.
+- Use **parallel** when branches are independent, especially read-only recon or non-overlapping work.
+- Use **swarm** (`prompt` + `tasks`) when you want the same prompt applied to multiple focuses or perspectives.
+- Use **async** when the parent thread can continue while children run; inspect with `subagent({ action: "status" })` or `/subagents-status`.
+- Use `worktree: true` only for concurrent write workflows that need isolated git worktrees.
+- Use `clarify: true` only when a human should preview or edit launch parameters.
 
-### Single agent
+## Fresh vs Fork
+
+`context` defaults to `"fresh"`. Fresh context is the normal choice for role
+changes and specialist delegation: recon agents, implementers, reviewers, QA,
+researchers, or any other different agent identity.
+
+`context: "fork"` is only for same-role self-branching. A fork starts a real
+branched child session from the current persisted parent session. It inherits
+parent history; it is not a filtered review context. Runtime enforcement rejects
+forks that try to switch to a different agent identity.
+
+Use this rule:
+
+- Different agent or role → use fresh context or omit `context`.
+- Same agent continuing in a separate branch → `context: "fork"` may be valid.
+- Unsure → use fresh context.
+
+## Single Agent
 
 ```typescript
 subagent({
-  agent: "oracle",
-  task: "Review my current direction and challenge assumptions."
+  agent: "<available-agent>",
+  task: "Inspect the API client retry behavior and summarize concrete risks.",
+  label: "inspect retry risks"
 })
 ```
 
-### Forked context
+Omit `task` only for self-contained agents whose prompt already defines the
+work.
 
-```typescript
-subagent({
-  agent: "oracle",
-  task: "Review my current direction and challenge assumptions.",
-  context: "fork"
-})
-```
+## Parallel Execution
 
-`context: "fork"` creates a branched child session from the current persisted
-parent session. It does **not** create a fresh minimal review context or filter
-history down to only the relevant parts. Use it when you want a separate review
-or execution thread that can still reference the parent session history.
-
-### Parallel execution
+Use parallel for independent tasks. Keep tasks narrow and include per-branch
+labels when the run will be visible in widgets or status views.
 
 ```typescript
 subagent({
   tasks: [
-    { agent: "scout", task: "Explore the auth module" },
-    { agent: "reviewer", task: "Review the API client" }
-  ]
+    {
+      agent: "<available-recon-agent>",
+      task: "Map the frontend auth flow and list likely change points.",
+      label: "map frontend auth"
+    },
+    {
+      agent: "<available-recon-agent>",
+      task: "Map the backend auth flow and list likely change points.",
+      label: "map backend auth"
+    }
+  ],
+  label: "parallel auth recon"
 })
 ```
 
-### Swarm execution
+If all branches use the same agent, pass top-level `agent` and use strings or
+`{ task }` objects:
 
 ```typescript
 subagent({
-  prompt: "Review the codebase for risks in this area. Focus on: {in}",
-  tasks: [
-    { agent: "scout", task: "authentication flow" },
-    { agent: "reviewer", task: "API boundaries" },
-    { agent: "oracle", task: "architecture trade-offs" }
-  ]
+  agent: "<available-review-agent>",
+  prompt: "Review for regressions in: {in}",
+  tasks: ["authentication", "billing", "settings"]
 })
 ```
 
-### Chain execution
+## Swarm Execution
+
+Swarm is parallel execution with a shared prompt. Use it for review diversity,
+approach comparisons, or one common checklist over several focuses.
+
+```typescript
+subagent({
+  prompt: "Evaluate this plan from the perspective of {in}. Return risks and one recommendation.",
+  tasks: ["correctness", "maintainability", "runtime validation"],
+  agent: "<available-advisory-agent>"
+})
+```
+
+## Chain Execution
+
+Use chains for dependent phases. Chain steps can use `{task}`, `{previous}`, and
+`{chain_dir}`.
 
 ```typescript
 subagent({
   chain: [
-    { agent: "scout", task: "Map the auth flow and summarize key files" },
-    { agent: "planner", task: "Create an implementation plan from {previous}" },
-    { agent: "worker", task: "Implement the approved plan based on {previous}" }
-  ]
+    {
+      agent: "<available-recon-agent>",
+      task: "Gather the minimum context needed for: {task}",
+      label: "gather context"
+    },
+    {
+      agent: "<available-implementation-agent>",
+      task: "Implement the smallest correct change using this context: {previous}",
+      label: "implement change"
+    },
+    {
+      agent: "<available-review-or-qa-agent>",
+      task: "Validate the change and report any blocking issues: {previous}",
+      label: "validate change"
+    }
+  ],
+  label: "context implement validate"
 })
 ```
 
-Chain steps can use templated variables such as `{task}`, `{previous}`, and
-`{chain_dir}`. This is the main way to pass structured summaries between steps
-without forcing each step to rediscover everything.
+Prefer one writer step by default. Use parallel writers only when work is truly
+independent and you can isolate or merge the results safely.
 
-### Async/background
+## Async and Status
 
 ```typescript
 subagent({
-  agent: "worker",
-  task: "Run the full test suite",
-  async: true
+  agent: "<available-qa-agent>",
+  task: "Run the full integration suite and report failures with artifacts.",
+  async: true,
+  label: "run integration suite"
 })
 ```
 
-Inspect async runs with `subagent({ action: "status", id: "..." })`, `subagent({ action: "status" })` for active runs, or the `/subagents-status` slash command.
-
-### Subagent control
-
-Subagent control is the runtime visibility and intervention layer for delegated runs. It is separate from lifecycle status. Lifecycle status says whether a child is `queued`, `running`, `paused`, `complete`, or `failed`. Activity reporting is factual: it tracks the last observed activity time and the current tool when known. It does not pretend to know that a child is truly stuck.
-
-Default behavior is intentionally conservative. When no activity has been observed past the configured threshold, the run emits a `needs_attention` control event. Foreground runs can push this as a `subagent:control-event` event, and async runs persist it to `events.jsonl` so the parent tracker can surface it without constant manual polling. Notification-worthy control events are also inserted into the visible transcript so both the user and the parent agent can see them, with a proactive hint plus concrete `nudge`, `status`, and `interrupt` options. Visible notifications fire once per child run and attention state.
-
-Use soft interrupt when a child is clearly blocked or drifting and the parent needs to regain control:
+Inspect async runs with:
 
 ```typescript
-subagent({ action: "interrupt" })
+subagent({ action: "status" })
+subagent({ action: "status", id: "<run-id-or-prefix>" })
 ```
 
-Pass `id` when targeting a specific controllable run:
+Use async only when the parent can keep coordinating or return control cleanly.
+
+## Subagent Control
+
+Subagent control is separate from lifecycle status. `needs_attention` means no
+activity has been observed past the configured threshold; it does not prove the
+child failed.
+
+Use soft interrupt only when a child is clearly blocked, drifting, or a human
+asks you to regain control:
 
 ```typescript
-subagent({ action: "interrupt", id: "abc123" })
+subagent({ action: "interrupt", id: "<run-id-or-prefix>" })
 ```
 
-A soft interrupt cancels the current child turn and leaves the run paused. It does not mean the delegated task succeeded or failed. After an interrupt, decide the next explicit action: resume with clearer instructions, replace the task, ask the user, or stop the workflow.
+A soft interrupt cancels the current child turn and leaves the run paused. After
+interrupting, explicitly decide whether to resume with clearer instructions,
+replace the task, ask the user, or stop.
 
-Per-run control thresholds can be overridden when a task legitimately runs without observable output for longer than usual:
+For legitimately quiet long-running tasks, override the threshold:
 
 ```typescript
 subagent({
-  agent: "worker",
-  task: "Run the slow migration test suite",
+  agent: "<available-qa-agent>",
+  task: "Run the slow migration test suite.",
   control: {
     needsAttentionAfterMs: 300000,
     notifyOn: ["needs_attention"]
@@ -203,106 +228,107 @@ subagent({
 })
 ```
 
-If the run already has an active intercom bridge target, needs-attention notifications can also prepare a compact intercom ping for the orchestrator. When a child route is available, the ping tells the orchestrator which agent needs attention and includes the exact `intercom({ action: "send", to: "..." })` target for a nudge. Do not invent a target or ask the child to self-report when no bridge exists.
-
 ## Clarify TUI
 
-Single, parallel, and chain runs support a clarification TUI when you want a human to preview or
-edit parameters before launch:
+Single, parallel, and chain runs support a clarification TUI:
 
 ```typescript
 subagent({
-  agent: "worker",
-  task: "Implement feature X",
+  agent: "<available-agent>",
+  task: "Implement feature X.",
   clarify: true
 })
 ```
 
-Clarify is opt-in for all modes, including chains. Use `clarify: true` only when a human should preview/edit before launch.
-For programmatic background launches, use `async: true` and leave `clarify` unset or set `clarify: false`.
-
-For swarm-style parallel dispatch, pass a top-level `prompt`; use `{in}` once to insert each task, or omit `{in}` to append each task after the common prompt. If all branches use the same agent, pass top-level `agent` and use `tasks` as plain strings or `{ task }` objects, e.g. `subagent({ agent: "explorer", prompt: "Review {in}", tasks: ["auth", "API"] })`.
+Use `clarify: true` only when a human should preview or edit parameters before
+launch. For programmatic background launches, use `async: true` and leave
+`clarify` unset or false.
 
 ## Worktree Isolation
 
-When multiple agents might write concurrently, use worktrees instead of letting
-them share one filesystem view.
+Use `worktree: true` when multiple agents may write concurrently:
 
 ```typescript
 subagent({
   tasks: [
-    { agent: "worker", task: "Implement feature A" },
-    { agent: "worker", task: "Implement feature B" }
+    { agent: "<available-implementation-agent>", task: "Implement feature A." },
+    { agent: "<available-implementation-agent>", task: "Implement feature B." }
   ],
   worktree: true
 })
 ```
 
-`worktree: true` gives each parallel task its own git worktree branched from
-HEAD. This requires a clean git state and is mainly for intentionally parallel
-write workflows. If you want one writer thread and several advisory agents,
-prefer a single-writer pattern instead.
+This requires a clean git state and is mainly for intentionally parallel write
+workflows. If you want one writer plus advisory/review agents, prefer a
+single-writer pattern.
 
-## The Oracle Workflow
+## Writing Good Delegated Tasks
 
-The intended oracle loop is:
-1. the main agent forks to `oracle`
-2. `oracle` reviews direction, drift, assumptions, and risks
-3. `oracle` can coordinate back to the orchestrator via `intercom`
-4. the main agent decides what direction to approve
-5. only then should `oracle-executor` implement
+Good delegated tasks include:
+
+- the desired outcome
+- relevant files, commands, or constraints already known
+- what to ignore or avoid
+- whether the child may edit files
+- what evidence or summary to return
+
+Prefer:
+
+```text
+Review src/auth/session.ts for token-expiry regressions introduced by this diff.
+Read only. Return blocking issues with line references; do not edit.
+```
+
+Over:
+
+```text
+Review everything.
+```
+
+## Coordination Patterns
+
+### Single-writer workflow
+
+Use one implementation agent for writes, with separate fresh-context recon,
+advisory, review, or QA agents around it.
+
+### Recon → Implement → Validate
+
+Run recon first, pass its result into an implementation step, then validate with
+a read-only reviewer or runtime QA agent. Use a chain when each step depends on
+the previous result.
+
+### Parallel read-only recon
+
+Run multiple read-only branches in parallel when they inspect independent areas.
+Synthesize their outputs before deciding the next implementation step.
+
+### Same-role fork
+
+Use fork only when the current agent should continue as itself in a separate
+branch. Do not use fork to launch a different specialist.
 
 ```typescript
-// Advisory review in a branched thread
 subagent({
-  agent: "oracle",
-  task: "Review my current direction, challenge assumptions, and propose the best next move.",
-  context: "fork"
-})
-
-// Implementation only after explicit approval
-subagent({
-  agent: "oracle-executor",
-  task: "Implement the approved approach: ...",
+  agent: "<current-agent-name>",
+  task: "Explore an alternate plan in a branched copy of this session.",
   context: "fork"
 })
 ```
 
-`oracle` is not a fresh-context reviewer in the Cognition article sense. It is
-a forked advisory thread that inherits the parent session history and uses that
-history as a baseline contract.
-
-## Subagent + Intercom Coordination
+## Intercom Coordination
 
 When `pi-intercom` is installed and enabled, delegated runs can coordinate with
 the orchestrator through the intercom bridge.
 
-### Subagent asks the orchestrator
+Use intercom when:
 
-```typescript
-intercom({
-  action: "ask",
-  to: "orchestrator",
-  message: "Should I optimize for readability or performance here?"
-})
-```
-
-### Orchestrator replies
-
-```typescript
-intercom({ action: "reply", message: "Optimize for readability." })
-```
-
-Or inspect unresolved asks first:
-
-```typescript
-intercom({ action: "pending" })
-```
-
-Use `intercom` when:
 - a subagent is blocked on a decision
 - an advisory agent wants to send a concise handoff mid-flight
-- a detached or async child needs to coordinate without waiting for normal tool return flow
+- an async child needs to coordinate without waiting for normal tool return flow
+
+Do not let advisory children silently become second decision-makers; escalate
+unapproved product, architecture, or scope choices upward.
 
 ## Management Mode
 
@@ -324,7 +350,6 @@ subagent({
     description: "Project-specific implementation helper",
     systemPrompt: "Your system prompt here.",
     systemPromptMode: "replace",
-    model: "openai-codex/gpt-5.4",
     tools: "read,grep,find,ls,bash"
   }
 })
@@ -348,8 +373,8 @@ subagent({
 subagent({ action: "delete", agent: "my-agent" })
 ```
 
-Use management actions when the system needs to create or edit subagents on
-demand without dropping into raw file editing.
+Use management actions when the system should create or edit subagents on demand
+without dropping into raw file editing.
 
 ## Creating and Editing Agents by File
 
@@ -370,102 +395,31 @@ inheritSkills: false
 Your system prompt here.
 ```
 
-That is only a starting point. Common optional fields include:
+Common optional fields include:
 - `defaultProgress`
 - `defaultReads`
 - `output`
 - `fallbackModels`
 - `maxSubagentDepth`
 
-For many customizations, builtin overrides in settings are lower-friction than
-copying a full builtin file.
+For small changes to extension-shipped agents, settings overrides are often
+lower-friction than copying full agent files.
 
 ## Prompt Template Integration
 
 If `pi-prompt-template-model` is installed, prompt templates can delegate into
 `pi-subagents`. This is useful when a slash command should always run through a
-particular agent or with forked context.
+particular available agent. Use forked context only for same-role self-branching.
 
 ## Important Constraints
 
-- **Forking requires a persisted parent session.** If the current session does not
-  have a persisted session file, forked runs fail.
-- **Forked runs inherit parent history.** They are branched threads, not fresh
-  filtered contexts.
-- **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
-  unless configured otherwise.
+- **Forking requires a persisted parent session.** If the current session does not have a persisted session file, forked runs fail.
+- **Forked runs inherit parent history.** They are branched threads, not fresh filtered contexts.
+- **Fork is same-role only.** Use fresh context for role changes and specialist delegation.
+- **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked unless configured otherwise.
 - **Attention signals are not lifecycle state.** `needs_attention` means no activity has been observed past the configured threshold. `paused` means the child turn was intentionally interrupted or is awaiting direction; it is not the same as `failed`.
-- **Intercom asks are blocking.** A session can only maintain one pending outbound
-  ask wait state at a time.
-- **Keep conversational authority clear.** Advisory subagents should not silently
-  become second decision-makers.
-
-## Best Practices
-
-### Keep writes single-threaded by default
-
-A strong pattern is one main decision-maker plus advisory/research/review
-subagents around it. Use `oracle` for advice and `oracle-executor` or `worker`
-for the actual write path.
-
-### Use fork for branched advisory or execution threads
-
-Forked runs are useful when the child should reason in a separate thread while
-still inheriting the parent’s accumulated context.
-
-### Prefer narrow tasks
-
-Give subagents specific tasks rather than vague mandates.
-`Review auth.ts for null-check gaps` works better than `Review everything`.
-
-### Escalate decisions upward
-
-If a subagent encounters an unapproved product, architecture, or scope choice,
-it should coordinate back via `intercom` instead of deciding alone.
-
-### Intervene only on clear control signals
-
-Use subagent control proactively when a delegated run emits `needs_attention`, or when a human asks you to regain control. Do not interrupt just because a child has briefly produced no output. Silence can be normal during long tool calls, test runs, or model reasoning.
-
-### Name sessions meaningfully
-
-Use `/name` so intercom targeting stays stable.
-
-## Common Workflows
-
-### Recon → Plan → Implement
-
-```typescript
-subagent({
-  chain: [
-    { agent: "scout", task: "Map the auth flow and summarize relevant files" },
-    { agent: "planner", task: "Plan the migration from {previous}" },
-    { agent: "worker", task: "Implement the approved plan from {previous}" }
-  ]
-})
-```
-
-### Review loop
-
-```typescript
-subagent({ agent: "worker", task: "Add retry logic to the API client." })
-subagent({
-  agent: "reviewer",
-  task: "Review the retry logic implementation. Look for edge cases and race conditions.",
-  context: "fork"
-})
-```
-
-### Parallel non-conflicting analysis
-
-```typescript
-subagent({
-  tasks: [
-    { agent: "scout", task: "Audit frontend auth flow" },
-    { agent: "researcher", task: "Research current retry/backoff best practices" }
-  ]
-})
-```
+- **Intercom asks are blocking.** A session can only maintain one pending outbound ask wait state at a time.
+- **Keep authority clear.** Root/main coordinates; delegated specialists execute bounded tasks and escalate unapproved decisions.
 
 ## Error Handling
 

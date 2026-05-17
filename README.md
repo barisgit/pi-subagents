@@ -46,12 +46,9 @@ Project discovery also reads legacy `.agents/{name}.md` files. If both `.agents/
 
 Use `agentScope` parameter to control discovery: `"user"`, `"project"`, or `"both"` (default; project takes priority).
 
-**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, `delegate`, `oracle`, and `oracle-executor`. They load at lowest priority so any user or project agent with the same name overrides them.
+**Builtin agents:** The extension ships with optional ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, `delegate`, `oracle`, and `oracle-executor`. They load at lowest priority, can be disabled, and any user or project agent with the same name overrides them. Treat these as package examples, not required workflow doctrine.
 
-- `oracle` is a high-context advisory reviewer on `openai-codex/gpt-5.5`. It critiques direction, surfaces hidden risks, and proposes a concrete execution prompt, but it does not edit files directly.
-- `oracle-executor` is a high-context implementation escalator on `openai-codex/gpt-5.5`. It is intended to run only after the main agent explicitly approves a course of action.
-
-You can also override selected builtin fields without copying the whole agent. Builtin overrides are stored in settings under `subagents.agentOverrides`:
+You can override selected builtin fields without copying the whole agent. Builtin overrides are stored in settings under `subagents.agentOverrides`:
 
 - User scope: `~/.pi/agent/settings.json`
 - Project scope: `.pi/settings.json`
@@ -311,36 +308,22 @@ Without `--bg`, the run is foreground: the tool call stays active and streams pr
 
 ### Forked Context Execution
 
-Add `--fork` at the end of `/run`, `/chain`, or `/parallel` to run with `context: "fork"`:
+Add `--fork` only for same-agent self-branching. Forked context starts a real branched session at the current parent leaf; it is not a way to launch a different specialist with inherited history. Cross-agent delegation should use fresh context, which is the default.
 
-```
-/run reviewer "review this diff" --fork
-/chain scout "analyze this branch" -> planner "plan next steps" --fork
-/parallel scout "audit frontend" -> reviewer "audit backend" --fork
-```
-
-You can combine `--fork` and `--bg` in any order:
-
-```
-/run reviewer "review this diff" --fork --bg
-/run reviewer "review this diff" --bg --fork
-```
-
-For the oracle pair, the intended default control loop is:
-
-1. main agent invokes `oracle` with forked context
-2. `oracle` returns diagnosis, recommendation, risks, and a suggested execution prompt
-3. main agent decides whether to accept that direction
-4. only then does main agent invoke `oracle-executor`
-
-Example:
+Example where the current agent is named `my-agent`:
 
 ```text
-/run oracle "Review my current direction, challenge assumptions, and propose the best next move." --fork
-/run oracle-executor "Implement the approved approach: ..." --fork
+/run my-agent "Explore an alternate plan in a branched copy of this session." --fork
 ```
 
-This keeps decision authority in the main thread while still giving you a stronger review/escalation path.
+You can combine `--fork` and `--bg` in any order for same-agent forks:
+
+```text
+/run my-agent "Continue this thread in the background." --fork --bg
+/run my-agent "Continue this thread in the background." --bg --fork
+```
+
+Runtime enforcement rejects forked runs that try to switch agent identity or use overrides that would break prompt/model reuse.
 
 ## Agents Manager
 
@@ -467,18 +450,13 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 | Parallel | Yes | `{ tasks: [{agent, task}...] }` for independent tasks that can run at the same time. With top-level `agent`, task items may omit `agent` or be plain strings. |
 | Swarm | Yes | `{ prompt, tasks }` for parallel perspectives/variants under one common prompt; use `{in}` as the per-task focus placeholder. For a single-agent swarm, use `{ agent, prompt, tasks: ["focus A", "focus B"] }`. |
 
-### Execution mode heuristics
+### Execution context
 
-- Use **single** for one small, bounded task.
-- Use **chain** instead of manual serial calls when stages depend on each other, e.g. explore → plan → build → review.
-- Use **parallel** when branches are independent, especially read-only recon or non-overlapping implementation work.
-- Use **swarm** when you want multiple perspectives, approach comparisons, review diversity, or the same prompt applied to several focus areas.
-- Use **async** for long-running or monitorable work so the parent agent/main thread can continue while child agents run; inspect with `subagent({ action: "status" })` or `/subagents-status`.
-- Use `worktree: true` for concurrent edits that might otherwise collide.
+Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Use fresh context for normal cross-agent delegation.
 
-Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
+`context: "fork"` is intentionally strict: it only allows the current agent to fork itself from the parent's current leaf, reuses the exact current effective system prompt and active model, and rejects clarify plus any top-level/per-step/per-task `model` or `skill` overrides that would break prompt/model reuse.
 
-`context: "fork"` is intentionally strict: it only allows the current agent to fork itself, reuses the exact current effective system prompt and active model, and rejects clarify plus any top-level/per-step/per-task `model` or `skill` overrides that would break prompt/model reuse.
+For workflow guidance and mode-selection patterns, load the bundled `pi-subagents` skill instead of relying on package README examples.
 
 When `intercomBridge` is enabled (default: `always`) and `pi-intercom` is installed/enabled, delegated children get runtime instructions for contacting the orchestrator session via `intercom({ action: "ask"|"send", ... })`.
 
@@ -601,8 +579,8 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 { agent: "scout", task: "find todos", maxOutput: { lines: 1000 } }
 { agent: "scout", task: "investigate", output: false }  // disable file output
 
-// Single agent from parent-session fork (real branched session at current leaf)
-{ agent: "worker", task: "continue this thread", context: "fork" }
+// Same-agent fork from the parent session (only when current agent is also "my-agent")
+{ agent: "my-agent", task: "continue this thread", context: "fork" }
 
 // Parallel
 { tasks: [{ agent: "scout", task: "a" }, { agent: "scout", task: "b" }] }
@@ -620,9 +598,6 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 // Parallel with count shorthand (run the same task 3 times)
 { tasks: [{ agent: "scout", task: "audit auth", count: 3 }] }
 
-// Parallel with forked context (each task gets its own isolated fork)
-{ tasks: [{ agent: "scout", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
-
 // Chain, runs immediately by default
 { chain: [
   { agent: "scout", task: "Gather context for auth refactor" },
@@ -636,12 +611,6 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
   { agent: "scout", task: "Gather context for auth refactor" },
   { agent: "planner" }
 ], clarify: true }
-
-// Chain with forked context (each step gets its own isolated fork of the same parent leaf)
-{ chain: [
-  { agent: "scout", task: "Analyze current branch decisions" },
-  { agent: "planner", task: "Plan from {previous}" }
-], context: "fork" }
 
 // Async chain (no launch preview unless clarify:true is explicitly set)
 { chain: [...], async: true }
@@ -1064,23 +1033,12 @@ Bridge activation also requires all of the following:
 
 When an unnamed session falls back to `subagent-chat-<id>`, that alias is used only for the live intercom broker. It is not persisted as the Pi session title, so `pi --resume` can still show the transcript snippet.
 
-If you want a stronger prompt contract for forked chat-back runs without changing builtins, define a custom agent for it. Keeping that as an opt-in agent works better than teaching every delegated run to behave this way.
+If you want a stronger prompt contract for same-agent forked chat-back runs, put that contract in the agent that will be forking itself. Do not create a separate differently named "fork worker" and expect `context: "fork"` to switch into it; fork mode is same-agent only.
 
-Example agent:
+Example prompt text for an agent that may self-fork:
 
 ```md
----
-name: fork-chatback
-description: Forked worker that asks the orchestrator questions through intercom when needed
-tools: read, bash, edit, write, intercom
-systemPromptMode: replace
-inheritProjectContext: true
-inheritSkills: false
----
-
-You are a delegated worker running from a fork of the orchestrator session.
-
-Treat the inherited conversation as reference-only context. Do not continue that conversation in normal assistant text.
+When launched with forked context, treat the inherited conversation as reference-only context. Do not continue that conversation in normal assistant text.
 
 Your job is to do the task. If you need a decision, clarification, or unblock from the orchestrator, use `intercom` to ask the orchestrator session named in the runtime bridge instructions.
 
@@ -1089,7 +1047,7 @@ If you need to send a progress update or completion handoff upstream, use `inter
 If no upstream coordination is needed, just complete the work and return a focused task result.
 ```
 
-Pair that with task wording that makes the contract explicit, like "Work from the forked context below. If you need anything from me, ask through `intercom`. Otherwise complete the task and return the result."
+Pair that with task wording that makes the contract explicit, like "Work from the inherited fork context as reference. If you need anything from me, ask through `intercom`. Otherwise complete the task and return the result."
 
 ### `worktreeSetupHook`
 

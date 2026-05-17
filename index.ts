@@ -723,36 +723,23 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage agent definitions",
-		description: `Delegate to subagents or manage agent definitions.
+		description: `Delegate to subagents or manage agent and chain definitions.
 
-EXECUTION (use exactly ONE mode):
-• Use { action: "list" } when available agents/chains are unknown or may have changed. Execute only agents known to be executable/non-disabled.
-• SINGLE: { agent, task? } - one bounded task; task may be omitted for self-contained agents.
-• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?, worktree? } - independent tasks; top-level agent lets tasks omit agent or be strings.
-• CHAIN: { chain: [{agent,task?}, {parallel:[{agent,task?}]}] } - dependent stages using {previous}.
-• SWARM: { prompt: "... {in}", tasks: [...] } - multiple perspectives/variants under one common prompt.
-• ASYNC: add async:true for background work; inspect with action:"status" or /subagents-status.
-• Optional: context "fresh"|"fork" (default fresh), preset "name". Use fork only for same-role session branching; use fresh for specialists.
-• Always include a short \`label\` (5-10 words) summarizing what each subagent will do, e.g. "recon run-shape call sites" or "fix null check in foo.ts". Used in live widgets and status overlays.
-• Top-level \`label\` summarizes the WHOLE spawn (widget row title, dashboard left-pane row); per-task \`label\` inside \`tasks[]\` / \`chain[]\` summarizes EACH individual subagent (dashboard right-pane step header). Both are optional; agent name is used when absent.
+Execution modes (use exactly one):
+• single: { agent, task? }
+• parallel: { tasks: [{ agent, task, count? }], concurrency?, worktree? }
+• chain: { chain: [{ agent, task? }, { parallel: [...] }] } with {task}, {previous}, {chain_dir}
+• swarm: { prompt, tasks } for shared-prompt variants; {in} inserts each task
+• async: add async:true; inspect with action:"status" or /subagents-status
 
-MODE SELECTION:
-• Use CHAIN for dependent phases, PARALLEL/SWARM for independent branches or review diversity, ASYNC only when the parent can continue.
-• Chain task variables: {task}=original request, {previous}=prior result, {chain_dir}=shared artifact dir.
+Management/control:
+• action:"list|get|create|update|delete|status|interrupt"
+• Use { action: "list" } when available agents/chains are unknown or may have changed; execute only agents known to be executable/non-disabled.
+• Add short labels for visible multi-agent work when helpful.
 
-Nested guardrails: root calls are allowed; nested calls require canDelegate and are limited by allowedDelegateAgents when set.
-
-Examples:
-• Chain: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", task:"Plan from {previous}"}] }
-• Swarm: { agent:"agent-a", prompt:"Review for risks in: {in}", tasks:["auth", "API"] }
-
-MANAGEMENT (use action; omit execution fields):
-• list/get/create/update/delete agents or chains; use chainName for chain operations.
-• config should include name/description/systemPrompt; steps creates a chain.
-
-CONTROL:
-• { action: "status", id: "..." } - inspect an async/background run by id or prefix
-• { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused`,
+Gotchas:
+• context defaults to "fresh"; "fork" is only same-role self-branching, not role switching.
+• Nested delegation requires agent config permission and is depth-limited.`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
