@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { ASYNC_NO_POLL_GUIDANCE } from "./async-guidance.ts";
 import { formatAsyncRunList, listAsyncRuns } from "./async-status.ts";
 import { ASYNC_DIR, RESULTS_DIR, type Details } from "./types.ts";
 import { findByPrefix, readStatus } from "./utils.ts";
@@ -80,8 +81,11 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 		const eventsPath = path.join(asyncDir, "events.jsonl");
 		if (status) {
 			const stepsTotal = status.steps?.length ?? 1;
+			const completedParallelSteps = status.steps?.filter((step) => step.status === "complete" || step.status === "failed" || step.status === "skipped").length ?? 0;
 			const current = status.currentStep !== undefined ? status.currentStep + 1 : undefined;
-			const stepLine = current !== undefined ? `Step: ${current}/${stepsTotal}` : `Steps: ${stepsTotal}`;
+			const stepLine = status.mode === "parallel"
+				? `Progress: ${completedParallelSteps}/${stepsTotal} tasks complete`
+				: current !== undefined ? `Step: ${current}/${stepsTotal}` : `Steps: ${stepsTotal}`;
 			const started = new Date(status.startedAt).toISOString();
 			const updated = status.lastUpdate ? new Date(status.lastUpdate).toISOString() : "n/a";
 			const statusActivityText = status.state === "running" ? activityText(status.activityState, status.lastActivityAt) : undefined;
@@ -103,6 +107,7 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 			if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
 			if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
 			if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
+			if (status.state === "running" || status.state === "queued") lines.push("", ASYNC_NO_POLL_GUIDANCE);
 
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
 		}

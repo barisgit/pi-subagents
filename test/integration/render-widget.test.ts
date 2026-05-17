@@ -83,6 +83,24 @@ describe("subagent async widget rendering", () => {
 		assert.doesNotMatch(lines[2]!, /fix null check/);
 	});
 
+	it("shows completed counts for running parallel jobs", () => {
+		const lines = buildWidgetLines([
+			{
+				asyncId: "parallel-progress",
+				asyncDir: "/tmp/parallel-progress",
+				status: "running",
+				mode: "parallel",
+				agents: ["review", "review", "review", "review", "review"],
+				stepsTotal: 5,
+				currentStep: 0,
+				stepStatuses: ["complete", "running", "complete", "failed", "running"],
+			},
+		], theme, 200);
+
+		assert.match(lines[1]!, /parallel 3\/5/);
+		assert.doesNotMatch(lines[1]!, /parallel 1\/5/);
+	});
+
 	it("renders explicit display state labels for running jobs", () => {
 		const lines = buildWidgetLines([
 			{ asyncId: "lost", asyncDir: "/tmp/lost", status: "running", displayState: "lost", agents: ["lost"], currentAgent: "lost", startedAt: 10 },

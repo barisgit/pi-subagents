@@ -18,6 +18,7 @@ import type { RunnerStep } from "./parallel-utils.ts";
 import { resolvePiPackageRoot } from "./pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "./skills.ts";
 import { resolveChildCwd } from "./utils.ts";
+import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "./async-guidance.ts";
 import { buildModelCandidates, resolveModelCandidate, type AvailableModelInfo } from "./model-fallback.ts";
 import {
 	type ArtifactConfig,
@@ -413,7 +414,7 @@ export function executeAsyncChain(
 		const parallelAgents = onlyStep.parallel.map((t) => t.agent);
 		const handle = formatRunHandle({ mode: "parallel", agents: parallelAgents, style: "verbose" });
 		return {
-			content: [{ type: "text", text: `Async parallel: ${handle} [${id}]` }],
+			content: [{ type: "text", text: `Async parallel: ${handle} [${id}]\nState: running\n${formatAsyncStatusHint(id)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
 			details: { mode: "parallel", results: [], asyncId: id, asyncDir },
 		};
 	}
@@ -425,7 +426,7 @@ export function executeAsyncChain(
 	const chainDesc = formatRunHandle({ mode: "chain", agents: chainTokens, style: "verbose" });
 
 	return {
-		content: [{ type: "text", text: `Async chain: ${chainDesc} [${id}]` }],
+		content: [{ type: "text", text: `Async chain: ${chainDesc} [${id}]\nState: running\n${formatAsyncStatusHint(id)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
 		details: { mode: "chain", results: [], asyncId: id, asyncDir },
 	};
 }
@@ -569,7 +570,7 @@ export function executeAsyncSingle(
 	}
 
 	return {
-		content: [{ type: "text", text: `Async: ${agent} [${id}]` }],
+		content: [{ type: "text", text: `Async: ${agent} [${id}]\nState: running\n${formatAsyncStatusHint(id)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
 		details: { mode: "single", results: [], asyncId: id, asyncDir },
 	};
 }

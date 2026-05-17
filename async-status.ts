@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ASYNC_NO_POLL_GUIDANCE } from "./async-guidance.ts";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
 import { type ActivityState, type AsyncStatus, RESULTS_DIR, type RunDisplayState, type TokenUsage } from "./types.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
@@ -257,7 +258,10 @@ function formatStepLine(step: AsyncRunStepSummary): string {
 
 function formatRunHeader(run: AsyncRunSummary): string {
 	const stepCount = run.steps.length || 1;
-	const stepLabel = run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
+	const completedParallelSteps = run.steps.filter((step) => step.status === "complete" || step.status === "failed" || step.status === "skipped").length;
+	const stepLabel = run.mode === "parallel"
+		? `tasks ${completedParallelSteps}/${stepCount} complete`
+		: run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
 	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir);
 	const activity = formatActivityFacts(run);
 	const state = run.displayState ? `${run.state}/${run.displayState}` : run.state;
@@ -267,7 +271,7 @@ function formatRunHeader(run: AsyncRunSummary): string {
 export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {
 	if (runs.length === 0) return `No ${heading.toLowerCase()}.`;
 
-	const lines = [`${heading}: ${runs.length}`, ""];
+	const lines = [`${heading}: ${runs.length}`, ASYNC_NO_POLL_GUIDANCE, ""];
 	for (const run of runs) {
 		lines.push(`- ${formatRunHeader(run)}`);
 		for (const step of run.steps) {

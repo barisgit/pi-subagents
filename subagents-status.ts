@@ -143,7 +143,7 @@ function runShapeBadge(run: LiveRun): string {
 	const total = run.run.steps.length;
 	// Parallel progress uses done-count; chain progress uses 1-based current step.
 	const current = run.run.mode === "parallel"
-		? run.run.steps.filter((s) => s.status === "complete" || s.status === "failed").length
+		? run.run.steps.filter((s) => s.status === "complete" || s.status === "failed" || s.status === "skipped").length
 		: (run.run.currentStep ?? 0) + 1;
 	return formatShapeBadge({ mode: run.run.mode, total, current });
 }

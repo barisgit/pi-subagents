@@ -205,6 +205,9 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 
 		assert.equal(run.details.asyncId, id);
+		assert.match(run.content[0]?.text ?? "", /State: running/);
+		assert.match(run.content[0]?.text ?? "", new RegExp(`Status: subagent\\(\\{ action: "status", id: "${id}" \\}\\)`));
+		assert.match(run.content[0]?.text ?? "", /Polling is not required; do not poll unless you need an immediate update\./);
 
 		const started = Date.now();
 		while (!fs.existsSync(resultPath)) {

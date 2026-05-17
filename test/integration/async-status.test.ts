@@ -99,6 +99,7 @@ describe("async status helpers", () => {
 			assert.equal(runs[0]?.activityState, "needs_attention");
 			assert.equal(runs[0]?.steps[0]?.activityState, "needs_attention");
 			const text = formatAsyncRunList(runs, "Active async runs");
+			assert.match(text, /Polling is not required; do not poll unless you need an immediate update\./);
 			assert.match(text, /no activity for/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });

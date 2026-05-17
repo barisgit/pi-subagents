@@ -339,6 +339,8 @@ export interface AsyncJobState {
 	label?: string;
 	/** Per-step caller-provided labels aligned by index with `agents[]`. */
 	agentLabels?: string[];
+	/** Per-step lifecycle statuses aligned by index with `agents[]`. */
+	stepStatuses?: string[];
 	currentStep?: number;
 	stepsTotal?: number;
 	startedAt?: number;

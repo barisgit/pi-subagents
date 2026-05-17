@@ -583,11 +583,12 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	const parts: string[] = [];
 	const stepsTotal = job.stepsTotal ?? job.agents?.length ?? 1;
+	const completedParallelSteps = job.stepStatuses?.filter((status) => status === "complete" || status === "failed" || status === "skipped").length;
 	// Label distinguishes chain (sequential multi-step) from parallel (concurrent children).
 	const badge = formatShapeBadge({
 		mode: job.mode,
 		total: stepsTotal,
-		current: (job.currentStep ?? 0) + 1,
+		current: job.mode === "parallel" ? (completedParallelSteps ?? 0) : (job.currentStep ?? 0) + 1,
 		fallbackLabel: "step",
 	});
 	if (badge) parts.push(badge);

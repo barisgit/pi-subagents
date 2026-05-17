@@ -156,6 +156,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 							// parallel run with its own color. Undefined slots stay undefined.
 							job.agentColors = status.steps.map((step) => step.live?.color);
 							job.agentLabels = status.steps.map((step) => step.label);
+							job.stepStatuses = status.steps.map((step) => step.status);
 						}
 						job.sessionDir = status.sessionDir ?? job.sessionDir;
 						job.outputFile = status.outputFile ?? job.outputFile;
