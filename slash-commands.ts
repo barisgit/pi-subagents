@@ -555,7 +555,7 @@ export function registerSlashCommands(
 				listForegroundRuns: () => foregroundRunsFromState(state),
 				sessionCwd,
 			}),
-			{ overlay: true, overlayOptions: { anchor: "center", width: "95%", maxHeight: "95%" } },
+			{ overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
 		);
 	};
 

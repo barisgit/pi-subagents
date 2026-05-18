@@ -1,6 +1,16 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
+/**
+ * Minimal theme shape for chrome helpers: only `fg(color, text)` is required.
+ * Lets the same helpers work for both `@mariozechner/pi-coding-agent` Theme and
+ * any pi-tui-compatible theme.
+ */
+interface ChromeTheme {
+	fg(color: string, text: string): string;
+	bold?(text: string): string;
+}
+
 function fuzzyScore(query: string, text: string): number {
 	const lq = query.toLowerCase();
 	const lt = text.toLowerCase();
@@ -84,4 +94,101 @@ export function renderFooter(text: string, width: number, theme: Theme): string 
 		theme.fg("dim", safeText) +
 		theme.fg("border", "─".repeat(padRight) + "╯")
 	);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Charter-style two-pane chrome helpers (titled top/bottom borders + body row).
+// Used by `SubagentsStatusComponent` to mirror pi-charter's fullscreen picker.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TitledTopSegmentOptions {
+	width: number;
+	label: string;
+	/** Plain-text tail; styled via `tailColor` (default "dim"). */
+	tail?: string;
+	/** Pre-rendered tail string when caller already applied ANSI; pair with `tailPlain` for length. */
+	tailRendered?: string;
+	/** Plain visible-width companion for `tailRendered` so dash math stays correct. */
+	tailPlain?: string;
+	labelColor?: string;
+	tailColor?: string;
+	labelBold?: boolean;
+}
+
+/**
+ * Build one half of a top border with an embedded title and optional right-aligned tail.
+ * Layout: `─ <label> ───…─── <tail> ─` with single dashes for spacing.
+ * Returns a fragment WITHOUT corner glyphs; caller composes corners + `┬` divider.
+ */
+export function titledTopSegment(theme: ChromeTheme, opts: TitledTopSegmentOptions): string {
+	const dash = (n: number) => theme.fg("dim", "─".repeat(Math.max(0, n)));
+	const labelColor = opts.labelColor ?? "text";
+	const tailColor = opts.tailColor ?? "dim";
+	// Reserve at least `─ ` + label + ` ─` (4 chars) and 1 dash on each side of the tail when present.
+	const labelBudget = opts.width <= 4 ? 0 : opts.width - 4;
+	const labelText = truncateToWidth(opts.label, labelBudget);
+	const labelStyled = opts.labelBold && theme.bold
+		? theme.bold(theme.fg(labelColor, labelText))
+		: theme.fg(labelColor, labelText);
+	const tailPlain = opts.tailPlain ?? opts.tail ?? "";
+	const tailRendered = opts.tailRendered ?? (opts.tail !== undefined ? theme.fg(tailColor, opts.tail) : "");
+	const labelLen = visibleWidth(labelText);
+	const tailLen = visibleWidth(tailPlain);
+	// Layout with tail: `─ <label> ──…── <tail> ─` => fixed = 6 + labelLen + tailLen.
+	// Layout without tail: `─ <label> ──…────`     => fixed = 3 + labelLen (one space + label + space).
+	if (tailLen > 0) {
+		const fillDashes = Math.max(1, opts.width - (labelLen + tailLen + 6));
+		return `${dash(1)} ${labelStyled} ${dash(fillDashes)} ${tailRendered} ${dash(1)}`;
+	}
+	const fillDashes = Math.max(1, opts.width - (labelLen + 3));
+	return `${dash(1)} ${labelStyled} ${dash(fillDashes)}`;
+}
+
+/**
+ * Build one half of a bottom border with an embedded hint string.
+ * Layout: `─ <hint> ───…─` (no tail). Empty hint renders as a solid dash run.
+ */
+export function titledBottomSegment(theme: ChromeTheme, width: number, hint: string, focused: boolean): string {
+	const dash = (n: number) => theme.fg("dim", "─".repeat(Math.max(0, n)));
+	if (width <= 0) return "";
+	if (!hint) return dash(width);
+	// Reserve at minimum `─ ` + hint + ` `; truncate hint to fit when narrow so we never overflow.
+	const hintBudget = Math.max(0, width - 3);
+	const clipped = truncateToWidth(hint, hintBudget);
+	const clippedLen = visibleWidth(clipped);
+	if (clippedLen === 0) return dash(width);
+	const hintStyled = focused && theme.bold
+		? theme.bold(theme.fg("accent", clipped))
+		: theme.fg("dim", clipped);
+	const fillDashes = Math.max(0, width - (clippedLen + 3));
+	return `${dash(1)} ${hintStyled} ${dash(fillDashes)}`;
+}
+
+/** Pad-right to a visible width using `visibleWidth` (ANSI-aware). */
+export function padRight(text: string, width: number): string {
+	const vis = visibleWidth(text);
+	if (vis > width) return clipText(text, width);
+	return text + " ".repeat(Math.max(0, width - vis));
+}
+
+/** Slice text by character count (NOT visible width). For label text after `clipText` we then re-measure with visibleWidth. */
+export function clipText(text: string, width: number): string {
+	if (width <= 0) return "";
+	return Array.from(text).slice(0, width).join("");
+}
+
+/**
+ * Inline horizontal rule with an embedded title, NO corner/tee glyphs.
+ * Used inside a pane to subdivide sections (e.g. list / legend) without
+ * faking a second box border. Layout: `─ <title> ──…──`.
+ */
+export function flatRule(theme: ChromeTheme, title: string, width: number): string {
+	if (width <= 0) return "";
+	const dash = (n: number) => theme.fg("dim", "─".repeat(Math.max(0, n)));
+	if (!title) return dash(width);
+	const clipped = truncateToWidth(title, Math.max(0, width - 4));
+	const clippedLen = visibleWidth(clipped);
+	const styled = theme.fg("dim", clipped);
+	const trailing = Math.max(0, width - (clippedLen + 3));
+	return `${dash(1)} ${styled} ${dash(trailing)}`;
 }

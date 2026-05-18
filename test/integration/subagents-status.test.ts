@@ -128,10 +128,12 @@ describe("SubagentsStatusComponent", () => {
 				assert.match(output, /─── Step 1: waiter ───/);
 				assert.match(output, /→ bash .* · 400ms/);
 				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
-				assert.match(output, /j\/k move/);
-				assert.match(output, /PgUp\/PgDn page/);
-				assert.match(output, /a all/);
-				assert.match(output, /q close/);
+				// Charter-style legend lives in a dedicated left-pane section above the
+				// bottom border; per-pane footers carry only counters now.
+				assert.match(output, /j\/k\s+move\/scroll/);
+				assert.match(output, /PgUp\/PgDn\s+page right/);
+				assert.match(output, /a\s+all sessions/);
+				assert.match(output, /q \/ esc\s+close/);
 			} finally {
 				component.dispose();
 			}
@@ -454,13 +456,19 @@ describe("SubagentsStatusComponent", () => {
 		try {
 			const scoped = component.render(140).join("\n");
 			assert.match(scoped, /Subagent runs · 1 total/);
-			assert.match(scoped, /run-here|here/);
+			// In scoped mode the per-row cwd badge is suppressed (every visible run
+			// shares the session cwd, so repeating it is noise). The contract here is
+			// that the other-workspace runs are filtered out, not that the cwd shows.
+			assert.doesNotMatch(scoped, /\[all sessions\]/);
 			assert.doesNotMatch(scoped, /run-other|other/);
 
 			component.handleInput("a");
 			const all = component.render(140).join("\n");
 			assert.match(all, /Subagent runs · 3 total/);
 			assert.match(all, /\[all sessions\]/);
+			// In all-sessions mode the cwd badge becomes essential to disambiguate.
+			assert.match(all, /here/);
+			assert.match(all, /other/);
 
 			component.setShowAllSessions(false);
 			const rescoped = component.render(140).join("\n");
