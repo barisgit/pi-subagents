@@ -153,6 +153,10 @@ async function runSingleAttempt(
 		forkSessionId: forkReuse?.sessionId,
 		currentAgentName: agent.name,
 		parentAgentName: options.parentAgentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+		parentSessionId: options.parentSessionId,
+		rootSessionId: options.rootSessionId,
+		// charter nested-subagent-display: nested children point at this foreground run.
+		parentRunId: options.parentRunId ?? options.runId,
 		canDelegate: agent.canDelegate,
 		allowedDelegateAgents: agent.allowedDelegateAgents,
 	});
@@ -340,6 +344,7 @@ async function runSingleAttempt(
 				content: [{ type: "text", text }],
 				details: {
 					mode: "single",
+					...(options.runId ? { runId: options.runId } : {}),
 					results: [resultSnapshot],
 					progress: [progressSnapshot],
 					controlEvents,
@@ -373,9 +378,13 @@ async function runSingleAttempt(
 				if (options.allowIntercomDetach && evt.toolName === "intercom") {
 					intercomStarted = true;
 				}
+				const rawArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
+					? evt.args as Record<string, unknown>
+					: {};
 				progress.toolCount++;
 				progress.currentTool = evt.toolName;
-				progress.currentToolArgs = extractToolArgsPreview((evt.args || {}) as Record<string, unknown>);
+				progress.currentToolArgs = extractToolArgsPreview(rawArgs);
+				progress.currentToolRawArgs = rawArgs;
 				progress.currentToolStartedAt = now;
 				fireUpdate();
 			}
@@ -388,12 +397,14 @@ async function runSingleAttempt(
 					progress.recentTools.push({
 						tool: progress.currentTool,
 						args: progress.currentToolArgs || "",
+						...(progress.currentToolRawArgs ? { rawArgs: progress.currentToolRawArgs } : {}),
 						endMs: now,
 						durationMs,
 					});
 				}
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
+				progress.currentToolRawArgs = undefined;
 				progress.currentToolStartedAt = undefined;
 				progress.lastToolEndAt = now;
 				fireUpdate();
@@ -607,7 +618,12 @@ async function runSingleAttempt(
 		const resultSnapshot = snapshotResult(result, progressSnapshot);
 		options.onUpdate({
 			content: [{ type: "text", text: finalText }],
-			details: { mode: "single", results: [resultSnapshot], progress: [progressSnapshot] },
+			details: {
+				mode: "single",
+				...(options.runId ? { runId: options.runId } : {}),
+				results: [resultSnapshot],
+				progress: [progressSnapshot],
+			},
 		});
 	}
 	return result;

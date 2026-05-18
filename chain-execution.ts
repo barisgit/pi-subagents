@@ -63,6 +63,7 @@ interface ChainExecutionDetailsInput {
 	chainAgents: string[];
 	totalSteps: number;
 	currentStepIndex?: number;
+	runId?: string;
 }
 
 interface ParallelChainRunInput {
@@ -112,6 +113,7 @@ interface ParallelChainRunInput {
 function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details {
 	return compactForegroundDetails({
 		mode: "chain",
+		...(input.runId ? { runId: input.runId } : {}),
 		results: input.results,
 		progress: input.includeProgress ? input.allProgress : undefined,
 		artifacts: input.allArtifactPaths.length ? { dir: input.artifactsDir, files: input.allArtifactPaths } : undefined,
@@ -244,6 +246,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				forkReuse: input.forkReuse,
 				preset: input.preset,
 				parentAgentName: input.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentSessionId: input.ctx.sessionManager.getSessionId(),
+				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? input.ctx.sessionManager.getSessionId(),
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -262,6 +266,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 							...progressUpdate,
 							details: {
 								mode: "chain",
+								...(input.runId ? { runId: input.runId } : {}),
 								results: input.results.concat(stepResults),
 								progress: input.allProgress.concat(stepProgress),
 								controlEvents: progressUpdate.details?.controlEvents,
@@ -582,6 +587,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					return {
 						content: [{ type: "text", text: `Chain paused after interrupt at step ${stepIndex + 1} (${interrupted.agent}). Waiting for explicit next action.` }],
 						details: buildChainExecutionDetails({
+							runId,
 							results,
 							includeProgress,
 							allProgress,
@@ -610,6 +616,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						content: [{ type: "text", text: summary }],
 						isError: true,
 						details: buildChainExecutionDetails({
+							runId,
 							results,
 							includeProgress,
 							allProgress,
@@ -741,6 +748,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				forkReuse,
 				preset: params.preset,
 				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentSessionId: ctx.sessionManager.getSessionId(),
+				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId(),
 				onUpdate: onUpdate
 					? (p) => {
 						const stepResults = p.details?.results || [];
@@ -803,6 +812,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				return {
 					content: [{ type: "text", text: `Chain paused after interrupt at step ${stepIndex + 1} (${r.agent}). Waiting for explicit next action.` }],
 					details: buildChainExecutionDetails({
+						runId,
 						results,
 						includeProgress,
 						allProgress,
@@ -823,6 +833,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				return {
 					content: [{ type: "text", text: summary }],
 					details: buildChainExecutionDetails({
+						runId,
 						results,
 						includeProgress,
 						allProgress,
@@ -845,6 +856,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	return {
 		content: [{ type: "text", text: summary }],
 		details: buildChainExecutionDetails({
+			runId,
 			results,
 			includeProgress,
 			allProgress,

@@ -22,6 +22,8 @@ export interface RunnerSubagentStep {
 	rootRoleName?: string;
 	forkSessionId?: string;
 	parentAgentName?: string;
+	parentSessionId?: string;
+	rootSessionId?: string;
 	canDelegate?: boolean;
 	allowedDelegateAgents?: string[];
 	/** Agent name tint stamped onto LiveStepProgress for widget rendering. */

@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
+import { colorForAgentName } from "./agents.ts";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay, sortRuns } from "./async-status.ts";
 import { readEventLog } from "./events-log.ts";
 import { formatDuration } from "./formatters.ts";
-import { multiSpinnerFrame, tintAgentName } from "./render.ts";
+import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
 import { deriveRunDisplayState, displayStatePriority } from "./run-liveness.ts";
 import { formatScrollInfo, pad, renderFooter, renderHeader } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
@@ -30,6 +31,8 @@ type ForegroundControl = SubagentState["foregroundControls"] extends Map<string,
 
 export interface ForegroundRunSummary {
 	id: string;
+	// charter nested-subagent-display: live sync hierarchy parent link.
+	parentRunId?: string;
 	state: "running";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
@@ -45,6 +48,8 @@ export interface ForegroundRunSummary {
 	/** Per-step caller-provided labels aligned by index. */
 	agentLabels?: string[];
 	currentAgent?: string;
+	/** Theme color token for tinting the current agent name in the left pane. */
+	currentAgentColor?: string;
 	currentIndex?: number;
 	recentTools?: Array<{ tool: string; args?: string; endMs?: number }>;
 	recentOutput?: string[];
@@ -87,6 +92,7 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 			});
 			return {
 				id: control.runId,
+				...(control.parentRunId ? { parentRunId: control.parentRunId } : {}),
 				state: "running" as const,
 				...(control.currentActivityState ? { activityState: control.currentActivityState } : {}),
 				...(displayState ? { displayState } : {}),
@@ -100,6 +106,7 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 			...(control.label ? { label: control.label } : {}),
 			...(control.agentLabels ? { agentLabels: control.agentLabels } : {}),
 			...(control.currentAgent ? { currentAgent: control.currentAgent } : {}),
+			...(control.currentAgentColor ? { currentAgentColor: control.currentAgentColor } : {}),
 			...(control.currentIndex !== undefined ? { currentIndex: control.currentIndex } : {}),
 			...(control.recentTools ? { recentTools: control.recentTools } : {}),
 			...(control.recentOutput ? { recentOutput: control.recentOutput } : {}),
@@ -116,18 +123,23 @@ function runKey(run: LiveRun): string {
 // Returns the agent name(s) as a pre-styled string when colors apply, otherwise plain text.
 // Parallel runs with heterogeneous agents get per-piece tinting so each name uses its own color.
 function runAgentLabel(run: LiveRun, theme: Theme): string {
-	if (run.source === "sync") return tintAgentName(run.run.currentAgent ?? run.run.mode, undefined);
+	if (run.source === "sync") {
+		const name = run.run.currentAgent ?? run.run.mode;
+		return tintAgentName(name, run.run.currentAgentColor ?? colorForAgentName(name));
+	}
 	const steps = run.run.mode === "parallel"
 		? run.run.steps.filter((s) => s.agent)
 		: run.run.steps;
 	const running = run.run.steps.find((step) => step.status === "running");
 	const fallbackStep = running ?? run.run.steps[0];
+	// Per-step disk-persisted color falls back to the live name -> color map so completed
+	// async rows (and any run whose status.json never recorded a step.live.color) still tint.
 	const desc = describeAgentLabel({
 		mode: run.run.mode,
 		agents: steps.map((s) => s.agent),
-		agentColors: steps.map((s) => s.color),
+		agentColors: steps.map((s) => s.color ?? colorForAgentName(s.agent)),
 		fallbackName: fallbackStep?.agent ?? run.run.mode,
-		fallbackColor: fallbackStep?.color,
+		fallbackColor: fallbackStep?.color ?? colorForAgentName(fallbackStep?.agent ?? run.run.mode),
 	});
 	if (desc.kind === "uniformParallel") return tintAgentName(`parallel(${desc.total})`, desc.color);
 	if (desc.kind === "mixedParallel") {
@@ -149,8 +161,16 @@ function runShapeBadge(run: LiveRun): string {
 }
 
 function runElapsed(run: LiveRun, now: number): string {
-	const end = run.source === "async" && run.run.endedAt ? run.run.endedAt : now;
-	return formatDuration(Math.max(0, end - run.run.startedAt));
+	// Terminal runs (lost/complete/failed) must not keep ticking. lost runs have no
+	// endedAt because the child crashed without writing one, so fall back to lastUpdate.
+	if (run.source === "async") {
+		if (run.run.endedAt) return formatDuration(Math.max(0, run.run.endedAt - run.run.startedAt));
+		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed") {
+			const frozen = run.run.lastUpdate ?? run.run.startedAt;
+			return formatDuration(Math.max(0, frozen - run.run.startedAt));
+		}
+	}
+	return formatDuration(Math.max(0, now - run.run.startedAt));
 }
 
 function stateBucket(state: AsyncRunSummary["state"]): number {
@@ -164,6 +184,65 @@ function stateBucket(state: AsyncRunSummary["state"]): number {
 	}
 }
 
+function baseSortLiveRuns(runs: LiveRun[]): LiveRun[] {
+	return [...runs].sort((a, b) => {
+		const displayA = displayStatePriority(a.run.displayState ?? (a.run.activityState === "needs_attention" ? "needs_attention" : undefined));
+		const displayB = displayStatePriority(b.run.displayState ?? (b.run.activityState === "needs_attention" ? "needs_attention" : undefined));
+		if (displayA !== displayB) return displayA - displayB;
+		return b.run.startedAt - a.run.startedAt;
+	});
+}
+
+function parentRunIdOf(run: LiveRun): string | undefined {
+	return run.run.parentRunId;
+}
+
+function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
+	// charter nested-subagent-display: parent rows immediately precede visible children.
+	const byParent = new Map<string, LiveRun[]>();
+	const ids = new Set(sorted.map((run) => run.run.id));
+	const roots: LiveRun[] = [];
+	for (const run of sorted) {
+		const parentRunId = parentRunIdOf(run);
+		if (parentRunId && ids.has(parentRunId)) {
+			const children = byParent.get(parentRunId) ?? [];
+			children.push(run);
+			byParent.set(parentRunId, children);
+		} else {
+			roots.push(run);
+		}
+	}
+	const out: LiveRun[] = [];
+	const visit = (run: LiveRun) => {
+		out.push(run);
+		for (const child of byParent.get(run.run.id) ?? []) visit(child);
+	};
+	for (const run of roots) visit(run);
+	return out;
+}
+
+function buildDepthMap(runs: LiveRun[]): Map<string, number> {
+	const ids = new Set(runs.map((run) => run.run.id));
+	const byId = new Map(runs.map((run) => [run.run.id, run] as const));
+	const depths = new Map<string, number>();
+	const depthFor = (run: LiveRun, seen = new Set<string>()): number => {
+		const cached = depths.get(run.run.id);
+		if (cached !== undefined) return cached;
+		const parent = parentRunIdOf(run);
+		if (!parent || !ids.has(parent) || seen.has(parent)) {
+			depths.set(run.run.id, 0);
+			return 0;
+		}
+		seen.add(run.run.id);
+		const parentRun = byId.get(parent);
+		const depth = parentRun ? Math.min(4, depthFor(parentRun, seen) + 1) : 0;
+		depths.set(run.run.id, depth);
+		return depth;
+	};
+	for (const run of runs) depthFor(run);
+	return depths;
+}
+
 function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummary[]): LiveRun[] {
 	// Single ordering rule for the dashboard: needs_attention pinned to the very top,
 	// then everything strictly by spawn time (newest first). State buckets are NOT
@@ -173,12 +252,7 @@ function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummary[]): L
 	const all: LiveRun[] = [];
 	for (const run of sync) all.push({ source: "sync", run });
 	for (const run of async) all.push({ source: "async", run });
-	return all.sort((a, b) => {
-		const displayA = displayStatePriority(a.run.displayState ?? (a.run.activityState === "needs_attention" ? "needs_attention" : undefined));
-		const displayB = displayStatePriority(b.run.displayState ?? (b.run.activityState === "needs_attention" ? "needs_attention" : undefined));
-		if (displayA !== displayB) return displayA - displayB;
-		return b.run.startedAt - a.run.startedAt;
-	});
+	return orderRunsWithChildren(baseSortLiveRuns(all));
 }
 
 function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: ActivityState | undefined, displayState?: RunDisplayState): string {
@@ -190,7 +264,9 @@ function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: Ac
 		case "paused": return theme.fg("warning", "⏸");
 		case "complete": return theme.fg("success", "✓");
 		case "failed": return theme.fg("error", "✗");
+		case "lost": return theme.fg("error", "!");
 	}
+	return theme.fg("dim", "·");
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -237,8 +313,10 @@ function runCwdBadge(run: LiveRun): string {
 	return base.length > 15 ? base.slice(0, 14) + "…" : base;
 }
 
-function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number): string {
+function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number, depth = 0): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
+	// charter nested-subagent-display: indent between cursor and glyph keeps cursor aligned.
+	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
 	const glyph = statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
 	const agent = runAgentLabel(run, theme);
 	const status = run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
@@ -250,15 +328,18 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 		: "";
 	const cwdBadge = runCwdBadge(run);
 	const cwdPart = cwdBadge ? ` · ${theme.fg("dim", cwdBadge)}` : "";
-	const text = `${cursor}${glyph} ${agent} · ${status}${badgePart}${labelPart}${cwdPart} · ${elapsed}`;
+	const text = `${cursor}${indent}${glyph} ${agent} · ${status}${badgePart}${labelPart}${cwdPart} · ${elapsed}`;
 	return truncateToWidth(text, width);
 }
 
-function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number): string[] {
+export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
-	if (run.source === "sync") return [theme.fg("dim", "(sync run — no event log)")];
-	const events = readEventLog(run.run.asyncDir);
+	// charter nested-subagent-display: sync runs persist events under ASYNC_DIR/<runId>.
+	const asyncDir = run.source === "sync" ? path.join(ASYNC_DIR, run.run.id) : run.run.asyncDir;
+	const events = readEventLog(asyncDir);
 	if (events.length === 0) return [theme.fg("dim", "(no events yet)")];
+	// Shared set so each nested child run is rendered at most once across all steps.
+	const rightPaneUsed = new Set<string>();
 
 	// Parallel runs share one events.jsonl with N children writing concurrently,
 	// each tagged with its own stepIndex. Render order chronological-within-step
@@ -285,6 +366,22 @@ function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number):
 		}
 		if (event.kind === "tool") {
 			const step = ensureStep(event.stepIndex, "");
+			// charter inline-nested-fix: suppress plain `subagent` raw-args lines in the
+			// right pane and recurse into the child run via the shared renderer, mirroring
+			// the left-pane/compact-card wiring. Falls back to the plain line when the
+			// child hasn't flushed its status.json yet.
+			if (event.toolName === "subagent") {
+				const isAsync = event.rawArgs?.async === true;
+				if (!isAsync) {
+					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
+					if (child) {
+						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
+							step.lines.push(theme.fg("dim", truncateToWidth(line, width)));
+						}
+						continue;
+					}
+				}
+			}
 			const argsPart = event.argsPreview ? ` ${event.argsPreview}` : "";
 			const base = `→ ${event.toolName}${argsPart}`;
 			if (event.durationMs !== undefined) {
@@ -391,7 +488,9 @@ export class SubagentsStatusComponent implements Component {
 		try {
 			const overlay = this.listRunsForOverlay(ASYNC_DIR, RECENT_LIMIT);
 			const sync = this.listForegroundRuns();
-			const combined = [...overlay.active, ...overlay.recent];
+			const syncIds = new Set(sync.map((run) => run.id));
+			// charter nested-subagent-display: prefer in-memory sync rows while disk mirrors exist.
+			const combined = [...overlay.active, ...overlay.recent].filter((run) => !syncIds.has(run.id));
 			this.runs = sortLiveRuns(sync, combined);
 			if (!this.showAllSessions && this.sessionCwd) {
 				this.runs = this.runs.filter((r) => runMatchesSession(r, this.sessionCwd));
@@ -598,10 +697,11 @@ export class SubagentsStatusComponent implements Component {
 		if (this.runs.length === 0) {
 			leftLines.push(this.theme.fg("dim", "No subagent runs"));
 		} else {
+			const depthMap = buildDepthMap(this.runs);
 			for (let i = 0; i < this.runs.length; i++) {
 				const run = this.runs[i]!;
 				const isSelected = runKey(run) === this.selectedId;
-				leftLines.push(buildLeftLine(this.theme, run, isSelected, now, leftWidth));
+				leftLines.push(buildLeftLine(this.theme, run, isSelected, now, leftWidth, depthMap.get(run.run.id) ?? 0));
 			}
 		}
 

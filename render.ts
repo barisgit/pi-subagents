@@ -2,6 +2,8 @@
  * Rendering functions for subagent results
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { getMarkdownTheme, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, visibleWidth, type Component } from "@mariozechner/pi-tui";
@@ -10,12 +12,15 @@ import {
 	type AsyncJobState,
 	type Details,
 	MAX_WIDGET_JOBS,
+	ASYNC_DIR,
 	WIDGET_KEY,
 } from "./types.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
 import { displayStatePriority } from "./run-liveness.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
-import { getDisplayItems, getSingleResultOutput } from "./utils.ts";
+import { getDisplayItems, getSingleResultOutput, readStatus } from "./utils.ts";
+import { readEventLog, previewArgs, type EventLogLine } from "./events-log.ts";
+import { statusToSummary, type AsyncRunSummary } from "./async-status.ts";
 
 type Theme = ExtensionContext["ui"]["theme"];
 
@@ -279,12 +284,20 @@ function firstOutputLine(text: string): string {
 	return text.split("\n").find((line) => line.trim())?.trim() ?? "";
 }
 
+const RESULT_STATUS_LINE_PREVIEW_MAX = 200;
+
 function resultStatusLine(result: Details["results"][number], output: string): string {
 	if (result.detached) return result.detachedReason ? `Detached: ${result.detachedReason}` : "Detached";
 	if (result.interrupted) return "Paused";
 	if (result.exitCode !== 0) return `Error: ${result.error ?? (firstOutputLine(output) || `exit ${result.exitCode}`)}`;
 	if (hasEmptyTextOutputWithoutOutputTarget(result.task, output)) return "Done (no text output)";
-	return "Done";
+	// Show the first line of the agent's response so the row is informative.
+	// `Done` (literal status) is reserved for the empty-output branch above.
+	const preview = firstOutputLine(output);
+	if (!preview) return "Done";
+	return preview.length > RESULT_STATUS_LINE_PREVIEW_MAX
+		? `${preview.slice(0, RESULT_STATUS_LINE_PREVIEW_MAX - 1)}…`
+		: preview;
 }
 
 function resultGlyph(result: Details["results"][number], output: string, theme: Theme, running = result.progress?.status === "running"): string {
@@ -346,16 +359,313 @@ function buildLiveHistoryLines(
 	// Chronological order: oldest first, newest last. The renderer places this above
 	// the current-activity line so the freshest event sits adjacent to "now".
 	const slice = progress.recentTools.slice(-count);
+	return slice.map((entry) => formatLiveHistoryEntry(entry, availableWidth));
+}
+
+function formatLiveHistoryEntry(entry: AgentProgress["recentTools"][number], availableWidth: number): string {
 	const maxArgsLen = Math.max(20, availableWidth - 24);
-	return slice.map((entry) => {
-		const args = entry.args
-			? (entry.args.length <= maxArgsLen ? entry.args : `${entry.args.slice(0, maxArgsLen)}...`)
-			: "";
-		const durationSuffix = entry.durationMs !== undefined ? `  ${formatDuration(entry.durationMs)}` : "";
-		return args
-			? `← ${entry.tool}: ${args}${durationSuffix}`
-			: `← ${entry.tool}${durationSuffix}`;
-	});
+	const args = entry.args
+		? (entry.args.length <= maxArgsLen ? entry.args : `${entry.args.slice(0, maxArgsLen)}...`)
+		: "";
+	const durationSuffix = entry.durationMs !== undefined ? `  ${formatDuration(entry.durationMs)}` : "";
+	return args
+		? `← ${entry.tool}: ${args}${durationSuffix}`
+		: `← ${entry.tool}${durationSuffix}`;
+}
+
+const MAX_INLINE_NESTING_DEPTH = 4;
+
+function isTerminalInlineState(state: AsyncRunSummary["state"]): boolean {
+	return state === "complete" || state === "failed" || state === "paused" || state === "lost";
+}
+
+function inlineStateGlyph(state: AsyncRunSummary["state"]): string {
+	if (state === "complete") return "✓";
+	if (state === "failed") return "×";
+	if (state === "lost") return "!";
+	if (state === "paused") return "‖";
+	return "◇";
+}
+
+function readInlineRun(runId: string): { summary: AsyncRunSummary; events: EventLogLine[] } | undefined {
+	const asyncDir = path.join(ASYNC_DIR, runId);
+	const status = readStatus(asyncDir);
+	if (!status) return undefined;
+	return { summary: statusToSummary(asyncDir, status), events: readEventLog(asyncDir) };
+}
+
+// Short-TTL cache: re-scan ASYNC_DIR at most every 250ms per parent. Caching on
+// ASYNC_DIR mtime alone is unsafe because a child status.json is written INSIDE
+// the child subdir after the subdir exists, and that doesn't bump the parent
+// dir's mtime. Result: a frame that catches the dir between subdir-create and
+// status-write caches an empty list forever.
+const inlineChildRunCache = new Map<string, { ts: number; ids: string[] }>();
+const INLINE_CHILD_RUN_CACHE_TTL_MS = 250;
+
+function listInlineChildRunIds(parentRunId: string): string[] {
+	const now = Date.now();
+	const cached = inlineChildRunCache.get(parentRunId);
+	if (cached && now - cached.ts < INLINE_CHILD_RUN_CACHE_TTL_MS) return cached.ids;
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(ASYNC_DIR);
+	} catch {
+		return [];
+	}
+	const out: Array<{ id: string; startedAt: number }> = [];
+	for (const entry of entries) {
+		const asyncDir = path.join(ASYNC_DIR, entry);
+		const status = readStatus(asyncDir);
+		if (!status || status.parentRunId !== parentRunId) continue;
+		out.push({ id: status.runId || entry, startedAt: status.startedAt });
+	}
+	const ids = out.sort((a, b) => a.startedAt - b.startedAt).map((child) => child.id);
+	inlineChildRunCache.set(parentRunId, { ts: now, ids });
+	return ids;
+}
+
+function listInlineChildRuns(parentRunId: string): AsyncRunSummary[] {
+	const out: AsyncRunSummary[] = [];
+	for (const id of listInlineChildRunIds(parentRunId)) {
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const status = readStatus(asyncDir);
+		if (!status || status.parentRunId !== parentRunId) continue;
+		out.push(statusToSummary(asyncDir, status));
+	}
+	return out.sort((a, b) => a.startedAt - b.startedAt);
+}
+
+function argString(args: Record<string, unknown> | undefined, key: string): string | undefined {
+	const value = args?.[key];
+	return typeof value === "string" && value ? value : undefined;
+}
+
+function argBoolean(args: Record<string, unknown> | undefined, key: string): boolean {
+	return args?.[key] === true;
+}
+
+function childMatchesArgs(child: AsyncRunSummary, args: Record<string, unknown> | undefined): boolean {
+	const agent = argString(args, "agent");
+	const label = argString(args, "label");
+	if (agent && !child.steps.some((step) => step.agent === agent)) return false;
+	if (label && child.label && child.label !== label) return false;
+	return true;
+}
+
+export function findInlineChildRun(parentRunId: string, args: Record<string, unknown> | undefined, used: Set<string>, spawnedAt?: number): AsyncRunSummary | undefined {
+	const directRunId = argString(args, "runId") ?? argString(args, "id");
+	if (directRunId && !used.has(directRunId)) {
+		const data = readInlineRun(directRunId);
+		if (data?.summary.parentRunId === parentRunId && childMatchesArgs(data.summary, args)) return data.summary;
+	}
+	const candidates = listInlineChildRuns(parentRunId).filter((child) => !used.has(child.id) && childMatchesArgs(child, args));
+	if (spawnedAt === undefined) return candidates[0];
+	const nearby = candidates
+		.filter((child) => Math.abs(child.startedAt - spawnedAt) <= 60_000)
+		.sort((a, b) => Math.abs(a.startedAt - spawnedAt) - Math.abs(b.startedAt - spawnedAt));
+	return nearby[0] ?? candidates[0];
+}
+
+function inlineRunLabel(summary: AsyncRunSummary, args?: Record<string, unknown>): string {
+	return argString(args, "label")
+		?? summary.label
+		?? summary.steps.find((step) => step.label)?.label
+		?? summary.steps[0]?.agent
+		?? summary.id;
+}
+
+function inlineRunAgent(summary: AsyncRunSummary, args?: Record<string, unknown>): string {
+	return argString(args, "agent") ?? summary.steps[0]?.agent ?? summary.mode;
+}
+
+function inlineToolCount(events: EventLogLine[]): number {
+	return events.filter((event) => event.kind === "tool").length;
+}
+
+function inlineTokenCount(summary: AsyncRunSummary): number {
+	return summary.totalTokens?.total ?? summary.steps.reduce((sum, step) => sum + (step.tokens?.total ?? 0), 0);
+}
+
+function inlineDuration(summary: AsyncRunSummary): number {
+	const end = isTerminalInlineState(summary.state) ? (summary.endedAt ?? summary.lastUpdate ?? Date.now()) : Date.now();
+	return Math.max(0, end - summary.startedAt);
+}
+
+function inlineMeta(summary: AsyncRunSummary, events: EventLogLine[]): string {
+	const tools = inlineToolCount(events);
+	const tokens = inlineTokenCount(summary);
+	return `${tools} tools · ~${formatTokens(tokens)} tok · ${formatDuration(inlineDuration(summary))}`;
+}
+
+function inlinePrefix(depth: number): string {
+	return `${"  ".repeat(Math.max(0, depth - 1))}└─`;
+}
+
+function countCollapsedNested(runId: string): { nested: number; tools: number } {
+	let nested = 0;
+	let tools = 0;
+	for (const child of listInlineChildRuns(runId)) {
+		nested++;
+		const childData = readInlineRun(child.id);
+		tools += childData ? inlineToolCount(childData.events) : 0;
+		const rest = countCollapsedNested(child.id);
+		nested += rest.nested;
+		tools += rest.tools;
+	}
+	return { nested, tools };
+}
+
+function formatInlineTool(event: Extract<EventLogLine, { kind: "tool" }>): string {
+	const args = event.rawArgs ? previewArgs(event.rawArgs) : event.argsPreview;
+	const duration = event.durationMs !== undefined ? `  ${formatDuration(event.durationMs)}` : "";
+	return args ? `${event.toolName}: ${args}${duration}` : `${event.toolName}${duration}`;
+}
+
+export function renderInlineAsyncToolLine(parentRunId: string, args: Record<string, unknown> | undefined, used = new Set<string>()): string | undefined {
+	const child = findInlineChildRun(parentRunId, args, used);
+	if (!child) return undefined;
+	used.add(child.id);
+	return `${inlinePrefix(1)} subagent (async): ${inlineRunAgent(child, args)} · ${inlineRunLabel(child, args)} → ${child.id.slice(0, 8)}`;
+}
+
+export function countLiveInlineAsyncChildren(parentRunId: string, tools: Array<{ tool: string; rawArgs?: Record<string, unknown> }>): number {
+	const used = new Set<string>();
+	let count = 0;
+	for (const tool of tools) {
+		if (tool.tool !== "subagent" || !argBoolean(tool.rawArgs, "async")) continue;
+		const child = findInlineChildRun(parentRunId, tool.rawArgs, used);
+		if (!child) continue;
+		used.add(child.id);
+		if (!isTerminalInlineState(child.state)) count++;
+	}
+	return count;
+}
+
+/**
+ * Count inline child tallies (sync + async) under a parent. Used by the post-complete
+ * header to summarise "this parent spawned N sync · M async" without re-expanding
+ * each child card (which duplicates info the dashboard already shows).
+ */
+export function countInlineChildTally(parentRunId: string, tools: Array<{ tool: string; rawArgs?: Record<string, unknown> }>): { sync: number; async: number } {
+	const used = new Set<string>();
+	let sync = 0;
+	let async = 0;
+	for (const tool of tools) {
+		if (tool.tool !== "subagent") continue;
+		const isAsync = argBoolean(tool.rawArgs, "async");
+		const child = findInlineChildRun(parentRunId, tool.rawArgs, used);
+		if (!child) continue;
+		used.add(child.id);
+		if (isAsync) async++; else sync++;
+	}
+	return { sync, async };
+}
+
+export function renderNestedChild(runId: string, depth = 1, args?: Record<string, unknown>, used = new Set<string>()): string[] {
+	const data = readInlineRun(runId);
+	if (!data) return [];
+	const { summary, events } = data;
+	used.add(runId);
+	if (depth >= MAX_INLINE_NESTING_DEPTH) {
+		const collapsed = countCollapsedNested(runId);
+		return collapsed.nested > 0 ? [`${inlinePrefix(depth)} … ${collapsed.nested} more nested · ${collapsed.tools} tools`] : [];
+	}
+	const label = inlineRunLabel(summary, args);
+	if (isTerminalInlineState(summary.state)) {
+		return [`${inlinePrefix(depth)} ${inlineStateGlyph(summary.state)} subagent: ${label} · ${inlineMeta(summary, events)}`];
+	}
+	const lines = [`${inlinePrefix(depth)} ${inlineStateGlyph(summary.state)} subagent: ${inlineRunAgent(summary, args)} · ${label} · ${inlineMeta(summary, events)}`];
+	for (const event of events) {
+		if (event.kind !== "tool") continue;
+		if (event.toolName === "subagent") {
+			if (argBoolean(event.rawArgs, "async")) {
+				const asyncLine = renderInlineAsyncToolLine(summary.id, event.rawArgs, used);
+				if (asyncLine) lines.push(`${"  ".repeat(depth)}${asyncLine.slice(3)}`);
+				else lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event)}`);
+				continue;
+			}
+			const child = findInlineChildRun(summary.id, event.rawArgs, used);
+			if (child) {
+				lines.push(...renderNestedChild(child.id, depth + 1, event.rawArgs, used));
+				continue;
+			}
+		}
+		lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event)}`);
+	}
+	return lines;
+}
+
+/**
+ * Render the live "current activity" footer of a running compact card.
+ * When the agent is currently in the middle of a sync `subagent` tool call,
+ * try to expand the in-flight child as a nested compact card (matching the
+ * post-complete render). Falls back to the generic `tool: args | dur` line
+ * when the child hasn't published its status.json yet or the call is async.
+ */
+function addLiveCurrentLines(
+	c: Container,
+	theme: Theme,
+	parentRunId: string | undefined,
+	progress: AgentProgress,
+	width: number,
+	indent: string,
+	used: Set<string>,
+): void {
+	const rawArgs = (progress as { currentToolRawArgs?: Record<string, unknown> }).currentToolRawArgs;
+	if (
+		progress.currentTool === "subagent"
+		&& parentRunId
+		&& !argBoolean(rawArgs, "async")
+	) {
+		const child = findInlineChildRun(parentRunId, rawArgs, used);
+		if (child) {
+			for (const line of renderNestedChild(child.id, 1, rawArgs, used)) {
+				c.addChild(new Text(truncLine(theme.fg("dim", `${indent}${line}`), width), 0, 0));
+			}
+			return;
+		}
+	}
+	const current = buildLiveCurrentLine(progress, width);
+	c.addChild(new Text(truncLine(`${theme.fg("dim", `${indent}└─`)} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
+}
+
+function addCompactRecentToolLines(
+	c: Container,
+	theme: Theme,
+	parentRunId: string | undefined,
+	recentTools: AgentProgress["recentTools"],
+	count: number,
+	width: number,
+	indent: string,
+	used: Set<string>,
+	includePlainTools = true,
+	options: { expandSyncChildren?: boolean; includeAsyncSubagents?: boolean } = {},
+): void {
+	if (count <= 0 || !recentTools.length) return;
+	const expandSyncChildren = options.expandSyncChildren ?? true;
+	const includeAsyncSubagents = options.includeAsyncSubagents ?? true;
+	for (const entry of recentTools.slice(-count)) {
+		if (entry.tool === "subagent") {
+			const isAsync = argBoolean(entry.rawArgs, "async");
+			if (isAsync) {
+				// Async subagents are summarised in the header tally; emitting them here
+				// only adds a transient line that scrolls out the moment the parent moves on.
+				if (!includeAsyncSubagents) continue;
+				c.addChild(new Text(truncLine(theme.fg("dim", `${indent}├─ ${formatLiveHistoryEntry(entry, width)}`), width), 0, 0));
+				continue;
+			}
+			if (!expandSyncChildren || !parentRunId) continue;
+			const child = findInlineChildRun(parentRunId, entry.rawArgs, used, entry.endMs);
+			if (!child) continue;
+			for (const line of renderNestedChild(child.id, 1, entry.rawArgs, used)) {
+				c.addChild(new Text(truncLine(theme.fg("dim", `${indent}${line}`), width), 0, 0));
+			}
+			continue;
+		}
+		if (includePlainTools) {
+			c.addChild(new Text(truncLine(theme.fg("dim", `${indent}├─ ${formatLiveHistoryEntry(entry, width)}`), width), 0, 0));
+		}
+	}
 }
 
 /**
@@ -539,7 +849,7 @@ function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
 }
 
 function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
-	if (job.displayState === "lost") return theme.fg("error", "!");
+	if (job.status === "lost" || job.displayState === "lost") return theme.fg("error", "!");
 	if (job.displayState === "needs_attention" || job.activityState === "needs_attention") return theme.fg("warning", "!");
 	if (job.status === "running") return theme.fg("accent", multiSpinnerFrame());
 	if (job.status === "queued") return theme.fg("dim", "·");
@@ -592,7 +902,7 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 		fallbackLabel: "step",
 	});
 	if (badge) parts.push(badge);
-	if (job.displayState === "lost") parts.push(theme.fg("error", "lost"));
+	if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
 	else if (job.displayState === "tool_running" && job.currentTool) parts.push(`tool ${job.currentTool}`);
 	else if (job.displayState === "needs_attention") parts.push(theme.fg("warning", "needs attention"));
 	else if (job.displayState === "quiet") parts.push("quiet");
@@ -604,6 +914,50 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
 }
 
+function orderWidgetJobsWithChildren(sorted: AsyncJobState[]): AsyncJobState[] {
+	// charter nested-subagent-display: widget mirrors dashboard parent-child ordering.
+	const ids = new Set(sorted.map((job) => job.asyncId));
+	const byParent = new Map<string, AsyncJobState[]>();
+	const roots: AsyncJobState[] = [];
+	for (const job of sorted) {
+		if (job.parentRunId && ids.has(job.parentRunId)) {
+			const children = byParent.get(job.parentRunId) ?? [];
+			children.push(job);
+			byParent.set(job.parentRunId, children);
+		} else {
+			roots.push(job);
+		}
+	}
+	const out: AsyncJobState[] = [];
+	const visit = (job: AsyncJobState) => {
+		out.push(job);
+		for (const child of byParent.get(job.asyncId) ?? []) visit(child);
+	};
+	for (const job of roots) visit(job);
+	return out;
+}
+
+function widgetDepths(jobs: AsyncJobState[]): Map<string, number> {
+	const ids = new Set(jobs.map((job) => job.asyncId));
+	const byId = new Map(jobs.map((job) => [job.asyncId, job] as const));
+	const depths = new Map<string, number>();
+	const depthFor = (job: AsyncJobState, seen = new Set<string>()): number => {
+		const cached = depths.get(job.asyncId);
+		if (cached !== undefined) return cached;
+		if (!job.parentRunId || !ids.has(job.parentRunId) || seen.has(job.parentRunId)) {
+			depths.set(job.asyncId, 0);
+			return 0;
+		}
+		seen.add(job.asyncId);
+		const parent = byId.get(job.parentRunId);
+		const depth = parent ? Math.min(4, depthFor(parent, seen) + 1) : 0;
+		depths.set(job.asyncId, depth);
+		return depth;
+	};
+	for (const job of jobs) depthFor(job);
+	return depths;
+}
+
 export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = getTermWidth()): string[] {
 	if (jobs.length === 0) return [];
 
@@ -611,14 +965,15 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	// spawn time (newest first). Bucket-by-status would pin old failures above
 	// recently completed/running runs, which fights the user's mental model. The
 	// glyph on each row already communicates status.
-	const sorted = [...jobs].sort((a, b) => {
+	const sorted = orderWidgetJobsWithChildren([...jobs].sort((a, b) => {
 		const displayA = displayStatePriority(a.displayState ?? (a.activityState === "needs_attention" ? "needs_attention" : undefined));
 		const displayB = displayStatePriority(b.displayState ?? (b.activityState === "needs_attention" ? "needs_attention" : undefined));
 		if (displayA !== displayB) return displayA - displayB;
 		return (b.startedAt ?? 0) - (a.startedAt ?? 0);
-	});
+	}));
 	const visible = sorted.slice(0, MAX_WIDGET_JOBS);
 	const overflow = sorted.length - visible.length;
+	const depthMap = widgetDepths(visible);
 
 	const running = jobs.filter((job) => job.status === "running").length;
 	const queued = jobs.filter((job) => job.status === "queued").length;
@@ -630,7 +985,11 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	for (let i = 0; i < visible.length; i++) {
 		const job = visible[i]!;
 		const isLast = i === visible.length - 1 && overflow === 0;
-		const branch = theme.fg("dim", isLast ? "└─" : "├─");
+		const depth = depthMap.get(job.asyncId) ?? 0;
+		const branchGlyph = depth > 0
+			? `${"  ".repeat(Math.max(0, depth - 1))}${isLast ? "└─" : "├─"}`
+			: (isLast ? "└─" : "├─");
+		const branch = theme.fg("dim", branchGlyph);
 		const glyph = widgetJobGlyph(job, theme);
 		const name = widgetJobName(job, theme);
 		const stats = widgetJobStats(job, theme);
@@ -740,25 +1099,45 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const boldName = theme.bold(r.agent);
 	const tintedName = r.progress?.color ? tintAgentName(boldName, r.progress.color) : theme.fg("toolTitle", boldName);
 	const labelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
-	const headBase = `${headGlyph} ${tintedName}${contextBadge}${labelTail}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
+	const tallyRecentTools = r.progress?.recentTools ?? (progress && "recentTools" in progress ? progress.recentTools : undefined);
+	const childTail = (() => {
+		if (!d.runId || !tallyRecentTools) return "";
+		if (isRunning) {
+			const active = countLiveInlineAsyncChildren(d.runId, tallyRecentTools);
+			return active > 0 ? theme.fg("dim", ` · ${active}↗ active`) : "";
+		}
+		const tally = countInlineChildTally(d.runId, tallyRecentTools);
+		const total = tally.sync + tally.async;
+		return total > 0 ? theme.fg("dim", ` · ${total} subagent${total === 1 ? "" : "s"}`) : "";
+	})();
+	const headBase = `${headGlyph} ${tintedName}${contextBadge}${labelTail}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}${childTail}`;
 	c.addChild(new Text(truncLine(rightAlignSuffix(headBase, spark, width), width), 0, 0));
 
 	if (isRunning && r.progress) {
-		const current = buildLiveCurrentLine(r.progress, width);
-		const history = buildLiveHistoryLines(r.progress, adaptiveSingleHistoryCount(), width);
 		// Chronological layout: history (oldest -> newest) on top, current activity at the bottom
 		// so the freshest information sits right next to "now".
-		for (let i = 0; i < history.length; i++) {
-			c.addChild(new Text(truncLine(theme.fg("dim", `  ├─ ${history[i]}`), width), 0, 0));
-		}
-		c.addChild(new Text(truncLine(`${theme.fg("dim", "  └─")} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
+		const used = new Set<string>();
+		addCompactRecentToolLines(c, theme, d.runId, r.progress.recentTools, adaptiveSingleHistoryCount(), width, "  ", used);
+		addLiveCurrentLines(c, theme, d.runId, r.progress, width, "  ", used);
 		return c;
 	}
 
 	c.addChild(new Text(truncLine(theme.fg("dim", `  └─ ${resultStatusLine(r, output)}`), width), 0, 0));
-	const preview = firstOutputLine(output);
-	if (preview && r.exitCode === 0 && !hasEmptyTextOutputWithoutOutputTarget(r.task, output)) {
-		c.addChild(new Text(truncLine(theme.fg("dim", `     ${preview}`), width), 0, 0));
+	// Completed view: child detail lives in the header tally and the dashboard.
+	// Skip both sync expansion and async one-liners so the transcript stays compact.
+	if (progress && "recentTools" in progress) {
+		addCompactRecentToolLines(
+			c,
+			theme,
+			d.runId,
+			progress.recentTools,
+			progress.recentTools.length,
+			width,
+			"  ",
+			new Set<string>(),
+			false,
+			{ expandSyncChildren: false, includeAsyncSubagents: false },
+		);
 	}
 	if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `  output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
 	if (r.truncation?.artifactPath) c.addChild(new Text(truncLine(theme.fg("dim", `  full output: ${shortenPath(r.truncation.artifactPath)}`), width), 0, 0));
@@ -812,8 +1191,10 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		? buildChainBar(theme, ok, hasRunning ? 1 : 0, totalCount, adaptiveBarWidth())
 		: "";
 	const chainBarPrefix = chainBar ? `${chainBar} ` : "";
-	// Only emit the '· stats' tail when stats is non-empty (prevents a hanging '· ' on empty early frames).
-	const statsTail = stats ? ` ${theme.fg("dim", "·")} ${stats}` : "";
+	// Child tally lives on each per-row header in multi-compact; the top-level mode
+	// header only shows aggregate run stats. (Single-compact still puts the tally on
+	// its single header since there's no per-row layer.)
+	const statsTail = `${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
 	const headlinePrefix = chainBarPrefix ? ` ${chainBarPrefix}` : "";
 	const uniformLabel = (() => {
 		if (d.label) return d.label;
@@ -871,25 +1252,48 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			?? (progressFromArray && "color" in progressFromArray ? (progressFromArray as { color?: string }).color : undefined);
 		const coloredName = rowColor ? tintAgentName(rowBoldName, rowColor) : rowBoldName;
 		const rowLabelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
-		const lineBase = `  ${glyph} ${itemTitle} ${stepNumber}: ${coloredName}${rowLabelTail}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
+		const rowChildTail = (() => {
+			if (!d.runId || !rProg || !("recentTools" in rProg)) return "";
+			if (rRunning) {
+				const active = countLiveInlineAsyncChildren(d.runId, rProg.recentTools);
+				return active > 0 ? theme.fg("dim", ` · ${active}↗ active`) : "";
+			}
+			const tally = countInlineChildTally(d.runId, rProg.recentTools);
+			const total = tally.sync + tally.async;
+			return total > 0 ? theme.fg("dim", ` · ${total} subagent${total === 1 ? "" : "s"}`) : "";
+		})();
+		const lineBase = `  ${glyph} ${itemTitle} ${stepNumber}: ${coloredName}${rowLabelTail}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${rowChildTail}${pendingLabel}`;
 		c.addChild(new Text(truncLine(rightAlignSuffix(lineBase, spark, width), width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
 			const fullProg = r.progress ?? (progressFromArray && "recentTools" in progressFromArray ? progressFromArray as AgentProgress : undefined);
 			if (fullProg) {
-				const current = buildLiveCurrentLine(fullProg, width);
-				const history = buildLiveHistoryLines(fullProg, historyN, width);
 				// Chronological layout: history (oldest -> newest) on top, current activity at the bottom.
-				for (let h = 0; h < history.length; h++) {
-					c.addChild(new Text(truncLine(theme.fg("dim", `    ├─ ${history[h]}`), width), 0, 0));
-				}
-				c.addChild(new Text(truncLine(`${theme.fg("dim", "    └─")} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
+				const used = new Set<string>();
+				addCompactRecentToolLines(c, theme, d.runId, fullProg.recentTools, historyN, width, "    ", used);
+				addLiveCurrentLines(c, theme, d.runId, fullProg, width, "    ", used);
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
 				const activity = compactCurrentActivity(rProg as AgentProgress);
 				c.addChild(new Text(truncLine(theme.fg("dim", `    └─ ${activity}`), width), 0, 0));
 			}
-		} else if (!rPending && (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output))) {
-			c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    └─ ${resultStatusLine(r, output)}`), width), 0, 0));
+		} else if (!rPending) {
+			if (rProg && "recentTools" in rProg) {
+				addCompactRecentToolLines(
+					c,
+					theme,
+					d.runId,
+					rProg.recentTools,
+					rProg.recentTools.length,
+					width,
+					"    ",
+					new Set<string>(),
+					false,
+					{ expandSyncChildren: false, includeAsyncSubagents: false },
+				);
+			}
+			if (r.exitCode !== 0 || r.interrupted || r.detached || hasEmptyTextOutputWithoutOutputTarget(r.task, output)) {
+				c.addChild(new Text(truncLine(theme.fg(r.exitCode !== 0 ? "error" : "dim", `    └─ ${resultStatusLine(r, output)}`), width), 0, 0));
+			}
 		}
 		// Spacer between running blocks only (skip after last row; skip after completed/pending rows).
 		// Running blocks are dense (header + current + N history) and benefit from a breathing line.

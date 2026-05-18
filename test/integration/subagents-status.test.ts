@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { visibleWidth } from "@mariozechner/pi-tui";
 import { foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
 import type { AsyncRunOverlayData, AsyncRunSummary } from "../../async-status.ts";
-import type { SubagentState } from "../../types.ts";
+import { ASYNC_DIR, type SubagentState } from "../../types.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
@@ -253,7 +253,7 @@ describe("SubagentsStatusComponent", () => {
 		}
 	});
 
-	it("renders '(sync run — no event log)' in the right pane for a foreground sync run", () => {
+	it("renders '(no events yet)' in the right pane for a foreground sync run without events", () => {
 		const component = new SubagentsStatusComponent(
 			createTestTui(() => {}),
 			createTestTheme(),
@@ -267,8 +267,61 @@ describe("SubagentsStatusComponent", () => {
 
 		try {
 			const output = component.render(120).join("\n");
-			assert.match(output, /\(sync run — no event log\)/);
+			assert.match(output, /\(no events yet\)/);
 			assert.match(output, /reviewer · running/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("dedupes in-flight sync disk mirrors and keeps completed disk sync runs visible", () => {
+		const id = `sync-dedupe-${process.pid}-${Date.now()}`;
+		const dir = path.join(ASYNC_DIR, id);
+		fs.mkdirSync(dir, { recursive: true });
+		try {
+			fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({ runId: id, mode: "single", state: "complete", startedAt: 1, endedAt: 2, steps: [{ agent: "syncer", status: "complete" }] }), "utf-8");
+			makeEventsFile(dir, [
+				{ type: "subagent.step.started", stepIndex: 0, agent: "syncer", ts: 1 },
+				{ type: "message_end", subagentStepIndex: 0, subagentAgent: "syncer", message: { role: "assistant", content: [{ type: "text", text: "sync final" }] } },
+				{ type: "subagent.step.completed", stepIndex: 0, agent: "syncer", ts: 2, status: "completed" },
+			]);
+			let foreground = [createSyncRun(id)];
+			const component = new SubagentsStatusComponent(createTestTui(() => {}), createTestTheme(), () => {}, {
+				listRunsForOverlay: () => ({ active: [], recent: [createRun(id, "complete", { asyncDir: dir, steps: [{ index: 0, agent: "syncer", status: "complete" }] })] }),
+				listForegroundRuns: () => foreground,
+				refreshMs: 1000,
+			});
+			try {
+				let output = component.render(160).join("\n");
+				assert.match(output, /Subagent runs · 1 total/);
+				assert.match(output, /sync final/);
+				foreground = [];
+				component.setShowAllSessions(true);
+				output = component.render(160).join("\n");
+				assert.match(output, /Subagent runs · 1 total/);
+				assert.match(output, /complete/);
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("indents child runs directly after their parent", () => {
+		const parent = createRun("parent-run", "running", { startedAt: 100, steps: [{ index: 0, agent: "parent", status: "running" }] });
+		const sibling = createRun("sibling-run", "running", { startedAt: 300, steps: [{ index: 0, agent: "sibling", status: "running" }] });
+		const child = createRun("child-run", "running", { parentRunId: "parent-run", startedAt: 200, steps: [{ index: 0, agent: "child", status: "running" }] });
+		const component = new SubagentsStatusComponent(createTestTui(() => {}), createTestTheme(), () => {}, {
+			listRunsForOverlay: () => ({ active: [sibling, child, parent], recent: [] }),
+			refreshMs: 1000,
+		});
+		try {
+			const rows = component.render(160).map(stripBorders).filter((line) => /running/.test(line));
+			const parentIndex = rows.findIndex((line) => line.includes("parent"));
+			const childIndex = rows.findIndex((line) => line.includes("child"));
+			assert.equal(childIndex, parentIndex + 1);
+			assert.match(rows[childIndex]!, /└─/);
 		} finally {
 			component.dispose();
 		}

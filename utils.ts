@@ -7,13 +7,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
 import { formatToolCall } from "./formatters.ts";
-import type { AgentProgress, AsyncStatus, Details, DisplayItem, ErrorInfo, SingleResult, ToolCallSummary } from "./types.ts";
+import { type AgentProgress, type AsyncStatus, type Details, type DisplayItem, type ErrorInfo, RESULTS_DIR, type SingleResult, type ToolCallSummary } from "./types.ts";
+import { isPidAlive } from "./run-liveness.ts";
 
 // ============================================================================
 // File System Utilities
 // ============================================================================
 
 const statusCache = new Map<string, { mtime: number; status: AsyncStatus }>();
+const STALE_MTIME_THRESHOLD_MS = 10 * 60 * 1000;
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -29,6 +31,25 @@ function isNotFoundError(error: unknown): boolean {
 		&& error !== null
 		&& "code" in error
 		&& (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function resultFileExists(runId: string): boolean {
+	try {
+		return fs.existsSync(path.join(RESULTS_DIR, `${runId}.json`));
+	} catch {
+		return false;
+	}
+}
+
+function reconcileStatus(status: AsyncStatus, mtimeMs: number): AsyncStatus {
+	if (status.state !== "running") return status;
+	if (status.pid !== undefined && status.pid !== null) {
+		return isPidAlive(status.pid) === false ? { ...status, state: "lost" } : status;
+	}
+	if (Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS && !resultFileExists(status.runId)) {
+		return { ...status, state: "lost" };
+	}
+	return status;
 }
 
 /**
@@ -65,11 +86,13 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	let status: AsyncStatus;
 	try {
 		status = JSON.parse(content) as AsyncStatus;
-	} catch (error) {
-		throw new Error(`Failed to parse async status file '${statusPath}': ${getErrorMessage(error)}`, {
-			cause: error instanceof Error ? error : undefined,
-		});
+	} catch {
+		// Malformed/partial status.json (e.g. crashed mid-write). Treat as a missing/lost
+		// entry rather than poisoning callers that scan ASYNC_DIR. Cache the null so
+		// we don't repeatedly re-parse the same broken file.
+		return null;
 	}
+	status = reconcileStatus(status, stat.mtimeMs);
 
 	statusCache.set(statusPath, { mtime: stat.mtimeMs, status });
 	if (statusCache.size > 50) {

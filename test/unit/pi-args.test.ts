@@ -138,6 +138,8 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.ok(extensionArgs.some((arg) => arg.endsWith("subagent-prompt-runtime.ts")));
 		assert.equal(env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT, "0");
 		assert.equal(env.PI_SUBAGENT_INHERIT_SKILLS, "1");
+		assert.equal("PI_SUBAGENT_PARENT_SESSION_ID" in env, false);
+		assert.equal("PI_SUBAGENT_ROOT_SESSION_ID" in env, false);
 	});
 
 	it("passes child intercom, preset, runtime mode, session override, and agent identity env through to child runs", () => {
@@ -154,6 +156,8 @@ describe("buildPiArgs system prompt mode wiring", () => {
 			forkSessionId: "root-session-123",
 			currentAgentName: "fixer",
 			parentAgentName: "orchestrator",
+			parentSessionId: "parent-session-456",
+			rootSessionId: "root-session-789",
 			canDelegate: true,
 			allowedDelegateAgents: ["explorer", "oracle"],
 		});
@@ -165,8 +169,28 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(env.PI_SUBAGENT_FORK_SESSION_ID, "root-session-123");
 		assert.equal(env.PI_SUBAGENT_CURRENT_AGENT, "fixer");
 		assert.equal(env.PI_SUBAGENT_PARENT_AGENT, "orchestrator");
+		assert.equal(env.PI_SUBAGENT_PARENT_SESSION_ID, "parent-session-456");
+		assert.equal(env.PI_SUBAGENT_ROOT_SESSION_ID, "root-session-789");
 		assert.equal(env.PI_SUBAGENT_CAN_DELEGATE, "1");
 		assert.equal(env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS, "explorer,oracle");
+	});
+
+	it("passes UUID-shaped parent and root session ids instead of session file paths", () => {
+		const uuid = "019e380b-bbc8-7710-900b-9044ea3a0ac3";
+		const { env } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			parentSessionId: uuid,
+			rootSessionId: uuid,
+		});
+
+		assert.match(env.PI_SUBAGENT_PARENT_SESSION_ID ?? "", /^[0-9a-f-]{36}$/);
+		assert.match(env.PI_SUBAGENT_ROOT_SESSION_ID ?? "", /^[0-9a-f-]{36}$/);
+		assert.doesNotMatch(env.PI_SUBAGENT_PARENT_SESSION_ID ?? "", /\.jsonl$/);
+		assert.doesNotMatch(env.PI_SUBAGENT_ROOT_SESSION_ID ?? "", /\.jsonl$/);
 	});
 
 	it("keeps tool extension paths when explicit extensions are allowlisted", () => {

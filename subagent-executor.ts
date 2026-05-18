@@ -30,6 +30,16 @@ import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readSta
 import { inspectSubagentStatus } from "./run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
 import {
+	appendSyncRunFinalText,
+	appendSyncRunStepEnd,
+	appendSyncRunStepStart,
+	appendSyncRunTool,
+	writeSyncRunStatusEnd,
+	writeSyncRunStatusStart,
+	writeSyncRunStatusUpdate,
+	type SyncRunStepInit,
+} from "./sync-run-persistence.ts";
+import {
 	cleanupWorktrees,
 	createWorktrees,
 	diffWorktrees,
@@ -669,6 +679,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		currentModelProvider: ctx.model?.provider,
 		preset: params.preset,
 		parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+		parentSessionId: forkReuse?.sessionId ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
+		rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
 	};
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({
 		provider: m.provider,
@@ -873,6 +885,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			currentModelProvider: ctx.model?.provider,
 			preset: params.preset,
 			parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+			parentSessionId: forkReuse?.sessionId ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
+			rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
 		};
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
 		return executeAsyncChain(id, {
@@ -947,6 +961,23 @@ function buildParallelModeError(message: string): AgentToolResult<Details> {
 		isError: true,
 		details: { mode: "parallel" as const, results: [] },
 	};
+}
+
+function tokenUsageFromResult(result: SingleResult): { input: number; output: number; total: number } | undefined {
+	const input = result.usage?.input ?? 0;
+	const output = result.usage?.output ?? 0;
+	const total = input + output;
+	return total > 0 ? { input, output, total } : undefined;
+}
+
+function appendNewSyncTools(input: { runId: string; stepIndex: number; progress?: AgentProgress; seen: Map<number, number> }): void {
+	const tools = input.progress?.recentTools ?? [];
+	const start = input.seen.get(input.stepIndex) ?? 0;
+	for (let i = start; i < tools.length; i++) {
+		const tool = tools[i]!;
+		appendSyncRunTool(input.runId, input.stepIndex, tool.tool, tool.rawArgs ?? {}, tool.endMs ?? Date.now(), tool.durationMs);
+	}
+	input.seen.set(input.stepIndex, tools.length);
 }
 
 function emitSyncLifecycleEvent(
@@ -1034,6 +1065,7 @@ function buildParallelWorktreeSuffix(
 }
 
 async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Promise<SingleResult[]> {
+	const seenSyncTools = new Map<number, number>();
 	return mapConcurrent(input.tasks, input.concurrencyLimit, async (task, index) => {
 		const overrideSkills = input.skillOverrides[index];
 		const effectiveSkills = overrideSkills === undefined ? input.behaviors[index]?.skills : overrideSkills;
@@ -1046,6 +1078,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			metadata: input.metadata,
 		};
 		emitSyncLifecycleEvent(input.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
+		appendSyncRunStepStart(input.runId, index, task.agent, Date.now(), input.taskTexts[index], task.label);
+		writeSyncRunStatusUpdate(input.runId, { currentStep: index, steps: input.tasks.map((_, stepIndex) => stepIndex === index ? { status: "running", startedAt: Date.now(), lastActivityAt: Date.now() } : undefined) as never }, { flush: true });
 		const interruptController = new AbortController();
 		if (input.foregroundControl) {
 			input.foregroundControl.currentAgent = task.agent;
@@ -1084,13 +1118,17 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			forkReuse: input.forkReuse,
 			preset: input.preset,
 			parentAgentName: input.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
-			onUpdate: input.onUpdate
+			parentSessionId: input.forkReuse?.sessionId ?? input.ctx.sessionManager.getSessionId(),
+			rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? input.ctx.sessionManager.getSessionId(),
+			parentRunId: input.runId,
+			onUpdate: input.onUpdate || input.foregroundControl
 				? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
 						const stepProgress = progressUpdate.details?.progress || [];
 						if (input.foregroundControl && stepProgress.length > 0) {
 							const current = stepProgress[0];
 							input.foregroundControl.currentAgent = task.agent;
+							input.foregroundControl.currentAgentColor = current?.color;
 							input.foregroundControl.currentIndex = index;
 							input.foregroundControl.currentActivityState = current?.activityState;
 							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
@@ -1101,6 +1139,19 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 							input.foregroundControl.recentOutput = current?.recentOutput;
 							input.foregroundControl.finalOutput = stepResults[0]?.finalOutput;
 							input.foregroundControl.updatedAt = Date.now();
+							appendNewSyncTools({ runId: input.runId, stepIndex: index, progress: current, seen: seenSyncTools });
+							writeSyncRunStatusUpdate(input.runId, {
+								currentStep: index,
+								lastActivityAt: current?.lastActivityAt,
+								currentTool: current?.currentTool,
+								currentToolStartedAt: current?.currentToolStartedAt,
+								steps: input.tasks.map((_, stepIndex) => stepIndex === index ? {
+									status: current?.status ?? "running",
+									lastActivityAt: current?.lastActivityAt,
+									currentTool: current?.currentTool,
+									currentToolStartedAt: current?.currentToolStartedAt,
+								} : undefined) as never,
+							});
 						}
 						if (stepResults.length > 0) input.liveResults[index] = stepResults[0];
 						if (stepProgress.length > 0) input.liveProgress[index] = stepProgress[0];
@@ -1110,6 +1161,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 							content: progressUpdate.content,
 							details: {
 								mode: "parallel",
+								runId: input.runId,
 								results: mergedResults,
 								progress: mergedProgress,
 								controlEvents: progressUpdate.details?.controlEvents,
@@ -1124,6 +1176,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				input.foregroundControl.updatedAt = Date.now();
 			}
 		});
+		appendSyncRunFinalText(input.runId, index, task.agent, result.finalOutput ?? "");
+		appendSyncRunStepEnd(input.runId, index, task.agent, Date.now(), result.exitCode === 0 ? "completed" : "failed", tokenUsageFromResult(result), result.progressSummary?.durationMs);
 		emitSyncLifecycleEvent(input.pi, result.exitCode === 0 ? SUBAGENT_COMPLETED_EVENT : SUBAGENT_FAILED_EVENT, {
 			...eventPayload,
 			exitCode: result.exitCode,
@@ -1259,6 +1313,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				currentModelProvider: ctx.model?.provider,
 				preset: params.preset,
 				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentSessionId: forkReuse?.sessionId ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
+				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
 			};
 			const parallelTasks = tasks.map((t, i) => ({
 				agent: t.agent,
@@ -1363,6 +1419,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				content: [{ type: "text", text: `Parallel run paused after interrupt (${interrupted.agent}). Waiting for explicit next action.` }],
 				details: compactForegroundDetails({
 					mode: "parallel",
+					runId,
 					results,
 					progress: params.includeProgress ? allProgress : undefined,
 					artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
@@ -1392,6 +1449,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			content: [{ type: "text", text: fullContent }],
 			details: compactForegroundDetails({
 				mode: "parallel",
+				runId,
 				results,
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
@@ -1499,6 +1557,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				currentModelProvider: ctx.model?.provider,
 				preset: params.preset,
 				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+				parentSessionId: forkReuse?.sessionId ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
+				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
 			};
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
@@ -1558,11 +1618,13 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		};
 	}
 
-	const forwardSingleUpdate = onUpdate
+	const seenSyncTools = new Map<number, number>();
+	const forwardSingleUpdate = onUpdate || foregroundControl
 		? (update: AgentToolResult<Details>) => {
 			if (foregroundControl) {
 				const firstProgress = update.details?.progress?.[0];
 				foregroundControl.currentAgent = params.agent;
+				foregroundControl.currentAgentColor = firstProgress?.color;
 				foregroundControl.currentIndex = firstProgress?.index ?? 0;
 				foregroundControl.currentActivityState = firstProgress?.activityState;
 				foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
@@ -1573,8 +1635,22 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				foregroundControl.recentOutput = firstProgress?.recentOutput;
 				foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
 				foregroundControl.updatedAt = Date.now();
+				appendNewSyncTools({ runId, stepIndex: 0, progress: firstProgress, seen: seenSyncTools });
+				writeSyncRunStatusUpdate(runId, {
+					currentStep: firstProgress?.index ?? 0,
+					lastActivityAt: firstProgress?.lastActivityAt,
+					currentTool: firstProgress?.currentTool,
+					currentToolStartedAt: firstProgress?.currentToolStartedAt,
+					steps: [{
+						status: firstProgress?.status ?? "running",
+						startedAt: firstProgress?.lastActivityAt,
+						lastActivityAt: firstProgress?.lastActivityAt,
+						currentTool: firstProgress?.currentTool,
+						currentToolStartedAt: firstProgress?.currentToolStartedAt,
+					}],
+				});
 			}
-			onUpdate(update);
+			onUpdate?.(update);
 		}
 		: undefined;
 
@@ -1586,6 +1662,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		metadata: params.metadata,
 	};
 	emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
+	appendSyncRunStepStart(runId, 0, params.agent!, Date.now(), cleanTask, params.label);
+	writeSyncRunStatusUpdate(runId, { currentStep: 0, steps: [{ status: "running", startedAt: Date.now(), lastActivityAt: Date.now() }] }, { flush: true });
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
 		cwd: effectiveCwd,
 		...(params.label ? { label: params.label } : {}),
@@ -1612,7 +1690,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		skills: effectiveSkills,
 		forkReuse,
 		preset: params.preset,
+		parentRunId: runId,
 		parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
+		parentSessionId: forkReuse?.sessionId ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
+		rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
 	});
 	emitSyncLifecycleEvent(deps.pi, r.exitCode === 0 ? SUBAGENT_COMPLETED_EVENT : SUBAGENT_FAILED_EVENT, {
 		...eventPayload,
@@ -1631,6 +1712,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		foregroundControl.finalOutput = r.finalOutput;
 		foregroundControl.updatedAt = Date.now();
 	}
+	appendSyncRunFinalText(runId, 0, params.agent!, r.finalOutput ?? "");
+	appendSyncRunStepEnd(runId, 0, params.agent!, Date.now(), r.exitCode === 0 ? "completed" : "failed", tokenUsageFromResult(r), r.progressSummary?.durationMs);
 	recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);
 
 	if (r.progress) allProgress.push(r.progress);
@@ -1649,9 +1732,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (r.detached) {
 		return {
 			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}` }],
-			details: compactForegroundDetails({
-				mode: "single",
-				results: [r],
+				details: compactForegroundDetails({
+					mode: "single",
+					runId,
+					results: [r],
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 				truncation: r.truncation,
@@ -1662,9 +1746,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (r.interrupted) {
 		return {
 			content: [{ type: "text", text: `Run paused after interrupt (${params.agent}). Waiting for explicit next action.` }],
-			details: compactForegroundDetails({
-				mode: "single",
-				results: [r],
+				details: compactForegroundDetails({
+					mode: "single",
+					runId,
+					results: [r],
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 				truncation: r.truncation,
@@ -1677,6 +1762,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			content: [{ type: "text", text: r.error || "Failed" }],
 			details: compactForegroundDetails({
 				mode: "single",
+				runId,
 				results: [r],
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
@@ -1688,6 +1774,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
 		details: compactForegroundDetails({
 			mode: "single",
+			runId,
 			results: [r],
 			progress: params.includeProgress ? allProgress : undefined,
 			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
@@ -1796,7 +1883,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const scope: AgentScope = resolveExecutionAgentScope(effectiveParams.agentScope);
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
-		deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		deps.state.currentSessionId = ctx.sessionManager.getSessionId() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, { preset: normalizedParams.preset, includeInternal: true }).agents;
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
@@ -1946,10 +2033,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const first = foregroundAgentLabels[0];
 			if (first && foregroundAgentLabels.every((l) => l === first)) foregroundRunLabel = first;
 		}
+		const parentRunId = process.env.PI_SUBAGENT_PARENT_RUN_ID;
 		const foregroundControl = effectiveAsync
 			? undefined
 			: {
 				runId,
+				...(parentRunId ? { parentRunId } : {}),
 				mode: foregroundMode,
 				startedAt: Date.now(),
 				updatedAt: Date.now(),
@@ -1963,27 +2052,56 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (foregroundControl) {
 			deps.state.foregroundControls.set(runId, foregroundControl);
 			deps.state.lastForegroundControlId = runId;
+			const steps: SyncRunStepInit[] = hasTasks && effectiveParams.tasks
+				? (normalizeTopLevelTasks(effectiveParams).tasks ?? []).map((task) => ({ agent: task.agent, task: task.task, ...(task.label ? { label: task.label } : {}) }))
+				: hasChain && effectiveParams.chain
+					? effectiveParams.chain.flatMap((step) => isParallelStep(step)
+						? step.parallel.map((task) => ({ agent: task.agent, task: task.task, ...(task.label ? { label: task.label } : {}) }))
+						: [{ agent: (step as SequentialStep).agent, task: (step as SequentialStep).task ?? effectiveParams.task ?? "", ...((step as SequentialStep).label ? { label: (step as SequentialStep).label } : {}) }])
+					: [{ agent: effectiveParams.agent ?? "subagent", task: effectiveParams.task ?? "", ...(effectiveParams.label ? { label: effectiveParams.label } : {}) }];
+			writeSyncRunStatusStart(runId, {
+				mode: foregroundMode,
+				startedAt: foregroundControl.startedAt,
+				cwd: effectiveCwd,
+				...(foregroundRunLabel ? { label: foregroundRunLabel } : {}),
+				...(parentRunId ? { parentRunId } : {}),
+				steps,
+			});
 		}
 
+		let executionResult: AgentToolResult<Details> | undefined;
 		try {
 			const asyncResult = runAsyncPath(execData, deps);
 			if (asyncResult) return withForkContext(asyncResult, effectiveParams.context);
 
 			if (hasChain && effectiveParams.chain) {
-				return withForkContext(await runChainPath(execData, deps), effectiveParams.context);
+				executionResult = withForkContext(await runChainPath(execData, deps), effectiveParams.context);
+				return executionResult;
 			}
 
 			if (hasTasks && effectiveParams.tasks) {
-				return withForkContext(await runParallelPath(execData, deps), effectiveParams.context);
+				executionResult = withForkContext(await runParallelPath(execData, deps), effectiveParams.context);
+				return executionResult;
 			}
 
 			if (hasSingle) {
-				return withForkContext(await runSinglePath(execData, deps), effectiveParams.context);
+				executionResult = withForkContext(await runSinglePath(execData, deps), effectiveParams.context);
+				return executionResult;
 			}
 		} catch (error) {
-			return toExecutionErrorResult(normalizedParams, error);
+			executionResult = toExecutionErrorResult(normalizedParams, error);
+			return executionResult;
 		} finally {
 			if (foregroundControl) {
+				writeSyncRunStatusEnd(runId, {
+					state: executionResult?.isError ? "failed" : "complete",
+					steps: executionResult?.details?.results?.map((result) => ({
+						status: result.exitCode === 0 ? "complete" : "failed",
+						tokens: tokenUsageFromResult(result),
+						durationMs: result.progressSummary?.durationMs,
+						error: result.error,
+					})) ?? [],
+				});
 				deps.state.foregroundControls.delete(runId);
 				if (deps.state.lastForegroundControlId === runId) {
 					deps.state.lastForegroundControlId = null;

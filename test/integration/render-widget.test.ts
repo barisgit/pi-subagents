@@ -125,6 +125,24 @@ describe("subagent async widget rendering", () => {
 		assert.equal(lines[3], "");
 	});
 
+	it("orders and indents child jobs under their parent", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "child", parentRunId: "parent", asyncDir: "/tmp/child", status: "running", agents: ["child"], currentAgent: "child", startedAt: 200 },
+			{ asyncId: "parent", asyncDir: "/tmp/parent", status: "running", agents: ["parent"], currentAgent: "parent", startedAt: 100 },
+			{ asyncId: "sibling", asyncDir: "/tmp/sibling", status: "running", agents: ["sibling"], currentAgent: "sibling", startedAt: 300 },
+		], theme, 200);
+		const joined = lines.join("\n");
+		assert.ok(joined.indexOf("parent") < joined.indexOf("child"), joined);
+		assert.match(lines.find((line) => line.includes("child")) ?? "", /├─|└─/);
+	});
+
+	it("renders child-only jobs at top level and preserves overflow", () => {
+		const jobs = Array.from({ length: 5 }, (_, i) => ({ asyncId: `run-${i}`, parentRunId: i === 0 ? "missing" : undefined, asyncDir: `/tmp/${i}`, status: "running", agents: [`agent${i}`], currentAgent: `agent${i}`, startedAt: i }));
+		const lines = buildWidgetLines(jobs, theme, 200);
+		assert.match(lines[1]!, /agent4/);
+		assert.match(lines.at(-2) ?? "", /\+1 more/);
+	});
+
 	it("does not animate queued-only widgets", async () => {
 		const ui = createUiContext();
 		try {

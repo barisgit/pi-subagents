@@ -22,7 +22,7 @@ function activityText(activityState: unknown, lastActivityAt: unknown): string |
 export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<Details> {
 	if (!params.id && !params.runId && !params.dir) {
 		try {
-			const runs = listAsyncRuns(ASYNC_DIR, { states: ["queued", "running"] });
+			const runs = listAsyncRuns(ASYNC_DIR, { states: ["queued", "running", "lost"] });
 			return {
 				content: [{ type: "text", text: formatAsyncRunList(runs) }],
 				details: { mode: "single", results: [] },
@@ -107,7 +107,7 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 			if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
 			if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
 			if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
-			if (status.state === "running" || status.state === "queued") lines.push("", ASYNC_NO_POLL_GUIDANCE);
+			if (status.state === "running" || status.state === "queued" || status.state === "lost") lines.push("", ASYNC_NO_POLL_GUIDANCE);
 
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
 		}

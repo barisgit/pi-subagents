@@ -30,8 +30,10 @@ export interface AsyncRunStepSummary {
 export interface AsyncRunSummary {
 	id: string;
 	asyncDir: string;
+	// charter nested-subagent-display: dashboard hierarchy parent link.
+	parentRunId?: string;
 	label?: string;
-	state: "queued" | "running" | "complete" | "failed" | "paused";
+	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;
@@ -109,7 +111,7 @@ function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { acti
 	};
 }
 
-function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string }): AsyncRunSummary {
+export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string }): AsyncRunSummary {
 	const { activityState, lastActivityAt } = deriveAsyncActivityState(asyncDir, status);
 	const id = status.runId || path.basename(asyncDir);
 	const displayState = deriveRunDisplayState({
@@ -125,6 +127,8 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 	return {
 		id,
 		asyncDir,
+		// charter nested-subagent-display: copy persisted parentRunId for readers.
+		...(status.parentRunId ? { parentRunId: status.parentRunId } : {}),
 		...(status.label ? { label: status.label } : {}),
 		state: status.state,
 		activityState,
@@ -186,6 +190,7 @@ export function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
 		switch (state) {
 			case "running": return 0;
 			case "queued": return 1;
+		case "lost": return 2;
 		case "failed": return 2;
 		case "paused": return 2;
 		case "complete": return 3;
@@ -234,7 +239,7 @@ export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): 
 		.sort((a, b) => b.startedAt - a.startedAt)
 		.slice(0, recentLimit);
 	return {
-		active: all.filter((run) => run.state === "queued" || run.state === "running"),
+		active: all.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
 		recent,
 	};
 }

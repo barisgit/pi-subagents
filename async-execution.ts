@@ -65,6 +65,8 @@ export interface AsyncExecutionContext {
 	currentModelProvider?: string;
 	preset?: string;
 	parentAgentName?: string;
+	parentSessionId?: string;
+	rootSessionId?: string;
 }
 
 export interface AsyncChainParams {
@@ -262,6 +264,8 @@ export function executeAsyncChain(
 				rootRoleName: forkReuse.agentName,
 				forkSessionId: forkReuse.sessionId,
 				parentAgentName: ctx.parentAgentName,
+				parentSessionId: ctx.parentSessionId,
+				rootSessionId: ctx.rootSessionId,
 				canDelegate: a.canDelegate,
 				allowedDelegateAgents: a.allowedDelegateAgents,
 				// Widget rendering hints (LiveStepProgress seed).
@@ -306,6 +310,8 @@ export function executeAsyncChain(
 			preset: ctx.preset,
 			runtimeMode: "delegated" as const,
 			parentAgentName: ctx.parentAgentName,
+			parentSessionId: ctx.parentSessionId,
+			rootSessionId: ctx.rootSessionId,
 			canDelegate: a.canDelegate,
 			allowedDelegateAgents: a.allowedDelegateAgents,
 			// Widget rendering hints (LiveStepProgress seed).
@@ -415,7 +421,7 @@ export function executeAsyncChain(
 		const handle = formatRunHandle({ mode: "parallel", agents: parallelAgents, style: "verbose" });
 		return {
 			content: [{ type: "text", text: `Async parallel: ${handle} [${id}]\nState: running\n${formatAsyncStatusHint(id)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-			details: { mode: "parallel", results: [], asyncId: id, asyncDir },
+			details: { mode: "parallel", results: [], runId: id, asyncId: id, asyncDir },
 		};
 	}
 
@@ -427,7 +433,7 @@ export function executeAsyncChain(
 
 	return {
 		content: [{ type: "text", text: `Async chain: ${chainDesc} [${id}]\nState: running\n${formatAsyncStatusHint(id)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-		details: { mode: "chain", results: [], asyncId: id, asyncDir },
+		details: { mode: "chain", results: [], runId: id, asyncId: id, asyncDir },
 	};
 }
 
@@ -519,6 +525,8 @@ export function executeAsyncSingle(
 						rootRoleName: forkReuse?.agentName,
 						forkSessionId: forkReuse?.sessionId,
 						parentAgentName: ctx.parentAgentName,
+						parentSessionId: ctx.parentSessionId,
+						rootSessionId: ctx.rootSessionId,
 						canDelegate: agentConfig.canDelegate,
 						allowedDelegateAgents: agentConfig.allowedDelegateAgents,
 						// Widget rendering hints (LiveStepProgress seed).
@@ -571,6 +579,6 @@ export function executeAsyncSingle(
 
 	return {
 		content: [{ type: "text", text: `Async: ${agent} [${id}]\nState: running\n${formatAsyncStatusHint(id)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-		details: { mode: "single", results: [], asyncId: id, asyncDir },
+		details: { mode: "single", results: [], runId: id, asyncId: id, asyncDir },
 	};
 }

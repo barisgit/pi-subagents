@@ -628,6 +628,8 @@ interface SingleStepContext {
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void;
 	childIntercomTarget?: string;
 	liveSink?: LiveProgressSink;
+	// charter nested-subagent-display: parent run's session id, propagated to children.
+	sessionId?: string;
 }
 
 /** Run a single pi agent step, returning output and metadata */
@@ -696,6 +698,10 @@ async function runSingleStep(
 			forkSessionId: step.forkSessionId,
 			currentAgentName: step.agent,
 			parentAgentName: step.parentAgentName,
+			parentSessionId: ctx.sessionId ?? process.env.PI_SUBAGENT_PARENT_SESSION_ID,
+			rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionId ?? undefined,
+			// charter nested-subagent-display: children spawned by this async run inherit its id as parent.
+			parentRunId: ctx.id,
 			canDelegate: step.canDelegate,
 			allowedDelegateAgents: step.allowedDelegateAgents,
 		});
@@ -971,8 +977,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			: flatSteps.length > 1 ? "chain"
 				: "single";
 	const runLabel: string | undefined = computeRunLabel(runMode, config.label, flatSteps.map((s) => s.label));
+	const parentRunId = process.env.PI_SUBAGENT_PARENT_RUN_ID;
 	const statusPayload: RunnerStatusPayload = {
 		runId: id,
+		// charter nested-subagent-display: persist parent run id from launcher env.
+		...(parentRunId ? { parentRunId } : {}),
 		mode: runMode,
 		...(runLabel ? { label: runLabel } : {}),
 		state: "running",
@@ -1270,6 +1279,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							piArgv1: config.piArgv1,
 							childIntercomTarget: config.childIntercomTargets?.[fi],
 							liveSink: buildLiveSink(fi),
+							sessionId: config.sessionId,
 							registerInterrupt: (interrupt) => {
 								activeChildInterrupt = interrupt;
 							},
@@ -1403,6 +1413,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				piArgv1: config.piArgv1,
 				childIntercomTarget: config.childIntercomTargets?.[flatIndex],
 				liveSink: buildLiveSink(flatIndex),
+				sessionId: config.sessionId,
 				registerInterrupt: (interrupt) => {
 					activeChildInterrupt = interrupt;
 				},

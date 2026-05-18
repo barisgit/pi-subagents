@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createMockPi, createTempDir, events, makeAgent, removeTempDir, tryImport } from "../support/helpers.ts";
+import { asyncIntegrationSkipReason } from "../support/integration-gate.ts";
 import type { MockPi } from "../support/helpers.ts";
 
 interface AsyncExecutionResult {
@@ -75,7 +76,7 @@ function writePackageSkill(packageRoot: string, skillName: string): void {
 	);
 }
 
-describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
+describe("async execution utilities", { skip: asyncIntegrationSkipReason(process.env, available) }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
 
@@ -104,6 +105,50 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	it("readStatus returns null for missing directory", () => {
 		const status = readStatus("/nonexistent/path/abc123");
 		assert.equal(status, null);
+	});
+
+	it("async child env receives runner session id, not a jsonl session path", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			echoEnv: ["PI_SUBAGENT_PARENT_SESSION_ID", "PI_SUBAGENT_ROOT_SESSION_ID"],
+		});
+
+		const id = `async-session-env-${Date.now().toString(36)}`;
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const sessionRoot = path.join(tempDir, "sessions");
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Report session env",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "u-u-i-d" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot,
+			maxSubagentDepth: 2,
+		});
+
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > deadline) {
+				assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.equal(payload.success, true);
+		const env = JSON.parse(payload.results[0].output);
+		assert.equal(env.PI_SUBAGENT_PARENT_SESSION_ID, "u-u-i-d");
+		assert.equal(env.PI_SUBAGENT_ROOT_SESSION_ID, "u-u-i-d");
+		assert.doesNotMatch(env.PI_SUBAGENT_PARENT_SESSION_ID, /\.jsonl$/);
+		assert.doesNotMatch(env.PI_SUBAGENT_ROOT_SESSION_ID, /\.jsonl$/);
 	});
 
 	it("readStatus parses valid status file", () => {

@@ -30,6 +30,10 @@ export interface BuildPiArgsInput {
 	forkSessionId?: string;
 	currentAgentName?: string;
 	parentAgentName?: string;
+	parentSessionId?: string;
+	rootSessionId?: string;
+	// charter nested-subagent-display: parent run id passed to child process env.
+	parentRunId?: string;
 	canDelegate?: boolean;
 	allowedDelegateAgents?: string[];
 }
@@ -131,6 +135,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.forkSessionId) env.PI_SUBAGENT_FORK_SESSION_ID = input.forkSessionId;
 	if (input.currentAgentName) env.PI_SUBAGENT_CURRENT_AGENT = input.currentAgentName;
 	if (input.parentAgentName) env.PI_SUBAGENT_PARENT_AGENT = input.parentAgentName;
+	if (input.parentSessionId) env.PI_SUBAGENT_PARENT_SESSION_ID = input.parentSessionId;
+	if (input.rootSessionId) env.PI_SUBAGENT_ROOT_SESSION_ID = input.rootSessionId;
+	if (input.parentRunId) env.PI_SUBAGENT_PARENT_RUN_ID = input.parentRunId;
 	if (input.canDelegate !== undefined) env.PI_SUBAGENT_CAN_DELEGATE = input.canDelegate ? "1" : "0";
 	if (input.allowedDelegateAgents?.length) env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS = input.allowedDelegateAgents.join(",");
 	if (input.mcpDirectTools !== undefined) {

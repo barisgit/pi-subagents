@@ -23,7 +23,7 @@ interface AsyncJobTrackerOptions {
 type AsyncJobLifecycleStatus = AsyncJobState["status"];
 
 function isTerminalAsyncStatus(status: AsyncJobLifecycleStatus): boolean {
-	return status === "complete" || status === "failed" || status === "paused";
+	return status === "complete" || status === "failed" || status === "paused" || status === "lost";
 }
 
 export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, asyncDirRoot: string, options: AsyncJobTrackerOptions = {}): {
@@ -133,6 +133,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.currentTool = isTerminalAsyncStatus(job.status) ? undefined : (status.currentTool ?? job.currentTool);
 						job.currentToolStartedAt = isTerminalAsyncStatus(job.status) ? undefined : (status.currentToolStartedAt ?? job.currentToolStartedAt);
 						job.mode = status.mode;
+						// charter nested-subagent-display: mirror parent id for widget hierarchy.
+						job.parentRunId = status.parentRunId;
 						if (status.label !== undefined) job.label = status.label;
 						job.currentStep = status.currentStep ?? job.currentStep;
 						job.stepsTotal = status.steps?.length ?? job.stepsTotal;

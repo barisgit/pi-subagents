@@ -28,6 +28,11 @@ beforeEach(() => {
 	savedParentAgent = process.env.PI_SUBAGENT_PARENT_AGENT;
 	savedCanDelegate = process.env.PI_SUBAGENT_CAN_DELEGATE;
 	savedAllowedDelegateAgents = process.env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS;
+	// Keep unit expectations independent from the parent subagent process env.
+	delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+	delete process.env.PI_SUBAGENT_PARENT_AGENT;
+	delete process.env.PI_SUBAGENT_CAN_DELEGATE;
+	delete process.env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS;
 });
 
 afterEach(() => {

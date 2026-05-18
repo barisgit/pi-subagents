@@ -125,6 +125,37 @@ export function resolveAgentColor(agent: { name: string; color?: string }): stri
 	return agent.color;
 }
 
+/**
+ * Lazy process-wide name -> color map. Built once from the merged agent
+ * registry (user dirs + builtin + project agents discovered near cwd) so the
+ * dashboard can tint completed/historic rows by agent name without depending
+ * on disk-persisted color fields. Project-agent overrides win over user/builtin
+ * via discoverAgents's existing precedence.
+ */
+let agentColorByNameCache: Map<string, string> | undefined;
+
+export function colorForAgentName(name: string): string | undefined {
+	if (!name) return undefined;
+	if (!agentColorByNameCache) {
+		try {
+			const { agents } = discoverAgents(process.cwd(), "both");
+			const map = new Map<string, string>();
+			for (const agent of agents) {
+				const color = resolveAgentColor(agent);
+				if (color) map.set(agent.name, color);
+			}
+			agentColorByNameCache = map;
+		} catch {
+			agentColorByNameCache = new Map();
+		}
+	}
+	return agentColorByNameCache.get(name);
+}
+
+export function clearAgentColorByNameCache(): void {
+	agentColorByNameCache = undefined;
+}
+
 interface SubagentSettings {
 	overrides: Record<string, BuiltinAgentOverrideConfig>;
 	disableBuiltins?: boolean;

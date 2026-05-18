@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-type EventLogLine =
+export type EventLogLine =
 	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string; label?: string }
-	| { kind: "tool"; stepIndex: number; toolName: string; argsPreview: string; durationMs?: number; ts: number }
+	| { kind: "tool"; stepIndex: number; toolName: string; argsPreview: string; rawArgs?: Record<string, unknown>; durationMs?: number; ts: number }
 	| { kind: "step-end"; stepIndex: number; agent: string; ts: number; durationMs?: number; tokens?: number; status?: string }
 	| { kind: "final-text"; stepIndex: number; agent: string; text: string };
 
@@ -17,7 +17,7 @@ const cache = new Map<string, CacheEntry>();
 
 const ARGS_PREVIEW_MAX = 60;
 
-function previewArgs(args: unknown): string {
+export function previewArgs(args: unknown): string {
 	if (args === undefined || args === null) return "";
 	let json: string;
 	try {
@@ -109,8 +109,9 @@ export function readEventLog(asyncDir: string): EventLogLine[] {
 			const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
 			const ts = typeof event.observedAt === "number" ? event.observedAt : 0;
 			if (stepIndex < 0 || !toolName) continue;
+			const rawArgs = event.args && typeof event.args === "object" && !Array.isArray(event.args) ? event.args as Record<string, unknown> : undefined;
 			const argsPreview = previewArgs(event.args);
-			const entry: EventLogLine = { kind: "tool", stepIndex, toolName, argsPreview, ts };
+			const entry: EventLogLine = { kind: "tool", stepIndex, toolName, argsPreview, ...(rawArgs ? { rawArgs } : {}), ts };
 			out.push(entry);
 			if (toolCallId) toolStartIndex.set(`${stepIndex}:${toolCallId}`, out.length - 1);
 			continue;

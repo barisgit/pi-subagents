@@ -84,9 +84,10 @@ export interface AgentProgress {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolArgs?: string;
+	currentToolRawArgs?: Record<string, unknown>;
 	currentToolStartedAt?: number;
 	lastToolEndAt?: number;
-	recentTools: Array<{ tool: string; args: string; endMs: number; durationMs?: number }>;
+	recentTools: Array<{ tool: string; args: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
 	recentOutput: string[];
 	tokenSamples?: Array<{ ts: number; tokens: number }>;
 	thinking?: string;
@@ -233,6 +234,8 @@ export interface Details {
 	chainAgents?: string[];      // Agent names in order, e.g., ["scout", "planner"]
 	totalSteps?: number;         // Total steps in chain
 	currentStepIndex?: number;   // 0-indexed current step (for running chains)
+	/** Internal foreground run id used to resolve nested on-disk child runs for inline live rendering. */
+	runId?: string;
 }
 
 // ============================================================================
@@ -271,7 +274,7 @@ export interface LiveStepProgress {
 	color?: string;
 	thinking?: string;
 	currentToolArgs?: string;
-	recentTools?: Array<{ tool: string; args?: string; endMs: number; durationMs?: number }>;
+	recentTools?: Array<{ tool: string; args?: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
 	tokenSamples?: Array<{ ts: number; tokens: number }>;
 	lastToolEndAt?: number;
 	toolCount?: number;
@@ -280,12 +283,14 @@ export interface LiveStepProgress {
 
 export interface AsyncStatus {
 	runId: string;
+	// charter nested-subagent-display: persisted parent link for hierarchy rendering.
+	parentRunId?: string;
 	// 'parallel' is used when the runner is invoked with a single parallel-only step;
 	// distinguishes top-level parallel from a real multi-step chain for display.
 	mode: "single" | "chain" | "parallel";
 	/** Run-level caller-provided summary; populated for single runs and uniform-label parallel runs. */
 	label?: string;
-	state: "queued" | "running" | "complete" | "failed" | "paused";
+	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;
@@ -327,7 +332,9 @@ export interface AsyncStatus {
 export interface AsyncJobState {
 	asyncId: string;
 	asyncDir: string;
-	status: "queued" | "running" | "complete" | "failed" | "paused";
+	// charter nested-subagent-display: widget reads this from status.json for nesting.
+	parentRunId?: string;
+	status: "queued" | "running" | "complete" | "failed" | "paused" | "lost";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;
@@ -366,7 +373,7 @@ export interface AsyncJobState {
 	agentColors?: string[];
 	thinking?: string;
 	currentToolArgs?: string;
-	recentTools?: Array<{ tool: string; args?: string; endMs: number; durationMs?: number }>;
+	recentTools?: Array<{ tool: string; args?: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
 	tokenSamples?: Array<{ ts: number; tokens: number }>;
 	lastToolEndAt?: number;
 }
@@ -377,6 +384,8 @@ export interface SubagentState {
 	asyncJobs: Map<string, AsyncJobState>;
 	foregroundControls: Map<string, {
 		runId: string;
+		// charter nested-subagent-display: sync rows carry hierarchy before disk handoff.
+		parentRunId?: string;
 		mode: "single" | "parallel" | "chain";
 		startedAt: number;
 		updatedAt: number;
@@ -385,6 +394,11 @@ export interface SubagentState {
 		/** Per-step caller-provided labels aligned by index. */
 		agentLabels?: string[];
 		currentAgent?: string;
+		/**
+		 * Theme color token used to tint the sync agent name in /subagents-status
+		 * left pane. Populated from AgentProgress.color (resolveAgentColor()).
+		 */
+		currentAgentColor?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
 		lastActivityAt?: number;
@@ -492,6 +506,12 @@ export interface RunSyncOptions {
 	preset?: string;
 	/** Immediate parent agent identity for nested delegation guardrails */
 	parentAgentName?: string;
+	/** Direct caller's Pi session id for charter/session attribution. */
+	parentSessionId?: string;
+	/** Top-of-chain Pi session id for charter/session attribution. */
+	rootSessionId?: string;
+	/** Immediate parent run id for nested subagent hierarchy display. */
+	parentRunId?: string;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -789,13 +809,17 @@ export function isAllowedNestedOrchestratorChild(name: unknown): boolean {
 export function getSubagentIdentityEnv(
 	currentAgentName: string,
 	parentAgentName?: string | null,
-	options?: { canDelegate?: boolean; allowedDelegateAgents?: string[] },
+	options?: { canDelegate?: boolean; allowedDelegateAgents?: string[]; parentRunId?: string; parentSessionId?: string; rootSessionId?: string },
 ): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		PI_SUBAGENT_CURRENT_AGENT: currentAgentName,
 	};
 	const normalizedParent = typeof parentAgentName === "string" ? parentAgentName.trim() : "";
 	if (normalizedParent) env.PI_SUBAGENT_PARENT_AGENT = normalizedParent;
+	if (options?.parentSessionId) env.PI_SUBAGENT_PARENT_SESSION_ID = options.parentSessionId;
+	if (options?.rootSessionId) env.PI_SUBAGENT_ROOT_SESSION_ID = options.rootSessionId;
+	// charter nested-subagent-display: expose parent run id to child Pi processes.
+	if (options?.parentRunId) env.PI_SUBAGENT_PARENT_RUN_ID = options.parentRunId;
 	if (options?.canDelegate !== undefined) env.PI_SUBAGENT_CAN_DELEGATE = options.canDelegate ? "1" : "0";
 	const allowedDelegateAgents = normalizeAgentList(options?.allowedDelegateAgents);
 	if (allowedDelegateAgents) env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS = allowedDelegateAgents.join(",");

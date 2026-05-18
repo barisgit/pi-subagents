@@ -925,7 +925,7 @@ Gotchas:
 
 	const resetSessionState = (ctx: ExtensionContext) => {
 		state.baseCwd = ctx.cwd;
-		state.currentSessionId = ctx.sessionManager.getSessionFile() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		state.currentSessionId = ctx.sessionManager.getSessionId() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
 		resetJobs(ctx);
