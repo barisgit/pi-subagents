@@ -150,6 +150,9 @@ function parseSessionFile(input: { filePath: string; stepIndex: number; status?:
 	const toolStartIndex = new Map<string, number>();
 	let finalText = "";
 	let firstMessageTs: number | undefined;
+	// First user-role message's plain text is the initial prompt the subagent received.
+	// Captured once and threaded onto step-start so the right pane can render it.
+	let initialPrompt: string | undefined;
 
 	for (const line of raw.split("\n")) {
 		const trimmed = line.trim();
@@ -192,6 +195,15 @@ function parseSessionFile(input: { filePath: string; stepIndex: number; status?:
 			continue;
 		}
 		if (role === "user") {
+			if (initialPrompt === undefined) {
+				const texts: string[] = [];
+				for (const part of content) {
+					const item = objectRecord(part);
+					if (!item) continue;
+					if (item.type === "text" && typeof item.text === "string" && item.text.trim()) texts.push(item.text);
+				}
+				if (texts.length > 0) initialPrompt = texts.join("\n\n").trim();
+			}
 			for (const part of content) {
 				const item = objectRecord(part);
 				if (!item) continue;
@@ -222,7 +234,7 @@ function parseSessionFile(input: { filePath: string; stepIndex: number; status?:
 	const tokens = step?.tokens?.total ?? (input.stepIndex === 0 ? input.status?.totalTokens?.total : undefined);
 	const status = step?.status ?? input.status?.state;
 	const lines: TranscriptLine[] = [
-		{ kind: "step-start", stepIndex: input.stepIndex, agent, ts: startTs, ...(step?.label ? { label: step.label } : input.stepIndex === 0 && input.status?.label ? { label: input.status.label } : {}) },
+		{ kind: "step-start", stepIndex: input.stepIndex, agent, ts: startTs, ...(step?.label ? { label: step.label } : input.stepIndex === 0 && input.status?.label ? { label: input.status.label } : {}), ...(initialPrompt ? { task: initialPrompt } : {}) },
 		...out,
 	];
 	if (isTerminalStepStatus(status)) {

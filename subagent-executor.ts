@@ -45,6 +45,22 @@ import { getCurrentPi } from "./current-pi.ts";
 import { getLineageForSession } from "./lineage.ts";
 
 /**
+ * Resolve the parent runId for a dispatch happening NOW. The dispatching
+ * session's lineage tells us our own runId; that becomes the parent for any
+ * runs we spawn from this turn. Falls back to PI_SUBAGENT_PARENT_RUN_ID for
+ * legacy/out-of-process callers, but the in-process executor doesn't set env
+ * so lineage is the canonical source.
+ */
+export function resolveDispatchParentRunId(ctx: { sessionManager?: { getSessionId?: () => string | undefined } }): string | undefined {
+	const sid = ctx.sessionManager?.getSessionId?.();
+	if (sid) {
+		const lineage = getLineageForSession(sid);
+		if (lineage?.runId) return lineage.runId;
+	}
+	return process.env.PI_SUBAGENT_PARENT_RUN_ID;
+}
+
+/**
  * Emit a subagent lifecycle event on the host pi.events bus, resolving the
  * CURRENT pi at emit time. The SDK invalidates captured pi on session
  * replacement (newSession/fork/switchSession/reload); resolving fresh avoids
@@ -793,7 +809,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, fullId: `${m.provider}/${m.id}` }));
 	const currentProvider = ctx.model?.provider;
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
-	const parentRunId = process.env.PI_SUBAGENT_PARENT_RUN_ID;
+	const parentRunId = resolveDispatchParentRunId(ctx);
 	const steps: AsyncDispatchStep[] = [];
 	let mode: "single" | "chain" | "parallel" = "single";
 	let runLabel = params.label;
@@ -2488,7 +2504,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const first = foregroundAgentLabels[0];
 			if (first && foregroundAgentLabels.every((l) => l === first)) foregroundRunLabel = first;
 		}
-		const parentRunId = process.env.PI_SUBAGENT_PARENT_RUN_ID;
+		const parentRunId = resolveDispatchParentRunId(ctx);
 		const foregroundControl = effectiveAsync
 			? undefined
 			: {

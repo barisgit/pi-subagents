@@ -100,6 +100,40 @@ describe("readRunTranscript", () => {
 		}
 	});
 
+	it("captures the first user-role text content as the step task (initial prompt)", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				user("2026-05-20T00:00:00.500Z", [{ type: "text", text: "Read package.json and respond OK." }]),
+				assistant("2026-05-20T00:00:01.000Z", [{ type: "text", text: "OK" }]),
+			]);
+			const lines = readRunTranscript(dir);
+			const start = lines.find((line) => line.kind === "step-start");
+			assert.ok(start && start.kind === "step-start");
+			assert.equal(start.task, "Read package.json and respond OK.");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("only captures the FIRST user prompt, not later follow-ups", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				user("2026-05-20T00:00:00.500Z", [{ type: "text", text: "first prompt" }]),
+				assistant("2026-05-20T00:00:01.000Z", [{ type: "text", text: "ack" }]),
+				user("2026-05-20T00:00:01.500Z", [{ type: "text", text: "follow up" }]),
+			]);
+			const start = readRunTranscript(dir).find((line) => line.kind === "step-start");
+			assert.ok(start && start.kind === "step-start");
+			assert.equal(start.task, "first prompt");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("returns the cached array while transcript and status stats are unchanged", () => {
 		const dir = makeRunDir();
 		try {
