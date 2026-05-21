@@ -1221,7 +1221,7 @@ Async events:
 - `subagent:async-started`
 - `subagent:async-complete`
 
-The result watcher emits `subagent:async-complete`; `index.ts` registers the notification handler that consumes it.
+The in-process executor emits `subagent:async-complete`; `index.ts` registers the notification handler that consumes it.
 
 ## Files
 
@@ -1233,9 +1233,10 @@ The result watcher emits `subagent:async-complete`; `index.ts` registers the not
 ├── chain-clarify.ts              # TUI for chain/single/parallel clarification
 ├── chain-execution.ts            # Chain orchestration (sequential + parallel)
 ├── chain-serializer.ts           # Parse/serialize .chain.md files
-├── async-execution.ts            # Async/background execution support
 ├── async-status.ts               # Async run discovery, listing, and formatting
-├── execution.ts                  # Core runSync and sync fallback handling
+├── in-process-executor.ts        # AgentSession-based child execution
+├── status-writer.ts              # Debounced async status persistence
+├── session-paths.ts              # Child session/run directory resolution
 ├── render.ts                     # TUI rendering (widget, tool result display)
 ├── subagents-status.ts           # Async status overlay component
 ├── artifacts.ts                  # Artifact management
@@ -1244,15 +1245,13 @@ The result watcher emits `subagent:async-complete`; `index.ts` registers the not
 ├── utils.ts                      # Shared utility functions (mapConcurrent, readStatus, etc.)
 ├── types.ts                      # Shared types and constants
 ├── model-fallback.ts             # Fallback candidate resolution and retry classification
-├── subagent-runner.ts            # Async runner (detached process)
-├── parallel-utils.ts             # Parallel execution utilities for async runner
+├── run-events.ts                 # JSONL event stream reader
+├── parallel-utils.ts             # Parallel execution utilities
 ├── worktree.ts                   # Git worktree isolation for parallel execution
-├── pi-spawn.ts                   # Cross-platform pi CLI spawning
 ├── single-output.ts              # Solo agent output file handling
 ├── notify.ts                     # Async completion notifications
 ├── completion-dedupe.ts          # Completion deduplication for notifications
 ├── file-coalescer.ts             # Debounced file write coalescing
-├── jsonl-writer.ts               # JSONL event stream writer
 ├── agent-manager.ts              # Overlay orchestrator, screen routing, CRUD
 ├── agent-manager-list.ts         # List screen (search, multi-select, progressive footer)
 ├── agent-manager-detail.ts       # Detail screen (resolved prompt, runs, fields)

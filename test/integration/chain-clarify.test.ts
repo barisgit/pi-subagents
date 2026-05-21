@@ -23,7 +23,7 @@ interface ClarifyTestModule {
 
 const clarifyMod = await tryImport<ClarifyTestModule>("./chain-clarify.ts");
 const available = !!clarifyMod;
-const ChainClarifyComponent = clarifyMod?.ChainClarifyComponent;
+const ChainClarifyComponent = clarifyMod?.ChainClarifyComponent as NonNullable<ClarifyTestModule["ChainClarifyComponent"]>;
 
 describe("chain clarify model display", { skip: !available ? "pi packages not available" : undefined }, () => {
 	it("keeps the preferred provider visible after applying thinking to a bare model", () => {

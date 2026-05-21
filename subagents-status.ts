@@ -1,17 +1,16 @@
-import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { colorForAgentName } from "./agents.ts";
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import type { Component, TUI } from "@mariozechner/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay, sortRuns } from "./async-status.ts";
-import { readEventLog } from "./events-log.ts";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryForOverlay, sortRuns } from "./async-status.ts";
+import { readRunTranscript } from "./run-transcript.ts";
 import { formatDuration } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
 import { deriveRunDisplayState, displayStatePriority } from "./run-liveness.ts";
 import { flatRule, formatScrollInfo, padRight, titledBottomSegment, titledTopSegment } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
-import { ASYNC_DIR, type ActivityState, type RunDisplayState, type SubagentState } from "./types.ts";
+import { type ActivityState, type RunDisplayState, type SubagentState } from "./types.ts";
 
 const AUTO_REFRESH_MS = 1000;
 const RECENT_LIMIT = 20;
@@ -53,6 +52,7 @@ type ForegroundControl = SubagentState["foregroundControls"] extends Map<string,
 
 export interface ForegroundRunSummary {
 	id: string;
+	asyncDir?: string;
 	// charter nested-subagent-display: live sync hierarchy parent link.
 	parentRunId?: string;
 	state: "running";
@@ -83,7 +83,7 @@ export type LiveRun =
 	| { source: "async"; run: AsyncRunSummary };
 
 interface StatusOverlayDeps {
-	listRunsForOverlay?: (asyncDirRoot: string, recentLimit?: number) => AsyncRunOverlayData;
+	listRunsForOverlay?: (recentLimit?: number) => AsyncRunOverlayData;
 	listForegroundRuns?: () => ForegroundRunSummary[];
 	refreshMs?: number;
 	leftPaneCap?: number;
@@ -112,8 +112,9 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 				lastActivityAt: control.lastActivityAt,
 				lastUpdate: control.updatedAt,
 			});
-			return {
+		return {
 				id: control.runId,
+			...(control.asyncDir ? { asyncDir: control.asyncDir } : {}),
 				...(control.parentRunId ? { parentRunId: control.parentRunId } : {}),
 				state: "running" as const,
 				...(control.currentActivityState ? { activityState: control.currentActivityState } : {}),
@@ -388,15 +389,15 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 
 export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
-	// charter nested-subagent-display: sync runs persist events under ASYNC_DIR/<runId>.
-	const asyncDir = run.source === "sync" ? path.join(ASYNC_DIR, run.run.id) : run.run.asyncDir;
-	const events = readEventLog(asyncDir);
+	const asyncDir = run.run.asyncDir;
+	if (!asyncDir) return [theme.fg("dim", "(no events yet)")];
+	const events = readRunTranscript(asyncDir);
 	if (events.length === 0) return [theme.fg("dim", "(no events yet)")];
 	// Shared set so each nested child run is rendered at most once across all steps.
 	const rightPaneUsed = new Set<string>();
 
-	// Parallel runs share one events.jsonl with N children writing concurrently,
-	// each tagged with its own stepIndex. Render order chronological-within-step
+	// Parallel runs share one run record with N session transcripts, one per step.
+	// Render order chronological-within-step
 	// so each step reads as a coherent block instead of interleaved noise.
 	type Step = { index: number; agent: string; startTs?: number; lines: string[]; final?: string; ended?: boolean; task?: string; label?: string };
 	const steps = new Map<number, Step>();
@@ -502,7 +503,7 @@ export class SubagentsStatusComponent implements Component {
 	private readonly tui: TUI;
 	private readonly theme: Theme;
 	private readonly done: () => void;
-	private readonly listRunsForOverlay: (asyncDirRoot: string, recentLimit?: number) => AsyncRunOverlayData;
+	private readonly listRunsForOverlay: (recentLimit?: number) => AsyncRunOverlayData;
 	private readonly listForegroundRuns: () => ForegroundRunSummary[];
 	private readonly leftPaneCap: number;
 	private readonly refreshTimer: NodeJS.Timeout;
@@ -532,7 +533,7 @@ export class SubagentsStatusComponent implements Component {
 		this.tui = tui;
 		this.theme = theme;
 		this.done = done;
-		this.listRunsForOverlay = deps.listRunsForOverlay ?? listAsyncRunsForOverlay;
+		this.listRunsForOverlay = deps.listRunsForOverlay ?? ((limit) => listRunsFromRegistryForOverlay(limit));
 		this.listForegroundRuns = deps.listForegroundRuns ?? (() => []);
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
 		this.sessionCwd = deps.sessionCwd;
@@ -547,7 +548,7 @@ export class SubagentsStatusComponent implements Component {
 
 	private reload(): void {
 		try {
-			const overlay = this.listRunsForOverlay(ASYNC_DIR, RECENT_LIMIT);
+			const overlay = this.listRunsForOverlay(RECENT_LIMIT);
 			const sync = this.listForegroundRuns();
 			const syncIds = new Set(sync.map((run) => run.id));
 			// charter nested-subagent-display: prefer in-memory sync rows while disk mirrors exist.
@@ -666,16 +667,8 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private openSessionFile(): void {
-		const run = this.selectedRun();
-		if (!run || run.source !== "async") return;
-		const file = run.run.sessionFile;
-		if (!file) return;
-		const editor = process.env.EDITOR || "vi";
-		try {
-			spawn(editor, [file], { stdio: "inherit", detached: true }).unref();
-		} catch {
-			// Best-effort open; ignore failures so the overlay keeps responding.
-		}
+		// Opening an editor would require spawning a subprocess; keep the dashboard
+		// read-only now that subagent execution is fully in-process.
 	}
 
 	handleInput(data: string): void {
@@ -864,6 +857,10 @@ export class SubagentsStatusComponent implements Component {
 		const rightSegment = titledBottomSegment(this.theme, rightWidth, rightHint, this.focus === "right");
 		const corner = (s: string) => this.theme.fg("dim", s);
 		return `${corner("╰")}${leftSegment}${corner("┴")}${rightSegment}${corner("╯")}`;
+	}
+
+	invalidate(): void {
+		// No cached render output.
 	}
 
 	render(width: number): string[] {

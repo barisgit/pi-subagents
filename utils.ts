@@ -5,10 +5,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
 import { formatToolCall } from "./formatters.ts";
-import { type AgentProgress, type AsyncStatus, type Details, type DisplayItem, type ErrorInfo, RESULTS_DIR, type SingleResult, type ToolCallSummary } from "./types.ts";
-import { isPidAlive } from "./run-liveness.ts";
+import { type AgentProgress, type AsyncStatus, type Details, type DisplayItem, type ErrorInfo, type SingleResult, type ToolCallSummary } from "./types.ts";
 
 // ============================================================================
 // File System Utilities
@@ -33,20 +32,9 @@ function isNotFoundError(error: unknown): boolean {
 		&& (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-function resultFileExists(runId: string): boolean {
-	try {
-		return fs.existsSync(path.join(RESULTS_DIR, `${runId}.json`));
-	} catch {
-		return false;
-	}
-}
-
 function reconcileStatus(status: AsyncStatus, mtimeMs: number): AsyncStatus {
 	if (status.state !== "running") return status;
-	if (status.pid !== undefined && status.pid !== null) {
-		return isPidAlive(status.pid) === false ? { ...status, state: "lost" } : status;
-	}
-	if (Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS && !resultFileExists(status.runId)) {
+	if (Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS) {
 		return { ...status, state: "lost" };
 	}
 	return status;
@@ -88,7 +76,7 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 		status = JSON.parse(content) as AsyncStatus;
 	} catch {
 		// Malformed/partial status.json (e.g. crashed mid-write). Treat as a missing/lost
-		// entry rather than poisoning callers that scan ASYNC_DIR. Cache the null so
+		// entry rather than poisoning callers that scan RUNS_DIR. Cache the null so
 		// we don't repeatedly re-parse the same broken file.
 		return null;
 	}

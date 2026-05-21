@@ -911,7 +911,8 @@ function loadChainsFromDir(dir: string, source: AgentSource): ChainConfig[] {
 		}
 
 		try {
-			chains.push(parseChain(content, source, filePath));
+			const chainSource = source === "builtin" ? "user" : source;
+			chains.push(parseChain(content, chainSource, filePath));
 		} catch {
 			continue;
 		}

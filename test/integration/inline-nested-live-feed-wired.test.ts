@@ -1,19 +1,23 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { renderSubagentResult } from "../../render.ts";
-import { ASYNC_DIR, type AsyncStatus } from "../../types.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
+import { RUNS_DIR, type AsyncStatus } from "../../types.ts";
 
 const ids = ["inline-wired-parent-single", "inline-wired-child-running", "inline-wired-parent-multi", "inline-wired-child-complete"];
 const theme = {
 	fg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
-};
+} as never;
 const usage = { input: 0, output: 0, total: 0 };
+const registryPath = path.join(os.tmpdir(), `pi-inline-wired-registry-${process.pid}.jsonl`);
 
 function rmRun(id: string): void {
-	fs.rmSync(path.join(ASYNC_DIR, id), { recursive: true, force: true });
+	fs.rmSync(path.join(RUNS_DIR, id), { recursive: true, force: true });
+	setRegistryPathForTests(null);
 }
 
 function writeRun(id: string, opts: {
@@ -26,7 +30,8 @@ function writeRun(id: string, opts: {
 	tokens?: number;
 	events?: Array<Record<string, unknown>>;
 } = {}): void {
-	const dir = path.join(ASYNC_DIR, id);
+	setRegistryPathForTests(registryPath);
+	const dir = path.join(RUNS_DIR, id);
 	fs.mkdirSync(dir, { recursive: true });
 	const startedAt = opts.startedAt ?? Date.now() - 1_500;
 	const endedAt = opts.endedAt ?? Date.now();
@@ -44,7 +49,25 @@ function writeRun(id: string, opts: {
 		...(opts.tokens ? { totalTokens: { input: 0, output: opts.tokens, total: opts.tokens } } : {}),
 	};
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify(status), "utf-8");
-	fs.writeFileSync(path.join(dir, "events.jsonl"), (opts.events ?? []).map((event) => JSON.stringify(event)).join("\n") + "\n", "utf-8");
+	const sessionDir = path.join(dir, "run-0");
+	fs.mkdirSync(sessionDir, { recursive: true });
+	const messages = (opts.events ?? []).filter((event) => event.type === "tool_execution_start").map((event) => ({
+		type: "message",
+		timestamp: new Date(typeof event.observedAt === "number" ? event.observedAt : Date.now()).toISOString(),
+		message: { role: "assistant", content: [{ type: "tool_use", id: event.toolCallId, name: event.toolName, input: event.args }] },
+	}));
+	fs.writeFileSync(path.join(sessionDir, "session.jsonl"), [{ type: "session", version: 3, id, timestamp: new Date(startedAt).toISOString(), cwd: process.cwd() }, ...messages].map((event) => JSON.stringify(event)).join("\n") + "\n", "utf-8");
+	appendRunEntry({
+		runId: id,
+		runRecordDir: dir,
+		mode: "single",
+		source: "sync",
+		agentName: opts.agent ?? "fixer",
+		...(opts.label ? { label: opts.label } : {}),
+		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
+		cwd: process.cwd(),
+		startedAt,
+	});
 }
 
 function tool(toolName: string, args: Record<string, unknown>, ts = 1_100): Record<string, unknown> {
@@ -120,7 +143,7 @@ describe("inline nested live feed compact wiring", () => {
 		}, { expanded: false }, theme);
 
 		const text = widget.render(140).join("\n");
-		assert.match(text, /✓ subagent: done child · 1 tools · ~512 tok · 1\.3s/);
+		assert.match(text, /Agent 1: parent · 1 tool use · 1\.3s · 1 subagent/);
 		assert.doesNotMatch(text, /← subagent: You are the nested SYNC child/);
 	});
 });

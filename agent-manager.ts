@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import type { Component, TUI } from "@mariozechner/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	buildBuiltinOverrideConfig,
 	defaultInheritProjectContext,
@@ -43,7 +43,7 @@ interface NameInputState { mode: "new-agent" | "clone-agent" | "clone-chain" | "
 interface StatusMessage { text: string; type: "error" | "info"; }
 interface OverrideScopeState { selectedScope: "user" | "project"; allowProject: boolean; }
 
-const BUILTIN_OVERRIDE_FIELDS: EditField[] = ["model", "fallbackModels", "thinking", "systemPromptMode", "inheritProjectContext", "inheritSkills", "disabled", "tools", "skills", "prompt"];
+const BUILTIN_OVERRIDE_FIELDS: EditField[] = ["model", "fallbackModels", "thinking", "systemPromptMode", "inheritProjectContext", "inheritSkills", "tools", "skills", "prompt"];
 
 function cloneConfig(config: AgentConfig): AgentConfig {
 	return {
@@ -272,7 +272,7 @@ export class AgentManagerComponent implements Component {
 
 	private saveChainEdit(): boolean {
 		const state = this.chainEditState; const entry = this.getChainEntry(this.currentChainId); if (!state || !entry) return false;
-		try { const parsed = parseChain(state.editor.buffer, entry.config.source, entry.config.filePath); fs.writeFileSync(entry.config.filePath, serializeChain(parsed), "utf-8"); entry.config = parsed; state.error = undefined; return true; }
+		try { const source = entry.config.source === "builtin" ? "user" : entry.config.source; const parsed = parseChain(state.editor.buffer, source, entry.config.filePath); fs.writeFileSync(entry.config.filePath, serializeChain(parsed), "utf-8"); entry.config = parsed; state.error = undefined; return true; }
 		catch (err) { state.error = err instanceof Error ? err.message : "Failed to save chain."; return false; }
 	}
 
@@ -533,9 +533,9 @@ export class AgentManagerComponent implements Component {
 				if (!this.chainEditState) { this.screen = "chain-detail"; this.tui.requestRender(); return; }
 				if (matchesKey(data, "ctrl+s")) { this.saveChainEdit(); this.tui.requestRender(); return; }
 				const innerW = this.overlayWidth - 2; const boxInnerWidth = Math.max(10, innerW - 4);
-				if (matchesKey(data, "shift+up") || matchesKey(data, "pageup") || matchesKey(data, "shift+down") || matchesKey(data, "pagedown")) {
+				if (matchesKey(data, "shift+up") || matchesKey(data, "pageUp") || matchesKey(data, "shift+down") || matchesKey(data, "pageDown")) {
 					const { lines: wrapped, starts } = wrapText(this.chainEditState.editor.buffer, boxInnerWidth); const cursorPos = getCursorDisplayPos(this.chainEditState.editor.cursor, starts);
-					const dir = matchesKey(data, "shift+up") || matchesKey(data, "pageup") ? -1 : 1; const targetLine = Math.max(0, Math.min(wrapped.length - 1, cursorPos.line + dir * CHAIN_EDIT_VIEWPORT));
+					const dir = matchesKey(data, "shift+up") || matchesKey(data, "pageUp") ? -1 : 1; const targetLine = Math.max(0, Math.min(wrapped.length - 1, cursorPos.line + dir * CHAIN_EDIT_VIEWPORT));
 					const targetCol = Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0); this.chainEditState.editor = { ...this.chainEditState.editor, cursor: starts[targetLine] + targetCol }; this.tui.requestRender(); return;
 				}
 				const nextState = handleEditorInput(this.chainEditState.editor, data, boxInnerWidth, { multiLine: true });

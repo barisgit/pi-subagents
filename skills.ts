@@ -2,7 +2,6 @@
  * Skill resolution and caching for subagent extension
  */
 
-import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -118,18 +117,8 @@ function extractSkillPathsFromPackageRoot(packageRoot: string, source: SkillSour
 		.map((entry) => ({ path: path.resolve(packageRoot, entry), source }));
 }
 
-let cachedGlobalNpmRoot: string | null = null;
-
 function getGlobalNpmRoot(): string | null {
-	if (cachedGlobalNpmRoot !== null) return cachedGlobalNpmRoot;
-	try {
-		cachedGlobalNpmRoot = execSync("npm root -g", { encoding: "utf-8", timeout: 5000 }).trim();
-		return cachedGlobalNpmRoot;
-	} catch {
-		// Global npm root is optional in constrained environments.
-		cachedGlobalNpmRoot = ""; // Empty string means "tried but failed"
-		return null;
-	}
+	return null;
 }
 
 function collectInstalledPackageSkillPaths(cwd: string): SkillSearchPath[] {

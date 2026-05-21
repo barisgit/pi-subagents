@@ -8,6 +8,9 @@ type RenderSubagentResult = (
 			mode: "single" | "parallel" | "chain" | "management";
 			context?: "fresh" | "fork";
 			results: unknown[];
+		chainAgents?: string[];
+		totalSteps?: number;
+		currentStepIndex?: number;
 		};
 	},
 	options: { expanded: boolean },
@@ -18,7 +21,7 @@ type RenderSubagentResult = (
 ) => { render(width: number): string[] };
 
 let renderSubagentResult: RenderSubagentResult | undefined;
-({ renderSubagentResult } = await import("../../render.ts") as {
+({ renderSubagentResult } = await import("../../render.ts") as unknown as {
 	renderSubagentResult?: RenderSubagentResult;
 });
 

@@ -1,5 +1,5 @@
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "./agents.ts";
 import { formatDuration } from "./formatters.ts";
 import type { RunEntry } from "./run-history.ts";
@@ -128,8 +128,8 @@ export function handleDetailInput(state: DetailState, data: string): DetailActio
 	if (data === "v") { state.resolved = !state.resolved; state.scrollOffset = 0; return; }
 	if (matchesKey(data, "up")) { state.scrollOffset--; return; }
 	if (matchesKey(data, "down")) { state.scrollOffset++; return; }
-	if (matchesKey(data, "pageup") || matchesKey(data, "shift+up")) { state.scrollOffset -= DETAIL_VIEWPORT_HEIGHT; return; }
-	if (matchesKey(data, "pagedown") || matchesKey(data, "shift+down")) { state.scrollOffset += DETAIL_VIEWPORT_HEIGHT; return; }
+	if (matchesKey(data, "pageUp") || matchesKey(data, "shift+up")) { state.scrollOffset -= DETAIL_VIEWPORT_HEIGHT; return; }
+	if (matchesKey(data, "pageDown") || matchesKey(data, "shift+down")) { state.scrollOffset += DETAIL_VIEWPORT_HEIGHT; return; }
 	return;
 }
 

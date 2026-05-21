@@ -5,9 +5,9 @@
  * Supports editing templates, output paths, reads lists, and progress toggle.
  */
 
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import type { Component, TUI } from "@mariozechner/pi-tui";
-import { matchesKey, visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import { matchesKey, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -786,7 +786,7 @@ export class ChainClarifyComponent implements Component {
 
 	private handleEditInput(data: string): void {
 		const textWidth = this.width - 4; // Must match render: innerW - 2 = (width - 2) - 2
-		if (matchesKey(data, "shift+up") || matchesKey(data, "pageup")) {
+		if (matchesKey(data, "shift+up") || matchesKey(data, "pageUp")) {
 			const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
 			const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
 			const targetLine = Math.max(0, cursorPos.line - this.EDIT_VIEWPORT_HEIGHT);
@@ -796,7 +796,7 @@ export class ChainClarifyComponent implements Component {
 			return;
 		}
 
-		if (matchesKey(data, "shift+down") || matchesKey(data, "pagedown")) {
+		if (matchesKey(data, "shift+down") || matchesKey(data, "pageDown")) {
 			const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
 			const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
 			const targetLine = Math.min(wrapped.length - 1, cursorPos.line + this.EDIT_VIEWPORT_HEIGHT);

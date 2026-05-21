@@ -66,7 +66,7 @@ let SubagentParams: SubagentParamsSchema | undefined;
 let CompileSchema: ((schema: unknown) => { Check(value: unknown): boolean; Errors(value: unknown): Iterable<{ message: string }> }) | undefined;
 let available = true;
 try {
-	schemas = await import("../../schemas.ts") as Record<string, JsonSchemaNode>;
+	schemas = await import("../../schemas.ts") as unknown as Record<string, JsonSchemaNode>;
 	SubagentParams = schemas.SubagentParams as SubagentParamsSchema;
 	const compileModule = await import("typebox/compile") as { Compile: typeof CompileSchema };
 	CompileSchema = compileModule.Compile;
@@ -259,7 +259,7 @@ it("includes subagent control fields", () => {
 	});
 
 	it("includes action on status params for list mode", () => {
-		const actionSchema = SubagentParams?.properties?.action;
+		const actionSchema = (SubagentParams?.properties as Record<string, JsonSchemaNode> | undefined)?.action;
 		assert.ok(actionSchema, "status action schema should exist");
 		assert.equal(actionSchema.type, "string");
 		assert.match(String(actionSchema.description ?? ""), /list/i);

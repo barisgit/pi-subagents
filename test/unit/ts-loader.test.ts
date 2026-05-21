@@ -25,7 +25,7 @@ describe("ts-loader", () => {
 			);
 
 			assert.equal(resolvedSpecifier, "./target.ts");
-			assert.equal(result.url, pathToFileURL(path.join(parentDir, "target.ts")).href);
+			assert.equal((result as { url: string }).url, pathToFileURL(path.join(parentDir, "target.ts")).href);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { inspectSubagentStatus } from "../../run-status.ts";
-import { ASYNC_DIR } from "../../types.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
 
 describe("run status guidance", () => {
 	it("tells callers not to poll running async runs", () => {
 		const id = `status-guidance-${Date.now().toString(36)}`;
-		const dir = path.join(ASYNC_DIR, id);
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "run-status-"));
+		setRegistryPathForTests(path.join(dir, "runs-index.jsonl"));
 		fs.mkdirSync(dir, { recursive: true });
 		try {
 			fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
@@ -25,13 +27,16 @@ describe("run status guidance", () => {
 					{ agent: "review", status: "running" },
 				],
 			}), "utf-8");
+			appendRunEntry({ runId: id, runRecordDir: dir, mode: "parallel", source: "async", agentNames: ["review"], cwd: process.cwd(), startedAt: Date.now() });
 
 			const result = inspectSubagentStatus({ id });
-			assert.match(result.content[0]?.text ?? "", /Progress: 3\/5 tasks complete/);
-			assert.doesNotMatch(result.content[0]?.text ?? "", /Step: 1\/5/);
-			assert.match(result.content[0]?.text ?? "", /Polling is not required; do not poll unless you need an immediate update\./);
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			assert.match(text, /Progress: 3\/5 tasks complete/);
+			assert.doesNotMatch(text, /Step: 1\/5/);
+			assert.match(text, /Polling is not required; do not poll unless you need an immediate update\./);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+			setRegistryPathForTests(null);
 		}
 	});
 });

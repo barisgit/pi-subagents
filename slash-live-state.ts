@@ -1,5 +1,5 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { Message } from "@mariozechner/pi-ai";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { Message } from "@earendil-works/pi-ai";
 import type { SubagentParamsLike } from "./subagent-executor.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { type Details, type SingleResult, type Usage, SLASH_RESULT_TYPE } from "./types.ts";
@@ -74,7 +74,7 @@ function createPlaceholderResult(
 }
 
 function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const tasks = params.tasks ?? [];
+	const tasks = (params.tasks ?? []).filter((task): task is { agent: string; task: string } => typeof task === "object" && task !== null && "agent" in task && "task" in task);
 	return {
 		content: [{ type: "text", text: tasks.map((task) => `${task.agent}: ${task.task}`).join("\n\n") }],
 		details: {

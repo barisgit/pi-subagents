@@ -15,7 +15,7 @@ function readText(result: { content: Array<{ type: string; text?: string }> }): 
 	assert.ok(first);
 	assert.equal(first.type, "text");
 	assert.equal(typeof first.text, "string");
-	return first.text;
+	return first.text as string;
 }
 
 describe("agent management config parsing", () => {
@@ -36,7 +36,7 @@ describe("agent management config parsing", () => {
 	it("surfaces JSON parse errors for create config strings", () => {
 		const result = handleCreate(
 			{ config: '{"name":' },
-			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
+			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] },
 		);
 
 		assert.equal(result.isError, true);
@@ -46,7 +46,7 @@ describe("agent management config parsing", () => {
 	it("surfaces JSON parse errors for update config strings", () => {
 		const result = handleUpdate(
 			{ agent: "reviewer", config: '{"description":' },
-			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
+			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] },
 		);
 
 		assert.equal(result.isError, true);
@@ -72,11 +72,11 @@ scope: internal
 Hidden
 `, "utf-8");
 
-		const defaultList = readText(handleList({}, { cwd: tempDir, modelRegistry: { getAvailable: () => [] } }));
+		const defaultList = readText(handleList({}, { cwd: tempDir, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] }));
 		assert.match(defaultList, /visible/);
 		assert.doesNotMatch(defaultList, /hidden/);
 
-		const internalList = readText(handleList({ includeInternal: true }, { cwd: tempDir, modelRegistry: { getAvailable: () => [] } }));
+		const internalList = readText(handleList({ includeInternal: true }, { cwd: tempDir, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] }));
 		assert.match(internalList, /visible/);
 		assert.match(internalList, /hidden/);
 	});
@@ -84,7 +84,7 @@ Hidden
 	it("creates delegate with its builtin prompt defaults", () => {
 		const result = handleCreate(
 			{ config: { name: "delegate", description: "Delegate helper", scope: "project" } },
-			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
+			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] },
 		);
 
 		assert.equal(result.isError, false);

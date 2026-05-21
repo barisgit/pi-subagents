@@ -79,7 +79,7 @@ describe("subagent prompt runtime", () => {
 			setSessionName(name: string) {
 				sessionName = name;
 			},
-		} as { on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>): void; setSessionName(name: string): void });
+		} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI);
 
 		await beforeAgentStart?.({ systemPrompt: BASE_PROMPT });
 
@@ -92,7 +92,7 @@ describe("subagent prompt runtime", () => {
 			on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) {
 				if (event === "before_agent_start") beforeAgentStart = handler;
 			},
-		} as { on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>): void });
+		} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI);
 
 		assert.ok(beforeAgentStart, "expected before_agent_start handler");
 		process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = "0";

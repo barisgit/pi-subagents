@@ -13,6 +13,7 @@ describe("foreground tool-call compaction", () => {
 				role: "assistant",
 				content: [{
 					type: "toolCall",
+					id: "tool-1",
 					name: "write",
 					arguments: {
 						path: "/tmp/report.md",
@@ -21,7 +22,7 @@ describe("foreground tool-call compaction", () => {
 				}],
 			}],
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-		});
+		} as unknown as Parameters<typeof compactForegroundResult>[0]);
 
 		assert.equal(result.messages, undefined);
 		assert.deepEqual(result.toolCalls, [{

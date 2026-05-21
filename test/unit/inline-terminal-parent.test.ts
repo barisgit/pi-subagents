@@ -10,7 +10,7 @@ const childTask = "You are the nested SYNC child. Summarize terminal work.";
 const theme = {
 	fg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
-};
+} as never;
 const usage = { input: 0, output: 0, total: 0 };
 
 afterEach(() => [parent, child].forEach(rmRun));

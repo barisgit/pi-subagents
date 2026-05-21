@@ -1,9 +1,9 @@
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /**
  * Minimal theme shape for chrome helpers: only `fg(color, text)` is required.
- * Lets the same helpers work for both `@mariozechner/pi-coding-agent` Theme and
+ * Lets the same helpers work for both `@earendil-works/pi-coding-agent` Theme and
  * any pi-tui-compatible theme.
  */
 interface ChromeTheme {

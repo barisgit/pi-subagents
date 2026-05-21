@@ -21,7 +21,7 @@ function readText(result: { content: Array<{ type: string; text?: string }> }): 
 	assert.ok(first);
 	assert.equal(first.type, "text");
 	assert.equal(typeof first.text, "string");
-	return first.text;
+	return first.text as string;
 }
 
 describe("builtin agent disabling", () => {
@@ -172,7 +172,7 @@ describe("builtin agent disabling", () => {
 
 		const text = readText(handleList(
 			{},
-			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } },
+			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] },
 		));
 
 		assert.match(text, /Executable agents:/);

@@ -56,6 +56,8 @@ interface ChainResultItem {
 	agent: string;
 	exitCode: number;
 	finalOutput?: string;
+	model?: string;
+	task?: string;
 	attemptedModels?: string[];
 	skills?: string[];
 }
@@ -76,7 +78,7 @@ interface ChainExecutionModule {
 
 const chainMod = await tryImport<ChainExecutionModule>("./chain-execution.ts");
 const available = !!chainMod;
-const executeChain = chainMod?.executeChain;
+const executeChain = chainMod!.executeChain;
 
 describe("chain execution — sequential", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
@@ -228,7 +230,7 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		);
 
 		assert.ok(!result.isError);
-		const step2Task = result.details.results[1].task;
+		const step2Task = result.details.results[1]!.task ?? "";
 		assert.ok(
 			step2Task.includes("MARKER_ABC_123"),
 			`step 2 task should contain step 1 output via {previous}: ${step2Task.slice(0, 200)}`,
@@ -248,7 +250,7 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		);
 
 		assert.ok(!result.isError);
-		const workerTask = result.details.results[0].task;
+		const workerTask = result.details.results[0]!.task ?? "";
 		assert.ok(
 			workerTask.includes("the authentication module"),
 			`should substitute {task}: ${workerTask.slice(0, 200)}`,
@@ -478,7 +480,7 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 
 		assert.ok(!result.isError);
 		assert.equal(result.details.results.length, 3);
-		const synthTask = result.details.results[2].task;
+		const synthTask = result.details.results[2]!.task ?? "";
 		assert.ok(
 			synthTask.includes("=== Parallel Task 1 (reviewer-a) ==="),
 			"synthesizer should include reviewer-a output block",

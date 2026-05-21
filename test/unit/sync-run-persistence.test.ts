@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { ensureSyncRunDir, writeSyncRunStatusEnd, writeSyncRunStatusStart, writeSyncRunStatusUpdate } from "../../sync-run-persistence.ts";
@@ -51,6 +52,23 @@ describe("sync run persistence", () => {
 			assert.equal(readStatus(runId).state, "complete");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("also mirrors status.json to runRecordDir when provided", () => {
+		const runId = `sync-persist-mirror-${process.pid}-${Date.now()}`;
+		const dir = ensureSyncRunDir(runId);
+		const runRecordDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-run-record-"));
+		try {
+			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "worker" }] }, runRecordDir);
+			writeSyncRunStatusUpdate(runId, { currentTool: "read" }, { flush: true }, runRecordDir);
+			writeSyncRunStatusEnd(runId, { state: "complete" }, runRecordDir);
+			const mirrored = JSON.parse(fs.readFileSync(path.join(runRecordDir, "status.json"), "utf-8"));
+			assert.equal(mirrored.state, "complete");
+			assert.equal(mirrored.currentTool, undefined);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(runRecordDir, { recursive: true, force: true });
 		}
 	});
 });

@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
 import type { AsyncRunOverlayData, AsyncRunSummary } from "../../async-status.ts";
-import { ASYNC_DIR, type SubagentState } from "../../types.ts";
+import { type SubagentState } from "../../types.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
@@ -44,9 +44,10 @@ function createRun(id: string, state: AsyncRunSummary["state"], overrides: Parti
 	return { ...base, ...overrides };
 }
 
-function createSyncRun(id = "sync-a"): ForegroundRunSummary {
+function createSyncRun(id = "sync-a", asyncDir?: string): ForegroundRunSummary {
 	return {
 		id,
+		...(asyncDir ? { asyncDir } : {}),
 		state: "running",
 		mode: "parallel",
 		startedAt: Date.now() - 6000,
@@ -77,7 +78,51 @@ function stripBorders(line: string): string {
 }
 
 function makeEventsFile(dir: string, events: Array<Record<string, unknown>>): void {
-	fs.writeFileSync(path.join(dir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+	const stepStarts = events.filter((event) => event.type === "subagent.step.started");
+	const steps: Array<{ agent: string; status: string; startedAt?: number; endedAt?: number; durationMs?: number; tokens?: { input: number; output: number; total: number } }> = stepStarts.length > 0 ? stepStarts.map((event) => {
+		const stepIndex = typeof event.stepIndex === "number" ? event.stepIndex : 0;
+		const end = events.find((candidate) => (candidate.type === "subagent.step.completed" || candidate.type === "subagent.step.failed") && candidate.stepIndex === stepIndex);
+		const tokens = end?.tokens as { total?: unknown } | undefined;
+		return {
+			agent: typeof event.agent === "string" ? event.agent : "agent",
+			status: typeof end?.status === "string" ? end.status : "running",
+			startedAt: typeof event.ts === "number" ? event.ts : undefined,
+			endedAt: typeof end?.ts === "number" ? end.ts : undefined,
+			durationMs: typeof end?.durationMs === "number" ? end.durationMs : undefined,
+			tokens: tokens && typeof tokens.total === "number" ? { input: 0, output: tokens.total, total: tokens.total } : undefined,
+		};
+	}) : [{ agent: "agent", status: "running" }];
+	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
+		runId: path.basename(dir),
+		mode: "single",
+		state: "running",
+		startedAt: steps[0]?.startedAt ?? 1,
+		lastUpdate: steps[0]?.endedAt ?? Date.now(),
+		steps,
+	}), "utf-8");
+
+	const toolNames = new Map<string, string>();
+	const records: Array<Record<string, unknown>> = [{ type: "session", version: 3, id: path.basename(dir), timestamp: new Date(steps[0]?.startedAt ?? 1).toISOString(), cwd: dir }];
+	for (const event of events) {
+		if (event.type === "tool_execution_start") {
+			const id = typeof event.toolCallId === "string" ? event.toolCallId : `${event.toolName ?? "tool"}-${event.observedAt ?? Date.now()}`;
+			if (typeof event.toolName === "string") toolNames.set(id, event.toolName);
+			records.push({ type: "message", timestamp: new Date(typeof event.observedAt === "number" ? event.observedAt : Date.now()).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id, name: event.toolName, input: event.args }] } });
+			continue;
+		}
+		if (event.type === "tool_execution_end") {
+			const id = typeof event.toolCallId === "string" ? event.toolCallId : "";
+			if (id || toolNames.size > 0) records.push({ type: "message", timestamp: new Date(typeof event.observedAt === "number" ? event.observedAt : Date.now()).toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+			continue;
+		}
+		if (event.type === "message_end") {
+			const message = event.message as { content?: unknown } | undefined;
+			records.push({ type: "message", timestamp: new Date(typeof event.ts === "number" ? event.ts : Date.now()).toISOString(), message: { role: "assistant", content: message?.content ?? [] } });
+		}
+	}
+	const runDir = path.join(dir, "run-0");
+	fs.mkdirSync(runDir, { recursive: true });
+	fs.writeFileSync(path.join(runDir, "session.jsonl"), records.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
 describe("SubagentsStatusComponent", () => {
@@ -278,7 +323,7 @@ describe("SubagentsStatusComponent", () => {
 
 	it("dedupes in-flight sync disk mirrors and keeps completed disk sync runs visible", () => {
 		const id = `sync-dedupe-${process.pid}-${Date.now()}`;
-		const dir = path.join(ASYNC_DIR, id);
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-sync-dedupe-"));
 		fs.mkdirSync(dir, { recursive: true });
 		try {
 			fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({ runId: id, mode: "single", state: "complete", startedAt: 1, endedAt: 2, steps: [{ agent: "syncer", status: "complete" }] }), "utf-8");
@@ -287,7 +332,7 @@ describe("SubagentsStatusComponent", () => {
 				{ type: "message_end", subagentStepIndex: 0, subagentAgent: "syncer", message: { role: "assistant", content: [{ type: "text", text: "sync final" }] } },
 				{ type: "subagent.step.completed", stepIndex: 0, agent: "syncer", ts: 2, status: "completed" },
 			]);
-			let foreground = [createSyncRun(id)];
+			let foreground = [createSyncRun(id, dir)];
 			const component = new SubagentsStatusComponent(createTestTui(() => {}), createTestTheme(), () => {}, {
 				listRunsForOverlay: () => ({ active: [], recent: [createRun(id, "complete", { asyncDir: dir, steps: [{ index: 0, agent: "syncer", status: "complete" }] })] }),
 				listForegroundRuns: () => foreground,

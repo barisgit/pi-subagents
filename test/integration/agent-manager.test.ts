@@ -26,11 +26,11 @@ describe("agent manager", () => {
 		fs.writeFileSync(originalPath, `---\nname: alpha\ndescription: Alpha\nsystemPromptMode: replace\ninheritProjectContext: false\ninheritSkills: false\n---\n\nHello\n`, "utf-8");
 
 		const component = new AgentManagerComponent(
-			{ requestRender() {} } as { requestRender(): void },
+			{ requestRender() {} } as unknown as ConstructorParameters<typeof AgentManagerComponent>[0],
 			{
 				fg(_color: string, text: string) { return text; },
 				bg(_color: string, text: string) { return text; },
-			} as { fg(color: string, text: string): string; bg(color: string, text: string): string },
+			} as unknown as ConstructorParameters<typeof AgentManagerComponent>[1],
 			{ ...discoverAgentsAll(root), cwd: root },
 			[],
 			[],
@@ -39,8 +39,8 @@ describe("agent manager", () => {
 
 		const entry = component["agents"].find((candidate) => candidate.config.name === "alpha");
 		assert.ok(entry);
-		component["enterEdit"](entry);
-		component["editState"].draft.name = "beta";
+		component["enterEdit"](entry!);
+		component["editState"]!.draft.name = "beta";
 
 		assert.equal(component["saveEdit"](), true);
 		assert.equal(fs.existsSync(originalPath), false);
@@ -55,11 +55,11 @@ describe("agent manager", () => {
 		fs.writeFileSync(path.join(agentsDir, "alpha.md"), `---\nname: alpha\ndescription: Alpha\nsystemPromptMode: replace\ninheritProjectContext: false\ninheritSkills: false\n---\n\nHello\n`, "utf-8");
 
 		const component = new AgentManagerComponent(
-			{ requestRender() {} } as { requestRender(): void },
+			{ requestRender() {} } as unknown as ConstructorParameters<typeof AgentManagerComponent>[0],
 			{
 				fg(_color: string, text: string) { return text; },
 				bg(_color: string, text: string) { return text; },
-			} as { fg(color: string, text: string): string; bg(color: string, text: string): string },
+			} as unknown as ConstructorParameters<typeof AgentManagerComponent>[1],
 			{ ...discoverAgentsAll(root), cwd: root },
 			[],
 			[],
@@ -68,22 +68,22 @@ describe("agent manager", () => {
 
 		const entry = component["agents"].find((candidate) => candidate.config.name === "alpha");
 		assert.ok(entry);
-		component["enterEdit"](entry);
+		component["enterEdit"](entry!);
 
-		assert.equal(component["editState"]?.fields.includes("disabled"), false);
+		assert.equal(component["editState"]?.fields.includes("disabled" as never), false);
 	});
 
 	it("collects a task before launching a multi-agent chain selection", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-manager-chain-task-"));
 		tempDirs.push(root);
-		let result: ManagerResult;
+		let result: ManagerResult | undefined;
 
 		const component = new AgentManagerComponent(
-			{ requestRender() {} } as { requestRender(): void },
+			{ requestRender() {} } as unknown as ConstructorParameters<typeof AgentManagerComponent>[0],
 			{
 				fg(_color: string, text: string) { return text; },
 				bg(_color: string, text: string) { return text; },
-			} as { fg(color: string, text: string): string; bg(color: string, text: string): string },
+			} as unknown as ConstructorParameters<typeof AgentManagerComponent>[1],
 			{ ...discoverAgentsAll(root), cwd: root },
 			[],
 			[],

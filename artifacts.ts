@@ -36,10 +36,6 @@ export function writeMetadata(filePath: string, metadata: object): void {
 	fs.writeFileSync(filePath, JSON.stringify(metadata, null, 2), "utf-8");
 }
 
-export function appendJsonl(filePath: string, line: string): void {
-	fs.appendFileSync(filePath, `${line}\n`);
-}
-
 export function cleanupOldArtifacts(dir: string, maxAgeDays: number): void {
 	if (!fs.existsSync(dir)) return;
 

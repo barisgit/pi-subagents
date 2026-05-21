@@ -4,9 +4,8 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@mariozechner/pi-ai";
-import type { FSWatcher } from "node:fs";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Message } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // ============================================================================
 // Basic Types
@@ -28,10 +27,10 @@ export interface TruncationResult {
 export interface Usage {
 	input: number;
 	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	turns: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	cost?: number;
+	turns?: number;
 }
 
 export interface TokenUsage {
@@ -75,7 +74,7 @@ export interface ControlEvent {
 // ============================================================================
 
 export interface AgentProgress {
-	index: number;
+	index?: number;
 	agent: string;
 	status: "pending" | "running" | "completed" | "failed" | "detached";
 	activityState?: ActivityState;
@@ -109,7 +108,7 @@ export interface ToolCallSummary {
 	expandedText: string;
 }
 
-export interface ProgressSummary {
+export interface ProgressSummary extends Partial<Pick<AgentProgress, "status" | "index" | "skills" | "currentTool" | "currentToolStartedAt" | "currentToolArgs" | "lastActivityAt" | "activityState" | "recentTools" | "recentOutput">> {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
@@ -207,6 +206,7 @@ export interface SingleResult {
 	finalOutput?: string;
 	savedOutputPath?: string;
 	outputSaveError?: string;
+	shareUrl?: string;
 }
 
 export interface Details {
@@ -300,11 +300,10 @@ export interface AsyncStatus {
 	endedAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
-	pid?: number;
 	cwd?: string;
 	currentStep?: number;
 	steps?: Array<{
-		agent: string;
+		agent?: string;
 		label?: string;
 		status: string;
 		activityState?: ActivityState;
@@ -322,6 +321,7 @@ export interface AsyncStatus {
 		modelAttempts?: ModelAttempt[];
 		error?: string;
 		live?: LiveStepProgress;
+		sessionFile?: string;
 	}>;
 	sessionDir?: string;
 	outputFile?: string;
@@ -353,12 +353,10 @@ export interface AsyncJobState {
 	startedAt?: number;
 	updatedAt?: number;
 	runnerHeartbeatAt?: number;
-	pid?: number;
 	sessionDir?: string;
 	outputFile?: string;
 	totalTokens?: TokenUsage;
 	sessionFile?: string;
-	controlEventCursor?: number;
 	/**
 	 * Live progress mirrored from status.json's running step (LiveStepProgress).
 	 * Drives the widget's per-job color/sparkline/current/history rendering --
@@ -384,6 +382,7 @@ export interface SubagentState {
 	asyncJobs: Map<string, AsyncJobState>;
 	foregroundControls: Map<string, {
 		runId: string;
+		asyncDir?: string;
 		// charter nested-subagent-display: sync rows carry hierarchy before disk handoff.
 		parentRunId?: string;
 		mode: "single" | "parallel" | "chain";
@@ -414,13 +413,6 @@ export interface SubagentState {
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
 	lastUiContext: ExtensionContext | null;
 	poller: NodeJS.Timeout | null;
-	completionSeen: Map<string, number>;
-	watcher: FSWatcher | null;
-	watcherRestartTimer: ReturnType<typeof setTimeout> | null;
-	resultFileCoalescer: {
-		schedule(file: string, delayMs?: number): boolean;
-		clear(): void;
-	};
 }
 
 // ============================================================================
@@ -468,50 +460,6 @@ export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 export interface ForkReuseConfig {
 	agentName: string;
 	sessionId: string;
-}
-
-export interface RunSyncOptions {
-	cwd?: string;
-	signal?: AbortSignal;
-	/** Caller-provided short label for this step. Stamped onto the produced SingleResult. */
-	label?: string;
-	interruptSignal?: AbortSignal;
-	allowIntercomDetach?: boolean;
-	intercomEvents?: IntercomEventBus;
-	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
-	onControlEvent?: (event: ControlEvent) => void;
-	controlConfig?: ResolvedControlConfig;
-	intercomSessionName?: string;
-	maxOutput?: MaxOutputConfig;
-	artifactsDir?: string;
-	artifactConfig?: ArtifactConfig;
-	runId: string;
-	index?: number;
-	sessionDir?: string;
-	sessionFile?: string;
-	share?: boolean;
-	outputPath?: string;
-	maxSubagentDepth?: number;
-	/** Override the agent's default model (format: "provider/id" or just "id") */
-	modelOverride?: string;
-	/** Registry models available for heuristic bare-model resolution */
-	availableModels?: Array<{ provider: string; id: string; fullId: string }>;
-	/** Current parent-session provider to prefer for ambiguous bare model ids */
-	preferredModelProvider?: string;
-	/** Skills to inject (overrides agent default if provided) */
-	skills?: string[];
-	/** Metadata for same-agent forked self-delegation. */
-	forkReuse?: ForkReuseConfig;
-	/** Resolved preset to pass through to child Pi processes */
-	preset?: string;
-	/** Immediate parent agent identity for nested delegation guardrails */
-	parentAgentName?: string;
-	/** Direct caller's Pi session id for charter/session attribution. */
-	parentSessionId?: string;
-	/** Top-of-chain Pi session id for charter/session attribution. */
-	rootSessionId?: string;
-	/** Immediate parent run id for nested subagent hierarchy display. */
-	parentRunId?: string;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -668,11 +616,10 @@ export function resolveTempScopeId(options?: {
 
 export const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
-export const TEMP_ROOT_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
-export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
-export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
-export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");
-export const TEMP_ARTIFACTS_DIR = path.join(TEMP_ROOT_DIR, "artifacts");
+export const BASE_TEMP_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
+export const RUNS_DIR = path.join(BASE_TEMP_DIR, "async-subagent-runs");
+export const CHAIN_RUNS_DIR = path.join(BASE_TEMP_DIR, "chain-runs");
+export const TEMP_ARTIFACTS_DIR = path.join(BASE_TEMP_DIR, "artifacts");
 export const WIDGET_KEY = "subagent-async";
 export const SLASH_RESULT_TYPE = "subagent-slash-result";
 export const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
@@ -710,10 +657,6 @@ export function resolveTopLevelParallelConcurrency(
 		?? MAX_CONCURRENCY;
 	const max = normalizeTopLevelParallelValue(maxValue);
 	return max === undefined ? requested : Math.min(requested, max);
-}
-
-export function getAsyncConfigPath(suffix: string): string {
-	return path.join(TEMP_ROOT_DIR, `async-cfg-${suffix}.json`);
 }
 
 export function wrapForkTask(task: string, preamble?: string | false): string {

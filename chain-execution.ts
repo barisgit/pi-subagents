@@ -4,8 +4,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride, type ModelInfo } from "./chain-clarify.ts";
 import {
@@ -26,7 +26,6 @@ import {
 	type ResolvedTemplates,
 } from "./settings.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.ts";
-import { runSync } from "./execution.ts";
 import { buildChainSummary } from "./formatters.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd } from "./utils.ts";
 import { recordRun } from "./run-history.ts";
@@ -47,12 +46,46 @@ import {
 	type ControlEvent,
 	type Details,
 	type ForkReuseConfig,
+	type MaxOutputConfig,
 	type ResolvedControlConfig,
 	type SingleResult,
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
 } from "./types.ts";
 import { resolveModelCandidate } from "./model-fallback.ts";
+
+interface ChainRunStepOptions {
+	cwd?: string;
+	signal?: AbortSignal;
+	label?: string;
+	interruptSignal?: AbortSignal;
+	onUpdate?: (r: AgentToolResult<Details>) => void;
+	onControlEvent?: (event: ControlEvent) => void;
+	controlConfig?: ResolvedControlConfig;
+	intercomSessionName?: string;
+	maxOutput?: MaxOutputConfig;
+	artifactsDir?: string;
+	artifactConfig?: ArtifactConfig;
+	runId: string;
+	index?: number;
+	sessionDir?: string;
+	sessionFile?: string;
+	share?: boolean;
+	outputPath?: string;
+	maxSubagentDepth?: number;
+	modelOverride?: string;
+	availableModels?: Array<{ provider: string; id: string; fullId: string }>;
+	preferredModelProvider?: string;
+	skills?: string[];
+	forkReuse?: ForkReuseConfig;
+	preset?: string;
+	parentAgentName?: string;
+	parentSessionId?: string;
+	rootSessionId?: string;
+	parentRunId?: string;
+}
+
+type RunStep = (runtimeCwd: string, agents: AgentConfig[], agentName: string, task: string, options: ChainRunStepOptions) => Promise<SingleResult>;
 
 interface ChainExecutionDetailsInput {
 	results: SingleResult[];
@@ -108,6 +141,7 @@ interface ParallelChainRunInput {
 	maxSubagentDepth: number;
 	forkReuse?: ForkReuseConfig;
 	preset?: string;
+	runStep: RunStep;
 }
 
 function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details {
@@ -222,7 +256,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				};
 			}
 
-			const result = await runSync(input.ctx.cwd, input.agents, task.agent, taskStr, {
+			const result = await input.runStep(input.ctx.cwd, input.agents, task.agent, taskStr, {
 				cwd: taskCwd,
 				...(task.label ? { label: task.label } : {}),
 				signal: input.signal,
@@ -330,6 +364,7 @@ export interface ChainExecutionParams {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	preset?: string;
+	runStep?: RunStep;
 }
 
 export interface ChainExecutionResult {
@@ -369,6 +404,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		chainSkills: chainSkillsParam,
 		chainDir: chainDirBase,
 	} = params;
+	const runStep = params.runStep;
+	if (!runStep) throw new Error("executeChain requires a runStep implementation");
 	const forkReuse = params.forkReuse;
 	const chainSkills = chainSkillsParam ?? [];
 
@@ -493,7 +530,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 		if (isParallelStep(step)) {
 			const parallelTemplates = stepTemplates as string[];
-			const parallelCwd = resolveChildCwd(cwd ?? ctx.cwd, step.cwd);
+			const parallelCwd = cwd ?? ctx.cwd;
 			let worktreeSetup: WorktreeSetup | undefined;
 			if (step.worktree) {
 				const worktreeTaskCwdConflict = findWorktreeTaskCwdConflict(step.parallel, parallelCwd);
@@ -573,6 +610,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					maxSubagentDepth: params.maxSubagentDepth,
 					forkReuse,
 					preset: params.preset,
+					runStep,
 				});
 				globalTaskIndex += step.parallel.length;
 
@@ -724,7 +762,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				};
 			}
 
-			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
+			const r = await runStep(ctx.cwd, agents, seqStep.agent, stepTask, {
 				cwd: resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
 				...(seqStep.label ? { label: seqStep.label } : {}),
 				signal,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-const { buildWidgetLines, renderWidget, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } = await import("../../render.ts") as {
+const { buildWidgetLines, renderWidget, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } = await import("../../render.ts") as unknown as {
 	buildWidgetLines: (jobs: Array<Record<string, unknown>>, theme: { fg(name: string, text: string): string; bold(text: string): string }, width?: number) => string[];
 	renderWidget: (ctx: Record<string, unknown>, jobs: Array<Record<string, unknown>>) => void;
 	stopResultAnimations: () => void;
@@ -23,6 +23,7 @@ function createUiContext() {
 			theme,
 			setWidget: (_key: string, value: unknown) => {
 				widgets.push(value);
+				if (typeof value === "function") value({ requestRender: () => { renderRequests += 1; } }, theme);
 			},
 			requestRender: () => {
 				renderRequests += 1;
@@ -159,7 +160,7 @@ describe("subagent async widget rendering", () => {
 	it("invalidates running result rows and stops after completion", async () => {
 		let invalidations = 0;
 		const context = {
-			state: {},
+			state: {} as { subagentResultAnimationTimer?: ReturnType<typeof setInterval> },
 			invalidate: () => {
 				invalidations += 1;
 			},

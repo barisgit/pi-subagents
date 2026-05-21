@@ -2,27 +2,26 @@
  * Rendering functions for subagent results
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { getMarkdownTheme, type ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text, visibleWidth, type Component } from "@mariozechner/pi-tui";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { getMarkdownTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import {
 	type AgentProgress,
 	type AsyncJobState,
 	type Details,
 	MAX_WIDGET_JOBS,
-	ASYNC_DIR,
 	WIDGET_KEY,
 } from "./types.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
 import { displayStatePriority } from "./run-liveness.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { getDisplayItems, getSingleResultOutput, readStatus } from "./utils.ts";
-import { readEventLog, previewArgs, type EventLogLine } from "./events-log.ts";
+import { readRunTranscript, previewArgs, type TranscriptLine } from "./run-transcript.ts";
 import { statusToSummary, type AsyncRunSummary } from "./async-status.ts";
+import { readAllEntries } from "./runs-registry.ts";
 
-type Theme = ExtensionContext["ui"]["theme"];
+type Theme = Pick<ExtensionContext["ui"]["theme"], "fg"> & { bold: (value: string) => string };
 
 function getTermWidth(): number {
 	return process.stdout.columns || 120;
@@ -106,6 +105,7 @@ function rightAlignSuffix(base: string, suffix: string, maxWidth: number): strin
 
 let widgetTimer: ReturnType<typeof setInterval> | undefined;
 let latestWidgetCtx: ExtensionContext | undefined;
+let latestWidgetTui: TUI | undefined;
 let latestWidgetJobs: AsyncJobState[] = [];
 
 const resultAnimationTimers = new Map<ReturnType<typeof setInterval>, ResultAnimationContext["state"]>();
@@ -387,18 +387,15 @@ function inlineStateGlyph(state: AsyncRunSummary["state"]): string {
 	return "◇";
 }
 
-function readInlineRun(runId: string): { summary: AsyncRunSummary; events: EventLogLine[] } | undefined {
-	const asyncDir = path.join(ASYNC_DIR, runId);
+function readInlineRun(runId: string): { summary: AsyncRunSummary; events: TranscriptLine[] } | undefined {
+	const asyncDir = readAllEntries().find((entry) => entry.runId === runId)?.runRecordDir;
+	if (!asyncDir) return undefined;
 	const status = readStatus(asyncDir);
 	if (!status) return undefined;
-	return { summary: statusToSummary(asyncDir, status), events: readEventLog(asyncDir) };
+	return { summary: statusToSummary(asyncDir, status), events: readRunTranscript(asyncDir) };
 }
 
-// Short-TTL cache: re-scan ASYNC_DIR at most every 250ms per parent. Caching on
-// ASYNC_DIR mtime alone is unsafe because a child status.json is written INSIDE
-// the child subdir after the subdir exists, and that doesn't bump the parent
-// dir's mtime. Result: a frame that catches the dir between subdir-create and
-// status-write caches an empty list forever.
+// Short-TTL cache: re-read the registry at most every 250ms per parent.
 const inlineChildRunCache = new Map<string, { ts: number; ids: string[] }>();
 const INLINE_CHILD_RUN_CACHE_TTL_MS = 250;
 
@@ -406,18 +403,13 @@ function listInlineChildRunIds(parentRunId: string): string[] {
 	const now = Date.now();
 	const cached = inlineChildRunCache.get(parentRunId);
 	if (cached && now - cached.ts < INLINE_CHILD_RUN_CACHE_TTL_MS) return cached.ids;
-	let entries: string[];
-	try {
-		entries = fs.readdirSync(ASYNC_DIR);
-	} catch {
-		return [];
-	}
+	const entries = readAllEntries({ limit: 500 });
 	const out: Array<{ id: string; startedAt: number }> = [];
 	for (const entry of entries) {
-		const asyncDir = path.join(ASYNC_DIR, entry);
+		const asyncDir = entry.runRecordDir;
 		const status = readStatus(asyncDir);
 		if (!status || status.parentRunId !== parentRunId) continue;
-		out.push({ id: status.runId || entry, startedAt: status.startedAt });
+		out.push({ id: status.runId || entry.runId, startedAt: status.startedAt });
 	}
 	const ids = out.sort((a, b) => a.startedAt - b.startedAt).map((child) => child.id);
 	inlineChildRunCache.set(parentRunId, { ts: now, ids });
@@ -426,8 +418,13 @@ function listInlineChildRunIds(parentRunId: string): string[] {
 
 function listInlineChildRuns(parentRunId: string): AsyncRunSummary[] {
 	const out: AsyncRunSummary[] = [];
+	const entriesById = new Map<string, string>();
+	for (const entry of readAllEntries({ limit: 500 })) {
+		if (!entriesById.has(entry.runId)) entriesById.set(entry.runId, entry.runRecordDir);
+	}
 	for (const id of listInlineChildRunIds(parentRunId)) {
-		const asyncDir = path.join(ASYNC_DIR, id);
+		const asyncDir = entriesById.get(id);
+		if (!asyncDir) continue;
 		const status = readStatus(asyncDir);
 		if (!status || status.parentRunId !== parentRunId) continue;
 		out.push(statusToSummary(asyncDir, status));
@@ -478,7 +475,7 @@ function inlineRunAgent(summary: AsyncRunSummary, args?: Record<string, unknown>
 	return argString(args, "agent") ?? summary.steps[0]?.agent ?? summary.mode;
 }
 
-function inlineToolCount(events: EventLogLine[]): number {
+function inlineToolCount(events: TranscriptLine[]): number {
 	return events.filter((event) => event.kind === "tool").length;
 }
 
@@ -491,7 +488,7 @@ function inlineDuration(summary: AsyncRunSummary): number {
 	return Math.max(0, end - summary.startedAt);
 }
 
-function inlineMeta(summary: AsyncRunSummary, events: EventLogLine[]): string {
+function inlineMeta(summary: AsyncRunSummary, events: TranscriptLine[]): string {
 	const tools = inlineToolCount(events);
 	const tokens = inlineTokenCount(summary);
 	return `${tools} tools · ~${formatTokens(tokens)} tok · ${formatDuration(inlineDuration(summary))}`;
@@ -515,7 +512,7 @@ function countCollapsedNested(runId: string): { nested: number; tools: number } 
 	return { nested, tools };
 }
 
-function formatInlineTool(event: Extract<EventLogLine, { kind: "tool" }>): string {
+function formatInlineTool(event: Extract<TranscriptLine, { kind: "tool" }>): string {
 	const args = event.rawArgs ? previewArgs(event.rawArgs) : event.argsPreview;
 	const duration = event.durationMs !== undefined ? `  ${formatDuration(event.durationMs)}` : "";
 	return args ? `${event.toolName}: ${args}${duration}` : `${event.toolName}${duration}`;
@@ -870,7 +867,7 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 		fallbackColor: job.agentColor,
 	});
 	const tint = (text: string, color: string | undefined): string => {
-		const bold = theme.bold(text);
+		const bold = themeBold(theme, text);
 		return color ? tintAgentName(bold, color) : theme.fg("toolTitle", bold);
 	};
 	let base: string;
@@ -1018,7 +1015,12 @@ function buildWidgetComponent(theme: Theme): Component {
 
 function refreshAnimatedWidget(): void {
 	if (!latestWidgetCtx?.hasUI || latestWidgetJobs.length === 0) return;
-	latestWidgetCtx.ui.requestRender?.();
+	if (latestWidgetTui) latestWidgetTui.requestRender();
+	else {
+		// TODO(sdk-0.75-shape): tests and older runtimes may still expose this
+		// optional UI hook; 0.75 widgets use TUI.requestRender once the factory runs.
+		(latestWidgetCtx.ui as unknown as { requestRender?: () => void }).requestRender?.();
+	}
 }
 
 function ensureWidgetAnimation(): void {
@@ -1039,6 +1041,7 @@ export function stopWidgetAnimation(): void {
 		widgetTimer = undefined;
 	}
 	latestWidgetCtx = undefined;
+	latestWidgetTui = undefined;
 	latestWidgetJobs = [];
 }
 
@@ -1068,7 +1071,10 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 
 	// Factory delivers a Component; latestWidgetJobs is captured by closure so the
 	// same factory continues to render fresh data on each animation tick.
-	ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => buildWidgetComponent(theme));
+	ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
+		latestWidgetTui = tui;
+		return buildWidgetComponent(theme);
+	});
 	if (hasAnimatedWidgetJobs(jobs)) ensureWidgetAnimation();
 	else stopWidgetAnimation();
 }
@@ -1096,7 +1102,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	// must carry the liveness signal -- use the sparkle spinner instead of the
 	// static ◇ that resultGlyph returns for running multi-block rows.
 	const headGlyph = isRunning ? theme.fg("accent", multiSpinnerFrame()) : resultGlyph(r, output, theme, isRunning);
-	const boldName = theme.bold(r.agent);
+	const boldName = themeBold(theme, r.agent);
 	const tintedName = r.progress?.color ? tintAgentName(boldName, r.progress.color) : theme.fg("toolTitle", boldName);
 	const labelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
 	const tallyRecentTools = r.progress?.recentTools ?? (progress && "recentTools" in progress ? progress.recentTools : undefined);
@@ -1126,12 +1132,13 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	// Completed view: child detail lives in the header tally and the dashboard.
 	// Skip both sync expansion and async one-liners so the transcript stays compact.
 	if (progress && "recentTools" in progress) {
+		const recentTools = progress.recentTools ?? [];
 		addCompactRecentToolLines(
 			c,
 			theme,
 			d.runId,
-			progress.recentTools,
-			progress.recentTools.length,
+			recentTools,
+			recentTools.length,
 			width,
 			"  ",
 			new Set<string>(),
@@ -1203,7 +1210,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		return d.results.every((r) => r.label === first) ? first : undefined;
 	})();
 	const headLabelTail = uniformLabel ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(uniformLabel, 30))}` : "";
-	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`, width), 0, 0));
+	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", themeBold(theme, d.mode))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`, width), 0, 0));
 
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
@@ -1254,11 +1261,12 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		const rowLabelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
 		const rowChildTail = (() => {
 			if (!d.runId || !rProg || !("recentTools" in rProg)) return "";
+			const recentTools = rProg.recentTools ?? [];
 			if (rRunning) {
-				const active = countLiveInlineAsyncChildren(d.runId, rProg.recentTools);
+				const active = countLiveInlineAsyncChildren(d.runId, recentTools);
 				return active > 0 ? theme.fg("dim", ` · ${active}↗ active`) : "";
 			}
-			const tally = countInlineChildTally(d.runId, rProg.recentTools);
+			const tally = countInlineChildTally(d.runId, recentTools);
 			const total = tally.sync + tally.async;
 			return total > 0 ? theme.fg("dim", ` · ${total} subagent${total === 1 ? "" : "s"}`) : "";
 		})();
@@ -1269,7 +1277,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			if (fullProg) {
 				// Chronological layout: history (oldest -> newest) on top, current activity at the bottom.
 				const used = new Set<string>();
-				addCompactRecentToolLines(c, theme, d.runId, fullProg.recentTools, historyN, width, "    ", used);
+				addCompactRecentToolLines(c, theme, d.runId, fullProg.recentTools ?? [], historyN, width, "    ", used);
 				addLiveCurrentLines(c, theme, d.runId, fullProg, width, "    ", used);
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
@@ -1282,8 +1290,8 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 					c,
 					theme,
 					d.runId,
-					rProg.recentTools,
-					rProg.recentTools.length,
+					rProg.recentTools ?? [],
+					(rProg.recentTools ?? []).length,
 					width,
 					"    ",
 					new Set<string>(),
@@ -1357,7 +1365,7 @@ export function renderSubagentResult(
 		const fit = (text: string) => expanded ? text : truncLine(text, w);
 		const toolCallLines = getToolCallLines(r, expanded);
 		const c = new Container();
-		c.addChild(new Text(fit(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${progressInfo}`), 0, 0));
+		c.addChild(new Text(fit(`${icon} ${theme.fg("toolTitle", themeBold(theme, r.agent))}${contextBadge}${progressInfo}`), 0, 0));
 		c.addChild(new Spacer(1));
 		const taskMaxLen = Math.max(20, w - 8);
 		const taskPreview = expanded || r.task.length <= taskMaxLen
@@ -1506,7 +1514,7 @@ export function renderSubagentResult(
 	const c = new Container();
 	c.addChild(
 		new Text(
-			fit(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${contextBadge}${stepInfo}${summaryStr}`),
+			fit(`${icon} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${stepInfo}${summaryStr}`),
 			0,
 			0,
 		),
@@ -1550,8 +1558,8 @@ export function renderSubagentResult(
 		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
 		const modelDisplay = r.model ? theme.fg("dim", ` (${r.model})`) : "";
 		const stepHeader = rRunning
-			? `${statusIcon} ${itemTitle} ${stepNumber}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
-			: `${statusIcon} ${itemTitle} ${stepNumber}: ${theme.bold(r.agent)}${modelDisplay}${stats}`;
+			? `${statusIcon} ${itemTitle} ${stepNumber}: ${themeBold(theme, theme.fg("warning", r.agent))}${modelDisplay}${stats}`
+			: `${statusIcon} ${itemTitle} ${stepNumber}: ${themeBold(theme, r.agent)}${modelDisplay}${stats}`;
 		const toolCallLines = getToolCallLines(r, expanded);
 		c.addChild(new Text(fit(stepHeader), 0, 0));
 

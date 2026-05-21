@@ -3,14 +3,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { formatAsyncRunList, listAsyncRuns, listAsyncRunsForOverlay } from "../../async-status.ts";
-import { computeRunLabel } from "../../subagent-runner.ts";
+import { formatAsyncRunList, listAsyncRuns, type AsyncRunOverlayData } from "../../async-status.ts";
 
 function createAsyncDir(root: string, id: string, status: Record<string, unknown>): string {
 	const dir = path.join(root, id);
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify(status), "utf-8");
 	return dir;
+}
+
+function listLegacyOverlay(root: string, recentLimit = 5): AsyncRunOverlayData {
+	const all = listAsyncRuns(root);
+	return {
+		active: all.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
+		recent: all
+			.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused")
+			.sort((a, b) => b.startedAt - a.startedAt)
+			.slice(0, recentLimit),
+	};
 }
 
 describe("async status helpers", () => {
@@ -73,7 +83,7 @@ describe("async status helpers", () => {
 				steps: [{ agent: "reviewer", status: "complete" }],
 			});
 
-			const overlay = listAsyncRunsForOverlay(root, 5);
+			const overlay = listLegacyOverlay(root, 5);
 			assert.deepEqual(overlay.recent.map((run) => run.id), ["newer-complete", "older-failed"]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -171,7 +181,7 @@ describe("async status helpers", () => {
 				steps: [{ agent: "worker", status: "complete" }],
 			});
 
-			const overlay = listAsyncRunsForOverlay(root, 5);
+			const overlay = listLegacyOverlay(root, 5);
 			assert.equal(overlay.active.length, 0);
 			assert.equal(overlay.recent[0]?.id, "run-paused");
 			assert.equal(overlay.recent[0]?.activityState, undefined);
@@ -231,7 +241,7 @@ describe("async status helpers", () => {
 				steps: [{ agent: "reviewer", status: "complete", durationMs: 3_000 }],
 			});
 
-			const overlay = listAsyncRunsForOverlay(root, 1);
+			const overlay = listLegacyOverlay(root, 1);
 			assert.equal(overlay.active.length, 1);
 			assert.equal(overlay.active[0]?.id, "run-running");
 			assert.equal(overlay.recent.length, 1);
@@ -244,55 +254,5 @@ describe("async status helpers", () => {
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
-	});
-});
-
-describe("computeRunLabel", () => {
-	it("caller top-level label wins over per-step labels for single runs", () => {
-		assert.equal(computeRunLabel("single", "group title", ["step label"]), "group title");
-	});
-
-	it("caller top-level label wins over uniform per-step labels for parallel runs", () => {
-		assert.equal(
-			computeRunLabel("parallel", "group title", ["step a", "step a", "step a"]),
-			"group title",
-		);
-	});
-
-	it("caller top-level label wins over mixed per-step labels for parallel runs", () => {
-		assert.equal(
-			computeRunLabel("parallel", "group title", ["step a", "step b", "step c"]),
-			"group title",
-		);
-	});
-
-	it("caller top-level label wins over per-step labels for chain runs", () => {
-		assert.equal(
-			computeRunLabel("chain", "group title", ["phase a", "phase b"]),
-			"group title",
-		);
-	});
-
-	it("falls back to the single step label when no top-level label is given", () => {
-		assert.equal(computeRunLabel("single", undefined, ["step label"]), "step label");
-	});
-
-	it("falls back to shared per-step label for uniform parallel runs", () => {
-		assert.equal(
-			computeRunLabel("parallel", undefined, ["shared", "shared", "shared"]),
-			"shared",
-		);
-	});
-
-	it("returns undefined for mixed-label parallel runs with no top-level label", () => {
-		assert.equal(
-			computeRunLabel("parallel", undefined, ["a", "b"]),
-			undefined,
-		);
-	});
-
-	it("ignores blank top-level labels and falls through to per-step inference", () => {
-		assert.equal(computeRunLabel("single", "   ", ["step label"]), "step label");
-		assert.equal(computeRunLabel("single", "", ["step label"]), "step label");
 	});
 });

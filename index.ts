@@ -16,19 +16,22 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { type AgentConfig, type RegisteredPersonaDir, discoverAgents, loadInternalPersonaDir } from "./agents.ts";
+import { setCurrentPi } from "./current-pi.ts";
+import { onProcessBus } from "./process-bus.ts";
+import { logger } from "./logger.ts";
 import { resolveAgentToolPatterns, resolveToolPatterns } from "./resolve-tool-patterns.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
 import { cleanupOldChainDirs } from "./settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor } from "./subagent-executor.ts";
+import { ChildAgentRegistry } from "./in-process-executor.ts";
 import { createAsyncJobTracker } from "./async-job-tracker.ts";
 import { controlNotificationKey, formatControlNoticeMessage } from "./subagent-control.ts";
-import { createResultWatcher } from "./result-watcher.ts";
 import { registerSlashCommands } from "./slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "./slash-bridge.ts";
@@ -43,12 +46,11 @@ import {
 	type PersonaDirErrorPayload,
 	type RegisterPersonaDirPayload,
 	type SpawnRawInput,
+	type SpawnResult,
 	type SubagentExposedAPI,
 	type SubagentState,
 	type UnregisterPersonaDirPayload,
-	ASYNC_DIR,
 	DEFAULT_ARTIFACT_CONFIG,
-	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_EXPOSE_API_EVENT,
@@ -60,22 +62,6 @@ import {
 	WIDGET_KEY,
 } from "./types.ts";
 import { configureXmlStripping } from "./utils.ts";
-
-/**
- * Derive subagent session base directory from parent session file.
- * If parent session is ~/.pi/agent/sessions/abc123.jsonl,
- * returns ~/.pi/agent/sessions/abc123/ as the base.
- * Callers add runId to create the actual session root: abc123/{runId}/
- * Falls back to a unique temp directory if no parent session.
- */
-function getSubagentSessionRoot(parentSessionFile: string | null): string {
-	if (parentSessionFile) {
-		const baseName = path.basename(parentSessionFile, ".jsonl");
-		const sessionsDir = path.dirname(parentSessionFile);
-		return path.join(sessionsDir, baseName);
-	}
-	return fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
-}
 
 const SUBAGENT_CONFIG_PRIMARY = path.join(os.homedir(), ".pi", "agent", "subagent.json");
 const SUBAGENT_CONFIG_LEGACY = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
@@ -278,6 +264,43 @@ class SubagentControlNoticeComponent implements Component {
 }
 
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
+	// In-process subagents call createAgentSession() which spins up a fresh
+	// ExtensionRunner that loads every discovered extension - including this
+	// one - with the child's pi. Activating in the child clobbers the host's
+	// process-bus listeners, currentPi pin, widget state, etc., and the
+	// captured child pi is disposed seconds later.
+	//
+	// Detect via a globalThis flag the in-process executor sets while
+	// constructing the child session (in-process-executor.ts:CHILD_SESSION_FLAG_KEY).
+	// On a child activate we register one no-op listener so the child can run
+	// to completion, but skip all host wiring.
+	const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
+	if ((globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true) {
+		logger.info("activate: child session detected - skipping host wiring");
+		return;
+	}
+
+	// Each activate hands a fresh `pi` with a fresh session-scoped EventBus.
+	// Subagent lifecycle events (started/complete) outlive any single agent
+	// session, so they live on our own process-scoped bus (see process-bus.ts)
+	// rather than `pi.events`. Cross-extension control/persona events stay on
+	// `pi.events` because their senders are session-scoped too.
+	//
+	// Pin the live pi for handlers that must call SDK action methods
+	// (sendMessage, etc.) from process-bus listeners registered in an earlier
+	// activate. See current-pi.ts for the rationale.
+	//
+	// ONLY pin when this activate is for the host (UI-bearing) session.
+	// In-process subagents call createAgentSession() which spins up a fresh
+	// ExtensionRunner that ALSO invokes this factory with the child's pi.
+	// When the child session disposes (a few seconds later) that pi goes stale.
+	// If we pinned the child pi we'd clobber the host pi and every later
+	// sendMessage would throw "ctx is stale after session replacement".
+	//
+	// We are guaranteed (by the early-return above) to be inside the host
+	// activate here, so pin the current pi unconditionally.
+	setCurrentPi(pi);
+
 	const globalStore = globalThis as Record<string, unknown>;
 	const runtimeCleanupStoreKey = "__piSubagentRuntimeCleanup";
 	const previousRuntimeCleanup = globalStore[runtimeCleanupStoreKey];
@@ -289,8 +312,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	ensureAccessibleDir(RESULTS_DIR);
-	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
 	const config = loadConfig();
@@ -308,26 +329,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		cleanupTimers: new Map(),
 		lastUiContext: null,
 		poller: null,
-		completionSeen: new Map(),
-		watcher: null,
-		watcherRestartTimer: null,
-		resultFileCoalescer: {
-			schedule: () => false,
-			clear: () => {},
-		},
 	};
 
-	const { startResultWatcher, primeExistingResults, stopResultWatcher } = createResultWatcher(
-		pi,
-		state,
-		RESULTS_DIR,
-		10 * 60 * 1000,
-	);
-	startResultWatcher();
-	primeExistingResults();
-
 	const runtimeCleanup = () => {
-		stopResultWatcher();
 		stopWidgetAnimation();
 		stopResultAnimations();
 		if (state.poller) {
@@ -342,7 +346,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
-	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR);
+	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state);
+	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
 		return agents.map((a) => resolveAgentToolPatterns(a, available));
@@ -358,7 +363,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		config,
 		asyncByDefault,
 		tempArtifactsDir,
-		getSubagentSessionRoot,
+		childRegistry,
 		expandTilde,
 		discoverAgents: (cwd, scope, options) => {
 			const result = discoverAgents(cwd, scope, { ...options, config, registeredPersonaDirs: getRegisteredPersonaDirs() });
@@ -366,17 +371,26 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 		getActiveRootRoleName: () => activeRootRoleName,
 	});
-	const buildSpawnRawContext = (): ExtensionContext => state.lastUiContext ?? {
+	const buildSpawnRawContext = (): ExtensionContext => state.lastUiContext ?? ({
 		cwd: state.baseCwd,
 		hasUI: false,
 		ui: {} as ExtensionContext["ui"],
 		sessionManager: {
 			getSessionId: () => state.currentSessionId ?? "spawn-raw",
 			getSessionFile: () => null,
-		} as ExtensionContext["sessionManager"],
-		modelRegistry: { getAvailable: () => [] } as ExtensionContext["modelRegistry"],
-	};
-	const spawnRaw = async (input: SpawnRawInput) => executor.execute(
+		} as unknown as ExtensionContext["sessionManager"],
+		modelRegistry: { getAvailable: () => [] } as unknown as ExtensionContext["modelRegistry"],
+		model: undefined,
+		isIdle: () => true,
+		signal: undefined,
+		abort: () => {},
+		hasPendingMessages: () => false,
+		shutdown: () => {},
+		getContextUsage: () => undefined,
+		compact: () => {},
+		getSystemPrompt: () => "",
+	} as ExtensionContext);
+	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> => executor.execute(
 		"subagent-spawn-raw",
 		{
 			agent: "__raw__",
@@ -405,7 +419,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		new AbortController().signal,
 		undefined,
 		buildSpawnRawContext(),
-	);
+	) as unknown as SpawnResult;
 	const subagentApi: SubagentExposedAPI = {
 		spawnRaw,
 		list: (options) => discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", {
@@ -426,7 +440,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
-		return createSlashResultComponent(details, options, theme, () => state.lastUiContext?.ui.requestRender?.());
+		return createSlashResultComponent(details, options, theme, () => {
+			// TODO(sdk-0.75-shape): message renderers do not receive TUI; keep the old
+			// optional runtime hook when present without typing it into the SDK surface.
+			(state.lastUiContext?.ui as unknown as { requestRender?: () => void }).requestRender?.();
+		});
 	});
 
 	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
@@ -481,7 +499,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				return executor.execute(
 					requestId,
 					{
-						tasks: request.tasks,
+						tasks: request.tasks as unknown as Array<Partial<{ agent: string; task: string }> & Record<string, unknown>>,
 						context: request.context,
 						cwd: request.cwd,
 						worktree: request.worktree,
@@ -743,7 +761,7 @@ Gotchas:
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
-			return executor.execute(id, params, signal, onUpdate, ctx);
+			return executor.execute(id, params as unknown as Parameters<typeof executor.execute>[1], signal as AbortSignal, onUpdate, ctx);
 		},
 
 		renderCall(args, theme) {
@@ -863,7 +881,8 @@ Gotchas:
 	const emitPersonaDirError = (payload: PersonaDirErrorPayload) => {
 		pi.events.emit(SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT, payload);
 	};
-	const handleRegisterPersonaDir = (payload: RegisterPersonaDirPayload) => {
+	const handleRegisterPersonaDir = (data: unknown) => {
+		const payload = data as RegisterPersonaDirPayload;
 		if (!payload || !payload.extensionId || payload.scope !== "internal" || !path.isAbsolute(payload.path)) {
 			emitPersonaDirError({
 				extensionId: payload?.extensionId ?? "",
@@ -890,15 +909,16 @@ Gotchas:
 		}
 		personaDirs.set(payload.extensionId, payload);
 	};
-	const handleUnregisterPersonaDir = (payload: UnregisterPersonaDirPayload) => {
+	const handleUnregisterPersonaDir = (data: unknown) => {
+		const payload = data as UnregisterPersonaDirPayload;
 		if (payload?.extensionId) personaDirs.delete(payload.extensionId);
 	};
 	const eventUnsubscribes = [
-		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
-		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
+		onProcessBus(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
+		onProcessBus(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
-		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, handleRegisterPersonaDir),
-		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, handleUnregisterPersonaDir),
+		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleRegisterPersonaDir(payload as RegisterPersonaDirPayload)),
+		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleUnregisterPersonaDir(payload as UnregisterPersonaDirPayload)),
 	];
 	globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
 
@@ -972,7 +992,6 @@ Gotchas:
 		activeWorkflowName = undefined;
 		activeRootRoleName = undefined;
 		activeRootRole = undefined;
-		stopResultWatcher();
 		if (state.poller) clearInterval(state.poller);
 		state.poller = null;
 		for (const timer of state.cleanupTimers.values()) {

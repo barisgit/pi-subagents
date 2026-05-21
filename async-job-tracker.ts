@@ -1,19 +1,14 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { renderWidget } from "./render.ts";
 import { deriveRunDisplayState } from "./run-liveness.ts";
-import { formatControlNoticeMessage } from "./subagent-control.ts";
 import {
 	type AsyncJobState,
-	type ControlEvent,
 	type SubagentState,
 	POLL_INTERVAL_MS,
-	RESULTS_DIR,
-	SUBAGENT_CONTROL_EVENT,
-	SUBAGENT_CONTROL_INTERCOM_EVENT,
 } from "./types.ts";
 import { readStatus } from "./utils.ts";
+import { readAllEntries } from "./runs-registry.ts";
+import { logger } from "./logger.ts";
 
 interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
@@ -26,7 +21,7 @@ function isTerminalAsyncStatus(status: AsyncJobLifecycleStatus): boolean {
 	return status === "complete" || status === "failed" || status === "paused" || status === "lost";
 }
 
-export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, asyncDirRoot: string, options: AsyncJobTrackerOptions = {}): {
+export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, options: AsyncJobTrackerOptions = {}): {
 	ensurePoller: () => void;
 	handleStarted: (data: unknown) => void;
 	handleComplete: (data: unknown) => void;
@@ -36,7 +31,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		renderWidget(ctx, jobs);
-		ctx.ui.requestRender?.();
+		// TODO(sdk-0.75-shape): ExtensionUIContext no longer exposes requestRender;
+		// renderWidget now captures TUI.requestRender for animation ticks.
 	};
 	const scheduleCleanup = (asyncId: string) => {
 		const existingTimer = state.cleanupTimers.get(asyncId);
@@ -51,62 +47,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		timer.unref?.();
 		state.cleanupTimers.set(asyncId, timer);
 	};
-	const emitNewControlEvents = (job: AsyncJobState) => {
-		const eventsPath = path.join(job.asyncDir, "events.jsonl");
-		let fd: number;
-		try {
-			fd = fs.openSync(eventsPath, "r");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-			console.error(`Failed to open async control events for '${job.asyncDir}':`, error);
-			return;
-		}
-		try {
-			const stat = fs.fstatSync(fd);
-			const cursor = stat.size < (job.controlEventCursor ?? 0) ? 0 : (job.controlEventCursor ?? 0);
-			if (stat.size <= cursor) return;
-			const buffer = Buffer.alloc(stat.size - cursor);
-			fs.readSync(fd, buffer, 0, buffer.length, cursor);
-			const lastNewline = buffer.lastIndexOf(0x0a);
-			if (lastNewline === -1) return;
-			job.controlEventCursor = cursor + lastNewline + 1;
-			for (const line of buffer.subarray(0, lastNewline).toString("utf-8").split("\n")) {
-				if (!line.trim()) continue;
-				let parsed: unknown;
-				try {
-					parsed = JSON.parse(line);
-				} catch {
-					// Ignore malformed completed records but keep the poller alive for later events.
-					continue;
-				}
-				if (!parsed || typeof parsed !== "object" || (parsed as { type?: unknown }).type !== "subagent.control") continue;
-				const record = parsed as { event?: ControlEvent; channels?: string[]; childIntercomTarget?: string; noticeText?: string; intercom?: { to?: string; message?: string } };
-				if (!record.event || !Array.isArray(record.channels)) continue;
-				const payload = {
-					event: record.event,
-					source: "async" as const,
-					asyncDir: job.asyncDir,
-					childIntercomTarget: record.childIntercomTarget,
-					noticeText: record.noticeText ?? formatControlNoticeMessage(record.event, record.childIntercomTarget),
-				};
-				if (record.channels.includes("event")) {
-					pi.events.emit(SUBAGENT_CONTROL_EVENT, payload);
-				}
-				if (record.channels.includes("intercom") && record.intercom?.to && record.intercom.message) {
-					pi.events.emit(SUBAGENT_CONTROL_INTERCOM_EVENT, {
-						...payload,
-						to: record.intercom.to,
-						message: record.intercom.message,
-					});
-				}
-			}
-		} catch (error) {
-			console.error(`Failed to read async control events for '${job.asyncDir}':`, error);
-		} finally {
-			fs.closeSync(fd);
-		}
-	};
-
 	const ensurePoller = () => {
 		if (state.poller) return;
 		state.poller = setInterval(() => {
@@ -141,7 +81,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.startedAt = status.startedAt ?? job.startedAt;
 						job.updatedAt = status.lastUpdate ?? Date.now();
 						job.runnerHeartbeatAt = status.runnerHeartbeatAt ?? job.runnerHeartbeatAt;
-						job.pid = status.pid ?? job.pid;
 						job.displayState = deriveRunDisplayState({
 							state: job.status,
 							activityState: job.activityState,
@@ -149,15 +88,13 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 							lastActivityAt: job.lastActivityAt,
 							lastUpdate: status.lastUpdate,
 							runnerHeartbeatAt: status.runnerHeartbeatAt,
-							pid: status.pid,
-							resultPath: path.join(RESULTS_DIR, `${status.runId || job.asyncId}.json`),
 						});
 						if (status.steps?.length) {
-							job.agents = status.steps.map((step) => step.agent);
+							job.agents = status.steps.map((step) => step.agent ?? "");
 							// Mirror per-step colors so widget/dashboard can tint each sibling in a
 							// parallel run with its own color. Undefined slots stay undefined.
-							job.agentColors = status.steps.map((step) => step.live?.color);
-							job.agentLabels = status.steps.map((step) => step.label);
+							job.agentColors = status.steps.map((step) => step.live?.color ?? "");
+							job.agentLabels = status.steps.map((step) => step.label ?? "");
 							job.stepStatuses = status.steps.map((step) => step.status);
 						}
 						job.sessionDir = status.sessionDir ?? job.sessionDir;
@@ -196,11 +133,9 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 							if (previousStatus !== job.status) scheduleCleanup(job.asyncId);
 							continue;
 						}
-						emitNewControlEvents(job);
 						continue;
 					}
 					if (isTerminalAsyncStatus(job.status)) continue;
-					emitNewControlEvents(job);
 					job.status = job.status === "queued" ? "running" : job.status;
 					job.displayState = deriveRunDisplayState({
 						state: job.status,
@@ -209,8 +144,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						lastActivityAt: job.lastActivityAt,
 						lastUpdate: job.updatedAt,
 						runnerHeartbeatAt: job.runnerHeartbeatAt,
-						pid: job.pid,
-						resultPath: path.join(RESULTS_DIR, `${job.asyncId}.json`),
 					});
 				} catch (error) {
 					console.error(`Failed to read async status for '${job.asyncDir}':`, error);
@@ -234,7 +167,11 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		};
 		if (!info.id) return;
 		const now = Date.now();
-		const asyncDir = info.asyncDir ?? path.join(asyncDirRoot, info.id);
+		const asyncDir = info.asyncDir ?? readAllEntries({ limit: 1 }).find((entry) => entry.runId === info.id)?.runRecordDir;
+		if (!asyncDir) {
+			logger.warn("handleStarted: no asyncDir for runId", { id: info.id });
+			return;
+		}
 		const agents = info.chain && info.chain.length > 0 ? info.chain : info.agent ? [info.agent] : undefined;
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
@@ -256,6 +193,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const handleComplete = (data: unknown) => {
 		const result = data as { id?: string; success?: boolean; asyncDir?: string };
 		const asyncId = result.id;
+
 		if (!asyncId) return;
 		const job = state.asyncJobs.get(asyncId);
 		if (job) {
@@ -278,7 +216,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		state.asyncJobs.clear();
 		state.foregroundControls?.clear();
 		state.lastForegroundControlId = null;
-		state.resultFileCoalescer.clear();
 		if (ctx?.hasUI) {
 			state.lastUiContext = ctx;
 			rerenderWidget(ctx, []);

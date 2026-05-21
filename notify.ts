@@ -2,8 +2,10 @@
  * Subagent completion notifications.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./completion-dedupe.ts";
+import { getCurrentPi } from "./current-pi.ts";
+import { onProcessBus } from "./process-bus.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "./types.ts";
 
 interface ChainStepResult {
@@ -94,7 +96,12 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 			.filter((line) => line !== undefined)
 			.join("\n");
 
-		pi.sendMessage(
+		// Cannot use the captured `pi` from registration time: the activate that
+		// registered this handler may have been replaced by ctx.reload()/fork()/
+		// newSession()/switchSession(), invalidating that pi. We must resolve the
+		// CURRENT pi at call time. (Process-bus delivery survives reloads but the
+		// SDK still requires an active ctx for action methods like sendMessage.)
+		getCurrentPi().sendMessage(
 			{
 				customType: "subagent-notify",
 				content,
@@ -104,5 +111,8 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		);
 	};
 
-	globalStore[unsubscribeStoreKey] = pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete);
+	// Subscribe on the process-scoped bus (see process-bus.ts) so completions
+	// emitted by long-lived in-process executor closures from earlier activates
+	// still reach the current handler.
+	globalStore[unsubscribeStoreKey] = onProcessBus(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete);
 }

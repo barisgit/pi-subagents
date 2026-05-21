@@ -68,7 +68,7 @@ export function serializeAgent(config: AgentConfig): string {
 
 	if (config.defaultProgress) lines.push("defaultProgress: true");
 	if (config.interactive) lines.push("interactive: true");
-	if (Number.isInteger(config.maxSubagentDepth) && config.maxSubagentDepth >= 0) {
+	if (config.maxSubagentDepth !== undefined && Number.isInteger(config.maxSubagentDepth) && config.maxSubagentDepth >= 0) {
 		lines.push(`maxSubagentDepth: ${config.maxSubagentDepth}`);
 	}
 	if (config.disabled !== undefined) lines.push(`disabled: ${config.disabled ? "true" : "false"}`);

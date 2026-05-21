@@ -1,5 +1,5 @@
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ChainConfig, ChainStepConfig } from "./agents.ts";
 import { row, renderFooter, renderHeader, formatPath, formatScrollInfo } from "./render-helpers.ts";
 
@@ -86,8 +86,8 @@ export function handleChainDetailInput(state: ChainDetailState, data: string): C
 	if (data === "e") return { type: "edit" };
 	if (matchesKey(data, "up")) { state.scrollOffset--; return; }
 	if (matchesKey(data, "down")) { state.scrollOffset++; return; }
-	if (matchesKey(data, "pageup") || matchesKey(data, "shift+up")) { state.scrollOffset -= CHAIN_DETAIL_VIEWPORT_HEIGHT; return; }
-	if (matchesKey(data, "pagedown") || matchesKey(data, "shift+down")) { state.scrollOffset += CHAIN_DETAIL_VIEWPORT_HEIGHT; return; }
+	if (matchesKey(data, "pageUp") || matchesKey(data, "shift+up")) { state.scrollOffset -= CHAIN_DETAIL_VIEWPORT_HEIGHT; return; }
+	if (matchesKey(data, "pageDown") || matchesKey(data, "shift+down")) { state.scrollOffset += CHAIN_DETAIL_VIEWPORT_HEIGHT; return; }
 	return;
 }
 

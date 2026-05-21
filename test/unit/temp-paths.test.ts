@@ -2,12 +2,10 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
-	ASYNC_DIR,
+	RUNS_DIR,
 	CHAIN_RUNS_DIR,
-	RESULTS_DIR,
 	TEMP_ARTIFACTS_DIR,
-	TEMP_ROOT_DIR,
-	getAsyncConfigPath,
+	BASE_TEMP_DIR,
 	resolveTempScopeId,
 } from "../../types.ts";
 
@@ -54,19 +52,12 @@ describe("resolveTempScopeId", () => {
 
 describe("shared temp paths", () => {
 	it("anchors shared temp directories under one scoped root", () => {
-		assert.equal(path.dirname(RESULTS_DIR), TEMP_ROOT_DIR);
-		assert.equal(path.dirname(ASYNC_DIR), TEMP_ROOT_DIR);
-		assert.equal(path.dirname(CHAIN_RUNS_DIR), TEMP_ROOT_DIR);
-		assert.equal(path.dirname(TEMP_ARTIFACTS_DIR), TEMP_ROOT_DIR);
-		assert.match(path.basename(TEMP_ROOT_DIR), /^pi-subagents-/);
-		assert.equal(path.basename(RESULTS_DIR), "async-subagent-results");
-		assert.equal(path.basename(ASYNC_DIR), "async-subagent-runs");
+		assert.equal(path.dirname(RUNS_DIR), BASE_TEMP_DIR);
+		assert.equal(path.dirname(CHAIN_RUNS_DIR), BASE_TEMP_DIR);
+		assert.equal(path.dirname(TEMP_ARTIFACTS_DIR), BASE_TEMP_DIR);
+		assert.match(path.basename(BASE_TEMP_DIR), /^pi-subagents-/);
+		assert.equal(path.basename(RUNS_DIR), "async-subagent-runs");
 		assert.equal(path.basename(CHAIN_RUNS_DIR), "chain-runs");
 		assert.equal(path.basename(TEMP_ARTIFACTS_DIR), "artifacts");
-	});
-
-	it("writes async config files under the same scoped temp root", () => {
-		assert.equal(path.dirname(getAsyncConfigPath("abc123")), TEMP_ROOT_DIR);
-		assert.equal(path.basename(getAsyncConfigPath("abc123")), "async-cfg-abc123.json");
 	});
 });

@@ -13,7 +13,7 @@ interface SingleResultLike {
 	finalOutput?: string;
 	messages?: unknown[];
 	toolCalls?: Array<{ text?: string; expandedText?: string }>;
-	progress?: unknown;
+	progress?: { recentOutput?: unknown[] };
 }
 
 interface ExecutorResult {
@@ -49,13 +49,6 @@ function makeState(cwd: string) {
 		cleanupTimers: new Map(),
 		lastUiContext: null,
 		poller: null,
-		completionSeen: new Map(),
-		watcher: null,
-		watcherRestartTimer: null,
-		resultFileCoalescer: {
-			schedule: () => false,
-			clear: () => {},
-		},
 	};
 }
 
@@ -70,7 +63,6 @@ function makeExecutor(cwd: string) {
 		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
-		getSubagentSessionRoot: () => cwd,
 		expandTilde: (value: string) => value,
 		discoverAgents: () => ({
 			agents: [{ name: "tester", description: "Tool-heavy test agent" }],

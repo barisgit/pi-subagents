@@ -149,8 +149,8 @@ export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegat
 	const fallbackTask = tasks[0];
 	return {
 		requestId: value.requestId,
-		agent: hasSingle ? value.agent : fallbackTask!.agent,
-		task: hasSingle ? value.task : fallbackTask!.task,
+		agent: hasSingle ? value.agent! : fallbackTask!.agent,
+		task: hasSingle ? value.task! : fallbackTask!.task,
 		...(tasks.length > 0 ? { tasks } : {}),
 		context: value.context,
 		model: value.model,

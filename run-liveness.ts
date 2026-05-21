@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import type { ActivityState, RunDisplayState } from "./types.ts";
 
 export const RUNNER_HEARTBEAT_STALE_MS = 15_000;
@@ -11,32 +10,9 @@ export interface RunDisplayStateInput {
 	lastActivityAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
-	pid?: number;
-	resultPath?: string;
 	now?: number;
 	heartbeatStaleMs?: number;
 	workingRecentMs?: number;
-}
-
-export function isPidAlive(pid: number | undefined): boolean | undefined {
-	if (pid === undefined) return undefined;
-	if (!Number.isInteger(pid) || pid <= 0) return false;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		return code === "EPERM" ? true : false;
-	}
-}
-
-function fileExists(filePath: string | undefined): boolean {
-	if (!filePath) return false;
-	try {
-		return fs.existsSync(filePath);
-	} catch {
-		return false;
-	}
 }
 
 export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplayState | undefined {
@@ -47,13 +23,7 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
 	const heartbeatAt = input.runnerHeartbeatAt ?? input.lastUpdate;
 	const heartbeatAge = heartbeatAt !== undefined ? now - heartbeatAt : undefined;
 	const heartbeatStaleMs = input.heartbeatStaleMs ?? RUNNER_HEARTBEAT_STALE_MS;
-	const pidAlive = isPidAlive(input.pid);
-	if (
-		heartbeatAge !== undefined
-		&& heartbeatAge > heartbeatStaleMs
-		&& pidAlive === false
-		&& !fileExists(input.resultPath)
-	) {
+	if (heartbeatAge !== undefined && heartbeatAge > heartbeatStaleMs) {
 		return "lost";
 	}
 

@@ -1,13 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ASYNC_NO_POLL_GUIDANCE } from "./async-guidance.ts";
-import { formatAsyncRunList, listAsyncRuns } from "./async-status.ts";
-import { ASYNC_DIR, RESULTS_DIR, type Details } from "./types.ts";
-import { findByPrefix, readStatus } from "./utils.ts";
+import { formatAsyncRunList, listRunsFromRegistry } from "./async-status.ts";
+import { readAllEntries } from "./runs-registry.ts";
+import { type Details } from "./types.ts";
+import { readStatus } from "./utils.ts";
 
 export interface RunStatusParams {
-	action?: "status";
+	action?: string;
 	id?: string;
 	runId?: string;
 	dir?: string;
@@ -22,7 +23,7 @@ function activityText(activityState: unknown, lastActivityAt: unknown): string |
 export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<Details> {
 	if (!params.id && !params.runId && !params.dir) {
 		try {
-			const runs = listAsyncRuns(ASYNC_DIR, { states: ["queued", "running", "lost"] });
+			const runs = listRunsFromRegistry({ states: ["queued", "running", "lost"] });
 			return {
 				content: [{ type: "text", text: formatAsyncRunList(runs) }],
 				details: { mode: "single", results: [] },
@@ -43,21 +44,14 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 	if (params.dir) {
 		asyncDir = path.resolve(params.dir);
 	} else if (resolvedId) {
-		const direct = path.join(ASYNC_DIR, resolvedId);
-		if (fs.existsSync(direct)) {
-			asyncDir = direct;
-		} else {
-			const match = findByPrefix(ASYNC_DIR, resolvedId);
-			if (match) {
-				asyncDir = match;
-				resolvedId = path.basename(match);
-			}
+		const match = readAllEntries().find((entry) => entry.runId.startsWith(resolvedId!));
+		if (match) {
+			asyncDir = match.runRecordDir;
+			resolvedId = match.runId;
 		}
 	}
 
-	const resultPath = resolvedId && !asyncDir ? findByPrefix(RESULTS_DIR, resolvedId, ".json") : null;
-
-	if (!asyncDir && !resultPath) {
+	if (!asyncDir) {
 		return {
 			content: [{ type: "text", text: "Async run not found. Provide id or dir." }],
 			isError: true,
@@ -78,7 +72,7 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 			};
 		}
 		const logPath = path.join(asyncDir, `subagent-log-${resolvedId ?? "unknown"}.md`);
-		const eventsPath = path.join(asyncDir, "events.jsonl");
+		const sessionPath = path.join(asyncDir, "run-0", "session.jsonl");
 		if (status) {
 			const stepsTotal = status.steps?.length ?? 1;
 			const completedParallelSteps = status.steps?.filter((step) => step.status === "complete" || step.status === "failed" || step.status === "skipped").length ?? 0;
@@ -105,29 +99,11 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 				lines.push(`Step ${index + 1}: ${step.agent} ${step.status}${stepActivityText ? `, ${stepActivityText}` : ""}`);
 			}
 			if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
+			else if (fs.existsSync(sessionPath)) lines.push(`Session: ${sessionPath}`);
 			if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
-			if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
 			if (status.state === "running" || status.state === "queued" || status.state === "lost") lines.push("", ASYNC_NO_POLL_GUIDANCE);
 
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-		}
-	}
-
-	if (resultPath) {
-		try {
-			const raw = fs.readFileSync(resultPath, "utf-8");
-			const data = JSON.parse(raw) as { id?: string; success?: boolean; summary?: string; exitCode?: number; state?: string };
-			const status = data.success ? "complete" : data.state === "paused" || data.exitCode === 0 ? "paused" : "failed";
-			const lines = [`Run: ${data.id ?? resolvedId}`, `State: ${status}`, `Result: ${resultPath}`];
-			if (data.summary) lines.push("", data.summary);
-			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			return {
-				content: [{ type: "text", text: `Failed to read async result file: ${message}` }],
-				isError: true,
-				details: { mode: "single", results: [] },
-			};
 		}
 	}
 

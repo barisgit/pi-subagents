@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentConfig,
 	type AgentScope,
@@ -21,7 +21,10 @@ import type { Details } from "./types.ts";
 
 type ManagementAction = "list" | "get" | "create" | "update" | "delete";
 type ManagementScope = "user" | "project";
-type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry">;
+function toManagementScope(source: AgentSource): ManagementScope {
+	return source === "builtin" ? "user" : source;
+}
+type ManagementContext = { cwd: string; modelRegistry: { getAvailable(): Array<{ provider?: string; id?: string }> } };
 
 interface ManagementParams {
 	action?: string;
@@ -510,7 +513,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 			if (sw) warnings.push(sw);
 		}
 		if (updated.name !== oldName) {
-			const renamed = renamePath("agent", target.filePath, updated.name, target.source, ctx.cwd);
+			const renamed = renamePath("agent", target.filePath, updated.name, toManagementScope(target.source), ctx.cwd);
 			if (renamed.error) return result(renamed.error, true);
 			updated.filePath = renamed.filePath!;
 		}
@@ -552,7 +555,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 		warnings.push(...chainStepWarnings(ctx, updated.steps));
 	}
 	if (updated.name !== oldName) {
-		const renamed = renamePath("chain", target.filePath, updated.name, target.source, ctx.cwd);
+		const renamed = renamePath("chain", target.filePath, updated.name, toManagementScope(target.source), ctx.cwd);
 		if (renamed.error) return result(renamed.error, true);
 		updated.filePath = renamed.filePath!;
 	}

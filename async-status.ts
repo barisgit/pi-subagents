@@ -2,10 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ASYNC_NO_POLL_GUIDANCE } from "./async-guidance.ts";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
-import { type ActivityState, type AsyncStatus, RESULTS_DIR, type RunDisplayState, type TokenUsage } from "./types.ts";
+import { type ActivityState, type AsyncStatus, type RunDisplayState, type TokenUsage } from "./types.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
 import { deriveRunDisplayState } from "./run-liveness.ts";
 import { readStatus } from "./utils.ts";
+import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 
 export interface AsyncRunStepSummary {
 	index: number;
@@ -45,7 +46,6 @@ export interface AsyncRunSummary {
 	lastUpdate?: number;
 	endedAt?: number;
 	runnerHeartbeatAt?: number;
-	pid?: number;
 	currentStep?: number;
 	steps: AsyncRunStepSummary[];
 	sessionDir?: string;
@@ -121,8 +121,6 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 		lastActivityAt,
 		lastUpdate: status.lastUpdate,
 		runnerHeartbeatAt: status.runnerHeartbeatAt,
-		pid: status.pid,
-		resultPath: path.join(RESULTS_DIR, `${id}.json`),
 	});
 	return {
 		id,
@@ -142,7 +140,6 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 		lastUpdate: status.lastUpdate,
 		endedAt: status.endedAt,
 		runnerHeartbeatAt: status.runnerHeartbeatAt,
-		pid: status.pid,
 		currentStep: status.currentStep,
 		steps: (status.steps ?? []).map((step, index) => {
 			const stepActivityState = step.activityState ?? (step.status === "running" ? activityState : undefined);
@@ -156,12 +153,10 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 					lastActivityAt: stepLastActivityAt,
 					lastUpdate: status.lastUpdate,
 					runnerHeartbeatAt: status.runnerHeartbeatAt,
-					pid: status.pid,
-					resultPath: path.join(RESULTS_DIR, `${id}.json`),
 				});
 			return {
 				index,
-				agent: step.agent,
+				agent: step.agent ?? "",
 				...(step.label ? { label: step.label } : {}),
 				status: step.status,
 				...(stepActivityState ? { activityState: stepActivityState } : {}),
@@ -232,8 +227,28 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 	return options.limit !== undefined ? sorted.slice(0, options.limit) : sorted;
 }
 
-export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): AsyncRunOverlayData {
-	const all = listAsyncRuns(asyncDirRoot);
+// Registry-backed reader. Single source of truth for run discovery: enumerates
+// the runs-index.jsonl registry instead of scanning a temp dir. Both sync and
+// async runs appear as equal first-class entries.
+export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"][]; limit?: number } = {}): AsyncRunSummary[] {
+	const entries = readAllEntries();
+	const allowedStates = options.states ? new Set(options.states) : undefined;
+	const runs: AsyncRunSummary[] = [];
+	const seen = new Set<string>();
+	for (const entry of entries) {
+		if (seen.has(entry.runId)) continue;
+		seen.add(entry.runId);
+		const summary = readSummaryForEntry(entry);
+		if (!summary) continue;
+		if (allowedStates && !allowedStates.has(summary.state)) continue;
+		runs.push(summary);
+	}
+	const sorted = sortRuns(runs);
+	return options.limit !== undefined ? sorted.slice(0, options.limit) : sorted;
+}
+
+export function listRunsFromRegistryForOverlay(recentLimit = 5): AsyncRunOverlayData {
+	const all = listRunsFromRegistry();
 	const recent = all
 		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused")
 		.sort((a, b) => b.startedAt - a.startedAt)
@@ -241,6 +256,26 @@ export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): 
 	return {
 		active: all.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
 		recent,
+	};
+}
+
+function readSummaryForEntry(entry: RunsRegistryEntry): AsyncRunSummary | null {
+	const status = readStatus(entry.runRecordDir) as (AsyncStatus & { cwd?: string }) | null;
+	if (status) return statusToSummary(entry.runRecordDir, status);
+	// No status.json yet: synthesize a minimal queued/running stub from the
+	// registry entry. Keeps the overlay populated the moment a run is dispatched.
+	const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : []);
+	return {
+		id: entry.runId,
+		asyncDir: entry.runRecordDir,
+		mode: entry.mode,
+		state: "queued",
+		startedAt: entry.startedAt,
+		cwd: entry.cwd,
+		currentStep: 0,
+		...(entry.label ? { label: entry.label } : {}),
+		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+		steps: agents.map((agent, index) => ({ index, agent, status: "queued" as const })),
 	};
 }
 

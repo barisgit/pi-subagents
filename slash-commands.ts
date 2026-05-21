@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { discoverAgents, discoverAgentsAll } from "./agents.ts";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
 import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-status.ts";
@@ -548,7 +548,7 @@ export function registerSlashCommands(
 	});
 
 	// Shared opener so the slash command and the shortcut stay in sync.
-	const openSubagentsStatus = async (ctx: Parameters<Parameters<typeof pi.registerCommand>[1]["handler"]>[1]) => {
+	const openSubagentsStatus = async (ctx: ExtensionContext) => {
 		const sessionCwd = (ctx as { cwd?: string }).cwd ?? state.baseCwd;
 		await ctx.ui.custom<void>(
 			(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
@@ -574,7 +574,7 @@ export function registerSlashCommands(
 
 	pi.registerShortcut("ctrl+shift+s", {
 		handler: async (ctx) => {
-			await openSubagentsStatus(ctx);
+			await openSubagentsStatus(ctx as ExtensionContext);
 		},
 	});
 }
