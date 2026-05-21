@@ -4,6 +4,9 @@ import type { ChildAgentResult, ChildAgentExitState, StatusPatch } from "./in-pr
 
 type StatusState = ChildAgentExitState | "queued" | "running" | "paused" | "lost";
 
+type TokenUsage = { input: number; output: number; total: number };
+type StatusUsage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
+
 type StatusStep = {
 	agent?: string;
 	label?: string;
@@ -16,6 +19,7 @@ type StatusStep = {
 	lastActivityAt?: number;
 	error?: string;
 	sessionFile?: string;
+	tokens?: TokenUsage;
 	live?: {
 		color?: string;
 		thinking?: string;
@@ -60,6 +64,8 @@ type StatusPayload = {
 	sessionDir?: string;
 	outputText?: string;
 	error?: string;
+	totalTokens?: TokenUsage;
+	totalUsage?: StatusUsage;
 };
 
 export class StatusWriter {
@@ -101,7 +107,7 @@ export class StatusWriter {
 		this.scheduleWrite();
 	}
 
-	async finalize(result: ChildAgentResult): Promise<void> {
+	async finalize(result: ChildAgentResult, options?: { totalUsage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number } }): Promise<void> {
 		this.ensureInitialized();
 		this.clearTimer();
 		this.applyPatch({
@@ -117,11 +123,29 @@ export class StatusWriter {
 			this.status.lastUpdate = result.endedAt;
 			this.status.outputText = result.outputText;
 			if (result.error?.message) this.status.error = result.error.message;
+			// Prefer caller-provided aggregate (chain/parallel sum across all
+			// steps); fall back to single-step result.usage.
+			const aggregate = options?.totalUsage ?? result.usage;
+			if (aggregate) {
+				this.status.totalUsage = { ...aggregate };
+				this.status.totalTokens = {
+					input: aggregate.input,
+					output: aggregate.output,
+					total: aggregate.input + aggregate.output,
+				};
+			}
 			const step = this.stepFor(result.stepIndex);
 			step.status = result.state;
 			step.endedAt = result.endedAt;
 			step.durationMs = result.durationMs;
 			if (result.error?.message) step.error = result.error.message;
+			if (result.usage) {
+				step.tokens = {
+					input: result.usage.input,
+					output: result.usage.output,
+					total: result.usage.input + result.usage.output,
+				};
+			}
 			step.live = {
 				...(step.live ?? {}),
 				outputText: result.outputText,

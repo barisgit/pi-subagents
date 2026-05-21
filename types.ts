@@ -241,6 +241,16 @@ export interface Details {
 	/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
 	label?: string;
 	results: SingleResult[];
+	/**
+	 * Canonical run-level usage aggregate. Sum of `results[].usage` across every
+	 * step of this dispatch, INCLUDING usage bubbled up from nested sub-subagent
+	 * calls (each child run aggregates its own descendants into its `usage`).
+	 * Consumers like pi-bar should read this instead of re-summing `results[]`.
+	 * For async dispatches the synchronous return has empty `results: []` and a
+	 * zero `totalUsage`; the final aggregate lives in status.json.totalUsage and
+	 * is published via SUBAGENT_ASYNC_COMPLETE_EVENT.totalUsage at completion.
+	 */
+	totalUsage?: Usage;
 	controlEvents?: ControlEvent[];
 	asyncId?: string;
 	asyncDir?: string;
@@ -352,6 +362,12 @@ export interface AsyncStatus {
 	sessionDir?: string;
 	outputFile?: string;
 	totalTokens?: TokenUsage;
+	/**
+	 * Canonical run-level usage aggregate for async runs. Populated on terminal
+	 * status writes (complete/failed/lost). Mirrors Details.totalUsage shape and
+	 * is also surfaced on SUBAGENT_ASYNC_COMPLETE_EVENT for live consumers.
+	 */
+	totalUsage?: Usage;
 	sessionFile?: string;
 }
 

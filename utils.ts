@@ -338,13 +338,40 @@ export function compactForegroundResult(result: SingleResult): SingleResult {
 }
 
 export function compactForegroundDetails(details: Details): Details {
+	const compactedResults = details.results.map(compactForegroundResult);
 	return {
 		...details,
-		results: details.results.map(compactForegroundResult),
+		results: compactedResults,
+		totalUsage: details.totalUsage ?? computeDetailsTotalUsage(compactedResults),
 		progress: details.progress
 			? details.progress.map(compactCompletedProgress)
 			: undefined,
 	};
+}
+
+/**
+ * Sum the canonical per-step usages on a foreground Details' results[] into a
+ * single Usage aggregate. Used to populate `details.totalUsage` so consumers
+ * (pi-bar, dashboards, charters) have one place to read per-run totals
+ * regardless of mode (single/parallel/chain). Empty results return zeroes.
+ *
+ * Per-step `result.usage` already includes accumulated cacheRead/cacheWrite/cost
+ * + descendant usage bubbled in via the child-run onEvent path, so summing here
+ * is by construction the whole tree.
+ */
+export function computeDetailsTotalUsage(results: { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number } }[]): { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number } {
+	const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	for (const r of results) {
+		const u = r.usage;
+		if (!u) continue;
+		total.input += u.input ?? 0;
+		total.output += u.output ?? 0;
+		total.cacheRead += u.cacheRead ?? 0;
+		total.cacheWrite += u.cacheWrite ?? 0;
+		total.cost += u.cost ?? 0;
+		total.turns += u.turns ?? 0;
+	}
+	return total;
 }
 
 /**

@@ -84,6 +84,15 @@ export interface ChildAgentContext {
 
 export type ChildAgentExitState = "complete" | "failed" | "interrupted";
 
+export interface ChildUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+	turns: number;
+}
+
 export interface ChildAgentResult {
 	runId: string;
 	stepIndex: number;
@@ -99,6 +108,15 @@ export interface ChildAgentResult {
 	sessionFile: string;
 	shareUrl?: string;
 	error?: { message: string; reason?: string };
+	/**
+	 * Aggregate token + cost usage for this child run.
+	 *
+	 * Accumulated inside the in-process executor by watching assistant
+	 * `message_end` events on the child's AgentSession AND by reading nested
+	 * `details.totalUsage` off any `subagent` tool_execution_end results.
+	 * Equals the full descendant tree, not just direct turns.
+	 */
+	usage?: ChildUsage;
 }
 
 export interface ChildAgentHandle {
@@ -268,6 +286,7 @@ async function executeChildAgent(
 	let toolErrorCount = 0;
 	let unsubscribe: (() => void) | undefined;
 	let session: AgentSession | undefined;
+	const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 
 	const baseResult = (state: ChildAgentExitState, error?: { message: string; reason?: string }): ChildAgentResult => {
 		endedAt = Date.now();
@@ -284,6 +303,7 @@ async function executeChildAgent(
 			startedAt,
 			endedAt,
 			sessionFile: step.sessionFile,
+			usage: { ...usage },
 			...(error ? { error } : {}),
 		};
 	};
@@ -320,6 +340,7 @@ async function executeChildAgent(
 				incrementToolCall: () => ++toolCallCount,
 				incrementToolResult: () => ++toolResultCount,
 				incrementToolError: () => ++toolErrorCount,
+				accumulateUsage: usage,
 			});
 			if (patch) ctx.onStatusUpdate?.(patch);
 		});
@@ -508,12 +529,41 @@ function handleSessionEvent(
 		incrementToolCall(): number;
 		incrementToolResult(): number;
 		incrementToolError(): number;
+		accumulateUsage?: ChildUsage;
 	},
 ): StatusPatch | undefined {
 	ctx.onEvent?.(step.stepIndex, event);
 	const record = event as Record<string, unknown>;
 	const type = typeof record.type === "string" ? record.type : undefined;
 	const now = Date.now();
+
+	// Token + cost accumulation. Equivalent to subagent-executor's sync path:
+	// add per-assistant-message usage, then add any nested subagent
+	// tool_result's `details.totalUsage` so the descendant tree bubbles up.
+	if (counters.accumulateUsage) {
+		if (type === "message_end" && record.message && typeof record.message === "object") {
+			const msg = record.message as { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } };
+			if (msg.role === "assistant" && msg.usage) {
+				const u = msg.usage;
+				counters.accumulateUsage.input += u.input || 0;
+				counters.accumulateUsage.output += u.output || 0;
+				counters.accumulateUsage.cacheRead += u.cacheRead || 0;
+				counters.accumulateUsage.cacheWrite += u.cacheWrite || 0;
+				counters.accumulateUsage.cost += u.cost?.total || 0;
+				counters.accumulateUsage.turns += 1;
+			}
+		} else if (type === "tool_execution_end" && record.toolName === "subagent" && record.result && typeof record.result === "object") {
+			const result = record.result as { details?: { totalUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number } } };
+			const nested = result.details?.totalUsage;
+			if (nested) {
+				counters.accumulateUsage.input += nested.input || 0;
+				counters.accumulateUsage.output += nested.output || 0;
+				counters.accumulateUsage.cacheRead += nested.cacheRead || 0;
+				counters.accumulateUsage.cacheWrite += nested.cacheWrite || 0;
+				counters.accumulateUsage.cost += nested.cost || 0;
+			}
+		}
+	}
 
 	if (type === "text_delta" && typeof record.delta === "string") {
 		return {

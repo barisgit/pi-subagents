@@ -969,7 +969,20 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				const now = Date.now();
 				finalResult = { runId, stepIndex: 0, state: "failed", exitCode: 1, outputText: "", toolCallCount: 0, toolResultCount: 0, toolErrorCount: 0, durationMs: now - startedAt, startedAt, endedAt: now, sessionFile: first.step.sessionFile, error: { message: String(settled[0].reason) } };
 			}
-			if (finalResult) await statusWriter.finalize(finalResult);
+			// Canonical run-level usage aggregate across all child agents (single,
+			// or each step of chain/parallel). For single mode this is just the
+			// final result's usage; for chain/parallel we sum across results since
+			// each step is its own ChildAgentResult with its own usage.
+			const totalUsage: Usage = emptyUsage();
+			if (mode === "chain" || mode === "parallel") {
+				for (const entry of settled) {
+					if (entry.status !== "fulfilled") continue;
+					if (entry.value.usage) addUsageInto(totalUsage, entry.value.usage as Usage);
+				}
+			} else if (finalResult?.usage) {
+				addUsageInto(totalUsage, finalResult.usage as Usage);
+			}
+			if (finalResult) await statusWriter.finalize(finalResult, { totalUsage });
 			logger.info("finalizeAsync: emitting COMPLETE", { runId, success: finalResult?.state === "complete", state: finalResult?.state });
 			const completeAgent = mode === "chain" || mode === "parallel"
 				? steps.map(({ step }) => step.agentName).join(",")
@@ -995,6 +1008,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				timestamp: Date.now(),
 				result: finalResult,
 				results: chainResults,
+				totalUsage,
 				asyncDir: runRecordDir,
 				metadata: params.metadata,
 			});
@@ -1219,6 +1233,28 @@ function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 }
 
+/**
+ * Add `addend` into `base` in place and return `base`.
+ * Treats missing fields as 0. Preserves explicit zeroes on the optional fields.
+ */
+export function addUsageInto(base: Usage, addend: Usage | undefined): Usage {
+	if (!addend) return base;
+	base.input += addend.input || 0;
+	base.output += addend.output || 0;
+	base.cacheRead = (base.cacheRead ?? 0) + (addend.cacheRead || 0);
+	base.cacheWrite = (base.cacheWrite ?? 0) + (addend.cacheWrite || 0);
+	base.cost = (base.cost ?? 0) + (addend.cost || 0);
+	base.turns = (base.turns ?? 0) + (addend.turns || 0);
+	return base;
+}
+
+/** Sum any number of usages into a fresh accumulator. */
+export function sumUsages(...usages: (Usage | undefined)[]): Usage {
+	const total = emptyUsage();
+	for (const u of usages) addUsageInto(total, u);
+	return total;
+}
+
 function resolveThinkingLevel(value: string | undefined): ChildAgentStep["thinkingLevel"] {
 	return value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh"
 		? value
@@ -1428,6 +1464,7 @@ async function runInProcessChildStep(input: {
 				mode: input.mode ?? "single",
 				runId: data.runId,
 				results: [{ ...resultShell, progress: progressSnapshot, messages: [...messages], usage: { ...usage } }],
+				totalUsage: { ...usage },
 				progress: [progressSnapshot],
 			},
 		};
@@ -1452,6 +1489,26 @@ async function runInProcessChildStep(input: {
 				if (progress.currentTool) {
 					const durationMs = progress.currentToolStartedAt !== undefined ? Math.max(0, now - progress.currentToolStartedAt) : undefined;
 					progress.recentTools.push({ tool: progress.currentTool, args: progress.currentToolArgs || "", rawArgs: progress.currentToolRawArgs, endMs: now, durationMs });
+				}
+				// Bubble nested subagent usage into the parent's accumulator. When a
+				// child agent invokes the `subagent` tool, the tool_result carries
+				// `details.totalUsage` representing the full descendant tree. Adding
+				// it here means parent SingleResult.usage (and therefore
+				// details.totalUsage on the foreground return) includes nested work
+				// even though the descendant's message_end events fire on a
+				// different AgentSession's bus.
+				const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
+				if (toolName === "subagent" && record.result && typeof record.result === "object") {
+					const result = record.result as { details?: { totalUsage?: Usage } };
+					const nested = result.details?.totalUsage;
+					if (nested) {
+						usage.input += nested.input || 0;
+						usage.output += nested.output || 0;
+						usage.cacheRead = (usage.cacheRead ?? 0) + (nested.cacheRead || 0);
+						usage.cacheWrite = (usage.cacheWrite ?? 0) + (nested.cacheWrite || 0);
+						usage.cost = (usage.cost ?? 0) + (nested.cost || 0);
+						progress.tokens = usage.input + usage.output;
+					}
 				}
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
