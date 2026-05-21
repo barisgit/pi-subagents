@@ -41,7 +41,25 @@ import {
 } from "./sync-run-persistence.ts";
 import { appendRunEntry } from "./runs-registry.ts";
 import { logger } from "./logger.ts";
-import { emitProcessBus } from "./process-bus.ts";
+import { getCurrentPi } from "./current-pi.ts";
+
+/**
+ * Emit a subagent lifecycle event on the host pi.events bus, resolving the
+ * CURRENT pi at emit time. The SDK invalidates captured pi on session
+ * replacement (newSession/fork/switchSession/reload); resolving fresh avoids
+ * emitting into a disposed bus. The try/catch protects against the brief
+ * window where the previous pi is disposed but the new activate hasn't fired
+ * yet — we drop those (rare) emits rather than crash the executor.
+ */
+function safeEmit(channel: string, data: unknown): void {
+	try {
+		const pi = getCurrentPi();
+		pi?.events.emit(channel, data);
+	} catch {
+		// Ignore: stale pi during reload window. Listeners on the next activate
+		// will be re-attached and pick up future events.
+	}
+}
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -939,7 +957,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 					success: r.state === "complete",
 				}))
 				: undefined;
-			emitProcessBus(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
 				id: runId,
 				runId,
 				success: finalResult?.state === "complete",
@@ -993,7 +1011,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	}
 	void finalizeAsync(handlesPromise);
 
-	emitProcessBus(SUBAGENT_ASYNC_STARTED_EVENT, {
+	safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
 		id: runId,
 		runId,
 		metadata: params.metadata,

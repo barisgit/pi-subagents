@@ -4,13 +4,14 @@
 //   The SDK invalidates the previous `pi` on ctx.reload/newSession/fork/
 //   switchSession ("ctx is stale after session replacement"). Any handler that
 //   captured the old `pi` and calls an action method (sendMessage, etc.) will
-//   throw. Our process-bus listeners (notify, async-job-tracker) are wired in
-//   one activate but may fire after the next activate has replaced `pi`, so
-//   they cannot use the captured-at-registration pi.
+//   throw. Long-lived in-process executor closures + lifecycle handlers may
+//   fire after the next activate has replaced `pi`, so they cannot use the
+//   pi captured at registration time.
 //
-// Scope is intentionally narrow: ONLY action-method call sites that need to
-// run from process-bus listeners reach for this. Event registrations stay on
-// the process-bus. Per-activate state stays in closures. The holder is pinned
+// Scope is intentionally narrow: ONLY action-method call sites (sendMessage,
+// safeEmit on pi.events, etc.) that may run across an activate boundary reach
+// for this. Event subscriptions stay on pi.events and are re-attached every
+// host activate. Per-activate state stays in closures. The holder is pinned
 // on globalThis so it survives module re-imports the extension runtime
 // performs on each activate.
 

@@ -414,7 +414,7 @@ function seedForkSessionFile(input: { sourcePath: string; targetPath: string; ch
  * Marker on globalThis set while we're constructing a child AgentSession.
  * The pi-subagents extension factory checks this to know it's being invoked
  * inside a child session (versus the host) and bail out of host-only wiring
- * (currentPi pin, process-bus listeners, widget state, etc.).
+ * (currentPi pin, pi.events listeners, widget state, etc.).
  */
 const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
 function setChildSessionFlag(value: boolean): void {

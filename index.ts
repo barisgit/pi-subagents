@@ -21,7 +21,6 @@ import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { type AgentConfig, type RegisteredPersonaDir, discoverAgents, loadInternalPersonaDir } from "./agents.ts";
 import { setCurrentPi } from "./current-pi.ts";
-import { onProcessBus } from "./process-bus.ts";
 import { logger } from "./logger.ts";
 import { resolveAgentToolPatterns, resolveToolPatterns } from "./resolve-tool-patterns.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
@@ -267,7 +266,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// In-process subagents call createAgentSession() which spins up a fresh
 	// ExtensionRunner that loads every discovered extension - including this
 	// one - with the child's pi. Activating in the child clobbers the host's
-	// process-bus listeners, currentPi pin, widget state, etc., and the
+	// pi.events listeners, currentPi pin, widget state, etc., and the
 	// captured child pi is disposed seconds later.
 	//
 	// Detect via a globalThis flag the in-process executor sets while
@@ -281,14 +280,16 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	}
 
 	// Each activate hands a fresh `pi` with a fresh session-scoped EventBus.
-	// Subagent lifecycle events (started/complete) outlive any single agent
-	// session, so they live on our own process-scoped bus (see process-bus.ts)
-	// rather than `pi.events`. Cross-extension control/persona events stay on
-	// `pi.events` because their senders are session-scoped too.
+	// All cross-extension events (subagent lifecycle, control, persona-dir) ride
+	// on `pi.events`. Listeners are torn down + re-attached on every host
+	// activate via eventUnsubscribeStoreKey so they always bind to the latest
+	// live bus. Emitters resolve the current pi at emit time (safeEmit in
+	// subagent-executor.ts) to avoid emitting into a disposed bus during the
+	// brief reload window.
 	//
 	// Pin the live pi for handlers that must call SDK action methods
-	// (sendMessage, etc.) from process-bus listeners registered in an earlier
-	// activate. See current-pi.ts for the rationale.
+	// (sendMessage, etc.) across an activate boundary. See current-pi.ts for
+	// the rationale.
 	//
 	// ONLY pin when this activate is for the host (UI-bearing) session.
 	// In-process subagents call createAgentSession() which spins up a fresh
@@ -914,8 +915,8 @@ Gotchas:
 		if (payload?.extensionId) personaDirs.delete(payload.extensionId);
 	};
 	const eventUnsubscribes = [
-		onProcessBus(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
-		onProcessBus(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
+		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
+		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleRegisterPersonaDir(payload as RegisterPersonaDirPayload)),
 		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleUnregisterPersonaDir(payload as UnregisterPersonaDirPayload)),
