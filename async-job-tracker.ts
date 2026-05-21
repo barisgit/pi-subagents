@@ -6,6 +6,7 @@ import {
 	type SubagentState,
 	POLL_INTERVAL_MS,
 } from "./types.ts";
+import type { IdleTracker } from "./idle-tracker.ts";
 import { readStatus } from "./utils.ts";
 import { readAllEntries } from "./runs-registry.ts";
 import { logger } from "./logger.ts";
@@ -13,6 +14,7 @@ import { logger } from "./logger.ts";
 interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
 	pollIntervalMs?: number;
+	idleTracker?: IdleTracker;
 }
 
 type AsyncJobLifecycleStatus = AsyncJobState["status"];
@@ -29,6 +31,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 } {
 	const completionRetentionMs = options.completionRetentionMs ?? 10000;
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+	const idleTracker = options.idleTracker;
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		renderWidget(ctx, jobs);
 		// TODO(sdk-0.75-shape): ExtensionUIContext no longer exposes requestRender;
@@ -165,6 +168,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			agent?: string;
 			chain?: string[];
 		};
+		logger.info("handleStarted: FIRED", { id: info.id, agent: info.agent, hasUi: !!state.lastUiContext });
 		if (!info.id) return;
 		const now = Date.now();
 		const asyncDir = info.asyncDir ?? readAllEntries({ limit: 1 }).find((entry) => entry.runId === info.id)?.runRecordDir;
@@ -173,6 +177,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			return;
 		}
 		const agents = info.chain && info.chain.length > 0 ? info.chain : info.agent ? [info.agent] : undefined;
+		idleTracker?.onAsyncStarted(info.id);
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
 			asyncDir,
@@ -193,7 +198,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const handleComplete = (data: unknown) => {
 		const result = data as { id?: string; success?: boolean; asyncDir?: string };
 		const asyncId = result.id;
-
+		logger.info("handleComplete: FIRED", { id: asyncId, success: result.success, inMap: asyncId ? state.asyncJobs.has(asyncId) : false, hasUi: !!state.lastUiContext });
 		if (!asyncId) return;
 		const job = state.asyncJobs.get(asyncId);
 		if (job) {
@@ -205,6 +210,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		if (state.lastUiContext) {
 			rerenderWidget(state.lastUiContext);
 		}
+		idleTracker?.onAsyncFinished(asyncId);
 		scheduleCleanup(asyncId);
 	};
 

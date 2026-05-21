@@ -21,6 +21,8 @@ import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { type AgentConfig, type RegisteredPersonaDir, discoverAgents, loadInternalPersonaDir } from "./agents.ts";
 import { setCurrentPi } from "./current-pi.ts";
+import { claimPendingChildLineage, setHostLineage } from "./lineage.ts";
+import { createIdleTracker } from "./idle-tracker.ts";
 import { logger } from "./logger.ts";
 import { resolveAgentToolPatterns, resolveToolPatterns } from "./resolve-tool-patterns.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
@@ -47,12 +49,14 @@ import {
 	type SpawnRawInput,
 	type SpawnResult,
 	type SubagentExposedAPI,
+	type SubagentLineage,
 	type SubagentState,
 	type UnregisterPersonaDirPayload,
 	DEFAULT_ARTIFACT_CONFIG,
 	SLASH_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_EXPOSE_API_EVENT,
+	SUBAGENT_LINEAGE_EVENT,
 	SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT,
 	SUBAGENT_REGISTER_PERSONA_DIR_EVENT,
 	SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT,
@@ -262,21 +266,66 @@ class SubagentControlNoticeComponent implements Component {
 	}
 }
 
+/**
+ * Publish a session-scoped SubagentExposedAPI on the child's pi.events with
+ * the child's lineage. Other extensions loaded inside this child session
+ * (e.g. pi-charter) can listen on SUBAGENT_EXPOSE_API_EVENT and call
+ * api.lineage() to learn who they are.
+ *
+ * Children deliberately get a STUB spawnRaw/list: spawning nested subagents
+ * from inside a child session is not supported on the in-process executor.
+ */
+function registerChildSessionApi(pi: ExtensionAPI): void {
+	let lineage: SubagentLineage | null = null;
+	const publish = () => {
+		const api: SubagentExposedAPI = {
+			spawnRaw: async () => ({
+				content: [{ type: "text", text: "spawnRaw is not available inside a child session" }],
+				details: { type: "error", message: "spawnRaw unsupported in child" } as unknown as Details,
+				isError: true,
+			}),
+			list: () => [],
+			lineage: () => lineage,
+		};
+		pi.events.emit(SUBAGENT_EXPOSE_API_EVENT, api);
+		pi.events.emit(SUBAGENT_LINEAGE_EVENT, lineage);
+	};
+	// Publish immediately with a null lineage so eager listeners see something;
+	// re-publish once session_start gives us the session id and lets us claim
+	// the lineage that the in-process executor pushed onto the pending queue.
+	publish();
+	pi.on("session_start", (_event, ctx) => {
+		const sid = ctx.sessionManager?.getSessionId?.();
+		if (typeof sid !== "string" || sid.length === 0) return;
+		// Fallback: claim from the pending queue if the in-process executor's
+		// pre-registered-by-sid lineage didn't land for this session. Normally
+		// lineage is already in the store keyed by sid before activate runs.
+		lineage = claimPendingChildLineage(sid, { runId: null, agentName: null });
+		publish();
+	});
+}
+
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// In-process subagents call createAgentSession() which spins up a fresh
-	// ExtensionRunner that loads every discovered extension - including this
-	// one - with the child's pi. Activating in the child clobbers the host's
-	// pi.events listeners, currentPi pin, widget state, etc., and the
-	// captured child pi is disposed seconds later.
+	// ExtensionRunner that loads every discovered extension (including this
+	// one) with the child's pi. Each child must get its own complete subagent
+	// runtime: own subagent tool, own executor + state, own async-job-tracker,
+	// own notify, own slash registrations. That way nested sync delegation
+	// works AND a child can dispatch its own async subagents tracked
+	// independently of the host.
 	//
-	// Detect via a globalThis flag the in-process executor sets while
-	// constructing the child session (in-process-executor.ts:CHILD_SESSION_FLAG_KEY).
-	// On a child activate we register one no-op listener so the child can run
-	// to completion, but skip all host wiring.
+	// The ONLY things the child must NOT do are process-global side effects
+	// that would clobber the host: the currentPi pin (host owns it for SDK
+	// action calls across activate boundaries) and the singleton runtime
+	// cleanup hook. Per-session globalStore keys are scoped by piId so the
+	// child's listeners don't tear down the host's.
 	const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-	if ((globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true) {
-		logger.info("activate: child session detected - skipping host wiring");
-		return;
+	const isChildSession = (globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true;
+	if (isChildSession) {
+		logger.info("activate: child session - registering scoped subagent runtime");
+		registerChildSessionApi(pi);
+	} else {
+		logger.info("activate: host session - registering subagent runtime");
 	}
 
 	// Each activate hands a fresh `pi` with a fresh session-scoped EventBus.
@@ -298,18 +347,21 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// If we pinned the child pi we'd clobber the host pi and every later
 	// sendMessage would throw "ctx is stale after session replacement".
 	//
-	// We are guaranteed (by the early-return above) to be inside the host
-	// activate here, so pin the current pi unconditionally.
-	setCurrentPi(pi);
+	// Host-only: pin the live pi for handlers that must call SDK action methods
+	// (sendMessage, etc.) across an activate boundary. Children must NOT pin
+	// because their pi disposes after their session ends.
+	if (!isChildSession) setCurrentPi(pi);
 
 	const globalStore = globalThis as Record<string, unknown>;
 	const runtimeCleanupStoreKey = "__piSubagentRuntimeCleanup";
-	const previousRuntimeCleanup = globalStore[runtimeCleanupStoreKey];
-	if (typeof previousRuntimeCleanup === "function") {
-		try {
-			previousRuntimeCleanup();
-		} catch {
-			// Best effort cleanup for stale timers from an older reload.
+	if (!isChildSession) {
+		const previousRuntimeCleanup = globalStore[runtimeCleanupStoreKey];
+		if (typeof previousRuntimeCleanup === "function") {
+			try {
+				previousRuntimeCleanup();
+			} catch {
+				// Best effort cleanup for stale timers from an older reload.
+			}
 		}
 	}
 
@@ -345,9 +397,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
 	};
-	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
+	// Host-only: install the runtime cleanup hook. Children don't outlive
+	// their session and their state goes with them.
+	if (!isChildSession) globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
-	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state);
+	const idleTracker = createIdleTracker(pi);
+	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state, { idleTracker });
 	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
@@ -421,6 +476,18 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		undefined,
 		buildSpawnRawContext(),
 	) as unknown as SpawnResult;
+	// Host lineage is recorded on session_start once we know the host session
+	// id. Until then, lineage() returns a best-effort host shape with a null
+	// rootSessionId so callers never see undefined.
+	let hostLineage: SubagentLineage = {
+		role: "host",
+		currentAgent: "main",
+		parentAgent: null,
+		parentSessionId: null,
+		rootSessionId: null,
+		depth: 0,
+		runId: null,
+	};
 	const subagentApi: SubagentExposedAPI = {
 		spawnRaw,
 		list: (options) => discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", {
@@ -434,9 +501,25 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				source: agent.source,
 				surface: agent.surface,
 			})),
+		lineage: () => hostLineage,
 	};
-	const exposeSubagentApi = () => pi.events.emit(SUBAGENT_EXPOSE_API_EVENT, subagentApi);
+	const exposeSubagentApi = () => {
+		pi.events.emit(SUBAGENT_EXPOSE_API_EVENT, subagentApi);
+		pi.events.emit(SUBAGENT_LINEAGE_EVENT, hostLineage);
+	};
 	exposeSubagentApi();
+
+	// Refine host lineage once session_start fires with the host session id.
+	pi.on("session_start", (_event, ctx) => {
+		const sid = ctx.sessionManager?.getSessionId?.();
+		if (typeof sid === "string" && sid.length > 0) {
+			hostLineage = { ...hostLineage, rootSessionId: sid };
+			setHostLineage(sid);
+			// Re-emit so any listener that subscribed before session_start gets the
+			// updated rootSessionId.
+			exposeSubagentApi();
+		}
+	});
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
 		const details = resolveSlashMessageDetails(message.details);
@@ -843,24 +926,29 @@ Gotchas:
 		},
 	});
 
+	// Host-only cross-activate state. Children don't need to tear down a
+	// previous activate (they don't reload), and they must NEVER unhook the
+	// host's listeners.
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
 	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
-	const previousEventUnsubscribes = globalStore[eventUnsubscribeStoreKey];
-	if (Array.isArray(previousEventUnsubscribes)) {
-		for (const unsubscribe of previousEventUnsubscribes) {
-			if (typeof unsubscribe !== "function") continue;
-			try {
-				unsubscribe();
-			} catch {
-				// Best effort cleanup for stale handlers from an older reload.
+	if (!isChildSession) {
+		const previousEventUnsubscribes = globalStore[eventUnsubscribeStoreKey];
+		if (Array.isArray(previousEventUnsubscribes)) {
+			for (const unsubscribe of previousEventUnsubscribes) {
+				if (typeof unsubscribe !== "function") continue;
+				try {
+					unsubscribe();
+				} catch {
+					// Best effort cleanup for stale handlers from an older reload.
+				}
 			}
 		}
 	}
 	registerSubagentNotify(pi);
 
-	const existingVisibleControlNotices = globalStore[controlNoticeSeenStoreKey];
+	const existingVisibleControlNotices = isChildSession ? undefined : globalStore[controlNoticeSeenStoreKey];
 	const visibleControlNotices = existingVisibleControlNotices instanceof Set ? existingVisibleControlNotices as Set<string> : new Set<string>();
-	globalStore[controlNoticeSeenStoreKey] = visibleControlNotices;
+	if (!isChildSession) globalStore[controlNoticeSeenStoreKey] = visibleControlNotices;
 	const controlEventHandler = (payload: unknown) => {
 		const details = payload as SubagentControlMessageDetails;
 		if (!details?.event) return;
@@ -921,7 +1009,7 @@ Gotchas:
 		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleRegisterPersonaDir(payload as RegisterPersonaDirPayload)),
 		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleUnregisterPersonaDir(payload as UnregisterPersonaDirPayload)),
 	];
-	globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
+	if (!isChildSession) globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
 
 	pi.on("tool_result", (event, ctx) => {
 		if (event.toolName !== "subagent") return;

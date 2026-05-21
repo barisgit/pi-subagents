@@ -145,9 +145,35 @@ export interface PersonaInfo {
 	surface?: AgentSurface;
 }
 
+/**
+ * Identity + ancestry of the AgentSession this API publication belongs to.
+ *
+ * Published per-session: the host session sees `{ role: "host", currentAgent:
+ * "main", ... }` and each in-process child session sees its own child shape.
+ * Other extensions loaded inside a child session (e.g. pi-charter) read this
+ * to attribute work to the correct agent/run without polling env vars.
+ */
+export interface SubagentLineage {
+	role: "host" | "child";
+	currentAgent: string;
+	parentAgent: string | null;
+	parentSessionId: string | null;
+	rootSessionId: string | null;
+	depth: number;
+	runId: string | null;
+}
+
 export interface SubagentExposedAPI {
 	spawnRaw(input: SpawnRawInput): Promise<SpawnResult>;
 	list(options?: { includeInternal?: boolean }): PersonaInfo[];
+	/**
+	 * Identity + lineage for the session this API publication belongs to.
+	 * - Host session: `{ role: "host", currentAgent: "main", depth: 0, ... }`.
+	 * - Child session: lineage carried from the dispatch (parent agent/session,
+	 *   root session, depth, runId).
+	 * Returns `null` only if the publication races ahead of session_start.
+	 */
+	lineage(): SubagentLineage | null;
 }
 
 export interface RegisterPersonaDirPayload {
@@ -442,6 +468,25 @@ export interface IntercomEventBus {
 export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
 export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
 export const SUBAGENT_EXPOSE_API_EVENT = "subagent:expose-api";
+/**
+ * Push-style lineage notification carrying a `SubagentLineage` payload.
+ *
+ * Fires when the host or child session resolves its identity on
+ * `session_start`. Consumers that only need lineage (and not the spawnRaw
+ * surface) can subscribe to this channel and skip the full expose-api event.
+ */
+export const SUBAGENT_LINEAGE_EVENT = "subagent:lineage";
+/**
+ * Fires when THIS session goes fully idle: the main agent is not mid-turn
+ * AND no async subagents are in flight. Sync subagent calls are subsumed
+ * by the turn cycle (they run between turn_start and turn_end). Emits on
+ * the busy → idle transition only after at least one busy period since
+ * the last idle. Payload: `{ ts: number }`.
+ *
+ * Each session (host + each child) tracks idleness independently. Use this
+ * to know "this agent + all its background subagents are done".
+ */
+export const SUBAGENT_ALL_IDLE_EVENT = "subagent:all-idle";
 export const SUBAGENT_REGISTER_PERSONA_DIR_EVENT = "subagent:register-persona-dir";
 export const SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT = "subagent:unregister-persona-dir";
 export const SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT = "subagent:register-persona-dir-error";
@@ -694,6 +739,18 @@ export function checkSubagentDepth(configMaxDepth?: number): { blocked: boolean;
 	const maxDepth = resolveCurrentMaxSubagentDepth(configMaxDepth);
 	const blocked = Number.isFinite(depth) && depth >= maxDepth;
 	return { blocked, depth, maxDepth };
+}
+
+/**
+ * Async dispatch is only allowed from the host session. Child (in-process) sessions
+ * have no UI to surface async runs, no notify wake target separate from the host, and
+ * no lifecycle owner to await descendants. The guard returns true when the current
+ * activate-time globalThis flag indicates we are inside a child session.
+ */
+export const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
+
+export function isInsideChildSession(): boolean {
+	return (globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true;
 }
 
 export function getSubagentDepthEnv(maxDepth?: number): Record<string, string> {

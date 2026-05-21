@@ -5,6 +5,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./completion-dedupe.ts";
 import { getCurrentPi } from "./current-pi.ts";
+import { logger } from "./logger.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "./types.ts";
 
 interface ChainStepResult {
@@ -43,13 +44,24 @@ interface SubagentResult {
 
 export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	const unsubscribeStoreKey = "__pi_subagents_notify_unsubscribe__";
+	const childSessionFlagKey = "__piSubagentInsideChildSession";
 	const globalStore = globalThis as Record<string, unknown>;
-	const previousUnsubscribe = globalStore[unsubscribeStoreKey];
-	if (typeof previousUnsubscribe === "function") {
-		try {
-			previousUnsubscribe();
-		} catch {
-			// Best effort cleanup for stale handlers from an older reload.
+	const isChildSession = globalStore[childSessionFlagKey] === true;
+
+	// CHILD sessions must NEVER touch the host's notify slot. The host owns the
+	// reload-resilient subscription on the user's pi.events bus; a child's
+	// pi.events is a different (ephemeral) bus and its subscription dies with
+	// its own ExtensionRunner. Calling the host's previousUnsubscribe from a
+	// child would remove the host's notify handler and the user never gets the
+	// completion message.
+	if (!isChildSession) {
+		const previousUnsubscribe = globalStore[unsubscribeStoreKey];
+		if (typeof previousUnsubscribe === "function") {
+			try {
+				previousUnsubscribe();
+			} catch {
+				// Best effort cleanup for stale handlers from an older reload.
+			}
 		}
 	}
 
@@ -58,9 +70,14 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 
 	const handleComplete = (data: unknown) => {
 		const result = data as SubagentResult;
+		const idLabel = result.id ?? "<null>";
+		logger.info("notify.handleComplete: FIRED", { id: idLabel, agent: result.agent ?? undefined, success: result.success });
 		const now = Date.now();
 		const key = buildCompletionKey(result, "notify");
-		if (markSeenWithTtl(seen, key, now, ttlMs)) return;
+		if (markSeenWithTtl(seen, key, now, ttlMs)) {
+			logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
+			return;
+		}
 
 		const agent = result.agent ?? "unknown";
 		const summary = typeof result.summary === "string" ? result.summary : "";
@@ -99,19 +116,31 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		// registered this handler may have been replaced by ctx.reload()/fork()/
 		// newSession()/switchSession(), invalidating that pi. We must resolve the
 		// CURRENT pi at call time.
-		getCurrentPi().sendMessage(
-			{
-				customType: "subagent-notify",
-				content,
-				display: true,
-			},
-			{ triggerTurn: true },
-		);
+		try {
+			const currentPi = getCurrentPi();
+			logger.info("notify.handleComplete: calling sendMessage", { id: idLabel, hasPi: !!currentPi });
+			currentPi.sendMessage(
+				{
+					customType: "subagent-notify",
+					content,
+					display: true,
+				},
+				{ triggerTurn: true },
+			);
+			logger.info("notify.handleComplete: sendMessage returned", { id: idLabel });
+		} catch (err) {
+			logger.error("notify.handleComplete: sendMessage threw", err instanceof Error ? err : new Error(String(err)), { id: idLabel });
+		}
 	};
 
-	// Subscribe on the host pi.events bus. The subscription is re-attached on
-	// every host activate (the eventUnsubscribeStoreKey block tears down the
-	// previous one above), so listeners stay bound to the latest live bus.
+	// Subscribe on this session's pi.events bus. The subscription is re-attached
+	// on every host activate (the unsubscribeStoreKey block tears down the
+	// previous one above), so host listeners stay bound to the latest live bus.
+	// Child sessions subscribe on their own ephemeral bus and let their bus
+	// disposal clean up the listener; they must not write the host's slot.
+	logger.info("registerSubagentNotify: subscribing to async-complete", { isChildSession });
 	const unsubscribe = pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete);
-	globalStore[unsubscribeStoreKey] = unsubscribe;
+	if (!isChildSession) {
+		globalStore[unsubscribeStoreKey] = unsubscribe;
+	}
 }

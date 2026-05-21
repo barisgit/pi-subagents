@@ -21,7 +21,8 @@ import {
 // list unfiltered; extension tools like ast_grep/fetch/mcp/scan_files register during
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "./logger.ts";
-import type { ControlConfig } from "./types.ts";
+import { pushPendingChildLineage, setChildLineage } from "./lineage.ts";
+import type { ControlConfig, SubagentLineage } from "./types.ts";
 
 export interface ResolvedAgentConfig {
 	name: string;
@@ -427,6 +428,21 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 	// extension factory (including this package's), and the factory must see
 	// the flag synchronously to skip host wiring.
 	setChildSessionFlag(true);
+
+	// Queue this child's lineage so its activate can claim it once it knows its
+	// own session id. Depth = parent's depth + 1; we don't have the parent's
+	// depth here, but rootSessionId tells charters/consumers how to reconstruct
+	// the tree if needed. depth 0 = host, 1 = first-level child, etc.
+	const lineage: SubagentLineage = {
+		role: "child",
+		currentAgent: step.agentName,
+		parentAgent: step.parentAgentName ?? null,
+		parentSessionId: step.parentSessionId ?? null,
+		rootSessionId: step.rootSessionId ?? step.parentSessionId ?? null,
+		depth: 1, // minimum; refined by child activate using rootSessionId vs parentSessionId
+		runId: step.runId,
+	};
+	pushPendingChildLineage(lineage);
 	try {
 		const loader = new runtimeDeps.DefaultResourceLoader({
 			cwd: step.cwd,
@@ -442,6 +458,21 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 		for (let index = 0; index < models.length; index++) {
 			const model = models[index]!;
 			try {
+				// Open the session manager up front so we can resolve the child's
+				// session id and register lineage by sid synchronously, before any
+				// activate inside the child can run. This bypasses the activate-time
+				// race where the SDK's session_start may already have fired by the
+				// time the extension attaches its listener.
+				const sessionManager = runtimeDeps.SessionManager.open(step.sessionFile);
+				try {
+					const childSid = sessionManager.getSessionId();
+					if (typeof childSid === "string" && childSid.length > 0) {
+						setChildLineage(childSid, lineage);
+					}
+				} catch {
+					// fall back to the pending-queue + activate-claim path
+				}
+
 				const created = await runtimeDeps.createAgentSession({
 					cwd: step.cwd,
 					agentDir: runtimeDeps.getAgentDir(),
@@ -454,7 +485,7 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 					tools: step.activeToolNames,
 					customTools: step.customTools,
 					resourceLoader: loader,
-					sessionManager: runtimeDeps.SessionManager.open(step.sessionFile),
+					sessionManager,
 				});
 				return created.session;
 			} catch (error) {

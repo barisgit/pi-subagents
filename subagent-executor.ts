@@ -42,6 +42,7 @@ import {
 import { appendRunEntry } from "./runs-registry.ts";
 import { logger } from "./logger.ts";
 import { getCurrentPi } from "./current-pi.ts";
+import { getLineageForSession } from "./lineage.ts";
 
 /**
  * Emit a subagent lifecycle event on the host pi.events bus, resolving the
@@ -54,8 +55,10 @@ import { getCurrentPi } from "./current-pi.ts";
 function safeEmit(channel: string, data: unknown): void {
 	try {
 		const pi = getCurrentPi();
+		logger.info("safeEmit", { channel, hasPi: !!pi });
 		pi?.events.emit(channel, data);
-	} catch {
+	} catch (err) {
+		logger.warn("safeEmit: threw", { channel, err: err instanceof Error ? err.message : String(err) });
 		// Ignore: stale pi during reload window. Listeners on the next activate
 		// will be re-attached and pick up future events.
 	}
@@ -95,6 +98,7 @@ import {
 	SUBAGENT_SPAWN_STARTED_EVENT,
 	checkNestedDelegationGuard,
 	checkSubagentDepth,
+	isInsideChildSession,
 	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
@@ -936,10 +940,13 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		pi: deps.pi,
 	};
 	const finalizeAsync = async (handlesPromise: Promise<ChildAgentHandle[]>) => {
+		logger.info("finalizeAsync: awaiting handles", { runId });
 		let finalResult: ChildAgentResult | undefined;
 		try {
 			const handles = await handlesPromise;
+			logger.info("finalizeAsync: handles resolved", { runId, count: handles.length });
 			const settled = await Promise.allSettled(handles.map((handle) => handle.completed));
+			logger.info("finalizeAsync: settled", { runId, states: settled.map((s) => s.status) });
 			const results = settled.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : []);
 			finalResult = results.find((result) => result.state !== "complete") ?? results.at(-1);
 			if (!finalResult && settled[0]?.status === "rejected") {
@@ -947,6 +954,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				finalResult = { runId, stepIndex: 0, state: "failed", exitCode: 1, outputText: "", toolCallCount: 0, toolResultCount: 0, toolErrorCount: 0, durationMs: now - startedAt, startedAt, endedAt: now, sessionFile: first.step.sessionFile, error: { message: String(settled[0].reason) } };
 			}
 			if (finalResult) await statusWriter.finalize(finalResult);
+			logger.info("finalizeAsync: emitting COMPLETE", { runId, success: finalResult?.state === "complete", state: finalResult?.state });
 			const completeAgent = mode === "chain" || mode === "parallel"
 				? steps.map(({ step }) => step.agentName).join(",")
 				: first.step.agentName;
@@ -2369,6 +2377,29 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return toExecutionErrorResult(effectiveParams, error);
 		}
 		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
+		// Async dispatch is only allowed from the host session. A child session (in-process
+		// subagent) has no UI to surface its async runs, no notify wake target separate
+		// from the host, and no lifecycle owner to await descendants. Reject early.
+		//
+		// Detection: `isInsideChildSession()` catches the brief activate-construction
+		// window (when the executor is created before the prompt loop runs). For the
+		// normal case — child's prompt loop calling the subagent tool — we look up
+		// lineage by the current session id. Children have role==='child'; the host
+		// has role==='host'; an unknown session falls through as 'not a child'.
+		const currentSid = ctx.sessionManager.getSessionId();
+		const currentLineage = currentSid ? getLineageForSession(currentSid) : null;
+		const dispatchedFromChild = isInsideChildSession() || currentLineage?.role === "child";
+		if (requestedAsync && dispatchedFromChild) {
+			const mode: "single" | "parallel" | "chain" = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			return {
+				content: [{
+					type: "text",
+					text: "Async dispatch is only allowed from the host session. Sub-subagents must be synchronous; retry without async:true.",
+				}],
+				isError: true,
+				details: { mode, results: [] },
+			};
+		}
 		const backgroundRequestedWhileClarifying = hasTasks && requestedAsync && effectiveParams.clarify === true;
 		// async:true only downgrades to sync when clarify is explicitly true (interactive
 		// preview gates the run). Undefined clarify means "no clarify", so it must not

@@ -2,21 +2,67 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify from "../../notify.ts";
+import { setCurrentPi } from "../../current-pi.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../types.ts";
 
+/**
+ * Build a pi.events stand-in whose `on()` returns an unsubscribe function
+ * (matching @earendil-works/pi-coding-agent's EventBus contract). Plain
+ * node:events EventEmitter.on() returns the emitter itself, which masks the
+ * exact bug that previously tore down the host's notify listener when a
+ * child session activated. Tests MUST use this shim to catch that class of
+ * regression.
+ */
+function createBus() {
+	const inner = new EventEmitter();
+	return {
+		inner,
+		bus: {
+			on(channel: string, handler: (data: unknown) => void): () => void {
+				inner.on(channel, handler);
+				return () => inner.off(channel, handler);
+			},
+			emit(channel: string, data: unknown) {
+				inner.emit(channel, data);
+			},
+			listenerCount(channel: string): number {
+				return inner.listenerCount(channel);
+			},
+		},
+	};
+}
+
 function createPi() {
-	const events = new EventEmitter();
+	const { bus, inner } = createBus();
 	const sent: Array<{ message: unknown; options: unknown }> = [];
 	const pi = {
-		events,
+		events: bus,
 		sendMessage(message: unknown, options: unknown) {
 			sent.push({ message, options });
 		},
 	};
 
+	// notify.ts resolves the active pi via getCurrentPi() at emit time (so a
+	// reload-invalidated capture cannot reach a dead session). Pin the mock as
+	// the current pi for each test.
+	setCurrentPi(pi as never);
 	registerSubagentNotify(pi as never);
 
-	return { events, sent };
+	return { events: inner, bus, sent };
+}
+
+const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
+
+function asChildSession<T>(fn: () => T): T {
+	const g = globalThis as Record<string, unknown>;
+	const prev = g[CHILD_SESSION_FLAG_KEY];
+	g[CHILD_SESSION_FLAG_KEY] = true;
+	try {
+		return fn();
+	} finally {
+		if (prev === undefined) delete g[CHILD_SESSION_FLAG_KEY];
+		else g[CHILD_SESSION_FLAG_KEY] = prev;
+	}
 }
 
 describe("registerSubagentNotify", () => {
@@ -90,6 +136,87 @@ describe("registerSubagentNotify", () => {
 			},
 			options: { triggerTurn: true },
 		}]);
+	});
+
+	it("keeps the host notify subscription alive when a child session activates", () => {
+		// Regression: previously the child's registerSubagentNotify() called
+		// the host's previousUnsubscribe() via an unscoped globalThis slot,
+		// silently tearing down the host's notify listener. The user then never
+		// got a wake-up message after an async subagent finished.
+		const host = createPi();
+		assert.equal(host.events.listenerCount(SUBAGENT_ASYNC_COMPLETE_EVENT), 1);
+
+		// Simulate the in-process executor activating this extension again for
+		// the child session (createAgentSession→activate(childPi)).
+		const { bus: childBus } = createBus();
+		const childPi = {
+			events: childBus,
+			sendMessage() {
+				// Child pi: must NEVER be called for host-bus events.
+				throw new Error("child pi.sendMessage must not be invoked for host events");
+			},
+		};
+		asChildSession(() => {
+			registerSubagentNotify(childPi as never);
+		});
+
+		// Host bus must still have its notify listener attached.
+		assert.equal(
+			host.events.listenerCount(SUBAGENT_ASYNC_COMPLETE_EVENT),
+			1,
+			"child activate must NOT remove the host's notify listener",
+		);
+
+		// And the host must still receive notifications.
+		host.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "host-survives-child-1",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 1000,
+		});
+		assert.equal(host.sent.length, 1);
+		assert.equal(
+			(host.sent[0]?.message as { content?: string })?.content,
+			"Background task completed: **worker**\n\nDone",
+		);
+	});
+
+	it("child-session subscriptions are scoped to their own bus, not the host's", () => {
+		// A child session subscribing to async-complete on its own ephemeral bus
+		// must NOT also pick up host-bus events. Otherwise every async would be
+		// notified twice (once by host pi, once by every alive child pi).
+		const host = createPi();
+
+		const { inner: childInner, bus: childBus } = createBus();
+		const childSent: Array<{ message: unknown; options: unknown }> = [];
+		const childPi = {
+			events: childBus,
+			sendMessage(message: unknown, options: unknown) {
+				childSent.push({ message, options });
+			},
+		};
+		asChildSession(() => {
+			registerSubagentNotify(childPi as never);
+		});
+
+		host.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "child-scope-1",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 2000,
+		});
+
+		assert.equal(host.sent.length, 1);
+		assert.equal(childSent.length, 0, "child bus must not receive host events");
+
+		// Child bus emits route to its own listener (which sends via the pinned
+		// host pi by design — child does not pin its pi as current). What matters
+		// for regression: the child listener exists on the child bus only.
+		void childInner;
 	});
 
 	it("labels paused completions as paused even without an exit code", () => {
