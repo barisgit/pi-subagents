@@ -139,7 +139,7 @@ export const SubagentParams = Type.Object({
 		description: "Run id/prefix for status or interrupt."
 	})),
 	runId: Type.Optional(Type.String({
-		description: "Interrupt target run ID; prefer id."
+		description: "Interrupt target run ID; prefer id. Use 'all' to interrupt every async child in this session."
 	})),
 	dir: Type.Optional(Type.String({
 		description: "Async run directory for status."

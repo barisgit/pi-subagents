@@ -464,6 +464,8 @@ When `intercomBridge` is enabled (default: `always`) and `pi-intercom` is instal
 
 All modes support foreground and background execution. Foreground is the default (the call waits and streams progress). For programmatic background launch, use `async: true` and leave `clarify` unset or set `clarify: false`. For interactive background launch, use `clarify: true` and press `b` in the TUI before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
 
+> **Async cancellation:** Cancelling the parent turn (e.g. ESC during a Pi turn) does NOT cancel in-flight async children. To stop a specific async run use `subagent({ action: "interrupt", runId })`; to stop every async child in the current session at once use `subagent({ action: "interrupt", runId: "all" })`. Foreground/sync runs still cancel with the parent turn.
+
 **Clarify TUI:**
 
 Single, parallel, and chain modes support the clarify TUI for previewing/editing parameters before execution. It is opt-in for all modes; use `clarify: true` to enable:

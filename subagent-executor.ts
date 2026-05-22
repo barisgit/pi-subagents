@@ -292,6 +292,38 @@ function emitControlNotification(input: {
 	}
 }
 
+function interruptAllAsyncRuns(state: SubagentState, childRegistry: ChildAgentRegistry): AgentToolResult<Details> {
+	const handles = childRegistry.list();
+	const asyncHandles = handles.filter((handle) => state.asyncJobs.has(handle.runId));
+	if (asyncHandles.length === 0) {
+		return {
+			content: [{ type: "text", text: "No running async runs to interrupt." }],
+			details: { mode: "management", results: [] },
+		};
+	}
+	const seen = new Set<string>();
+	const ids: string[] = [];
+	for (const handle of asyncHandles) {
+		if (seen.has(handle.runId)) continue;
+		seen.add(handle.runId);
+		ids.push(handle.runId);
+		try {
+			void childRegistry.abortRun(handle.runId, "interrupt-all requested");
+			const tracked = state.asyncJobs.get(handle.runId);
+			if (tracked) {
+				tracked.activityState = undefined;
+				tracked.updatedAt = Date.now();
+			}
+		} catch {
+			// best-effort: continue aborting remaining runs
+		}
+	}
+	return {
+		content: [{ type: "text", text: `Interrupt requested for ${ids.length} async run(s): ${ids.join(", ")}.` }],
+		details: { mode: "management", results: [] },
+	};
+}
+
 function interruptAsyncRun(state: SubagentState, childRegistry: ChildAgentRegistry, runId: string | undefined): AgentToolResult<Details> | null {
 	const target = getAsyncInterruptTarget(state, runId);
 	if (!target) return null;
@@ -948,9 +980,15 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		})),
 	});
 
+	// Async children deliberately do NOT receive the parent turn's AbortSignal.
+	// They survive ESC/cancel of the parent turn (matching the stated semantics:
+	// "spawn async and hand control back; Pi wakes the parent when children finish").
+	// Cancellation is still possible via childRegistry per-run controllers, exposed
+	// through subagent({ action: "interrupt", runId }) and { runId: "all" }.
+	const asyncDetachedAbort = new AbortController();
 	const asyncCtx = {
 		extensionCtx: ctx,
-		abortSignal: data.signal,
+		abortSignal: asyncDetachedAbort.signal,
 		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => statusWriter.enqueue(patch),
 		registry: deps.childRegistry,
 		pi: deps.pi,
@@ -2310,6 +2348,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 			if (params.action === "interrupt") {
 				const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id;
+				// Explicit fan-out: runId="all" interrupts every running async child in this
+				// session (foreground runs are not affected). Used as a discoverable kill
+				// switch now that ESC of the parent turn no longer cascades into async work.
+				if (targetRunId === "all") {
+					return interruptAllAsyncRuns(deps.state, deps.childRegistry);
+				}
 				const foreground = getForegroundControl(deps.state, targetRunId);
 				if (foreground?.interrupt) {
 					const interrupted = foreground.interrupt();

@@ -214,6 +214,44 @@ describe("runChildAgent", () => {
 });
 
 describe("dispatchAsyncChild", () => {
+	it("survives an unrelated parent-turn abort when only the registry/local signals can cancel it", async () => {
+		// Models the runAsyncPath wiring after decoupling: asyncCtx.abortSignal is a
+		// detached controller never tied to the parent turn's signal. The parent turn
+		// can ESC freely; the async child keeps running until the registry per-run
+		// controller (or its local controller) fires.
+		let release!: () => void;
+		const promptReleased = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const session = new FakeAgentSession(async (self) => {
+			await promptReleased;
+			self.emit({ type: "text_delta", delta: "ok" });
+		});
+		installFakeRuntime([session]);
+
+		const parentTurnAbort = new AbortController();
+		const asyncDetachedAbort = new AbortController();
+		const registry = new ChildAgentRegistry();
+
+		const handle = dispatchAsyncChild(
+			makeStep({ runId: "async-survives-esc" }),
+			makeContext({ abortSignal: asyncDetachedAbort.signal, registry }),
+		);
+
+		await new Promise((resolve) => setImmediate(resolve));
+		// Simulate parent turn ESC: aborting an UNRELATED controller must not reach the child.
+		parentTurnAbort.abort("parent ESC");
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(session.abortCalls, 0, "unrelated parent-turn abort must not reach async child");
+
+		// Per-run registry controller is the supported kill switch via action:"interrupt".
+		await registry.abortRun("async-survives-esc", "interrupt requested");
+		release();
+		const result = await handle.completed;
+		assert.ok(session.abortCalls >= 1, "registry abort must reach the child session");
+		assert.equal(result.state, "interrupted");
+	});
+
 	it("returns a handle without awaiting and fires onCompleted", async () => {
 		let release!: () => void;
 		const promptReleased = new Promise<void>((resolve) => {

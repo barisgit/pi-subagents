@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+- Async/background subagent runs now survive cancellation of the parent turn. The parent's `AbortSignal` (e.g. ESC during a Pi turn) is no longer forwarded into dispatched async children; only the per-run controller used by `subagent({ action: "interrupt", runId })` and the new `runId: "all"` fan-out can cancel them. Foreground/sync runs are unchanged and still cancel with the parent turn.
+
+### Added
+- `subagent({ action: "interrupt", runId: "all" })` interrupts every running async child in the current session in one call. Foreground runs are not affected; use the existing per-run interrupt with `runId`/`id` instead.
+
 ## [0.18.1] - 2026-04-25
 
 ### Changed
