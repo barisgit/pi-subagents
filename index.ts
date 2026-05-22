@@ -757,9 +757,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	}
 
 	async function activateRootRole(ctx: ExtensionContext, role: AgentConfig, workflowName: string | undefined): Promise<void> {
+		const previousWorkflowName = activeWorkflowName;
+		const previousRootRoleName = activeRootRoleName;
 		activeWorkflowName = workflowName;
 		activeRootRoleName = role.name;
 		activeRootRole = role;
+		if (previousRootRoleName !== role.name || previousWorkflowName !== workflowName) {
+			pi.appendEntry("role-state", { name: role.name, workflow: workflowName });
+		}
 		await applyRootModel(ctx, role.model);
 		applyRootThinking(role);
 		applyRootTools(ctx, role);
@@ -1056,17 +1061,6 @@ Gotchas:
 		if (isDelegatedSubagentSession()) return;
 		await initializeRootRole(ctx);
 	});
-	pi.on("turn_start", () => {
-		if (isDelegatedSubagentSession()) return;
-		if (activeWorkflowName) {
-			pi.appendEntry("workflow-state", { name: activeWorkflowName });
-			pi.appendEntry("preset-state", { name: activeWorkflowName });
-		}
-		if (activeRootRoleName) {
-			pi.appendEntry("role-state", { name: activeRootRoleName, workflow: activeWorkflowName });
-		}
-	});
-
 	pi.on("session_shutdown", () => {
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
