@@ -247,6 +247,7 @@ function formatForegroundActivity(control: SubagentState["foregroundControls"] e
 
 const SLIM_TOP_LEVEL_KEYS = new Set(["run", "chain", "async", "batch", "concurrency", "worktree", "message", "action", "id"]);
 const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "worktree", "output"]);
+const ALLOWED_CONTROL_ACTIONS = ["list", "status", "interrupt", "resume"] as const;
 const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);
 
 function validationError(message: string): AgentToolResult<Details> {
@@ -364,16 +365,21 @@ export function validateSubagentToolInput(input: unknown): AgentToolResult<Detai
 	if (!isRecord(input)) return null;
 	const action = typeof input.action === "string" ? input.action : undefined;
 	if (action && REMOVED_CRUD_ACTIONS.has(action)) {
-		return validationError(`Agent CRUD removed; write a file under agents/<name>.md instead of action:\"${action}\".`);
+		return validationError(`Agent CRUD removed; write a file under agents/<name>.md instead of action:\"${action}\". Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
+	}
+	if (action && !(ALLOWED_CONTROL_ACTIONS as readonly string[]).includes(action)) {
+		return validationError(`Unknown action: ${action}. Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
+	}
+	if (action === "resume") {
+		if (Object.hasOwn(input, "run")) return validationError('resume is per-run; do not supply `run`');
+		if (Object.hasOwn(input, "agent")) return validationError('resume takes only `message`; do not supply `agent` or Task');
+		if (!Object.hasOwn(input, "id")) return validationError("resume requires `id` (runId)");
+		if (!Object.hasOwn(input, "message")) return validationError("resume requires `message` to send to the child");
 	}
 	const unknownKey = Object.keys(input).find((key) => !SLIM_TOP_LEVEL_KEYS.has(key));
 	if (unknownKey) {
 		if (unknownKey === "prompt") return validationError("Unknown top-level key 'prompt'; `prompt` renamed to `message`.");
 		return validationError(`Unknown top-level key '${unknownKey}'.`);
-	}
-	// f6 owns the message field shape; f7 owns full resume behavior.
-	if (action === "resume" && !Object.hasOwn(input, "message")) {
-		return validationError('action:"resume" requires `message`; `prompt` renamed to `message`.');
 	}
 	if (!Array.isArray(input.run)) return null;
 	if (input.run.length === 0) return validationError("`run` must contain at least one task");
@@ -517,6 +523,62 @@ function interruptAsyncRun(state: SubagentState, childRegistry: ChildAgentRegist
 			isError: true,
 			details: { mode: "management", results: [] },
 		};
+	}
+}
+
+function parseChildRunId(id: string): { dispatchRunId: string; stepIndex?: number } {
+	const match = id.match(/^(.*):(\d+)$/);
+	if (!match) return { dispatchRunId: id };
+	return { dispatchRunId: match[1]!, stepIndex: Number(match[2]) };
+}
+
+function isResumeTerminalStatus(status: unknown): boolean {
+	return status === "complete" || status === "failed" || status === "interrupted" || status === "paused" || status === "lost";
+}
+
+function resumeAsyncRun(state: SubagentState, childRegistry: ChildAgentRegistry, runId: string, message: string): AgentToolResult<Details> {
+	const parsed = parseChildRunId(runId);
+	const tracked = state.asyncJobs.get(parsed.dispatchRunId);
+	const handles = childRegistry.list().filter((handle) => handle.runId === parsed.dispatchRunId);
+
+	if (parsed.stepIndex === undefined) {
+		if ((tracked?.mode && tracked.mode !== "single") || handles.length > 1 || (handles.length === 1 && handles[0]!.stepIndex !== 0)) {
+			return validationError("`id` must be a runId, not batchId");
+		}
+	} else if ((tracked?.mode && tracked.mode === "single") || (handles.length === 1 && handles[0]!.stepIndex === 0 && handles[0]!.runId === parsed.dispatchRunId)) {
+		return validationError(`No resumable run found for '${runId}'.`);
+	}
+
+	if (isResumeTerminalStatus(tracked?.status)) return validationError("cannot resume terminated run");
+
+	const handle = parsed.stepIndex === undefined
+		? handles[0]
+		: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
+	if (!handle) return validationError(`No resumable run found for '${runId}'.`);
+
+	try {
+		const session = handle.session as unknown as {
+			postUserMessage?: (message: string, options?: unknown) => unknown;
+			enqueueTurn?: (message: string, options?: unknown) => unknown;
+			prompt?: (message: string, options?: unknown) => unknown;
+		};
+		const post = session.postUserMessage ?? session.enqueueTurn ?? session.prompt;
+		if (typeof post !== "function") return validationError(`Run ${runId} cannot accept resume messages.`);
+		void Promise.resolve(post.call(session, message, { expandPromptTemplates: false, source: "extension" })).catch((error) => {
+			logger.warn("resume action failed after dispatch", { runId, error: error instanceof Error ? error.message : String(error) });
+		});
+		if (tracked) {
+			tracked.status = "running";
+			tracked.activityState = undefined;
+			tracked.updatedAt = Date.now();
+		}
+		return {
+			content: [{ type: "text", text: `Resume message sent to run ${runId}.` }],
+			details: { mode: "management", results: [] },
+		};
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
 	}
 }
 
@@ -2650,13 +2712,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					details: { mode: "management", results: [] },
 				};
 			}
-			const validActions = ["list", "status", "interrupt", "resume"];
-			if (!validActions.includes(params.action)) {
-				return {
-					content: [{ type: "text", text: `Unknown action: ${params.action}. Valid: ${validActions.join(", ")}` }],
-					isError: true,
-					details: { mode: "management" as const, results: [] },
-				};
+			if (params.action === "resume") {
+				return resumeAsyncRun(deps.state, deps.childRegistry, paramsWithResolvedCwd.id!, paramsWithResolvedCwd.message!);
+			}
+			if (!(ALLOWED_CONTROL_ACTIONS as readonly string[]).includes(params.action)) {
+				return validationError(`Unknown action: ${params.action}. Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
 			}
 			return handleManagementAction(params.action, paramsWithResolvedCwd as { action?: string; agent?: string; chainName?: string; agentScope?: string; includeInternal?: boolean; config?: unknown; preset?: string }, { ...ctx, cwd: requestCwd });
 		}
@@ -2762,7 +2822,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			&& ctx.hasUI
 			&& !(effectiveParams.chain?.some(isParallelStep) ?? false);
 
-		const validationError = validateExecutionInput(
+		const executionValidationError = validateExecutionInput(
 			effectiveParams,
 			agents,
 			hasChain,
@@ -2770,7 +2830,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			hasSingle,
 			allowClarifyTaskPrompt,
 		);
-		if (validationError) return validationError;
+		if (executionValidationError) return executionValidationError;
 
 		let sessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
 		let forkReuse: ForkReuseConfig | undefined;
