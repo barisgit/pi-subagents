@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-23
+
+### Changed
+- `subagent-schema-slim` hard-cuts the model-facing subagent schema to the slim `run[]` dispatch shape for the charter `f5fec59c-e92e-4263-927c-17a1ec03c93a`.
+- Breaking change: legacy fields are dropped, `prompt` is renamed to `message`, model-facing CRUD verbs are removed, and there is no compatibility shim or gradual migration path.
+
 ### Changed
 - Async/background subagent runs now survive cancellation of the parent turn. The parent's `AbortSignal` (e.g. ESC during a Pi turn) is no longer forwarded into dispatched async children; only the per-run controller used by `subagent({ action: "interrupt", runId })` and the new `runId: "all"` fan-out can cancel them. Foreground/sync runs are unchanged and still cancel with the parent turn.
 
