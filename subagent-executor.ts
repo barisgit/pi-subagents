@@ -43,6 +43,7 @@ import { appendRunEntry } from "./runs-registry.ts";
 import { logger } from "./logger.ts";
 import { getCurrentPi } from "./current-pi.ts";
 import { getLineageForSession } from "./lineage.ts";
+import type { SubagentToolInput, Step, Task } from "./schemas.ts";
 
 /**
  * Resolve the parent runId for a dispatch happening NOW. The dispatching
@@ -145,12 +146,10 @@ interface TaskParam {
 	skill?: string | string[] | boolean;
 }
 
-type RawTaskParam = string | Partial<TaskParam>;
+export type { SubagentToolInput, Step, Task };
+export type { SubagentToolInput as SubagentParamsLike };
 
-export type { SubagentToolInput, Step, Task } from "./schemas.ts";
-export type { SubagentToolInput as SubagentParamsLike } from "./schemas.ts";
-
-export interface LegacySubagentParamsLike {
+interface InternalSubagentParams {
 	action?: string;
 	id?: string;
 	runId?: string;
@@ -160,7 +159,7 @@ export interface LegacySubagentParamsLike {
 	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
 	label?: string;
 	chain?: ChainStep[];
-	tasks?: RawTaskParam[];
+	tasks?: TaskParam[];
 	prompt?: string;
 	message?: string;
 	concurrency?: number;
@@ -199,7 +198,7 @@ interface ExecutorDeps {
 }
 
 interface ExecutionContextData {
-	params: LegacySubagentParamsLike;
+	params: InternalSubagentParams;
 	effectiveCwd: string;
 	ctx: ExtensionContext;
 	signal: AbortSignal;
@@ -289,11 +288,11 @@ function applySharedMessage(message: string, task: string): string {
 	return `${message}\n\n${task}`;
 }
 
-function normalizeRunDispatchParams(params: LegacySubagentParamsLike): { params?: LegacySubagentParamsLike; error?: AgentToolResult<Details> } {
+function normalizeRunDispatchParams(params: InternalSubagentParams): { params?: InternalSubagentParams; error?: AgentToolResult<Details> } {
 	const slimValidationError = validateSubagentToolInput(params);
 	if (slimValidationError) return { error: slimValidationError };
 
-	const input = params as LegacySubagentParamsLike & { run?: unknown[]; message?: string; chain?: boolean; concurrency?: number };
+	const input = params as InternalSubagentParams & { run?: unknown[]; message?: string; chain?: boolean; concurrency?: number };
 	if (!Array.isArray(input.run) || input.run.length === 0) {
 		return { error: validationError("`run` must contain at least one task") };
 	}
@@ -352,7 +351,7 @@ function normalizeRunDispatchParams(params: LegacySubagentParamsLike): { params?
 			...params,
 			agent: undefined,
 			task: undefined,
-			tasks: parallelTasks as RawTaskParam[],
+			tasks: parallelTasks,
 			chain: undefined,
 			message: undefined,
 			prompt: undefined,
@@ -592,7 +591,7 @@ function createForegroundControlNotifier(data: Pick<ExecutionContextData, "contr
 }
 
 function validateExecutionInput(
-	params: LegacySubagentParamsLike,
+	params: InternalSubagentParams,
 	agents: AgentConfig[],
 	hasChain: boolean,
 	hasTasks: boolean,
@@ -672,14 +671,14 @@ function validateExecutionInput(
 	return null;
 }
 
-function getRequestedModeLabel(params: LegacySubagentParamsLike): Details["mode"] {
+function getRequestedModeLabel(params: InternalSubagentParams): Details["mode"] {
 	if ((params.chain?.length ?? 0) > 0) return "chain";
 	if ((params.tasks?.length ?? 0) > 0) return "parallel";
 	if (params.agent) return "single";
 	return "single";
 }
 
-function buildRequestedModeError(params: LegacySubagentParamsLike, message: string): AgentToolResult<Details> {
+function buildRequestedModeError(params: InternalSubagentParams, message: string): AgentToolResult<Details> {
 	return withForkContext(
 		{
 			content: [{ type: "text", text: message }],
@@ -690,7 +689,7 @@ function buildRequestedModeError(params: LegacySubagentParamsLike, message: stri
 	);
 }
 
-function collectRequestedAgentNames(params: LegacySubagentParamsLike): string[] {
+function collectRequestedAgentNames(params: InternalSubagentParams): string[] {
 	if ((params.tasks?.length ?? 0) > 0) {
 		return params.tasks!
 			.map((task) => typeof task === "object" && task && !Array.isArray(task) ? normalizeName(task.agent) : undefined)
@@ -707,7 +706,7 @@ function normalizeName(value: unknown): string | undefined {
 	return trimmed || undefined;
 }
 
-function collectForkOverridePaths(params: LegacySubagentParamsLike): string[] {
+function collectForkOverridePaths(params: InternalSubagentParams): string[] {
 	const paths: string[] = [];
 	if (params.clarify === true) paths.push("clarify");
 	if (params.model !== undefined) paths.push("model");
@@ -736,7 +735,7 @@ function collectForkOverridePaths(params: LegacySubagentParamsLike): string[] {
 }
 
 function resolveForkReuse(
-	params: LegacySubagentParamsLike,
+	params: InternalSubagentParams,
 	ctx: ExtensionContext,
 	deps: ExecutorDeps,
 ): ForkReuseConfig | undefined {
@@ -781,33 +780,6 @@ function resolveForkReuse(
 	};
 }
 
-export function normalizeTopLevelTasks(params: LegacySubagentParamsLike): { tasks?: TaskParam[]; error?: string } {
-	const rawTasks = params.tasks;
-	if (!rawTasks) return { tasks: undefined };
-	const defaultAgent = normalizeName(params.agent);
-	const tasks: TaskParam[] = [];
-	for (let taskIndex = 0; taskIndex < rawTasks.length; taskIndex++) {
-		const rawTask = rawTasks[taskIndex];
-		if (typeof rawTask === "string") {
-			const task = rawTask.trim();
-			if (!defaultAgent) return { error: `tasks[${taskIndex}] string shorthand requires top-level agent` };
-			if (!task) return { error: `tasks[${taskIndex}] must be a non-empty string` };
-			tasks.push({ agent: defaultAgent, task });
-			continue;
-		}
-		if (!rawTask || typeof rawTask !== "object" || Array.isArray(rawTask)) {
-			return { error: `tasks[${taskIndex}] must be an object or, with top-level agent, a string` };
-		}
-		const agent = normalizeName(rawTask.agent) ?? defaultAgent;
-		if (!agent) return { error: `tasks[${taskIndex}].agent is required when top-level agent is not set` };
-		if (typeof rawTask.task !== "string" || !rawTask.task.trim()) {
-			return { error: `tasks[${taskIndex}].task must be a non-empty string` };
-		}
-		tasks.push({ ...rawTask, agent, task: rawTask.task } as TaskParam);
-	}
-	return { tasks };
-}
-
 function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskParam[]; error?: string } {
 	const expanded: TaskParam[] = [];
 	for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
@@ -849,17 +821,13 @@ function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; e
 	return { chain: expandedChain };
 }
 
-function normalizeRepeatedParallelCounts(params: LegacySubagentParamsLike): { params?: LegacySubagentParamsLike; error?: AgentToolResult<Details> } {
+function normalizeRepeatedParallelCounts(params: InternalSubagentParams): { params?: InternalSubagentParams; error?: AgentToolResult<Details> } {
 	if (params.tasks) {
-		const normalizedTasks = normalizeTopLevelTasks(params);
-		if (normalizedTasks.error) {
-			return { error: buildRequestedModeError(params, normalizedTasks.error) };
-		}
-		const expandedTasks = expandTopLevelTaskCounts(normalizedTasks.tasks ?? []);
+		const expandedTasks = expandTopLevelTaskCounts(params.tasks);
 		if (expandedTasks.error) {
 			return { error: buildRequestedModeError(params, expandedTasks.error) };
 		}
-		return { params: { ...params, tasks: expandedTasks.tasks as RawTaskParam[] } };
+		return { params: { ...params, tasks: expandedTasks.tasks } };
 	}
 	if (params.chain) {
 		const expandedChain = expandChainParallelCounts(params.chain);
@@ -873,7 +841,7 @@ function normalizeRepeatedParallelCounts(params: LegacySubagentParamsLike): { pa
 
 function withForkContext(
 	result: AgentToolResult<Details>,
-	context: LegacySubagentParamsLike["context"],
+	context: InternalSubagentParams["context"],
 ): AgentToolResult<Details> {
 	if (context !== "fork" || !result.details) return result;
 	return {
@@ -885,7 +853,7 @@ function withForkContext(
 	};
 }
 
-function toExecutionErrorResult(params: LegacySubagentParamsLike, error: unknown): AgentToolResult<Details> {
+function toExecutionErrorResult(params: InternalSubagentParams, error: unknown): AgentToolResult<Details> {
 	const message = error instanceof Error ? error.message : String(error);
 	return withForkContext(
 		{
@@ -917,7 +885,7 @@ function collectChainSessionFiles(
 	return sessionFiles;
 }
 
-function wrapChainTasksForFork(chain: ChainStep[], context: LegacySubagentParamsLike["context"]): ChainStep[] {
+function wrapChainTasksForFork(chain: ChainStep[], context: InternalSubagentParams["context"]): ChainStep[] {
 	if (context !== "fork") return chain;
 	return chain.map((step, stepIndex) => {
 		if (isParallelStep(step)) {
@@ -2646,32 +2614,36 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
-		params: LegacySubagentParamsLike,
+		params: SubagentToolInput,
+		signal: AbortSignal,
+		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
+		ctx: ExtensionContext,
+	) => Promise<AgentToolResult<Details>>;
+	executeInternal: (
+		id: string,
+		params: InternalSubagentParams,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	) => Promise<AgentToolResult<Details>>;
 } {
-	const execute = async (
+	const executeImpl = async (
 		_id: string,
-		params: LegacySubagentParamsLike,
+		params: InternalSubagentParams,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
+		internal: boolean,
 	): Promise<AgentToolResult<Details>> => {
 		deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
-		const shouldApplySlimValidation = Object.hasOwn(params as object, "run")
-			|| Object.hasOwn(params as object, "message")
-			|| Object.hasOwn(params as object, "batch")
-			|| typeof params.action === "string";
-		if (shouldApplySlimValidation) {
+		if (!internal) {
 			const slimValidationError = validateSubagentToolInput(params);
 			if (slimValidationError) return slimValidationError;
 		}
 
-		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
+		const requestCwd = internal ? resolveRequestedCwd(ctx.cwd, params.cwd) : ctx.cwd;
 		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
 		if (params.action) {
 			if (params.action === "status") {
@@ -2721,17 +2693,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return handleManagementAction(params.action, paramsWithResolvedCwd as { action?: string; agent?: string; chainName?: string; agentScope?: string; includeInternal?: boolean; config?: unknown; preset?: string }, { ...ctx, cwd: requestCwd });
 		}
 
-		const hasRunShape = Object.hasOwn(paramsWithResolvedCwd as object, "run");
-		const legacyBridgeDispatch = !hasRunShape && (
-			paramsWithResolvedCwd.agentScope !== undefined
-			|| paramsWithResolvedCwd.rawAgentConfig !== undefined
-			|| paramsWithResolvedCwd.clarify !== undefined
-			|| paramsWithResolvedCwd.sessionDir !== undefined
-			|| paramsWithResolvedCwd.chainDir !== undefined
-			|| paramsWithResolvedCwd.metadata !== undefined
-			|| paramsWithResolvedCwd.includeProgress !== undefined
-		);
-		const runNormalized = legacyBridgeDispatch
+		const runNormalized = internal
 			? { params: paramsWithResolvedCwd }
 			: normalizeRunDispatchParams(paramsWithResolvedCwd);
 		if (runNormalized.error) return runNormalized.error;
@@ -2802,14 +2764,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					details: { mode: "parallel" as const, results: [] },
 				};
 			}
-			effectiveParams.tasks = effectiveParams.tasks.map((t) => {
-				const task = typeof t === "string" ? t : t.task;
-				const taskObject = typeof t === "string" ? {} : t as Record<string, unknown>;
-				return {
-					...taskObject,
-					task: applySharedMessage(template, task ?? ""),
-				};
-			});
+			effectiveParams.tasks = effectiveParams.tasks.map((task) => ({
+				...task,
+				task: applySharedMessage(template, task.task),
+			}));
 			effectiveParams.message = undefined;
 			effectiveParams.prompt = undefined;
 		}
@@ -2934,7 +2892,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		// status.json. Run-level label applies for single runs and uniform-label parallel
 		// runs; otherwise per-step labels carry the meaning.
 		const foregroundAgentLabels: string[] | undefined = hasTasks && effectiveParams.tasks
-			? (normalizeTopLevelTasks(effectiveParams).tasks ?? []).map((t) => t.label ?? "")
+			? effectiveParams.tasks.map((t) => t.label ?? "")
 			: hasChain && effectiveParams.chain
 				? effectiveParams.chain.flatMap((step) => {
 					if (isParallelStep(step)) return step.parallel.map((t) => t.label ?? "");
@@ -2973,7 +2931,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			deps.state.foregroundControls.set(runId, foregroundControl);
 			deps.state.lastForegroundControlId = runId;
 			const stepsRaw: Omit<SyncRunStepInit, "sessionFile">[] = hasTasks && effectiveParams.tasks
-				? (normalizeTopLevelTasks(effectiveParams).tasks ?? []).map((task) => ({ agent: task.agent, task: task.task, ...(task.label ? { label: task.label } : {}) }))
+				? effectiveParams.tasks.map((task) => ({ agent: task.agent, task: task.task, ...(task.label ? { label: task.label } : {}) }))
 				: hasChain && effectiveParams.chain
 					? effectiveParams.chain.flatMap((step) => isParallelStep(step)
 						? step.parallel.map((task) => ({ agent: task.agent, task: task.task, ...(task.label ? { label: task.label } : {}) }))
@@ -3057,5 +3015,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}, effectiveParams.context);
 	};
 
-	return { execute };
+	return {
+		execute: (id, params, signal, onUpdate, ctx) => executeImpl(id, params as InternalSubagentParams, signal, onUpdate, ctx, false),
+		executeInternal: (id, params, signal, onUpdate, ctx) => executeImpl(id, params, signal, onUpdate, ctx, true),
+	};
 }

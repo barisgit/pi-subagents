@@ -51,18 +51,6 @@ function lineIsComment(line: string): boolean {
 	return trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*");
 }
 
-function legacyTypeLineNumbers(file: string): Set<number> {
-	const lines = linesWithNumbers(file);
-	const matches = new Set<number>();
-	for (let i = 0; i < lines.length; i++) {
-		if (!lines[i]!.line.includes("LegacySubagentParamsLike")) continue;
-		for (let number = Math.max(1, i + 1 - 10); number <= Math.min(lines.length, i + 1 + 10); number++) {
-			matches.add(number);
-		}
-	}
-	return matches;
-}
-
 function wordPattern(name: string): RegExp {
 	return new RegExp(`\\b${name}\\b`);
 }
@@ -111,9 +99,8 @@ describe("no dropped fields", () => {
 
 		for (const file of files) {
 			if (file === thisFile) continue;
-			const legacyLines = legacyTypeLineNumbers(file);
 			for (const { line, number } of linesWithNumbers(file)) {
-				if (lineIsComment(line) || legacyLines.has(number)) continue;
+				if (lineIsComment(line)) continue;
 				for (const name of droppedNames) {
 					if (wordPattern(name).test(line)) failures.push(`${path.relative(projectRoot, file)}:${number}: ${name}: ${line.trim()}`);
 				}

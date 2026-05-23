@@ -446,7 +446,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		compact: () => {},
 		getSystemPrompt: () => "",
 	} as ExtensionContext);
-	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> => executor.execute(
+	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> => executor.executeInternal(
 		"subagent-spawn-raw",
 		{
 			agent: "__raw__",
@@ -580,10 +580,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getContext: () => state.lastUiContext,
 		execute: async (requestId, request, signal, ctx, onUpdate) => {
 			if (request.tasks && request.tasks.length > 0) {
-				return executor.execute(
+				return executor.executeInternal(
 					requestId,
 					{
-						tasks: request.tasks as unknown as Array<Partial<{ agent: string; task: string }> & Record<string, unknown>>,
+						tasks: request.tasks,
 						context: request.context,
 						cwd: request.cwd,
 						worktree: request.worktree,
@@ -595,7 +595,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					ctx,
 				);
 			}
-			return executor.execute(
+			return executor.executeInternal(
 				requestId,
 				{
 					agent: request.agent,

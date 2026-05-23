@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import type { LegacySubagentParamsLike as SubagentParamsLike } from "./subagent-executor.ts";
+import type { SubagentToolInput as SubagentParamsLike, Step, Task } from "./schemas.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { type Details, type SingleResult, type Usage, SLASH_RESULT_TYPE } from "./types.ts";
 
@@ -13,17 +13,6 @@ interface SlashSnapshot {
 	result: AgentToolResult<Details>;
 	version: number;
 }
-
-interface SequentialChainStepLike {
-	agent: string;
-	task?: string;
-}
-
-interface ParallelChainStepLike {
-	parallel: Array<{ agent: string; task?: string }>;
-}
-
-type ChainStepLike = SequentialChainStepLike | ParallelChainStepLike;
 
 const liveSnapshots = new Map<string, SlashSnapshot>();
 const finalSnapshots = new Map<string, SlashSnapshot>();
@@ -73,13 +62,35 @@ function createPlaceholderResult(
 	};
 }
 
+function applySharedMessage(message: string | undefined, task: string): string {
+	if (!message) return task;
+	return message.includes("{in}") ? message.replace("{in}", task) : `${message}\n\n${task}`;
+}
+
+function taskWithMessage(task: Task, message: string | undefined): Task {
+	return { ...task, task: applySharedMessage(message, task.task) };
+}
+
+function runTasks(params: SubagentParamsLike): Task[] {
+	return (params.run ?? []).filter((step): step is Task => !Array.isArray(step)).map((task) => taskWithMessage(task, params.message));
+}
+
+function runContext(params: SubagentParamsLike): "fresh" | "fork" | undefined {
+	for (const step of params.run ?? []) {
+		const tasks = Array.isArray(step) ? step : [step];
+		const found = tasks.find((task) => task.context !== undefined)?.context;
+		if (found) return found;
+	}
+	return undefined;
+}
+
 function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const tasks = (params.tasks ?? []).filter((task): task is { agent: string; task: string } => typeof task === "object" && task !== null && "agent" in task && "task" in task);
+	const tasks = runTasks(params);
 	return {
 		content: [{ type: "text", text: tasks.map((task) => `${task.agent}: ${task.task}`).join("\n\n") }],
 		details: {
 			mode: "parallel",
-			...(params.context ? { context: params.context } : {}),
+			...(runContext(params) ? { context: runContext(params) } : {}),
 			results: tasks.map((task, index) => createPlaceholderResult(task.agent, task.task, "running", index)),
 			progress: tasks.map((task, index) => ({
 				index,
@@ -96,37 +107,32 @@ function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult
 	};
 }
 
-function isParallelChainStep(step: ChainStepLike): step is ParallelChainStepLike {
-	return "parallel" in step && Array.isArray(step.parallel);
+function chainStepLabel(step: Step): string {
+	return Array.isArray(step) ? `[${step.map((entry) => entry.agent).join("+")}]` : step.agent;
 }
 
-function chainStepLabel(step: ChainStepLike): string {
-	if (isParallelChainStep(step)) {
-		return `[${step.parallel.map((entry) => entry.agent).join("+")}]`;
-	}
-	return step.agent;
-}
-
-function flattenChainResults(chain: ChainStepLike[], fallbackTask: string | undefined): SingleResult[] {
+function flattenChainResults(chain: Step[], message: string | undefined): SingleResult[] {
 	const results: SingleResult[] = [];
 	let flatIndex = 0;
 	for (const step of chain) {
-		if (isParallelChainStep(step)) {
-			for (const task of step.parallel) {
-				results.push(createPlaceholderResult(task.agent, task.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));
+		if (Array.isArray(step)) {
+			for (const rawTask of step) {
+				const task = taskWithMessage(rawTask, message);
+				results.push(createPlaceholderResult(task.agent, task.task, results.length === 0 ? "running" : "pending", flatIndex));
 				flatIndex++;
 			}
 			continue;
 		}
-		results.push(createPlaceholderResult(step.agent, step.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));
+		const task = taskWithMessage(step, message);
+		results.push(createPlaceholderResult(task.agent, task.task, results.length === 0 ? "running" : "pending", flatIndex));
 		flatIndex++;
 	}
 	return results;
 }
 
 function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const chain = (params.chain ?? []) as ChainStepLike[];
-	const results = flattenChainResults(chain, params.task);
+	const chain = params.run ?? [];
+	const results = flattenChainResults(chain, params.message);
 	return {
 		content: [{
 			type: "text",
@@ -134,7 +140,7 @@ function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<De
 		}],
 		details: {
 			mode: "chain",
-			...(params.context ? { context: params.context } : {}),
+			...(runContext(params) ? { context: runContext(params) } : {}),
 			results,
 			progress: results.map((result, index) => ({
 				index,
@@ -155,13 +161,14 @@ function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<De
 }
 
 function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const agent = params.agent ?? "subagent";
-	const task = params.task ?? "";
+	const first = runTasks(params)[0];
+	const agent = first?.agent ?? "subagent";
+	const task = first?.task ?? "";
 	return {
 		content: [{ type: "text", text: task }],
 		details: {
 			mode: "single",
-			...(params.context ? { context: params.context } : {}),
+			...(runContext(params) ? { context: runContext(params) } : {}),
 			results: [createPlaceholderResult(agent, task, "running")],
 			progress: [{
 				agent,
@@ -178,11 +185,12 @@ function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<D
 }
 
 export function buildSlashInitialResult(requestId: string, params: SubagentParamsLike): SlashMessageDetails {
-	const result = (params.tasks?.length ?? 0) > 0
+	const run = params.run ?? [];
+	const result = params.chain === true
+		? buildChainInitialResult(params)
+		: run.length > 1
 		? buildParallelInitialResult(params)
-		: (params.chain?.length ?? 0) > 0
-			? buildChainInitialResult(params)
-			: buildSingleInitialResult(params);
+		: buildSingleInitialResult(params);
 	liveSnapshots.set(requestId, { result, version: nextVersion() });
 	finalSnapshots.delete(requestId);
 	return { requestId, result };

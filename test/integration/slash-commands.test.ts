@@ -151,7 +151,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler("scout", createCommandContext({ sessionManager }));
 
-		assert.deepEqual(requestedParams, { agent: "scout", task: "", clarify: false, agentScope: "both" });
+		assert.deepEqual(requestedParams, { run: [{ agent: "scout", task: "" }] });
 		assert.equal(sent.length, 2);
 		assert.equal((sent[0] as { display?: boolean }).display, true);
 		assert.equal((sent[0] as { content?: string }).content, "Running subagent...");
@@ -278,8 +278,8 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		const events = createEventBus();
 		let requestedTasks = 0;
 		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
-			const payload = data as { requestId: string; params?: { tasks?: unknown[] } };
-			requestedTasks = payload.params?.tasks?.length ?? 0;
+			const payload = data as { requestId: string; params?: { run?: unknown[] } };
+			requestedTasks = payload.params?.run?.length ?? 0;
 			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId: payload.requestId });
 			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
 				requestId: payload.requestId,
@@ -317,8 +317,8 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		const events = createEventBus();
 		const requestedPresets: Array<{ command: string; preset?: string }> = [];
 		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
-			const payload = data as { requestId: string; params?: { preset?: string; chain?: unknown[]; tasks?: unknown[] } };
-			const command = payload.params?.tasks ? "parallel" : payload.params?.chain ? "chain" : "run";
+			const payload = data as { requestId: string; params?: { preset?: string; chain?: boolean; run?: unknown[] } };
+			const command = payload.params?.chain ? "chain" : (payload.params?.run?.length ?? 0) > 1 ? "parallel" : "run";
 			requestedPresets.push({ command, preset: payload.params?.preset });
 			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId: payload.requestId });
 			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {

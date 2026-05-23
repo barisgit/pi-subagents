@@ -254,7 +254,7 @@ describe("phase", () => {
 		});
 		installFakeRuntime([session]);
 		try {
-			const result = await makeExecutor(tempDir).execute(
+			const result = await makeExecutor(tempDir).executeInternal(
 				"id",
 				{ agent: "phase-tester", task: "think", sessionDir: tempDir },
 				new AbortController().signal,

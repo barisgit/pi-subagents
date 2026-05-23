@@ -33,7 +33,7 @@ index.ts(337,19): error TS2352: Conversion of type '{ getSessionId: () => string
 index.ts(341,18): error TS2352: Conversion of type '{ getAvailable: () => never[]; }' to type 'ModelRegistry' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
 index.ts(374,3): error TS2322: Type '(input: SpawnRawInput) => Promise<AgentToolResult<Details>>' is not assignable to type '(input: SpawnRawInput) => Promise<SpawnResult>'.
 index.ts(393,92): error TS2339: Property 'requestRender' does not exist on type 'ExtensionUIContext'.
-index.ts(448,7): error TS2322: Type 'PromptTemplateDelegationTask[]' is not assignable to type 'RawTaskParam[]'.
+index.ts(448,7): error TS2322: Type 'PromptTemplateDelegationTask[]' is not assignable to type 'TaskParam[]'.
 index.ts(710,32): error TS2345: Argument of type '{ model?: string | undefined; skill?: string | boolean | string[] | undefined; output?: string | boolean | undefined; async?: boolean | undefined; chain?: { model?: string | undefined; ... 11 more ...; failFast?: boolean | undefined; }[] | undefined; ... 25 more ...; control?: { ...; } | undefined; }' is not assignable to parameter of type 'SubagentParamsLike'.
 index.ts(864,53): error TS2345: Argument of type '(payload: RegisterPersonaDirPayload) => void' is not assignable to parameter of type '(data: unknown) => void'.
 index.ts(865,55): error TS2345: Argument of type '(payload: UnregisterPersonaDirPayload) => void' is not assignable to parameter of type '(data: unknown) => void'.
@@ -66,12 +66,12 @@ run-status.ts(112,3): error TS2353: Object literal may only specify known proper
 slash-commands.ts(554,31): error TS2322: Type 'SubagentsStatusComponent' is not assignable to type '(Component & { dispose?(): void; }) | Promise<Component & { dispose?(): void; }>'.
 slash-commands.ts(577,30): error TS2345: Argument of type 'ExtensionContext' is not assignable to parameter of type 'ExtensionCommandContext'.
 slash-live-state.ts(62,3): error TS2322: Type '{ agent: string; status: "pending" | "running"; task: string; recentTools: never[]; recentOutput: never[]; toolCount: number; tokens: number; durationMs: number; index?: number | undefined; }' is not assignable to type 'AgentProgress'.
-slash-live-state.ts(79,63): error TS2339: Property 'agent' does not exist on type 'RawTaskParam'.
-slash-live-state.ts(79,78): error TS2339: Property 'task' does not exist on type 'RawTaskParam'.
-slash-live-state.ts(83,69): error TS2339: Property 'agent' does not exist on type 'RawTaskParam'.
-slash-live-state.ts(83,81): error TS2339: Property 'task' does not exist on type 'RawTaskParam'.
-slash-live-state.ts(86,17): error TS2339: Property 'agent' does not exist on type 'RawTaskParam'.
-slash-live-state.ts(88,16): error TS2339: Property 'task' does not exist on type 'RawTaskParam'.
+slash-live-state.ts(79,63): error TS2339: Property 'agent' does not exist on type 'TaskParam'.
+slash-live-state.ts(79,78): error TS2339: Property 'task' does not exist on type 'TaskParam'.
+slash-live-state.ts(83,69): error TS2339: Property 'agent' does not exist on type 'TaskParam'.
+slash-live-state.ts(83,81): error TS2339: Property 'task' does not exist on type 'TaskParam'.
+slash-live-state.ts(86,17): error TS2339: Property 'agent' does not exist on type 'TaskParam'.
+slash-live-state.ts(88,16): error TS2339: Property 'task' does not exist on type 'TaskParam'.
 slash-live-state.ts(166,15): error TS2741: Property 'index' is missing in type '{ agent: string; status: "running"; task: string; recentTools: never[]; recentOutput: never[]; toolCount: number; tokens: number; durationMs: number; }' but required in type 'AgentProgress'.
 subagent-executor.ts(262,4): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
 subagent-executor.ts(281,4): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
@@ -83,7 +83,7 @@ subagent-executor.ts(349,7): error TS2353: Object literal may only specify known
 subagent-executor.ts(357,6): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
 subagent-executor.ts(366,7): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
 subagent-executor.ts(388,4): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
-subagent-executor.ts(558,33): error TS2322: Type 'TaskParam[] | undefined' is not assignable to type 'RawTaskParam[] | undefined'.
+subagent-executor.ts(558,33): error TS2322: Type 'TaskParam[] | undefined' is not assignable to type 'TaskParam[] | undefined'.
 subagent-executor.ts(589,4): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
 subagent-executor.ts(671,5): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
 subagent-executor.ts(749,75): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
@@ -106,8 +106,8 @@ subagent-executor.ts(2202,49): error TS2345: Argument of type 'SubagentParamsLik
 subagent-executor.ts(2217,5): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
 subagent-executor.ts(2264,6): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.
 subagent-executor.ts(2270,5): error TS2698: Spread types may only be created from object types.
-subagent-executor.ts(2272,35): error TS2339: Property 'task' does not exist on type 'RawTaskParam'.
-subagent-executor.ts(2273,28): error TS2339: Property 'task' does not exist on type 'RawTaskParam'.
+subagent-executor.ts(2272,35): error TS2339: Property 'task' does not exist on type 'TaskParam'.
+subagent-executor.ts(2273,28): error TS2339: Property 'task' does not exist on type 'TaskParam'.
 subagent-executor.ts(2300,52): error TS2345: Argument of type 'ReadonlySessionManager' is not assignable to parameter of type 'ForkableSessionManager'.
 subagent-executor.ts(2467,30): error TS2339: Property 'isError' does not exist on type 'AgentToolResult<Details>'.
 subagent-executor.ts(2484,4): error TS2353: Object literal may only specify known properties, and 'isError' does not exist in type 'AgentToolResult<Details>'.

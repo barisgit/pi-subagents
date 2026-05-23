@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { LegacySubagentParamsLike as SubagentParamsLike } from "./subagent-executor.ts";
+import type { SubagentToolInput as SubagentParamsLike } from "./schemas.ts";
 import {
 	SLASH_SUBAGENT_CANCEL_EVENT,
 	SLASH_SUBAGENT_REQUEST_EVENT,

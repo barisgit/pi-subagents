@@ -7,7 +7,7 @@ import { discoverAgents, discoverAgentsAll } from "./agents.ts";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
 import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-status.ts";
 import { discoverAvailableSkills } from "./skills.ts";
-import type { LegacySubagentParamsLike as SubagentParamsLike } from "./subagent-executor.ts";
+import type { SubagentToolInput as SubagentParamsLike } from "./schemas.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import {
 	applySlashUpdate,
@@ -330,48 +330,36 @@ async function openAgentManager(
 	if (!result) return;
 
 	if (result.action === "chain") {
-		const chain = result.agents.map((name, i) => ({
+		const run = result.agents.map((name, i) => ({
 			agent: name,
-			...(i === 0 ? { task: result.task } : {}),
+			task: result.task,
+			...(i === 0 ? { label: result.task.slice(0, 60) } : {}),
 		}));
 		await runSlashSubagent(pi, ctx, {
-			chain,
-			task: result.task,
-			clarify: true,
-			agentScope: "both",
+			run,
+			chain: true,
 		});
 		return;
 	}
 
 	if (result.action === "launch") {
 		await runSlashSubagent(pi, ctx, {
-			agent: result.agent,
-			task: result.task,
-			clarify: !result.skipClarify,
-			agentScope: "both",
+			run: [{ agent: result.agent, task: result.task }],
 		});
 	} else if (result.action === "launch-chain") {
-		const chainParam = result.chain.steps.map((step) => ({
+		const run = result.chain.steps.map((step) => ({
 			agent: step.agent,
-			task: step.task || undefined,
-			output: step.output,
-			reads: step.reads,
-			progress: step.progress,
-			skill: step.skills,
-			model: step.model,
+			task: step.task || result.task,
+			...(step.output !== undefined ? { output: step.output } : {}),
 		}));
 		await runSlashSubagent(pi, ctx, {
-			chain: chainParam,
-			task: result.task,
-			clarify: !result.skipClarify,
-			agentScope: "both",
+			run,
+			chain: true,
 		});
 	} else if (result.action === "parallel") {
 		await runSlashSubagent(pi, ctx, {
-			tasks: result.tasks,
-			prompt: result.prompt,
-			clarify: !result.skipClarify,
-			agentScope: "both",
+			run: result.tasks,
+			...(result.prompt ? { message: result.prompt } : {}),
 		});
 	}
 }
@@ -485,13 +473,14 @@ export function registerSlashCommands(
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
 				finalTask = `[Read from: ${inline.reads.join(", ")}]\n\n${finalTask}`;
 			}
-			const params: SubagentParamsLike = { agent: agentName, task: finalTask, clarify: false, agentScope: "both" };
-			if (inline.output !== undefined) params.output = inline.output;
-			if (inline.skill !== undefined) params.skill = inline.skill;
-			if (inline.model) params.model = inline.model;
-			if (presetResolution.preset) params.preset = presetResolution.preset;
+			const taskParam = {
+				agent: agentName,
+				task: finalTask,
+				...(inline.output !== undefined ? { output: inline.output } : {}),
+				...(fork ? { context: "fork" as const } : {}),
+			};
+			const params: SubagentParamsLike = { run: [taskParam] };
 			if (bg) params.async = true;
-			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
@@ -508,17 +497,12 @@ export function registerSlashCommands(
 			if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
 			const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
 				agent: name,
-				...(stepTask ? { task: stepTask } : i === 0 && parsed.task ? { task: parsed.task } : {}),
+				task: stepTask ?? parsed.task,
 				...(config.output !== undefined ? { output: config.output } : {}),
-				...(config.reads !== undefined ? { reads: config.reads } : {}),
-				...(config.model ? { model: config.model } : {}),
-				...(config.skill !== undefined ? { skill: config.skill } : {}),
-				...(config.progress !== undefined ? { progress: config.progress } : {}),
+				...(fork && i === 0 ? { context: "fork" as const } : {}),
 			}));
-			const params: SubagentParamsLike = { chain, task: parsed.task, clarify: false, agentScope: "both" };
-			if (presetResolution.preset) params.preset = presetResolution.preset;
+			const params: SubagentParamsLike = { run: chain, chain: true };
 			if (bg) params.async = true;
-			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
@@ -526,23 +510,20 @@ export function registerSlashCommands(
 	pi.registerCommand("parallel", {
 		description: "Run agents in parallel: /parallel [preset=name] scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
-			handler: async (args, ctx) => {
-				const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-				const { args: parallelArgs, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
-				const parsed = parseAgentArgs(state, parallelArgs, "parallel", ctx, topLevel.preset);
-				if (!parsed) return;
-				const presetResolution = resolveSlashPreset(topLevel.preset, ...parsed.steps.map((step) => step.config.preset));
-				if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
-				const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
-					agent: name,
-					task: stepTask ?? parsed.task,
-					...(config.model ? { model: config.model } : {}),
-					...(config.skill !== undefined ? { skill: config.skill } : {}),
-				}));
-				const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
-				if (presetResolution.preset) params.preset = presetResolution.preset;
-				if (bg) params.async = true;
-			if (fork) params.context = "fork";
+		handler: async (args, ctx) => {
+			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+			const { args: parallelArgs, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
+			const parsed = parseAgentArgs(state, parallelArgs, "parallel", ctx, topLevel.preset);
+			if (!parsed) return;
+			const presetResolution = resolveSlashPreset(topLevel.preset, ...parsed.steps.map((step) => step.config.preset));
+			if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
+			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
+				agent: name,
+				task: stepTask ?? parsed.task,
+				...(fork ? { context: "fork" as const } : {}),
+			}));
+			const params: SubagentParamsLike = { run: tasks };
+			if (bg) params.async = true;
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
