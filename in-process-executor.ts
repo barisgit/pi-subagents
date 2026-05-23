@@ -23,7 +23,7 @@ import {
 import { logger } from "./logger.ts";
 import { pushPendingChildLineage, setChildLineage } from "./lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhase, type RunPhaseState } from "./run-phase.ts";
-import { SUBAGENT_PHASE_CHANGE_EVENT, type ControlConfig, type SubagentLineage, type SubagentPhaseChangePayload } from "./types.ts";
+import { SUBAGENT_PHASE_CHANGE_EVENT, SUBAGENT_STUCK_EVENT, type ControlConfig, type SubagentLineage, type SubagentPhaseChangePayload, type SubagentStuckPayload } from "./types.ts";
 
 export interface ResolvedAgentConfig {
 	name: string;
@@ -226,9 +226,11 @@ export interface PhaseTickerOptions {
 	stepIndex: number;
 	intervalMs?: number;
 	quietMs?: number;
+	stuckThresholdMs?: number;
 	getPhaseState: () => RunPhaseState;
 	getLastEventAt: () => number;
 	onStatusUpdate: (patch: StatusPatch) => void;
+	onStuck?: (payload: SubagentStuckPayload) => void;
 	now?: () => number;
 	setIntervalFn?: typeof setInterval;
 	clearIntervalFn?: typeof clearInterval;
@@ -236,14 +238,6 @@ export interface PhaseTickerOptions {
 
 export interface PhaseTickerHandle {
 	stop(): void;
-}
-
-interface PhaseStuckPayload {
-	runId: string;
-	stepIndex: number;
-	phase: RunPhase;
-	sinceMs: number;
-	toolName?: string;
 }
 
 interface LegacyPhaseTickerOptions {
@@ -256,7 +250,7 @@ interface LegacyPhaseTickerOptions {
 	setIntervalFn?: typeof setInterval;
 	clearIntervalFn?: typeof clearInterval;
 	stuckThresholdMs?: number;
-	onStuck?: (payload: PhaseStuckPayload) => void;
+	onStuck?: (payload: SubagentStuckPayload) => void;
 }
 
 type LegacyPhaseTickerHandle = PhaseTickerHandle & { notifyEvent(now: number): void };
@@ -278,9 +272,11 @@ export function createPhaseTicker(
 		? {
 			intervalMs: legacyOptions?.intervalMs,
 			quietMs: legacyOptions?.quietThresholdMs,
+			stuckThresholdMs: legacyOptions?.stuckThresholdMs,
 			getPhaseState: optionsOrGetPhaseState,
 			getLastEventAt: () => legacyLastEventAt,
 			onStatusUpdate: legacyOptions!.onStatusUpdate,
+			onStuck: legacyOptions?.onStuck,
 			now,
 			setIntervalFn: legacyOptions?.setIntervalFn,
 			clearIntervalFn: legacyOptions?.clearIntervalFn,
@@ -290,18 +286,54 @@ export function createPhaseTicker(
 		: optionsOrGetPhaseState;
 	const intervalMs = options.intervalMs ?? 5_000;
 	const quietMs = options.quietMs ?? 4_000;
+	const stuckThresholdMs = options.stuckThresholdMs ?? 60_000;
 	const nowFn = options.now ?? Date.now;
 	const setIntervalFn = options.setIntervalFn ?? setInterval;
 	const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
 	let stopped = false;
+	let stuckPhase: RunPhase | undefined;
+	let stuckPhaseStartedAt: number | undefined;
+	let stuckEmitted = false;
 
 	const timer = setIntervalFn(() => {
 		try {
 			if (stopped) return;
 			const currentNow = nowFn();
+			const phaseState = options.getPhaseState();
+			if (phaseState.phase === "idle" || phaseState.phase === "paused") {
+				stuckPhase = undefined;
+				stuckPhaseStartedAt = undefined;
+				stuckEmitted = false;
+			} else {
+				if (stuckPhase !== phaseState.phase || stuckPhaseStartedAt !== phaseState.phaseStartedAt) {
+					stuckPhase = phaseState.phase;
+					stuckPhaseStartedAt = phaseState.phaseStartedAt;
+					stuckEmitted = false;
+				}
+				const sinceMs = currentNow - phaseState.phaseStartedAt;
+				if (!stuckEmitted && sinceMs >= stuckThresholdMs) {
+					stuckEmitted = true;
+					try {
+						options.onStuck?.({
+							runId: options.runId,
+							stepIndex: options.stepIndex,
+							phase: phaseState.phase,
+							sinceMs,
+							...(phaseState.toolName !== undefined ? { toolName: phaseState.toolName } : {}),
+						});
+					} catch (error) {
+						logger.debug("Phase ticker stuck event failed", {
+							runId: options.runId,
+							stepIndex: options.stepIndex,
+							phase: phaseState.phase,
+							error: formatError(error),
+						});
+					}
+				}
+			}
+
 			if (currentNow - options.getLastEventAt() <= quietMs) return;
 
-			const phaseState = options.getPhaseState();
 			options.onStatusUpdate({
 				runId: options.runId,
 				stepIndex: options.stepIndex,
@@ -550,6 +582,18 @@ async function executeChildAgent(
 			getPhaseState: () => phaseEvents.getState(),
 			getLastEventAt: () => phaseEvents.getState().lastPhaseTickAt,
 			onStatusUpdate: (patch) => ctx.onStatusUpdate?.(patch),
+			onStuck: (payload) => {
+				try {
+					ctx.pi?.events?.emit(SUBAGENT_STUCK_EVENT, payload);
+				} catch (error) {
+					logger.debug("Failed to emit stuck event on parent pi.events", {
+						runId: payload.runId,
+						stepIndex: payload.stepIndex,
+						phase: payload.phase,
+						error: formatError(error),
+					});
+				}
+			},
 		});
 
 		const promptPromise = session.prompt(step.task, { expandPromptTemplates: false, source: "extension" });

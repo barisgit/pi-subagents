@@ -5,203 +5,208 @@
  */
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
-	createPhaseTicker,
 	createPhaseEventHandler,
+	createPhaseTicker,
 	type PhaseTickerOptions,
 	type StatusPatch,
 } from "../../in-process-executor.ts";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { RunPhaseState } from "../../run-phase.ts";
+import { SUBAGENT_STUCK_EVENT, type SubagentStuckPayload } from "../../types.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;
 }
+
 function messageUpdate(type: string): AgentSessionEvent {
 	return event({ type: "message_update", assistantMessageEvent: { type } });
 }
 
-function makePhaseState(initialPhase = "tool_running", phaseStartedAt = 0) {
-	// Build a handler whose getState() starts in the given phase
-	const { handle, getState } = createPhaseEventHandler({
-		runId: "r1", stepIndex: 0, onStatusUpdate: () => {}, initialNow: phaseStartedAt,
+function makePhaseRef(initialNow = 0) {
+	const handler = createPhaseEventHandler({
+		runId: "r1",
+		stepIndex: 0,
+		onStatusUpdate: () => {},
+		initialNow,
 	});
-	if (initialPhase === "tool_running") {
-		handle(event({ type: "tool_execution_start", toolName: "bash" }), phaseStartedAt);
-	} else if (initialPhase === "thinking") {
-		handle(messageUpdate("thinking_delta"), phaseStartedAt);
-	}
-	return { handle, getState };
+	return {
+		handle: handler.handle,
+		getPhaseState: handler.getState,
+		getLastEventAt: () => handler.getState().lastPhaseTickAt,
+	};
+}
+
+function fixedPhaseRef(state: RunPhaseState) {
+	return {
+		getPhaseState: () => state,
+		getLastEventAt: () => state.lastPhaseTickAt,
+	};
+}
+
+function startThinking(phaseRef: ReturnType<typeof makePhaseRef>, now: number): void {
+	phaseRef.handle(messageUpdate("thinking_delta"), now);
+}
+
+function startTool(phaseRef: ReturnType<typeof makePhaseRef>, now: number, toolName = "bash"): void {
+	phaseRef.handle(event({ type: "tool_execution_start", toolName }), now);
+}
+
+function baseOpts(
+	phaseRef: Pick<ReturnType<typeof makePhaseRef>, "getPhaseState" | "getLastEventAt">,
+	extra?: Partial<PhaseTickerOptions>,
+): PhaseTickerOptions {
+	return {
+		runId: "r1",
+		stepIndex: 0,
+		getPhaseState: phaseRef.getPhaseState,
+		getLastEventAt: phaseRef.getLastEventAt,
+		onStatusUpdate: () => {},
+		intervalMs: 5_000,
+		quietMs: Number.POSITIVE_INFINITY,
+		now: Date.now,
+		setIntervalFn: globalThis.setInterval,
+		clearIntervalFn: globalThis.clearInterval,
+		...extra,
+	};
 }
 
 let testsRun = 0;
 afterEach(() => { testsRun++; });
 after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
-describe("subagent:stuck emits once per phase", () => {
-	it("emits-stuck-after-threshold: fires onStuck after stuckThresholdMs in same phase", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+describe("stuck detection", () => {
+	it("stuck-after-60s in thinking emits ONE stuck event", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
-		const stuckEvents: unknown[] = [];
-		const { getState } = makePhaseState("tool_running", 0);
+		const stuckEvents: SubagentStuckPayload[] = [];
+		const phaseRef = makePhaseRef();
+		startThinking(phaseRef, 0);
 
-		const ticker = createPhaseTicker(getState, {
-			runId: "r1",
-			stepIndex: 0,
-			onStatusUpdate: () => {},
-			intervalMs: 5_000,
-			quietThresholdMs: 0, // always emit heartbeat
-			stuckThresholdMs: 60_000,
-			onStuck: (p) => stuckEvents.push(p),
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}, 0);
+		const ticker = createPhaseTicker(baseOpts(phaseRef, {
+			onStuck: (payload) => stuckEvents.push(payload),
+		}));
 
-		// Ticks before threshold
-		t.mock.timers.tick(30_000);
-		assert.equal(stuckEvents.length, 0, "no stuck before 60s");
+		t.mock.timers.tick(55_000);
+		assert.equal(stuckEvents.length, 0, "no stuck event before the default 60s threshold");
 
-		t.mock.timers.tick(29_000); // total 59s — still under
-		assert.equal(stuckEvents.length, 0, "no stuck at 59s");
+		t.mock.timers.tick(5_000);
+		assert.equal(stuckEvents.length, 1, "one stuck event fires at the 60s threshold");
+		assert.equal(stuckEvents[0]!.phase, "thinking");
+		assert.equal(stuckEvents[0]!.sinceMs, 60_000);
 
-		t.mock.timers.tick(5_000); // total 64s — over threshold, first tick past it
-		assert.equal(stuckEvents.length, 1, "must emit exactly once after threshold");
-		assert.equal((stuckEvents[0] as { phase: string }).phase, "tool_running");
-		assert.ok((stuckEvents[0] as { sinceMs: number }).sinceMs >= 60_000);
-
+		t.mock.timers.tick(60_000);
+		assert.equal(stuckEvents.length, 1, "same stuck spell must not re-emit");
 		ticker.stop();
 	});
 
-	it("one-per-phase-boundary: subsequent ticks in same phase do NOT re-fire", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("idle-never-stuck: 60s in idle emits no stuck event", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
-		const stuckEvents: unknown[] = [];
-		const { getState } = makePhaseState("tool_running", 0);
+		const stuckEvents: SubagentStuckPayload[] = [];
+		const phaseRef = fixedPhaseRef({ phase: "idle", phaseStartedAt: 0, lastPhaseTickAt: 0 });
+		const ticker = createPhaseTicker(baseOpts(phaseRef, {
+			onStuck: (payload) => stuckEvents.push(payload),
+		}));
 
-		const ticker = createPhaseTicker(getState, {
-			runId: "r1",
-			stepIndex: 0,
-			onStatusUpdate: () => {},
-			intervalMs: 5_000,
-			quietThresholdMs: 0,
-			stuckThresholdMs: 10_000,
-			onStuck: (p) => stuckEvents.push(p),
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}, 0);
-
-		t.mock.timers.tick(60_000); // many ticks past threshold
-		assert.equal(stuckEvents.length, 1, "must emit exactly once, not once per tick");
-
+		t.mock.timers.tick(60_000);
+		assert.equal(stuckEvents.length, 0);
 		ticker.stop();
 	});
 
-	it("resets-on-phase-change: stuck fires again after phase changes and new phase exceeds threshold", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("paused-never-stuck: 60s in paused emits no stuck event", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
-		const stuckEvents: unknown[] = [];
-		const { handle, getState } = makePhaseState("tool_running", 0);
+		const stuckEvents: SubagentStuckPayload[] = [];
+		const phaseRef = fixedPhaseRef({ phase: "paused", phaseStartedAt: 0, lastPhaseTickAt: 0 });
+		const ticker = createPhaseTicker(baseOpts(phaseRef, {
+			onStuck: (payload) => stuckEvents.push(payload),
+		}));
 
-		const ticker = createPhaseTicker(getState, {
-			runId: "r1",
-			stepIndex: 0,
-			onStatusUpdate: () => {},
-			intervalMs: 5_000,
-			quietThresholdMs: 0,
-			stuckThresholdMs: 30_000,
-			onStuck: (p) => stuckEvents.push(p),
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}, 0);
-
-		// First phase exceeds threshold
-		t.mock.timers.tick(35_000);
-		assert.equal(stuckEvents.length, 1, "first stuck after tool_running > 30s");
-		assert.equal((stuckEvents[0] as { phase: string }).phase, "tool_running");
-
-		// Change phase at t=35000 → thinking
-		handle(event({ type: "tool_execution_end" }), 35_000); // idle
-		handle(messageUpdate("thinking_delta"), 35_000);        // thinking
-
-		// Another 35s in thinking phase
-		t.mock.timers.tick(35_000); // total t=70000; thinking started at 35000 → 35s in thinking
-		assert.equal(stuckEvents.length, 2, "second stuck after thinking > 30s");
-		assert.equal((stuckEvents[1] as { phase: string }).phase, "thinking");
-
+		t.mock.timers.tick(60_000);
+		assert.equal(stuckEvents.length, 0);
 		ticker.stop();
 	});
 
-	it("configurable-threshold: custom stuckThresholdMs is respected", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("transition-clears-latch: thinking 50s -> tool_running 20s -> thinking 50s emits none", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
-		const stuckEvents: unknown[] = [];
-		const { getState } = makePhaseState("thinking", 0);
+		const stuckEvents: SubagentStuckPayload[] = [];
+		const phaseRef = makePhaseRef();
+		startThinking(phaseRef, 0);
+		const ticker = createPhaseTicker(baseOpts(phaseRef, {
+			onStuck: (payload) => stuckEvents.push(payload),
+		}));
 
-		const ticker = createPhaseTicker(getState, {
-			runId: "r1",
-			stepIndex: 0,
-			onStatusUpdate: () => {},
-			intervalMs: 5_000,
-			quietThresholdMs: 0,
-			stuckThresholdMs: 20_000, // custom: 20s
-			onStuck: (p) => stuckEvents.push(p),
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}, 0);
+		t.mock.timers.tick(50_000);
+		startTool(phaseRef, 50_000);
+		t.mock.timers.tick(20_000);
+		startThinking(phaseRef, 70_000);
+		t.mock.timers.tick(50_000);
 
-		t.mock.timers.tick(15_000); // under 20s threshold
-		assert.equal(stuckEvents.length, 0, "no stuck before custom 20s threshold");
-
-		t.mock.timers.tick(10_000); // now 25s > 20s
-		assert.equal(stuckEvents.length, 1, "stuck fires at custom 20s threshold");
-
+		assert.equal(stuckEvents.length, 0, "each phase spell stayed below 60s");
 		ticker.stop();
 	});
 
-	it("no-onStuck-no-crash: ticker works normally with no onStuck callback", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("one-emit-per-stuck-spell: thinking 120s emits exactly one", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const stuckEvents: SubagentStuckPayload[] = [];
+		const phaseRef = makePhaseRef();
+		startThinking(phaseRef, 0);
+		const ticker = createPhaseTicker(baseOpts(phaseRef, {
+			onStuck: (payload) => stuckEvents.push(payload),
+		}));
+
+		t.mock.timers.tick(120_000);
+		assert.equal(stuckEvents.length, 1);
+		assert.ok(stuckEvents[0]!.sinceMs >= 60_000);
+		ticker.stop();
+	});
+
+	it("emit-failure-silent: onStuck throws and ticker survives", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
 		const patches: StatusPatch[] = [];
-		const { getState } = makePhaseState("tool_running", 0);
+		const phaseRef = makePhaseRef();
+		startThinking(phaseRef, 0);
+		const ticker = createPhaseTicker(baseOpts(phaseRef, {
+			quietMs: 0,
+			stuckThresholdMs: 5_000,
+			onStatusUpdate: (patch) => patches.push(patch),
+			onStuck: () => { throw new Error("bus exploded"); },
+		}));
 
-		const ticker = createPhaseTicker(getState, {
-			runId: "r1",
-			stepIndex: 0,
-			onStatusUpdate: (p) => patches.push(p),
-			intervalMs: 5_000,
-			quietThresholdMs: 0,
-			// no onStuck
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}, 0);
+		assert.doesNotThrow(() => t.mock.timers.tick(5_000));
+		assert.equal(patches.length, 1, "heartbeat still emits on the throwing stuck tick");
 
-		assert.doesNotThrow(() => t.mock.timers.tick(120_000), "must not throw when onStuck is absent");
-		assert.ok(patches.length > 0, "heartbeat patches must still be emitted");
-
+		t.mock.timers.tick(5_000);
+		assert.equal(patches.length, 2, "ticker continues after onStuck failure");
 		ticker.stop();
 	});
 
-	it("toolName forwarded in stuck payload for tool phases", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("payload-shape: includes runId stepIndex phase sinceMs and toolName", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
-		const stuckEvents: Array<{ toolName?: string }> = [];
-		const { getState } = makePhaseState("tool_running", 0); // toolName = "bash"
+		const calls: Array<{ event: string; payload: SubagentStuckPayload }> = [];
+		const phaseRef = makePhaseRef();
+		startTool(phaseRef, 0, "bash");
+		const ticker = createPhaseTicker(baseOpts(phaseRef, {
+			runId: "run-42",
+			stepIndex: 7,
+			onStuck: (payload) => calls.push({ event: SUBAGENT_STUCK_EVENT, payload }),
+		}));
 
-		const ticker = createPhaseTicker(getState, {
-			runId: "r1",
-			stepIndex: 0,
-			onStatusUpdate: () => {},
-			intervalMs: 5_000,
-			quietThresholdMs: 0,
-			stuckThresholdMs: 10_000,
-			onStuck: (p) => stuckEvents.push(p),
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}, 0);
-
-		t.mock.timers.tick(15_000);
-		assert.equal(stuckEvents.length, 1);
-		assert.equal(stuckEvents[0]!.toolName, "bash", "toolName must be forwarded for tool phases");
-
+		t.mock.timers.tick(60_000);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0]!.event, "subagent:stuck");
+		assert.deepEqual(calls[0]!.payload, {
+			runId: "run-42",
+			stepIndex: 7,
+			phase: "tool_running",
+			sinceMs: 60_000,
+			toolName: "bash",
+		});
 		ticker.stop();
 	});
 });

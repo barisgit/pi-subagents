@@ -535,6 +535,7 @@ export const SUBAGENT_SPAWN_STARTED_EVENT = "subagent:spawn_started";
 export const SUBAGENT_COMPLETED_EVENT = "subagent:completed";
 export const SUBAGENT_FAILED_EVENT = "subagent:failed";
 export const SUBAGENT_PHASE_CHANGE_EVENT = "subagent:phase-change";
+export const SUBAGENT_STUCK_EVENT = "subagent:stuck";
 export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
 export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 export const SUBAGENT_NEEDS_ATTENTION_EVENT = "subagent:needs-attention";
@@ -546,6 +547,14 @@ export interface SubagentPhaseChangePayload {
 	previousPhase?: RunPhase;
 	toolName?: string;
 	ts: number;
+}
+
+export interface SubagentStuckPayload {
+	runId: string;
+	stepIndex: number;
+	phase: RunPhase;
+	sinceMs: number;
+	toolName?: string;
 }
 
 export interface SubagentNeedsAttentionPayload {
