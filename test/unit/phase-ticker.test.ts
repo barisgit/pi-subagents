@@ -14,25 +14,49 @@ import {
 	type PhaseTickerOptions,
 	type StatusPatch,
 } from "../../in-process-executor.ts";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 function makeCollector(): { patches: StatusPatch[]; onStatusUpdate: (p: StatusPatch) => void } {
 	const patches: StatusPatch[] = [];
 	return { patches, onStatusUpdate: (p) => patches.push(p) };
 }
 
-function baseOpts(onStatusUpdate: (p: StatusPatch) => void, extra?: Partial<PhaseTickerOptions>): PhaseTickerOptions {
-	return { runId: "r1", stepIndex: 0, onStatusUpdate, intervalMs: 5_000, quietThresholdMs: 4_000, ...extra };
+function event(record: Record<string, unknown>): AgentSessionEvent {
+	return record as AgentSessionEvent;
 }
 
-/** Build a getPhaseState backed by createPhaseEventHandler (no-op onStatusUpdate). */
-function makePhaseRef() {
-	const { getState } = createPhaseEventHandler({
+function makePhaseRef(initialNow = 0) {
+	const handler = createPhaseEventHandler({
 		runId: "r1",
 		stepIndex: 0,
 		onStatusUpdate: () => {},
-		initialNow: 0,
+		initialNow,
 	});
-	return getState;
+	return {
+		handle: handler.handle,
+		getPhaseState: handler.getState,
+		getLastEventAt: () => handler.getState().lastPhaseTickAt,
+	};
+}
+
+function baseOpts(
+	phaseRef: ReturnType<typeof makePhaseRef>,
+	onStatusUpdate: (p: StatusPatch) => void,
+	extra?: Partial<PhaseTickerOptions>,
+): PhaseTickerOptions {
+	return {
+		runId: "r1",
+		stepIndex: 0,
+		getPhaseState: phaseRef.getPhaseState,
+		getLastEventAt: phaseRef.getLastEventAt,
+		onStatusUpdate,
+		intervalMs: 5_000,
+		quietMs: 4_000,
+		now: Date.now,
+		setIntervalFn: globalThis.setInterval,
+		clearIntervalFn: globalThis.clearInterval,
+		...extra,
+	};
 }
 
 let testsRun = 0;
@@ -40,167 +64,140 @@ afterEach(() => { testsRun++; });
 after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
 describe("phase ticker fallback", () => {
-	it("emits heartbeat patches at 5 s, 10 s, 15 s when no events arrive", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("quiet-tick-emits-after-4s", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
 		const { patches, onStatusUpdate } = makeCollector();
-		const getPhaseState = makePhaseRef();
+		const phaseRef = makePhaseRef();
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
 
-		const ticker = createPhaseTicker(getPhaseState, baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 0);
+		t.mock.timers.tick(5_000);
 
-		t.mock.timers.tick(5_000); // t=5000, lastEventAt=0, delta=5000 >= 4000 → emit
-		assert.equal(patches.length, 1, "1 patch at 5 s");
+		assert.equal(patches.length, 1);
 		assert.equal(patches[0]!.phase, "idle");
-
-		t.mock.timers.tick(5_000); // t=10000 → emit
-		assert.equal(patches.length, 2, "2 patches at 10 s");
-
-		t.mock.timers.tick(5_000); // t=15000 → emit
-		assert.equal(patches.length, 3, "3 patches at 15 s");
-
+		assert.equal(patches[0]!.phaseStartedAt, 0);
+		assert.equal(patches[0]!.runnerHeartbeatAt, 5_000);
 		ticker.stop();
 	});
 
-	it("suppresses tick when an event arrived within quietThresholdMs", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("repeats-on-interval", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
 		const { patches, onStatusUpdate } = makeCollector();
-		const getPhaseState = makePhaseRef();
-
-		// initialNow = 0; event at t=12_000 → lastEventAt=12_000
-		const ticker = createPhaseTicker(getPhaseState, baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 0);
-
-		t.mock.timers.tick(5_000);  // t=5000: 5000-0=5000 ≥ 4000 → emit
-		assert.equal(patches.length, 1);
-
-		t.mock.timers.tick(5_000);  // t=10000: 10000-0=10000 → emit
-		assert.equal(patches.length, 2);
-
-		// Simulate event at t=12000 (2 s before next tick)
-		ticker.notifyEvent(12_000);
-
-		t.mock.timers.tick(5_000);  // t=15000: 15000-12000=3000 < 4000 → suppressed
-		assert.equal(patches.length, 2, "tick at t=15s must be suppressed by event at t=12s");
-
-		t.mock.timers.tick(5_000);  // t=20000: 20000-12000=8000 ≥ 4000 → emit
-		assert.equal(patches.length, 3, "tick at t=20s must fire");
-
-		ticker.stop();
-	});
-
-	it("stop() after clean end prevents further patches", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
-
-		const { patches, onStatusUpdate } = makeCollector();
-		const getPhaseState = makePhaseRef();
-
-		const ticker = createPhaseTicker(getPhaseState, baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 0);
-
-		t.mock.timers.tick(5_000); // emit 1
-		assert.equal(patches.length, 1);
-
-		ticker.stop(); // session ended
-
-		t.mock.timers.tick(10_000); // no more emissions
-		assert.equal(patches.length, 1, "no patches after stop()");
-	});
-
-	it("stop() on throw path prevents further patches", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
-
-		const { patches, onStatusUpdate } = makeCollector();
-		const getPhaseState = makePhaseRef();
-
-		const ticker = createPhaseTicker(getPhaseState, baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 0);
-
-		// Simulate prompt() throwing at t=8000
-		t.mock.timers.tick(5_000); // emit 1
-		ticker.stop(); // finally block runs on throw
-
-		t.mock.timers.tick(10_000); // no more
-		assert.equal(patches.length, 1, "no patches after stop() on error path");
-	});
-
-	it("stop() on abort path prevents further patches", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
-
-		const { patches, onStatusUpdate } = makeCollector();
-		const getPhaseState = makePhaseRef();
-
-		const ticker = createPhaseTicker(getPhaseState, baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 0);
-
-		t.mock.timers.tick(5_000); // emit 1
-		ticker.stop(); // abort triggers finally
+		const phaseRef = makePhaseRef();
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
 
 		t.mock.timers.tick(15_000);
-		assert.equal(patches.length, 1, "no patches after stop() on abort");
-	});
 
-	it("stop() is idempotent — calling twice does not throw", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
-
-		const { onStatusUpdate } = makeCollector();
-		const ticker = createPhaseTicker(makePhaseRef(), baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 0);
-
-		ticker.stop();
-		assert.doesNotThrow(() => ticker.stop(), "second stop() must not throw");
-	});
-
-	it("runnerHeartbeatAt in emitted patches advances with each tick", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
-
-		const { patches, onStatusUpdate } = makeCollector();
-		const ticker = createPhaseTicker(makePhaseRef(), baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 0);
-
-		t.mock.timers.tick(5_000);
-		t.mock.timers.tick(5_000);
-
-		assert.ok(patches[1]!.runnerHeartbeatAt! > patches[0]!.runnerHeartbeatAt!, "runnerHeartbeatAt must advance");
+		assert.equal(patches.length, 3);
+		assert.equal(patches[2]!.runnerHeartbeatAt, 15_000);
 		ticker.stop();
 	});
 
-	it("phase in patches reflects current state from getPhaseState()", (t) => {
-		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+	it("noisy-no-emit", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 
 		const { patches, onStatusUpdate } = makeCollector();
-		const phaseHandler = createPhaseEventHandler({
-			runId: "r1", stepIndex: 0, onStatusUpdate: () => {}, initialNow: 0,
-		});
+		const phaseRef = makePhaseRef();
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
 
-		// Advance to thinking before starting ticker so getState() returns thinking
-		phaseHandler.handle({ type: "turn_start" } as never, 100);
-		phaseHandler.handle({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } } as never, 200);
+		t.mock.timers.tick(4_900);
+		phaseRef.handle(event({ type: "noop" }), 4_900);
+		t.mock.timers.tick(100);
 
-		const ticker = createPhaseTicker(phaseHandler.getState, baseOpts(onStatusUpdate, {
-			setIntervalFn: globalThis.setInterval,
-			clearIntervalFn: globalThis.clearInterval,
-		}), 200);
+		assert.equal(patches.length, 0);
+		ticker.stop();
+	});
+
+	it("throw-path-clears", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const { patches, onStatusUpdate } = makeCollector();
+		const phaseRef = makePhaseRef();
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
 
 		t.mock.timers.tick(5_000);
 		assert.equal(patches.length, 1);
-		assert.equal(patches[0]!.phase, "thinking", "ticker must report current phase from state machine");
 
+		ticker.stop();
+		t.mock.timers.tick(10_000);
+
+		assert.equal(patches.length, 1);
+	});
+
+	it("abort-path-clears", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const { patches, onStatusUpdate } = makeCollector();
+		const phaseRef = makePhaseRef();
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
+
+		t.mock.timers.tick(5_000);
+		assert.equal(patches.length, 1);
+
+		ticker.stop();
+		t.mock.timers.tick(15_000);
+
+		assert.equal(patches.length, 1);
+	});
+
+	it("model-fallback-retry-clears", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const { patches, onStatusUpdate } = makeCollector();
+		const firstPhaseRef = makePhaseRef();
+		const firstTicker = createPhaseTicker(baseOpts(firstPhaseRef, onStatusUpdate));
+		firstTicker.stop();
+
+		const secondPhaseRef = makePhaseRef();
+		const secondTicker = createPhaseTicker(baseOpts(secondPhaseRef, onStatusUpdate));
+		t.mock.timers.tick(5_000);
+
+		assert.equal(patches.length, 1, "only the second cycle may emit");
+
+		secondTicker.stop();
+		t.mock.timers.tick(20_000);
+		assert.equal(patches.length, 1, "no interval leaks after both cycles stop");
+	});
+
+	it("handler-throw-does-not-crash-ticker", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const patches: StatusPatch[] = [];
+		let calls = 0;
+		const phaseRef = makePhaseRef();
+		const ticker = createPhaseTicker(baseOpts(phaseRef, (patch) => {
+			calls++;
+			if (calls === 1) throw new Error("boom");
+			patches.push(patch);
+		}));
+
+		assert.doesNotThrow(() => t.mock.timers.tick(5_000));
+		assert.equal(calls, 1);
+		assert.equal(patches.length, 0);
+
+		t.mock.timers.tick(5_000);
+		assert.equal(calls, 2);
+		assert.equal(patches.length, 1);
+		assert.equal(patches[0]!.runnerHeartbeatAt, 10_000);
+		ticker.stop();
+	});
+
+	it("re-asserts-current-phase-fields", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const { patches, onStatusUpdate } = makeCollector();
+		const phaseRef = makePhaseRef();
+		phaseRef.handle(event({ type: "turn_start" }), 100);
+		phaseRef.handle(event({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }), 200);
+
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
+		t.mock.timers.tick(5_000);
+
+		assert.equal(patches.length, 1);
+		assert.equal(patches[0]!.phase, "thinking");
+		assert.equal(patches[0]!.phaseStartedAt, 200);
+		assert.equal(patches[0]!.runnerHeartbeatAt, 5_000);
 		ticker.stop();
 	});
 });

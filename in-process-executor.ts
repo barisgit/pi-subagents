@@ -221,6 +221,118 @@ export function createPhaseEventHandler(options: PhaseEventHandlerOptions): Phas
 	};
 }
 
+export interface PhaseTickerOptions {
+	runId: string;
+	stepIndex: number;
+	intervalMs?: number;
+	quietMs?: number;
+	getPhaseState: () => RunPhaseState;
+	getLastEventAt: () => number;
+	onStatusUpdate: (patch: StatusPatch) => void;
+	now?: () => number;
+	setIntervalFn?: typeof setInterval;
+	clearIntervalFn?: typeof clearInterval;
+}
+
+export interface PhaseTickerHandle {
+	stop(): void;
+}
+
+interface PhaseStuckPayload {
+	runId: string;
+	stepIndex: number;
+	phase: RunPhase;
+	sinceMs: number;
+	toolName?: string;
+}
+
+interface LegacyPhaseTickerOptions {
+	runId: string;
+	stepIndex: number;
+	onStatusUpdate: (patch: StatusPatch) => void;
+	intervalMs?: number;
+	quietThresholdMs?: number;
+	now?: () => number;
+	setIntervalFn?: typeof setInterval;
+	clearIntervalFn?: typeof clearInterval;
+	stuckThresholdMs?: number;
+	onStuck?: (payload: PhaseStuckPayload) => void;
+}
+
+type LegacyPhaseTickerHandle = PhaseTickerHandle & { notifyEvent(now: number): void };
+
+export function createPhaseTicker(options: PhaseTickerOptions): PhaseTickerHandle;
+export function createPhaseTicker(
+	getPhaseState: () => RunPhaseState,
+	options: LegacyPhaseTickerOptions,
+	initialNow?: number,
+): LegacyPhaseTickerHandle;
+export function createPhaseTicker(
+	optionsOrGetPhaseState: PhaseTickerOptions | (() => RunPhaseState),
+	legacyOptions?: LegacyPhaseTickerOptions,
+	initialNow?: number,
+): PhaseTickerHandle | LegacyPhaseTickerHandle {
+	const now = legacyOptions?.now ?? (typeof optionsOrGetPhaseState === "function" ? undefined : optionsOrGetPhaseState.now) ?? Date.now;
+	let legacyLastEventAt = initialNow ?? now();
+	const options: PhaseTickerOptions = typeof optionsOrGetPhaseState === "function"
+		? {
+			intervalMs: legacyOptions?.intervalMs,
+			quietMs: legacyOptions?.quietThresholdMs,
+			getPhaseState: optionsOrGetPhaseState,
+			getLastEventAt: () => legacyLastEventAt,
+			onStatusUpdate: legacyOptions!.onStatusUpdate,
+			now,
+			setIntervalFn: legacyOptions?.setIntervalFn,
+			clearIntervalFn: legacyOptions?.clearIntervalFn,
+			runId: legacyOptions!.runId,
+			stepIndex: legacyOptions!.stepIndex,
+		}
+		: optionsOrGetPhaseState;
+	const intervalMs = options.intervalMs ?? 5_000;
+	const quietMs = options.quietMs ?? 4_000;
+	const nowFn = options.now ?? Date.now;
+	const setIntervalFn = options.setIntervalFn ?? setInterval;
+	const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
+	let stopped = false;
+
+	const timer = setIntervalFn(() => {
+		try {
+			if (stopped) return;
+			const currentNow = nowFn();
+			if (currentNow - options.getLastEventAt() <= quietMs) return;
+
+			const phaseState = options.getPhaseState();
+			options.onStatusUpdate({
+				runId: options.runId,
+				stepIndex: options.stepIndex,
+				phase: phaseState.phase,
+				phaseStartedAt: phaseState.phaseStartedAt,
+				runnerHeartbeatAt: currentNow,
+				...(phaseState.toolName !== undefined ? { toolName: phaseState.toolName } : {}),
+			});
+		} catch (error) {
+			logger.debug("Phase ticker heartbeat failed", {
+				runId: options.runId,
+				stepIndex: options.stepIndex,
+				error: formatError(error),
+			});
+		}
+	}, intervalMs);
+	const unref = (timer as { unref?: () => void }).unref;
+	if (typeof unref === "function") unref.call(timer);
+
+	return {
+		stop(): void {
+			if (stopped) return;
+			stopped = true;
+			clearIntervalFn(timer);
+		},
+		notifyEvent(now: number): void {
+			legacyLastEventAt = now;
+		},
+	};
+}
+
 interface ExecutorRuntimeDeps {
 	createAgentSession: typeof createAgentSession;
 	DefaultResourceLoader: typeof DefaultResourceLoader;
@@ -367,6 +479,7 @@ async function executeChildAgent(
 	let toolErrorCount = 0;
 	let unsubscribe: (() => void) | undefined;
 	let session: AgentSession | undefined;
+	let ticker: PhaseTickerHandle | undefined;
 	const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 	const phaseEvents = createPhaseEventHandler({
 		runId: step.runId,
@@ -431,6 +544,13 @@ async function executeChildAgent(
 			});
 			if (patch) ctx.onStatusUpdate?.(patch);
 		});
+		ticker = createPhaseTicker({
+			runId: step.runId,
+			stepIndex: step.stepIndex,
+			getPhaseState: () => phaseEvents.getState(),
+			getLastEventAt: () => phaseEvents.getState().lastPhaseTickAt,
+			onStatusUpdate: (patch) => ctx.onStatusUpdate?.(patch),
+		});
 
 		const promptPromise = session.prompt(step.task, { expandPromptTemplates: false, source: "extension" });
 		const aborted = await promptOrAbort(promptPromise, signal);
@@ -484,6 +604,7 @@ async function executeChildAgent(
 		});
 		return result;
 	} finally {
+		ticker?.stop();
 		unsubscribe?.();
 		session?.dispose();
 	}
