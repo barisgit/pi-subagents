@@ -1,0 +1,6 @@
+{
+	"charterId": "f5fec59c-e92e-4263-927c-17a1ec03c93a",
+	"featureId": "f13-suite-green",
+	"testCommand": "npm run test:all",
+	"skipCount": 30
+}

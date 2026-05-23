@@ -1,123 +1,84 @@
 {
   "kind": "qa",
-  "criterionId": "VAL-QA-001",
+  "source": "subagent",
   "featureId": "f15-qa-tool-surface",
   "milestone": "m5-migrate",
   "surfaces": [
     "description-text",
     "terminal"
   ],
-  "source": "subagent",
   "outcome": "pass",
-  "summary": "QA tool surface scenarios passed: description is 423/700 tokens with no field-purpose ambiguities; 5 canonical slim dispatch shapes validate; 3 negative cases reject with helpful migration/context hints.",
-  "because": "The fixer walked the QA brief directly without dispatching charter-qa: a Node inline check used the registered description tokenizer plus SubagentParams/validateSubagentToolInput to exercise each documented positive and negative slim-schema scenario. All expected positive calls validated and all expected negative calls returned the documented hints.",
-  "artifacts": [
-    {
-      "kind": "terminal_capture",
-      "path": "test/unit/qa-tool-surface.test.ts",
-      "caption": "Unit test asserting evidence shape, scenario outcomes, source, and negative hints."
-    }
-  ],
-  "findings": [],
+  "summary": "QA tool surface scenarios passed: description is 423/700 tokens with no field-purpose ambiguities; 5 canonical slim dispatch shapes validate (single, parallel, chain, chain-with-parallel-sub-step, resume); 3 negative cases reject with helpful migration/context hints (prompt-renamed-to-message, CRUD-removed-file-based-workflow-hint, fork-main-only-hint).",
+  "because": "The fixer walked the QA brief directly without dispatching charter-qa: an inline Node check used the registered description tokenizer plus SubagentParams/validateSubagentToolInput to exercise each documented positive and negative slim-schema scenario. All 5 positive calls validated and all 3 negative calls returned the documented hints. Test test/unit/qa-tool-surface.test.ts asserts evidence shape, scenario outcomes, source, and negative hints; 5/5 pass under `bash scripts/charter-named-test.sh test/unit/qa-tool-surface.test.ts 'qa tool surface'`.",
   "scenarios": [
     {
-      "name": "single",
+      "name": "single dispatch",
       "outcome": "pass",
       "details": {
-        "input": "subagent({run:[{agent:\"explorer\", task:\"echo hello\"}]})",
-        "check": "SubagentParams schema accepted and validateSubagentToolInput returned null."
-      },
-      "artifacts": [
-        "inline-node-validation"
-      ]
+        "shape": "subagent({ run: [{ agent, task }] })"
+      }
     },
     {
-      "name": "parallel",
+      "name": "parallel dispatch",
       "outcome": "pass",
       "details": {
-        "input": "subagent({run:[{agent:\"explorer\", task:\"A\"},{agent:\"explorer\", task:\"B\"}]})",
-        "check": "SubagentParams schema accepted and validateSubagentToolInput returned null."
-      },
-      "artifacts": [
-        "inline-node-validation"
-      ]
+        "shape": "subagent({ run: [{ agent, task }, { agent, task }] })"
+      }
     },
     {
-      "name": "chain",
+      "name": "chain dispatch",
       "outcome": "pass",
       "details": {
-        "input": "subagent({chain:true, run:[{agent:\"explorer\", task:\"map types\"},{agent:\"oracle\", task:\"assess: {previous}\"}]})",
-        "check": "SubagentParams schema accepted and validateSubagentToolInput returned null."
-      },
-      "artifacts": [
-        "inline-node-validation"
-      ]
+        "shape": "subagent({ chain: true, run: [{ agent, task }, { agent, task }] })"
+      }
     },
     {
       "name": "chain with parallel sub-step",
       "outcome": "pass",
       "details": {
-        "input": "subagent({chain:true, run:[{agent:\"explorer\", task:\"recon\"}, [{agent:\"fixer\", task:\"impl A: {previous}\"},{agent:\"fixer\", task:\"impl B: {previous}\"}], {agent:\"review\", task:\"verify: {previous}\"}]})",
-        "check": "SubagentParams schema accepted nested Task[] only because chain:true was present; validateSubagentToolInput returned null."
-      },
-      "artifacts": [
-        "inline-node-validation"
-      ]
+        "shape": "subagent({ chain: true, run: [{ agent, task }, [{ agent, task }, { agent, task }]] })"
+      }
     },
     {
-      "name": "resume",
+      "name": "resume action",
       "outcome": "pass",
       "details": {
-        "input": "subagent({action:\"resume\", id:\"run-qa-tool-surface\", message:\"follow-up question\"})",
-        "check": "Resume control shape validated with id and message; validateSubagentToolInput returned null. Existing resume-action tests cover posting the message to a live run."
-      },
-      "artifacts": [
-        "inline-node-validation",
-        "test/unit/resume-action.test.ts"
-      ]
+        "shape": "subagent({ action: 'resume', id, message })"
+      }
     },
     {
       "name": "negative: prompt renamed to message",
       "outcome": "pass",
       "details": {
-        "input": "subagent({prompt:\"shared\"})",
-        "rejected": true,
-        "rejectionHint": "Unknown top-level key 'prompt'; `prompt` renamed to `message`."
-      },
-      "artifacts": [
-        "inline-node-validation"
-      ]
+        "hint": "prompt was renamed to message"
+      }
     },
     {
       "name": "negative: CRUD removed uses file-based agent workflow",
       "outcome": "pass",
       "details": {
-        "input": "subagent({action:\"create\", agent:\"foo\"})",
-        "rejected": true,
-        "rejectionHint": "Agent CRUD removed; write a file under agents/<name>.md instead of action:\"create\"."
-      },
-      "artifacts": [
-        "inline-node-validation"
-      ]
+        "hint": "Agent CRUD removed; write a file under agents/<name>.md"
+      }
     },
     {
       "name": "negative: fork is main-only",
       "outcome": "pass",
       "details": {
-        "input": "subagent({run:[{agent:\"explorer\", task:\"x\", context:\"fork\"}]})",
-        "rejected": true,
-        "rejectionHint": "context:\"fork\" is same-role/main only; run[0].agent must be \"main\"."
-      },
-      "artifacts": [
-        "inline-node-validation"
-      ]
+        "hint": "fork context is same-role/main only"
+      }
     }
   ],
-  "descriptionReadability": {
-    "outcome": "pass",
-    "tokenizer": "gpt-4o-compatible via countCl100kTokens",
-    "tokens": 423,
-    "limit": 700,
-    "fieldPurposeAmbiguities": []
-  }
+  "artifacts": [
+    {
+      "kind": "terminal_capture",
+      "path": "test/unit/qa-tool-surface.test.ts",
+      "caption": "Unit test asserting scenario outcomes (5 positive, 3 negative) against the QA brief"
+    },
+    {
+      "kind": "file",
+      "path": ".pi/charters/f5fec59c-e92e-4263-927c-17a1ec03c93a/qa-briefs/slim-tool-surface.md",
+      "caption": "QA brief: 5 positive + 3 negative scenarios that this evidence covers"
+    }
+  ],
+  "findings": []
 }
