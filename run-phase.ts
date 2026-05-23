@@ -203,49 +203,43 @@ function hasFollowUp(record: Record<string, unknown>): boolean {
  * Format a run phase into a short human-readable label for dashboard rendering.
  *
  * Returns strings like `"thinking 12s"`, `"tool: bash 45s"`, `"retrying 3s"`,
- * `"streaming 7s"`, `"queued"`.
+ * `"streaming 7s"`, or `"queued 2s"` with no surrounding whitespace.
  *
- * When `phase` is undefined, `"idle"`, or unrecognised, returns `undefined` so
+ * When `phase` is undefined, `"idle"`, or unrecognised, returns an empty string so
  * callers can fall back to legacy rendering (e.g. the `!` lost glyph or
  * `currentTool` indicator).
  *
  * `phaseStartedAt` is optional; when absent the duration suffix is omitted.
  */
 export function formatPhase(
-	phase: RunPhase | string | undefined,
+	phase: RunPhase | undefined,
 	phaseStartedAt: number | undefined,
 	now: number,
 	toolName?: string,
-): string | undefined {
-	if (phase === undefined || phase === "idle") return undefined;
+): string {
+	if (phase === undefined || phase === "idle") return "";
 
-	const durationMs = phaseStartedAt !== undefined ? Math.max(0, now - phaseStartedAt) : undefined;
-	const dur = durationMs !== undefined ? ` ${formatDurationShort(durationMs)}` : "";
+	const dur = phaseStartedAt !== undefined
+		? ` ${Math.max(0, Math.floor((now - phaseStartedAt) / 1000))}s`
+		: "";
 
-	switch (phase as RunPhase) {
+	switch (phase) {
+		case "waiting_model":
+			return `waiting${dur}`;
 		case "thinking":
 			return `thinking${dur}`;
 		case "streaming_text":
 			return `streaming${dur}`;
 		case "tool_running":
 		case "tool_streaming":
-			return toolName ? `tool: ${toolName}${dur}` : `tool${dur}`;
+			return `tool: ${toolName ?? "tool"}${dur}`;
 		case "retrying":
 			return `retrying${dur}`;
-		case "waiting_model":
-			return `waiting${dur}`;
 		case "queued_follow_up":
-			return `queued`;
+			return `queued${dur}`;
 		case "paused":
-			return `paused`;
+			return `paused${dur}`;
 		default:
-			return undefined;
+			return "";
 	}
-}
-
-/** Minimal duration formatter used by formatPhase (avoids circular dep on formatters.ts). */
-function formatDurationShort(ms: number): string {
-	if (ms < 1000) return `${ms}ms`;
-	if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-	return `${Math.floor(ms / 60_000)}m${Math.floor((ms % 60_000) / 1000)}s`;
 }

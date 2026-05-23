@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 
 const { buildWidgetLines, renderWidget, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } = await import("../../render.ts") as unknown as {
 	buildWidgetLines: (jobs: Array<Record<string, unknown>>, theme: { fg(name: string, text: string): string; bold(text: string): string }, width?: number) => string[];
@@ -13,6 +13,10 @@ const theme = {
 	fg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
 };
+
+let testsRun = 0;
+afterEach(() => { testsRun++; });
+after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
 function createUiContext() {
 	const widgets: unknown[] = [];
@@ -225,4 +229,42 @@ describe("subagent async widget rendering", () => {
 			stopWidgetAnimation();
 		}
 	});
+	it("phase label suppresses the lost glyph for active-phase jobs", () => {
+		const lines = buildWidgetLines([
+			{
+				asyncId: "active-phase",
+				asyncDir: "/tmp/active-phase",
+				status: "running",
+				displayState: "lost",
+				phase: "thinking",
+				phaseStartedAt: Date.now() - 12_000,
+				agents: ["thinker"],
+				currentAgent: "thinker",
+			},
+		], theme, 200);
+		const row = lines.find((line) => line.includes("thinker")) ?? "";
+
+		assert.doesNotMatch(row, /!/);
+		assert.match(row, /thinking 12s/);
+	});
+
+	it("phase label keeps the lost glyph for stale unknown-phase jobs", () => {
+		const lines = buildWidgetLines([
+			{
+				asyncId: "unknown-phase",
+				asyncDir: "/tmp/unknown-phase",
+				status: "running",
+				displayState: "lost",
+				phase: "unknown_phase",
+				runnerHeartbeatAt: Date.now() - 30_000,
+				agents: ["legacy"],
+				currentAgent: "legacy",
+			},
+		], theme, 200);
+		const row = lines.find((line) => line.includes("legacy")) ?? "";
+
+		assert.match(row, /! .*legacy/);
+		assert.match(row, /lost/);
+	});
+
 });

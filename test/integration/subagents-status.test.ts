@@ -2,14 +2,19 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { renderSubagentResult } from "../../render.ts";
 import { foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
 import type { AsyncRunOverlayData, AsyncRunSummary } from "../../async-status.ts";
-import { type SubagentState } from "../../types.ts";
+import { type AgentProgress, type SubagentState } from "../../types.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
+
+let testsRun = 0;
+afterEach(() => { testsRun++; });
+after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
 function wait(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -639,4 +644,107 @@ describe("SubagentsStatusComponent", () => {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
+	describe("phase label", () => {
+		function renderStatus(run: AsyncRunSummary): string {
+			const component = new SubagentsStatusComponent(
+				createTestTui(() => {}),
+				createTestTheme(),
+				() => {},
+				{
+					listRunsForOverlay: () => ({ active: [run], recent: [] }),
+					refreshMs: 1000,
+				},
+			);
+			try {
+				return component.render(180).join("\n");
+			} finally {
+				component.dispose();
+			}
+		}
+
+		function renderInlineProgress(progress: Partial<AgentProgress>): string {
+			const widget = renderSubagentResult({
+				content: [{ type: "text", text: "(running...)" }],
+				details: {
+					mode: "single",
+					results: [{
+						agent: "worker",
+						task: "work",
+						exitCode: 0,
+						messages: [],
+						usage: { input: 0, output: 0 },
+						progress: {
+							index: 0,
+							agent: "worker",
+							status: "running",
+							task: "work",
+							lastActivityAt: Date.now(),
+							recentTools: [],
+							recentOutput: [],
+							toolCount: 1,
+							tokens: 0,
+							durationMs: 0,
+							...progress,
+						},
+					}],
+				},
+			}, { expanded: false }, { fg: (_name: string, value: string) => value, bold: (value: string) => value });
+
+			return widget.render(180).join("\n");
+		}
+
+		it("phase label renders thinking duration in the left pane", () => {
+			const now = Date.now();
+			const output = renderStatus(createRun("phase-thinking", "running", {
+				currentTool: undefined,
+				currentToolStartedAt: undefined,
+				phase: "thinking",
+				phaseStartedAt: now - 12_000,
+			}));
+
+			assert.match(output, /thinking 12s/);
+		});
+
+		it("phase label renders tool name in the left pane", () => {
+			const now = Date.now();
+			const output = renderStatus(createRun("phase-tool", "running", {
+				currentTool: "bash",
+				phase: "tool_running",
+				phaseStartedAt: now - 45_000,
+			}));
+
+			assert.match(output, /tool: bash 45s/);
+		});
+
+		it("phase label keeps the lost glyph for stale legacy rows", () => {
+			const output = renderStatus(createRun("phase-lost", "running", {
+				currentTool: undefined,
+				currentToolStartedAt: undefined,
+				displayState: "lost",
+				runnerHeartbeatAt: Date.now() - 30_000,
+			}));
+
+			assert.match(output, /! .*waiter .*running\/lost/);
+		});
+
+		it("phase label renders thinking in inline progress", () => {
+			const output = renderInlineProgress({
+				phase: "thinking",
+				phaseStartedAt: Date.now() - 12_000,
+			});
+
+			assert.match(output, /thinking 12s/);
+		});
+
+		it("phase label keeps current tool rendering in inline progress", () => {
+			const output = renderInlineProgress({
+				phase: "tool_running",
+				phaseStartedAt: Date.now() - 12_000,
+				currentTool: "bash",
+			});
+
+			assert.match(output, /tool: bash/);
+		});
+	});
+
 });

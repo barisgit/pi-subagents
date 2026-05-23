@@ -15,6 +15,7 @@ import {
 } from "./types.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
 import { displayStatePriority } from "./run-liveness.ts";
+import { formatPhase } from "./run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { getDisplayItems, getSingleResultOutput, readStatus } from "./utils.ts";
 import { readRunTranscript, previewArgs, type TranscriptLine } from "./run-transcript.ts";
@@ -313,7 +314,15 @@ function resultGlyph(result: Details["results"][number], output: string, theme: 
 }
 
 function compactCurrentActivity(progress: AgentProgress): string {
-	return formatCurrentToolLine(progress, getTermWidth() - 4, false) ?? buildLiveStatusLine(progress) ?? "thinking…";
+	const phaseLine = formatPhase(progress.phase, progress.phaseStartedAt, Date.now(), progress.currentTool);
+	if (phaseLine && isToolPhase(progress.phase) && !progress.currentToolArgs) return phaseLine;
+	const toolLine = formatCurrentToolLine(progress, getTermWidth() - 4, false);
+	if (toolLine) return toolLine;
+	return phaseLine || buildLiveStatusLine(progress) || "thinking…";
+}
+
+function isToolPhase(phase: AgentProgress["phase"]): boolean {
+	return phase === "tool_running" || phase === "tool_streaming";
 }
 
 /**
@@ -332,8 +341,11 @@ function buildLiveCurrentLine(
 			: "a while";
 		return { text: `! no activity for ${age}`, tone: "warning" };
 	}
+	const phaseLine = formatPhase(progress.phase, progress.phaseStartedAt, Date.now(), progress.currentTool);
+	if (phaseLine && isToolPhase(progress.phase) && !progress.currentToolArgs) return { text: phaseLine, tone: "accent" };
 	const toolLine = formatCurrentToolLine(progress, availableWidth, false);
 	if (toolLine) return { text: toolLine, tone: "accent" };
+	if (phaseLine) return { text: phaseLine, tone: "accent" };
 	if (progress.lastToolEndAt !== undefined) {
 		// Thinking pressure bar removed: visual fill added little over the elapsed
 		// number, and being the widest bar it dominated attention. The thinking
@@ -846,7 +858,9 @@ function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
 }
 
 function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
-	if (job.status === "lost" || job.displayState === "lost") return theme.fg("error", "!");
+	// TODO(f5): Replace this local phase check with phase-aware display-state derivation.
+	const hasKnownActivePhase = formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool) !== "";
+	if (job.status === "lost" || (job.displayState === "lost" && !hasKnownActivePhase)) return theme.fg("error", "!");
 	if (job.displayState === "needs_attention" || job.activityState === "needs_attention") return theme.fg("warning", "!");
 	if (job.status === "running") return theme.fg("accent", multiSpinnerFrame());
 	if (job.status === "queued") return theme.fg("dim", "·");
@@ -899,7 +913,9 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 		fallbackLabel: "step",
 	});
 	if (badge) parts.push(badge);
-	if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
+	const phaseLabel = formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool);
+	if (phaseLabel) parts.push(phaseLabel);
+	else if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
 	else if (job.displayState === "tool_running" && job.currentTool) parts.push(`tool ${job.currentTool}`);
 	else if (job.displayState === "needs_attention") parts.push(theme.fg("warning", "needs attention"));
 	else if (job.displayState === "quiet") parts.push("quiet");

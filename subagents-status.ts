@@ -8,6 +8,7 @@ import { readRunTranscript } from "./run-transcript.ts";
 import { formatDuration } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
 import { deriveRunDisplayState, displayStatePriority } from "./run-liveness.ts";
+import { formatPhase, type RunPhase } from "./run-phase.ts";
 import { flatRule, formatScrollInfo, padRight, titledBottomSegment, titledTopSegment } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { type ActivityState, type RunDisplayState, type SubagentState } from "./types.ts";
@@ -61,6 +62,8 @@ export interface ForegroundRunSummary {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
+	phase?: RunPhase;
+	phaseStartedAt?: number;
 	mode: "single" | "parallel" | "chain";
 	cwd?: string;
 	startedAt: number;
@@ -122,6 +125,8 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 			...(control.lastActivityAt !== undefined ? { lastActivityAt: control.lastActivityAt } : {}),
 			...(control.currentTool ? { currentTool: control.currentTool } : {}),
 			...(control.currentToolStartedAt !== undefined ? { currentToolStartedAt: control.currentToolStartedAt } : {}),
+			...(control.phase !== undefined ? { phase: control.phase } : {}),
+			...(control.phaseStartedAt !== undefined ? { phaseStartedAt: control.phaseStartedAt } : {}),
 			mode: control.mode,
 			...(state.baseCwd ? { cwd: state.baseCwd } : {}),
 			startedAt: control.startedAt,
@@ -365,6 +370,7 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
 	const glyph = statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
 	const agent = runAgentLabel(run, theme);
+	const phase = formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
 	const status = run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
 	const elapsed = runElapsed(run, now);
 	const dateStamp = runEndedStamp(run);
@@ -376,12 +382,13 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const labelPart = run.run.label
 		? ` · ${theme.fg("muted", run.run.label)}`
 		: "";
+	const phasePart = phase ? ` · ${theme.fg("dim", phase)}` : "";
 	const cwdBadge = runCwdBadge(run, showCwd);
 	const cwdPart = cwdBadge ? ` · ${theme.fg("dim", cwdBadge)}` : "";
 	// Elapsed for active runs (`5.2s`), date stamp for terminated runs (`HH:MM`
 	// or `MM-DD HH:MM`). Both never apply to the same row.
 	const tail = dateStamp ? ` · ${theme.fg("dim", dateStamp)}` : ` · ${elapsed}`;
-	const text = `${cursor}${indent}${glyph} ${agent} · ${status}${badgePart}${labelPart}${cwdPart}${tail}`;
+	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${labelPart}${cwdPart}${tail}`;
 	// Hard-clip with no ellipsis — the row already ends at the pane border, so an
 	// ellipsis adds zero information and steals 1–3 columns of label space.
 	return truncateToWidth(text, width, "");
