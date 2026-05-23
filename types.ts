@@ -310,6 +310,10 @@ export interface ArtifactConfig {
 export interface LiveStepProgress {
 	color?: string;
 	thinking?: string;
+	/** Current execution phase for this step, persisted additively by status-writer. */
+	phase?: RunPhase;
+	/** Milliseconds since epoch when this step's current phase was entered. */
+	phaseStartedAt?: number;
 	currentToolArgs?: string;
 	recentTools?: Array<{ tool: string; args?: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
 	tokenSamples?: Array<{ ts: number; tokens: number }>;

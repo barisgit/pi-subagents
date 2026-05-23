@@ -84,10 +84,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.startedAt = status.startedAt ?? job.startedAt;
 						job.updatedAt = status.lastUpdate ?? Date.now();
 						job.runnerHeartbeatAt = status.runnerHeartbeatAt ?? job.runnerHeartbeatAt;
-						if (status.phase !== undefined) {
-							job.phase = status.phase;
-							job.phaseStartedAt = status.phaseStartedAt;
-						}
+						if (status.phase !== undefined) job.phase = status.phase;
+						if (status.phaseStartedAt !== undefined) job.phaseStartedAt = status.phaseStartedAt;
 						job.displayState = deriveRunDisplayState({
 							state: job.status,
 							activityState: job.activityState,

@@ -16,6 +16,10 @@ export interface AsyncRunStepSummary {
 	status: string;
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
+	/** Current execution phase mirrored from status.steps[i].live. */
+	phase?: RunPhase;
+	/** Milliseconds since epoch when the step's current phase was entered. */
+	phaseStartedAt?: number;
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
@@ -177,6 +181,8 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 				...(step.model ? { model: step.model } : {}),
 				...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 				...(step.error ? { error: step.error } : {}),
+				...(step.live?.phase !== undefined ? { phase: step.live.phase } : {}),
+				...(step.live?.phaseStartedAt !== undefined ? { phaseStartedAt: step.live.phaseStartedAt } : {}),
 				...(step.live?.color ? { color: step.live.color } : {}),
 			};
 		}),

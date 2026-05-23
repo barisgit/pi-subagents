@@ -196,13 +196,11 @@ export class StatusWriter {
 			}
 		}
 
-		// Merge phase: preserve last-known phase when patch omits it (high-frequency patches must not erase phase state).
-		if (patch.phase !== undefined) {
-			this.status.phase = patch.phase;
-			this.status.phaseStartedAt = patch.phaseStartedAt;
-		}
+		// Merge phase: preserve last-known phase fields when a patch omits them (high-frequency patches must not erase phase state).
+		if (patch.phase !== undefined) this.status.phase = patch.phase;
+		if (patch.phaseStartedAt !== undefined) this.status.phaseStartedAt = patch.phaseStartedAt;
 		// Bump runnerHeartbeatAt on every patch to signal the runner is alive.
-		this.status.runnerHeartbeatAt = patch.runnerHeartbeatAt ?? Date.now();
+		this.status.runnerHeartbeatAt = patch.runnerHeartbeatAt ?? now;
 
 		const step = this.stepFor(patch.stepIndex);
 		if (patch.state) step.status = patch.state;
@@ -217,16 +215,14 @@ export class StatusWriter {
 				step.currentToolStartedAt = undefined;
 			}
 		}
-		if (patch.liveText !== undefined || patch.toolCallDelta || patch.toolResultDelta || patch.toolErrorDelta || patch.phase !== undefined) {
+		if (patch.liveText !== undefined || patch.toolCallDelta || patch.toolResultDelta || patch.toolErrorDelta || patch.phase !== undefined || patch.phaseStartedAt !== undefined) {
 			step.live = step.live ?? {};
 			if (patch.liveText !== undefined) step.live.outputText = patch.liveText;
 			if (patch.toolCallDelta) step.live.toolCallCount = (step.live.toolCallCount ?? 0) + patch.toolCallDelta;
 			if (patch.toolResultDelta) step.live.toolResultCount = (step.live.toolResultCount ?? 0) + patch.toolResultDelta;
 			if (patch.toolErrorDelta) step.live.toolErrorCount = (step.live.toolErrorCount ?? 0) + patch.toolErrorDelta;
-			if (patch.phase !== undefined) {
-				step.live.phase = patch.phase;
-				step.live.phaseStartedAt = patch.phaseStartedAt;
-			}
+			if (patch.phase !== undefined) step.live.phase = patch.phase;
+			if (patch.phaseStartedAt !== undefined) step.live.phaseStartedAt = patch.phaseStartedAt;
 		}
 	}
 
