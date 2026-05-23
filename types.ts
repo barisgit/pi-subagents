@@ -520,8 +520,18 @@ export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
 export const SUBAGENT_SPAWN_STARTED_EVENT = "subagent:spawn_started";
 export const SUBAGENT_COMPLETED_EVENT = "subagent:completed";
 export const SUBAGENT_FAILED_EVENT = "subagent:failed";
+export const SUBAGENT_PHASE_CHANGE_EVENT = "subagent:phase-change";
 export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
 export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
+
+export interface SubagentPhaseChangePayload {
+	runId: string;
+	stepIndex: number;
+	phase: RunPhase;
+	previousPhase?: RunPhase;
+	toolName?: string;
+	ts: number;
+}
 
 // ============================================================================
 // Execution Options

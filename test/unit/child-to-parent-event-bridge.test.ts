@@ -41,7 +41,7 @@ let testsRun = 0;
 afterEach(() => { testsRun++; });
 after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
-describe("phase-change emits on parent pi", () => {
+describe("child-to-parent event bridge: phase-change emits on parent pi", () => {
 	it("emit-on-phase-change: transitions produce subagent:phase-change events with correct payload", () => {
 		const bus = makeEventsBus();
 		const patches: StatusPatch[] = [];

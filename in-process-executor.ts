@@ -23,7 +23,7 @@ import {
 import { logger } from "./logger.ts";
 import { pushPendingChildLineage, setChildLineage } from "./lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhase, type RunPhaseState } from "./run-phase.ts";
-import type { ControlConfig, SubagentLineage } from "./types.ts";
+import { SUBAGENT_PHASE_CHANGE_EVENT, type ControlConfig, type SubagentLineage, type SubagentPhaseChangePayload } from "./types.ts";
 
 export interface ResolvedAgentConfig {
 	name: string;
@@ -160,6 +160,28 @@ export interface PhaseEventHandler {
 	getState(): RunPhaseState;
 }
 
+export function emitPhaseChange(pi: PhaseEventHandlerOptions["pi"] | undefined, payload: SubagentPhaseChangePayload): void {
+	try {
+		const events = pi?.events;
+		if (!events || typeof events.emit !== "function") {
+			logger.debug("Parent pi.events unavailable for phase-change event", {
+				runId: payload.runId,
+				stepIndex: payload.stepIndex,
+				phase: payload.phase,
+			});
+			return;
+		}
+		events.emit(SUBAGENT_PHASE_CHANGE_EVENT, payload);
+	} catch (error) {
+		logger.debug("Failed to emit phase-change event on parent pi.events", {
+			runId: payload.runId,
+			stepIndex: payload.stepIndex,
+			phase: payload.phase,
+			error: formatError(error),
+		});
+	}
+}
+
 export function createPhaseEventHandler(options: PhaseEventHandlerOptions): PhaseEventHandler {
 	let phaseState = initialRunPhaseState(options.initialNow ?? Date.now());
 
@@ -170,6 +192,16 @@ export function createPhaseEventHandler(options: PhaseEventHandlerOptions): Phas
 
 			const transitioned = nextState.previousPhase !== undefined;
 			if (!transitioned && patchBody === undefined) return undefined;
+			if (transitioned) {
+				emitPhaseChange(options.pi, {
+					runId: options.runId,
+					stepIndex: options.stepIndex,
+					phase: nextState.phase,
+					previousPhase: nextState.previousPhase,
+					...(nextState.toolName !== undefined ? { toolName: nextState.toolName } : {}),
+					ts: now,
+				} satisfies SubagentPhaseChangePayload);
+			}
 
 			const patch: StatusPatch = {
 				runId: options.runId,
@@ -340,6 +372,7 @@ async function executeChildAgent(
 		runId: step.runId,
 		stepIndex: step.stepIndex,
 		initialNow: startedAt,
+		pi: ctx.pi,
 	});
 
 	const baseResult = (state: ChildAgentExitState, error?: { message: string; reason?: string }): ChildAgentResult => {
