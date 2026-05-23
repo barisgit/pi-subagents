@@ -75,6 +75,72 @@ export function shouldEmitControlEvent(
 	return config.enabled && from !== to && to === "needs_attention";
 }
 
+export interface ActivityTickerOptions {
+	runId: string;
+	agent: string;
+	index?: number;
+	config: ResolvedControlConfig;
+	getStartedAt: () => number;
+	getLastActivityAt: () => number | undefined;
+	onNeedsAttention?: (event: ControlEvent) => void;
+	now?: () => number;
+}
+
+export interface ActivityTickerHandle {
+	tick: () => ActivityState | undefined;
+	stop: () => void;
+}
+
+/**
+ * Edge detector for foreground/async activity checks.
+ *
+ * The caller owns the actual clock tick (foreground status updates or async
+ * poll loop). This helper only derives the current activity state and emits on
+ * the rising edge into needs_attention, so it does not add its own interval.
+ */
+export function createActivityTicker(options: ActivityTickerOptions): ActivityTickerHandle {
+	let lastActivityState: ActivityState | undefined;
+	let stopped = false;
+	const now = options.now ?? (() => Date.now());
+
+	return {
+		tick() {
+			if (stopped) return lastActivityState;
+			const ts = now();
+			const current = deriveActivityState({
+				config: options.config,
+				startedAt: options.getStartedAt(),
+				lastActivityAt: options.getLastActivityAt(),
+				now: ts,
+			});
+			if (shouldEmitControlEvent(options.config, lastActivityState, current) && current) {
+				const event = buildControlEvent({
+					from: lastActivityState,
+					to: current,
+					runId: options.runId,
+					agent: options.agent,
+					index: options.index,
+					ts,
+					lastActivityAt: options.getLastActivityAt(),
+				});
+				lastActivityState = current;
+				try {
+					options.onNeedsAttention?.(event);
+				} catch {
+					// Control notifications must never crash or stop the child run.
+				}
+				return current;
+			}
+			lastActivityState = current;
+			return current;
+		},
+		stop() {
+			stopped = true;
+			lastActivityState = undefined;
+		},
+	};
+}
+
 export function buildControlEvent(input: {
 	from?: ActivityState;
 	to: ActivityState;

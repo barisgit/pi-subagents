@@ -24,7 +24,7 @@ import { buildSkillInjection, discoverAvailableSkills, normalizeSkillInput, reso
 import { createForkContextResolver } from "./fork-context.ts";
 import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, type StatusPatch, ChildAgentRegistry, dispatchAsyncChild, runChildAgent } from "./in-process-executor.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
-import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
+import { createActivityTicker, formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutput, resolveSingleOutputPath } from "./single-output.ts";
 import { resolveChildSessionFile } from "./session-paths.ts";
 import { StatusWriter } from "./status-writer.ts";
@@ -108,10 +108,12 @@ import {
 	SUBAGENT_COMPLETED_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
+	SUBAGENT_NEEDS_ATTENTION_EVENT,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_SPAWN_STARTED_EVENT,
+	type SubagentNeedsAttentionPayload,
 	checkNestedDelegationGuard,
 	checkSubagentDepth,
 	isInsideChildSession,
@@ -282,6 +284,15 @@ function emitControlNotification(input: {
 	};
 	if (input.controlConfig.notifyChannels.includes("event")) {
 		input.pi.events.emit(SUBAGENT_CONTROL_EVENT, payload);
+		if (input.event.type === "needs_attention") {
+			input.pi.events.emit(SUBAGENT_NEEDS_ATTENTION_EVENT, {
+				runId: input.event.runId,
+				agent: input.event.agent,
+				ts: input.event.ts,
+				message: input.event.message,
+				...(input.event.index !== undefined ? { index: input.event.index } : {}),
+			} satisfies SubagentNeedsAttentionPayload);
+		}
 	}
 	if (input.controlConfig.notifyChannels.includes("intercom") && input.intercomBridge.active && input.intercomBridge.orchestratorTarget) {
 		input.pi.events.emit(SUBAGENT_CONTROL_INTERCOM_EVENT, {
@@ -1091,6 +1102,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		id: runId,
 		runId,
 		metadata: params.metadata,
+		controlConfig,
 		agent: first.step.agentName,
 		task: first.cleanTask.slice(0, 50),
 		...(mode !== "single" ? { chain: steps.map(({ step }) => step.agentName) } : {}),
@@ -1463,6 +1475,7 @@ async function runInProcessChildStep(input: {
 	const outputSnapshot = captureSingleOutputSnapshot(input.outputPath);
 	const usage = emptyUsage();
 	const messages: Message[] = [];
+	const startedAt = Date.now();
 	const progress: AgentProgress = {
 		index: stepIndex,
 		agent: agentConfig.name,
@@ -1474,10 +1487,10 @@ async function runInProcessChildStep(input: {
 		toolCount: 0,
 		tokens: 0,
 		durationMs: 0,
-		lastActivityAt: Date.now(),
+		lastActivityAt: startedAt,
 		thinking: agentConfig.thinking,
 		color: resolveAgentColor(agentConfig),
-		tokenSamples: [{ ts: Date.now(), tokens: 0 }],
+		tokenSamples: [{ ts: startedAt, tokens: 0 }],
 	};
 	const resultShell: SingleResult = {
 		agent: agentConfig.name,
@@ -1493,7 +1506,17 @@ async function runInProcessChildStep(input: {
 		skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
 		progress,
 	};
+	const activityTicker = createActivityTicker({
+		runId: data.runId,
+		agent: agentConfig.name,
+		index: stepIndex,
+		config: data.controlConfig,
+		getStartedAt: () => startedAt,
+		getLastActivityAt: () => progress.lastActivityAt,
+		onNeedsAttention: input.onControlEvent,
+	});
 	const emitUpdate = () => {
+		progress.activityState = activityTicker.tick();
 		progress.durationMs = Date.now() - startedAt;
 		const progressSnapshot = snapshotProgress(progress);
 		const update: AgentToolResult<Details> = {
@@ -1510,6 +1533,10 @@ async function runInProcessChildStep(input: {
 	};
 	const applyStatusPatchToProgress = (patch: StatusPatch) => {
 		let shouldEmit = false;
+		if (patch.activity?.updatedAt !== undefined) {
+			progress.lastActivityAt = patch.activity.updatedAt;
+			shouldEmit = true;
+		}
 		if (patch.phase !== undefined) {
 			progress.phase = patch.phase;
 			shouldEmit = true;
@@ -1520,11 +1547,12 @@ async function runInProcessChildStep(input: {
 		}
 		if (shouldEmit) emitUpdate();
 	};
-	const startedAt = Date.now();
-	const childResult = await runChildAgent(step, {
-		extensionCtx: data.ctx,
-		abortSignal: combineOptionalSignals(data.signal, input.interruptSignal),
-		onEvent: (_stepIndex: number, event: AgentSessionEvent) => {
+	let childResult: ChildAgentResult | undefined;
+	try {
+		childResult = await runChildAgent(step, {
+			extensionCtx: data.ctx,
+			abortSignal: combineOptionalSignals(data.signal, input.interruptSignal),
+			onEvent: (_stepIndex: number, event: AgentSessionEvent) => {
 			const record = event as Record<string, unknown>;
 			const now = Date.now();
 			progress.lastActivityAt = now;
@@ -1586,10 +1614,15 @@ async function runInProcessChildStep(input: {
 				emitUpdate();
 			}
 		},
-		onStatusUpdate: applyStatusPatchToProgress,
-		registry: deps.childRegistry,
-		pi: deps.pi,
-	});
+			onStatusUpdate: applyStatusPatchToProgress,
+			registry: deps.childRegistry,
+			pi: deps.pi,
+		});
+	} finally {
+		activityTicker.stop();
+	}
+	if (!childResult) throw new Error(`Child agent did not produce a result for ${data.runId}`);
+	progress.activityState = undefined;
 	return childResultToSingleResult(childResult, {
 		resultShell,
 		progress,

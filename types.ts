@@ -408,6 +408,8 @@ export interface AsyncJobState {
 	startedAt?: number;
 	updatedAt?: number;
 	runnerHeartbeatAt?: number;
+	/** Control notification settings captured at async dispatch start. */
+	controlConfig?: ResolvedControlConfig;
 	/** Current execution phase, mirrored from status.json per-patch. */
 	phase?: RunPhase;
 	/** Milliseconds since epoch when the current phase was entered. */
@@ -535,6 +537,7 @@ export const SUBAGENT_FAILED_EVENT = "subagent:failed";
 export const SUBAGENT_PHASE_CHANGE_EVENT = "subagent:phase-change";
 export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
 export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
+export const SUBAGENT_NEEDS_ATTENTION_EVENT = "subagent:needs-attention";
 
 export interface SubagentPhaseChangePayload {
 	runId: string;
@@ -543,6 +546,14 @@ export interface SubagentPhaseChangePayload {
 	previousPhase?: RunPhase;
 	toolName?: string;
 	ts: number;
+}
+
+export interface SubagentNeedsAttentionPayload {
+	runId: string;
+	agent: string;
+	ts: number;
+	message: string;
+	index?: number;
 }
 
 // ============================================================================

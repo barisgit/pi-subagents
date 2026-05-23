@@ -2,9 +2,23 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { renderWidget } from "./render.ts";
 import { deriveRunDisplayState } from "./run-liveness.ts";
 import {
+	DEFAULT_CONTROL_CONFIG,
+	buildControlEvent,
+	deriveActivityState,
+	formatControlNoticeMessage,
+	shouldEmitControlEvent,
+	shouldNotifyControlEvent,
+} from "./subagent-control.ts";
+import {
+	type ActivityState,
 	type AsyncJobState,
+	type ControlEvent,
+	type ResolvedControlConfig,
 	type SubagentState,
 	POLL_INTERVAL_MS,
+	SUBAGENT_CONTROL_EVENT,
+	SUBAGENT_NEEDS_ATTENTION_EVENT,
+	type SubagentNeedsAttentionPayload,
 } from "./types.ts";
 import type { IdleTracker } from "./idle-tracker.ts";
 import { readStatus } from "./utils.ts";
@@ -23,6 +37,41 @@ function isTerminalAsyncStatus(status: AsyncJobLifecycleStatus): boolean {
 	return status === "complete" || status === "failed" || status === "paused" || status === "lost";
 }
 
+function asyncAgentName(job: AsyncJobState): string {
+	return job.currentAgent ?? job.agents?.[job.currentStep ?? 0] ?? job.agents?.[0] ?? "unknown";
+}
+
+function deriveAsyncJobActivityState(job: AsyncJobState, config: ResolvedControlConfig, now = Date.now()): ActivityState | undefined {
+	if (isTerminalAsyncStatus(job.status)) return undefined;
+	return deriveActivityState({
+		config,
+		startedAt: job.startedAt ?? now,
+		lastActivityAt: job.lastActivityAt,
+		now,
+	});
+}
+
+function emitAsyncControlNotification(pi: Pick<ExtensionAPI, "events">, config: ResolvedControlConfig, event: ControlEvent): void {
+	if (!shouldNotifyControlEvent(config, event)) return;
+	const payload = {
+		event,
+		source: "async" as const,
+		noticeText: formatControlNoticeMessage(event),
+	};
+	if (config.notifyChannels.includes("event")) {
+		pi.events.emit(SUBAGENT_CONTROL_EVENT, payload);
+		if (event.type === "needs_attention") {
+			pi.events.emit(SUBAGENT_NEEDS_ATTENTION_EVENT, {
+				runId: event.runId,
+				agent: event.agent,
+				ts: event.ts,
+				message: event.message,
+				...(event.index !== undefined ? { index: event.index } : {}),
+			} satisfies SubagentNeedsAttentionPayload);
+		}
+	}
+}
+
 export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, options: AsyncJobTrackerOptions = {}): {
 	ensurePoller: () => void;
 	handleStarted: (data: unknown) => void;
@@ -32,6 +81,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const completionRetentionMs = options.completionRetentionMs ?? 10000;
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
 	const idleTracker = options.idleTracker;
+	const lastActivityStateByRunId = new Map<string, ActivityState | undefined>();
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		renderWidget(ctx, jobs);
 		// TODO(sdk-0.75-shape): ExtensionUIContext no longer exposes requestRender;
@@ -43,12 +93,32 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		const timer = setTimeout(() => {
 			state.cleanupTimers.delete(asyncId);
 			state.asyncJobs.delete(asyncId);
+			lastActivityStateByRunId.delete(asyncId);
 			if (state.lastUiContext) {
 				rerenderWidget(state.lastUiContext);
 			}
 		}, completionRetentionMs);
 		timer.unref?.();
 		state.cleanupTimers.set(asyncId, timer);
+	};
+	const updateActivityState = (job: AsyncJobState): ActivityState | undefined => {
+		const config = job.controlConfig ?? DEFAULT_CONTROL_CONFIG;
+		const previous = lastActivityStateByRunId.get(job.asyncId);
+		const current = deriveAsyncJobActivityState(job, config);
+		job.activityState = current;
+		if (shouldEmitControlEvent(config, previous, current) && current) {
+			emitAsyncControlNotification(pi, config, buildControlEvent({
+				from: previous,
+				to: current,
+				runId: job.asyncId,
+				agent: asyncAgentName(job),
+				index: job.currentStep,
+				lastActivityAt: job.lastActivityAt,
+			}));
+		}
+		if (current === undefined) lastActivityStateByRunId.delete(job.asyncId);
+		else lastActivityStateByRunId.set(job.asyncId, current);
+		return current;
 	};
 	const ensurePoller = () => {
 		if (state.poller) return;
@@ -68,11 +138,11 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					const previousStatusWasTerminal = isTerminalAsyncStatus(previousStatus);
 					const status = readStatus(job.asyncDir);
 					if (status) {
+						const currentStepRecord = status.steps?.[status.currentStep ?? 0];
 						if (!previousStatusWasTerminal || isTerminalAsyncStatus(status.state)) {
 							job.status = status.state;
 						}
-						job.activityState = isTerminalAsyncStatus(job.status) ? undefined : status.activityState;
-						job.lastActivityAt = status.lastActivityAt ?? job.lastActivityAt;
+						job.lastActivityAt = status.lastActivityAt ?? currentStepRecord?.lastActivityAt ?? currentStepRecord?.startedAt ?? job.lastActivityAt;
 						job.currentTool = isTerminalAsyncStatus(job.status) ? undefined : (status.currentTool ?? job.currentTool);
 						job.currentToolStartedAt = isTerminalAsyncStatus(job.status) ? undefined : (status.currentToolStartedAt ?? job.currentToolStartedAt);
 						job.mode = status.mode;
@@ -86,9 +156,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.runnerHeartbeatAt = status.runnerHeartbeatAt ?? job.runnerHeartbeatAt;
 						if (status.phase !== undefined) job.phase = status.phase;
 						if (status.phaseStartedAt !== undefined) job.phaseStartedAt = status.phaseStartedAt;
+						const activityState = updateActivityState(job);
 						job.displayState = deriveRunDisplayState({
 							state: job.status,
-							activityState: job.activityState,
+							activityState,
 							currentTool: job.currentTool,
 							phase: job.phase,
 							phaseStartedAt: job.phaseStartedAt,
@@ -110,7 +181,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.sessionFile = status.sessionFile ?? job.sessionFile;
 						// Mirror LiveStepProgress from currentStep onto flat job fields so the widget
 						// can render color/sparkline/recent-tools without re-reading status.json shape.
-						const currentStepRecord = status.steps?.[status.currentStep ?? 0];
 						const live = currentStepRecord?.live;
 						const terminal = isTerminalAsyncStatus(job.status);
 						if (live) {
@@ -144,9 +214,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					}
 					if (isTerminalAsyncStatus(job.status)) continue;
 					job.status = job.status === "queued" ? "running" : job.status;
+					const activityState = updateActivityState(job);
 					job.displayState = deriveRunDisplayState({
 						state: job.status,
-						activityState: job.activityState,
+						activityState,
 						currentTool: job.currentTool,
 						phase: job.phase,
 						phaseStartedAt: job.phaseStartedAt,
@@ -173,6 +244,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			asyncDir?: string;
 			agent?: string;
 			chain?: string[];
+			controlConfig?: ResolvedControlConfig;
 		};
 		logger.info("handleStarted: FIRED", { id: info.id, agent: info.agent, hasUi: !!state.lastUiContext });
 		if (!info.id) return;
@@ -194,6 +266,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			stepsTotal: agents?.length,
 			startedAt: now,
 			updatedAt: now,
+			controlConfig: info.controlConfig,
 		});
 		ensurePoller();
 		if (state.lastUiContext) {
@@ -210,9 +283,11 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		if (job) {
 			job.status = result.success ? "complete" : "failed";
 			job.displayState = undefined;
+			job.activityState = undefined;
 			job.updatedAt = Date.now();
 			if (result.asyncDir) job.asyncDir = result.asyncDir;
 		}
+		lastActivityStateByRunId.delete(asyncId);
 		if (state.lastUiContext) {
 			rerenderWidget(state.lastUiContext);
 		}
@@ -226,6 +301,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
+		lastActivityStateByRunId.clear();
 		state.foregroundControls?.clear();
 		state.lastForegroundControlId = null;
 		if (ctx?.hasUI) {
