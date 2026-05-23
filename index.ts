@@ -5,7 +5,7 @@
  * - Sync (default): Streams output, renders markdown, tracks usage
  * - Async: Background execution, emits events when done
  *
- * Modes: single (agent + task), parallel (tasks[]), chain (chain[] with {previous})
+ * Modes: run[], chain:true, or management via action/id.
  * Toggle: async parameter (default: false, configurable via config.json)
  *
  * Config file: ~/.pi/agent/subagent.json
@@ -829,18 +829,19 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
-		promptSnippet: "Delegate to subagents or control runs",
-		description: `Delegate to subagents or control runs.
+		promptSnippet: "Delegate to subagents or manage runs",
+		description: `Delegate to subagents or manage runs.
 
 Dispatch:
 • run:[{agent,task}] starts one task.
-• run:[{agent,task},{agent,task}] runs tasks in parallel by default.
+• run:[{agent,task},{agent,task}] runs entries in parallel by default.
 • chain:true runs run[] sequentially; inside chain:true a run item may be Task[] for a parallel sub-step.
 • message adds shared framing for dispatch, or the next turn for action:"resume".
 
-Control:
+Run management:
 • action is one of "list", "status", "interrupt", "resume"; id targets status/interrupt/resume.
 • Use { action: "list" } when available agents/chains are unknown or may have changed; execute only agents known to be executable/non-disabled.
+• Agent CRUD removed; write a file under \`agents/<name>.md\`.
 
 Task fields: agent, task, label, context, worktree, output.
 Gotchas: context defaults to "fresh"; "fork" is main-only same-role self-branching, not role switching. Nested delegation is depth-limited.`,

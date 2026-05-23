@@ -19,7 +19,7 @@ import { serializeChain } from "./chain-serializer.ts";
 import { discoverAvailableSkills } from "./skills.ts";
 import type { Details } from "./types.ts";
 
-type ManagementAction = "list" | "get" | "create" | "update" | "delete";
+type ManagementAction = "list";
 type ManagementScope = "user" | "project";
 function toManagementScope(source: AgentSource): ManagementScope {
 	return source === "builtin" ? "user" : source;
@@ -590,10 +590,6 @@ export function handleDelete(params: ManagementParams, ctx: ManagementContext): 
 export function handleManagementAction(action: string, params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	switch (action as ManagementAction) {
 		case "list": return handleList(params, ctx);
-		case "get": return handleGet(params, ctx);
-		case "create": return handleCreate(params, ctx);
-		case "update": return handleUpdate(params, ctx);
-		case "delete": return handleDelete(params, ctx);
 		default: return result(`Unknown action: ${action}`, true);
 	}
 }
