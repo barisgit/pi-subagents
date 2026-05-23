@@ -8,6 +8,15 @@ import type { ChildAgentResult } from "../../in-process-executor.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
+let testsRun = 0;
+
+afterEach(() => {
+	testsRun++;
+});
+
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 afterEach(() => {
 	while (restoreFns.length > 0) restoreFns.pop()?.();
@@ -144,5 +153,88 @@ describe("StatusWriter", () => {
 		assert.equal(status.outputText, "partial");
 		assert.equal(status.error, "Child agent interrupted: session-reload");
 		assert.equal((status.steps as Array<Record<string, unknown>>)[0]!.status, "interrupted");
+	});
+});
+
+describe("StatusWriter phase persistence", () => {
+	it("persists phase and phaseStartedAt on flush; runnerHeartbeatAt advances", async () => {
+		const dir = tempDir("pi-status-phase-persist-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 20 });
+		writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
+
+		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", phase: "thinking", phaseStartedAt: 5000, runnerHeartbeatAt: 6000 });
+		await delay(60);
+
+		const status = readStatus(dir);
+		assert.equal(status.phase, "thinking");
+		assert.equal(status.phaseStartedAt, 5000);
+		assert.equal(status.runnerHeartbeatAt, 6000);
+	});
+
+	it("live block carries phase and phaseStartedAt", async () => {
+		const dir = tempDir("pi-status-phase-live-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 20 });
+		writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
+
+		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", phase: "streaming_text", phaseStartedAt: 7000 });
+		await delay(60);
+
+		const status = readStatus(dir);
+		const step = (status.steps as Array<Record<string, unknown>>)[0]!;
+		const live = step.live as Record<string, unknown> | undefined;
+		assert.equal(live?.phase, "streaming_text");
+		assert.equal(live?.phaseStartedAt, 7000);
+	});
+
+	it("phase is preserved when a follow-up patch omits it (merge not overwrite)", async () => {
+		const dir = tempDir("pi-status-phase-preserve-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 20 });
+		writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
+
+		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", phase: "thinking", phaseStartedAt: 9000 });
+		await delay(60);
+
+		// Second patch with no phase field — must not erase the previously persisted phase
+		writer.enqueue({ runId: "run-1", stepIndex: 0, liveText: "some text" });
+		await delay(60);
+
+		const status = readStatus(dir);
+		assert.equal(status.phase, "thinking");
+		assert.equal(status.phaseStartedAt, 9000);
+	});
+
+	it("explicit phase value in a later patch overwrites the prior one (no stuck-idle)", async () => {
+		const dir = tempDir("pi-status-phase-explicit-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 20 });
+		writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
+
+		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", phase: "thinking", phaseStartedAt: 1000 });
+		await delay(60);
+		writer.enqueue({ runId: "run-1", stepIndex: 0, phase: "idle", phaseStartedAt: 2000 });
+		await delay(60);
+
+		const status = readStatus(dir);
+		assert.equal(status.phase, "idle");
+		assert.equal(status.phaseStartedAt, 2000);
+	});
+
+	it("async-job-tracker mirror loop carries phase and phaseStartedAt through statusToSummary", async () => {
+		// Verify the round-trip: write a status.json with phase populated, read it
+		// back via statusToSummary (the path used by async-status readers).
+		const { statusToSummary } = await import("../../async-status.ts");
+
+		const dir = tempDir("pi-status-phase-compat-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-async-1", debounceMs: 20 });
+		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "fixer", status: "running" }] });
+		writer.enqueue({ runId: "run-async-1", stepIndex: 0, phase: "tool_running", phaseStartedAt: 3000, runnerHeartbeatAt: 4000 });
+		await delay(60);
+
+		const rawStatus = JSON.parse(
+			(await import("node:fs")).readFileSync((await import("node:path")).join(dir, "status.json"), "utf-8")
+		) as import("../../types.ts").AsyncStatus;
+
+		const summary = statusToSummary(dir, rawStatus);
+		assert.equal(summary.phase, "tool_running");
+		assert.equal(summary.phaseStartedAt, 3000);
 	});
 });

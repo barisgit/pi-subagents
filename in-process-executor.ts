@@ -22,6 +22,7 @@ import {
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "./logger.ts";
 import { pushPendingChildLineage, setChildLineage } from "./lineage.ts";
+import { advanceRunPhase, initialRunPhaseState, type RunPhase, type RunPhaseState } from "./run-phase.ts";
 import type { ControlConfig, SubagentLineage } from "./types.ts";
 
 export interface ResolvedAgentConfig {
@@ -138,6 +139,54 @@ export interface StatusPatch {
 	toolErrorDelta?: number;
 	endedAt?: number;
 	outputText?: string;
+	phase?: RunPhase;
+	phaseStartedAt?: number;
+	runnerHeartbeatAt?: number;
+	toolName?: string;
+}
+
+type StatusPatchBody = Omit<StatusPatch, "runId" | "stepIndex">;
+
+export interface PhaseEventHandlerOptions {
+	runId: string;
+	stepIndex: number;
+	onStatusUpdate?: (patch: StatusPatch) => void;
+	initialNow?: number;
+	pi?: { events?: { emit(event: string, payload: unknown): void } };
+}
+
+export interface PhaseEventHandler {
+	handle(event: AgentSessionEvent, now?: number, patch?: StatusPatchBody): StatusPatch | undefined;
+	getState(): RunPhaseState;
+}
+
+export function createPhaseEventHandler(options: PhaseEventHandlerOptions): PhaseEventHandler {
+	let phaseState = initialRunPhaseState(options.initialNow ?? Date.now());
+
+	return {
+		handle(event: AgentSessionEvent, now = Date.now(), patchBody?: StatusPatchBody): StatusPatch | undefined {
+			const nextState = advanceRunPhase(phaseState, event, now);
+			phaseState = nextState;
+
+			const transitioned = nextState.previousPhase !== undefined;
+			if (!transitioned && patchBody === undefined) return undefined;
+
+			const patch: StatusPatch = {
+				runId: options.runId,
+				stepIndex: options.stepIndex,
+				...(patchBody ?? {}),
+				phase: nextState.phase,
+				phaseStartedAt: nextState.phaseStartedAt,
+				runnerHeartbeatAt: now,
+				...(nextState.toolName !== undefined ? { toolName: nextState.toolName } : {}),
+			};
+			options.onStatusUpdate?.(patch);
+			return patch;
+		},
+		getState(): RunPhaseState {
+			return phaseState;
+		},
+	};
 }
 
 interface ExecutorRuntimeDeps {
@@ -287,6 +336,11 @@ async function executeChildAgent(
 	let unsubscribe: (() => void) | undefined;
 	let session: AgentSession | undefined;
 	const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	const phaseEvents = createPhaseEventHandler({
+		runId: step.runId,
+		stepIndex: step.stepIndex,
+		initialNow: startedAt,
+	});
 
 	const baseResult = (state: ChildAgentExitState, error?: { message: string; reason?: string }): ChildAgentResult => {
 		endedAt = Date.now();
@@ -332,7 +386,7 @@ async function executeChildAgent(
 			session.setActiveToolsByName(step.activeToolNames);
 		}
 		unsubscribe = session.subscribe((event) => {
-			const patch = handleSessionEvent(step, ctx, event, {
+			const patch = handleSessionEvent(step, ctx, event, phaseEvents, {
 				appendOutput: (delta) => {
 					outputText += delta;
 					return outputText;
@@ -524,6 +578,7 @@ function handleSessionEvent(
 	step: ChildAgentStep,
 	ctx: ChildAgentContext,
 	event: AgentSessionEvent,
+	phaseEvents: PhaseEventHandler,
 	counters: {
 		appendOutput(delta: string): string;
 		incrementToolCall(): number;
@@ -536,6 +591,7 @@ function handleSessionEvent(
 	const record = event as Record<string, unknown>;
 	const type = typeof record.type === "string" ? record.type : undefined;
 	const now = Date.now();
+	let patchBody: StatusPatchBody | undefined;
 
 	// Token + cost accumulation. Equivalent to subagent-executor's sync path:
 	// add per-assistant-message usage, then add any nested subagent
@@ -566,49 +622,35 @@ function handleSessionEvent(
 	}
 
 	if (type === "text_delta" && typeof record.delta === "string") {
-		return {
-			runId: step.runId,
-			stepIndex: step.stepIndex,
+		patchBody = {
 			liveText: counters.appendOutput(record.delta),
 			activity: { state: "running", updatedAt: now },
 		};
-	}
-
-	if (type === "text_end" && typeof record.content === "string") {
-		return {
-			runId: step.runId,
-			stepIndex: step.stepIndex,
+	} else if (type === "text_end" && typeof record.content === "string") {
+		patchBody = {
 			liveText: record.content,
 			activity: { state: "running", updatedAt: now },
 		};
-	}
-
-	if (type === "tool_execution_start") {
+	} else if (type === "tool_execution_start") {
 		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
 		counters.incrementToolCall();
-		return {
-			runId: step.runId,
-			stepIndex: step.stepIndex,
+		patchBody = {
 			toolCallDelta: 1,
 			activity: { state: "tool_running", toolName, updatedAt: now },
 		};
-	}
-
-	if (type === "tool_execution_end") {
+	} else if (type === "tool_execution_end") {
 		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
 		counters.incrementToolResult();
 		const isError = record.isError === true;
 		if (isError) counters.incrementToolError();
-		return {
-			runId: step.runId,
-			stepIndex: step.stepIndex,
+		patchBody = {
 			toolResultDelta: 1,
 			...(isError ? { toolErrorDelta: 1 } : {}),
 			activity: { state: "running", toolName, updatedAt: now },
 		};
 	}
 
-	return undefined;
+	return phaseEvents.handle(event, now, patchBody);
 }
 
 function combineAbortSignals(signals: AbortSignal[]): AbortSignal {

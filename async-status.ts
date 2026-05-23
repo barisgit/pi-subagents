@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { ASYNC_NO_POLL_GUIDANCE } from "./async-guidance.ts";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
 import { type ActivityState, type AsyncStatus, type RunDisplayState, type TokenUsage } from "./types.ts";
+import type { RunPhase } from "./run-phase.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
 import { deriveRunDisplayState } from "./run-liveness.ts";
 import { readStatus } from "./utils.ts";
@@ -46,6 +47,10 @@ export interface AsyncRunSummary {
 	lastUpdate?: number;
 	endedAt?: number;
 	runnerHeartbeatAt?: number;
+	/** Current execution phase mirrored from status.json. */
+	phase?: RunPhase;
+	/** Milliseconds since epoch when the current phase was entered. */
+	phaseStartedAt?: number;
 	currentStep?: number;
 	steps: AsyncRunStepSummary[];
 	sessionDir?: string;
@@ -140,6 +145,8 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 		lastUpdate: status.lastUpdate,
 		endedAt: status.endedAt,
 		runnerHeartbeatAt: status.runnerHeartbeatAt,
+		...(status.phase !== undefined ? { phase: status.phase } : {}),
+		...(status.phaseStartedAt !== undefined ? { phaseStartedAt: status.phaseStartedAt } : {}),
 		currentStep: status.currentStep,
 		steps: (status.steps ?? []).map((step, index) => {
 			const stepActivityState = step.activityState ?? (step.status === "running" ? activityState : undefined);

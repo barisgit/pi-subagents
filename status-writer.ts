@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ChildAgentResult, ChildAgentExitState, StatusPatch } from "./in-process-executor.ts";
+import type { RunPhase } from "./run-phase.ts";
 
 type StatusState = ChildAgentExitState | "queued" | "running" | "paused" | "lost";
 
@@ -27,6 +28,8 @@ type StatusStep = {
 		toolCallCount?: number;
 		toolResultCount?: number;
 		toolErrorCount?: number;
+		phase?: RunPhase;
+		phaseStartedAt?: number;
 	};
 };
 
@@ -66,6 +69,12 @@ type StatusPayload = {
 	error?: string;
 	totalTokens?: TokenUsage;
 	totalUsage?: StatusUsage;
+	/** Current execution phase persisted on every patch. */
+	phase?: RunPhase;
+	/** Milliseconds since epoch when the current phase was entered. */
+	phaseStartedAt?: number;
+	/** Milliseconds since epoch of last runner heartbeat (bumped on every patch). */
+	runnerHeartbeatAt?: number;
 };
 
 export class StatusWriter {
@@ -187,6 +196,14 @@ export class StatusWriter {
 			}
 		}
 
+		// Merge phase: preserve last-known phase when patch omits it (high-frequency patches must not erase phase state).
+		if (patch.phase !== undefined) {
+			this.status.phase = patch.phase;
+			this.status.phaseStartedAt = patch.phaseStartedAt;
+		}
+		// Bump runnerHeartbeatAt on every patch to signal the runner is alive.
+		this.status.runnerHeartbeatAt = patch.runnerHeartbeatAt ?? Date.now();
+
 		const step = this.stepFor(patch.stepIndex);
 		if (patch.state) step.status = patch.state;
 		if (patch.endedAt !== undefined) step.endedAt = patch.endedAt;
@@ -200,12 +217,16 @@ export class StatusWriter {
 				step.currentToolStartedAt = undefined;
 			}
 		}
-		if (patch.liveText !== undefined || patch.toolCallDelta || patch.toolResultDelta || patch.toolErrorDelta) {
+		if (patch.liveText !== undefined || patch.toolCallDelta || patch.toolResultDelta || patch.toolErrorDelta || patch.phase !== undefined) {
 			step.live = step.live ?? {};
 			if (patch.liveText !== undefined) step.live.outputText = patch.liveText;
 			if (patch.toolCallDelta) step.live.toolCallCount = (step.live.toolCallCount ?? 0) + patch.toolCallDelta;
 			if (patch.toolResultDelta) step.live.toolResultCount = (step.live.toolResultCount ?? 0) + patch.toolResultDelta;
 			if (patch.toolErrorDelta) step.live.toolErrorCount = (step.live.toolErrorCount ?? 0) + patch.toolErrorDelta;
+			if (patch.phase !== undefined) {
+				step.live.phase = patch.phase;
+				step.live.phaseStartedAt = patch.phaseStartedAt;
+			}
 		}
 	}
 

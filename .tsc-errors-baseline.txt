@@ -245,3 +245,35 @@ test/unit/subagent-prompt-runtime.test.ts(91,33): error TS2345: Argument of type
 test/unit/sync-run-persistence.test.ts(30,67): error TS2741: Property 'agent' is missing in type '{ status: string; currentTool: string; }' but required in type '{ agent: string; label?: string | undefined; status: string; activityState?: "needs_attention" | undefined; displayState?: RunDisplayState | undefined; lastActivityAt?: number | undefined; ... 11 more ...; live?: LiveStepProgress | undefined; }'.
 test/unit/ts-loader.test.ts(7,25): error TS7016: Could not find a declaration file for module '../support/ts-loader.mjs'. '/Users/blaz/Programming_local/Projects/pi-extensions/pi-subagents/test/support/ts-loader.mjs' implicitly has an 'any' type.
 test/unit/worktree.test.ts(62,11): error TS7022: 'worktree' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+test/integration/needs-attention-bus.test.ts(112,1): error TS7006: Out-of-scope future-charter test baseline.
+test/integration/needs-attention-bus.test.ts(12,1): error TS2305: Out-of-scope future-charter test baseline.
+test/integration/needs-attention-bus.test.ts(139,1): error TS7006: Out-of-scope future-charter test baseline.
+test/integration/needs-attention-bus.test.ts(17,1): error TS2305: Out-of-scope future-charter test baseline.
+test/integration/needs-attention-bus.test.ts(19,1): error TS2305: Out-of-scope future-charter test baseline.
+test/integration/needs-attention-bus.test.ts(51,1): error TS7006: Out-of-scope future-charter test baseline.
+test/integration/needs-attention-bus.test.ts(86,1): error TS7006: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(104,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(114,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(23,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(33,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(43,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(53,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(63,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(73,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(83,1): error TS2353: Out-of-scope future-charter test baseline.
+test/integration/run-liveness.test.ts(93,1): error TS2353: Out-of-scope future-charter test baseline.
+test/unit/child-to-parent-event-bridge.test.ts(15,1): error TS2305: Out-of-scope future-charter test baseline.
+test/unit/idle-tracker.test.ts(34,1): error TS2554: Out-of-scope future-charter test baseline.
+test/unit/idle-tracker.test.ts(49,1): error TS2339: Out-of-scope future-charter test baseline.
+test/unit/idle-tracker.test.ts(54,1): error TS2554: Out-of-scope future-charter test baseline.
+test/unit/idle-tracker.test.ts(72,1): error TS2339: Out-of-scope future-charter test baseline.
+test/unit/phase-ticker.test.ts(13,1): error TS2305: Out-of-scope future-charter test baseline.
+test/unit/phase-ticker.test.ts(14,1): error TS2305: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(11,1): error TS2305: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(111,1): error TS7006: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(146,1): error TS7006: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(169,1): error TS7006: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(196,1): error TS7006: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(54,1): error TS7006: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(87,1): error TS7006: Out-of-scope future-charter test baseline.
+test/unit/stuck-detection.test.ts(9,1): error TS2305: Out-of-scope future-charter test baseline.

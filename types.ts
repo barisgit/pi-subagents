@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { RunPhase } from "./run-phase.ts";
 
 // ============================================================================
 // Basic Types
@@ -336,6 +337,10 @@ export interface AsyncStatus {
 	endedAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
+	/** Current execution phase, written by status-writer on every patch. */
+	phase?: RunPhase;
+	/** Milliseconds since epoch when the current phase was entered. */
+	phaseStartedAt?: number;
 	cwd?: string;
 	currentStep?: number;
 	steps?: Array<{
@@ -395,6 +400,10 @@ export interface AsyncJobState {
 	startedAt?: number;
 	updatedAt?: number;
 	runnerHeartbeatAt?: number;
+	/** Current execution phase, mirrored from status.json per-patch. */
+	phase?: RunPhase;
+	/** Milliseconds since epoch when the current phase was entered. */
+	phaseStartedAt?: number;
 	sessionDir?: string;
 	outputFile?: string;
 	totalTokens?: TokenUsage;
