@@ -1,6 +1,6 @@
 # Dispatch patterns
 
-Use the slim `run` shape for every dispatch. Top-level `run` items start in parallel by default; set `chain:true` when later work depends on earlier output.
+Use the `run` shape for every dispatch. Top-level `run` items start in parallel by default; set `chain:true` when later work depends on earlier output.
 
 ## Single
 
@@ -43,7 +43,7 @@ subagent({
 
 ## Swarm-style parallel
 
-Swarm is no longer a separate field. Model it as several `run` tasks that share the same framing through `message` and specialize each task.
+For a shared framing across several specialists, put the framing in `message` and specialize each `run` task. `{task}` in `message` substitutes per-task.
 
 ```ts
 subagent({

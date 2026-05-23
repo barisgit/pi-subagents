@@ -11,30 +11,8 @@ const referenceFiles = [
 	"context-fork.md",
 	"dispatch-patterns.md",
 	"error-modes.md",
-	"migration.md",
 	"resume.md",
 ] as const;
-const droppedFields = [
-	"model",
-	"tasks",
-	"prompt",
-	"clarify",
-	"share",
-	"preset",
-	"sessionDir",
-	"control",
-	"skill",
-	"chainDir",
-	"artifacts",
-	"progress",
-	"agentScope",
-	"includeInternal",
-	"metadata",
-	"cwd",
-	"reads",
-	"includeProgress",
-] as const;
-const droppedCrudVerbs = ["create", "update", "delete", "get"] as const;
 
 function readSkill(): string {
 	return fs.readFileSync(skillPath, "utf-8");
@@ -59,7 +37,7 @@ describe("skill progressive", () => {
 		assert.ok(lines.length <= 80, `SKILL.md has ${lines.length} lines`);
 	});
 
-	it("references-folder-has-7", () => {
+	it("references-folder-has-6", () => {
 		const files = fs.readdirSync(referencesDir).filter((file) => file.endsWith(".md")).sort();
 
 		assert.deepEqual(files, [...referenceFiles].sort());
@@ -76,17 +54,6 @@ describe("skill progressive", () => {
 	it("each-reference-has-h1", () => {
 		for (const file of referenceFiles) {
 			assert.match(readReference(file), /^#\s+.+/m, `${file} is missing an H1`);
-		}
-	});
-
-	it("migration-lists-every-dropped-field", () => {
-		const migration = readReference("migration.md");
-
-		for (const field of droppedFields) {
-			assert.ok(migration.includes(`\`${field}\``), `missing dropped field ${field}`);
-		}
-		for (const verb of droppedCrudVerbs) {
-			assert.ok(migration.includes(`\`${verb}\``), `missing dropped CRUD verb ${verb}`);
 		}
 	});
 

@@ -830,11 +830,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage runs",
-		description: `Delegate bounded work to subagents, or manage an existing run.
+		description: `Delegate a bounded task to a named specialist agent, run several in parallel, build sequential chains, fork same-role branches, or inspect/resume async runs. Use when a specialist or background run beats doing the work inline.
 
 Shape: run: Step[] dispatches work. Step is a Task; inside chain:true a Step may be Task[] for a parallel sub-step.
 
-Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async returns immediately with an id; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets the default isolated-worktree mode; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status/interrupt/resume.
+Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async returns immediately with an id so the parent can keep working; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets the default isolated-worktree mode for concurrent writers; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status/interrupt/resume.
 
 Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; worktree per-task override; output path/boolean capture override.
 
@@ -850,7 +850,7 @@ Examples:
 
 Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only agents known to be executable/non-disabled. Then use action:"status"|"interrupt"|"resume" with id; resume uses message.
 
-Agent CRUD removed; write a file under \`agents/<name>.md\`. For advanced patterns see skills/subagent.`,
+Author agents as files under \`agents/<name>.md\`. For advanced patterns see skills/subagent.`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {

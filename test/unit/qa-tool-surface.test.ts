@@ -65,7 +65,7 @@ describe("qa tool surface", () => {
 		const evidence = readEvidence();
 		const negatives = [
 			["negative: prompt renamed to message", /prompt.*message/i],
-			["negative: CRUD removed uses file-based agent workflow", /Agent CRUD removed.*agents\/<name>\.md/i],
+			["negative: CRUD removed uses file-based agent workflow", /agents\/<name>\.md/i],
 			["negative: fork is main-only", /fork.*same-role\/main|same-role\/main.*fork/i],
 		] as const;
 

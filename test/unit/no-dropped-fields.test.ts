@@ -112,14 +112,10 @@ describe("no dropped fields", () => {
 
 	it("tool-description-clean", () => {
 		const description = readRegisteredSubagentDescription();
-		const checked = description
-			.split("\n")
-			.filter((line) => !/Agent CRUD removed/.test(line))
-			.join("\n");
 
-		for (const name of droppedFields) assert.doesNotMatch(checked, wordPattern(name), `${name} leaked into tool description`);
-		for (const verb of droppedCrudVerbs) assert.doesNotMatch(checked, wordPattern(verb), `${verb} leaked into tool description`);
-		assert.match(description, /Agent CRUD removed; write a file under \\?`agents\/<name>\.md\\?`\./);
+		for (const name of droppedFields) assert.doesNotMatch(description, wordPattern(name), `${name} leaked into tool description`);
+		for (const verb of droppedCrudVerbs) assert.doesNotMatch(description, wordPattern(verb), `${verb} leaked into tool description`);
+		assert.match(description, /agents\/<name>\.md/, "description should point to file-based agent authoring");
 	});
 
 	it("crud-verb-absence", () => {

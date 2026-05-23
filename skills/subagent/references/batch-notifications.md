@@ -23,7 +23,7 @@ With `batch:true`, the parent receives one rollup after the batch completes. Use
 subagent({
   run: [
     { agent: "explorer", task: "Find schema callers." },
-    { agent: "explorer", task: "Find docs that mention legacy fields." }
+    { agent: "explorer", task: "Find docs that mention the retry policy." }
   ],
   batch: true
 })

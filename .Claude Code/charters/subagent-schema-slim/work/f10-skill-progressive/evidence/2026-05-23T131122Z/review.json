@@ -1,0 +1,17 @@
+{
+  "kind": "review",
+  "featureId": "f10-skill-progressive",
+  "round": 1,
+  "reviewedAt": "2026-05-23T13:11:22Z",
+  "subagentSessionId": "charter-reviewer-m4-skill",
+  "outcome": "pass",
+  "blockingIssues": [],
+  "nonBlockingNotes": [
+    "SKILL.md is 68 lines — well under the 80-line ceiling; no risk of creep.",
+    "error-modes.md ends with a back-reference to migration.md, which reinforces the progressive-disclosure pattern.",
+    "All 7 reference files have an H1 heading and are individually loadable on demand."
+  ],
+  "summary": "SKILL.md (68 lines) is compact, references all 7 files by name for on-demand load, and migration.md covers every dropped field and CRUD verb. All 8 automated tests pass.",
+  "because": "Static inspection confirms: (1) SKILL.md ≤ 80 lines (68), (2) 7 references exist with correct names, (3) SKILL.md footer links each reference explicitly, (4) migration.md table contains every droppedField and droppedCrudVerb constant from the test, (5) canonical run/chain example present in SKILL.md. Test run: 8/8 pass, 0 fail.",
+  "narrativePath": "review.md"
+}

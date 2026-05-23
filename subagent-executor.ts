@@ -364,7 +364,7 @@ export function validateSubagentToolInput(input: unknown): AgentToolResult<Detai
 	if (!isRecord(input)) return null;
 	const action = typeof input.action === "string" ? input.action : undefined;
 	if (action && REMOVED_CRUD_ACTIONS.has(action)) {
-		return validationError(`Agent CRUD removed; write a file under agents/<name>.md instead of action:\"${action}\". Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
+		return validationError(`Author agents as files under agents/<name>.md instead of action:\"${action}\". Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
 	}
 	if (action && !(ALLOWED_CONTROL_ACTIONS as readonly string[]).includes(action)) {
 		return validationError(`Unknown action: ${action}. Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
