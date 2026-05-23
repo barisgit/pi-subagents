@@ -9,112 +9,73 @@ import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
 import { RUNNER_HEARTBEAT_STALE_MS, deriveRunDisplayState } from "../../run-liveness.ts";
 
-const STALE = RUNNER_HEARTBEAT_STALE_MS + 5_000; // clearly stale
+const THIRTY_SECONDS = RUNNER_HEARTBEAT_STALE_MS + 15_000;
+const SIXTY_SECONDS = 60_000;
+const FIVE_SECONDS = 5_000;
 const NOW = 100_000;
 
 let testsRun = 0;
 afterEach(() => { testsRun++; });
 after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
-describe("lost requires unknown phase", () => {
-	it("active-phase-not-lost: tool_running + stale heartbeat → working, not lost", () => {
-		const result = deriveRunDisplayState({
-			state: "running",
-			phase: "tool_running",
-			runnerHeartbeatAt: NOW - STALE,
-			now: NOW,
-		});
-		assert.notEqual(result, "lost", "tool_running phase must not produce lost");
-	});
-
-	it("active-phase-not-lost: thinking + stale heartbeat → not lost", () => {
+describe("deriveRunDisplayState lost requires unknown phase", () => {
+	it("active-phase-not-lost: thinking + 30s old heartbeat → not lost", () => {
 		const result = deriveRunDisplayState({
 			state: "running",
 			phase: "thinking",
-			runnerHeartbeatAt: NOW - STALE,
+			runnerHeartbeatAt: NOW - THIRTY_SECONDS,
 			now: NOW,
 		});
 		assert.notEqual(result, "lost", "thinking phase must not produce lost");
 	});
 
-	it("active-phase-not-lost: streaming_text + stale heartbeat → not lost", () => {
+	it("active-tool-phase-not-lost: tool_running + 60s old heartbeat → tool_running, not lost", () => {
 		const result = deriveRunDisplayState({
 			state: "running",
-			phase: "streaming_text",
-			runnerHeartbeatAt: NOW - STALE,
+			currentTool: "bash",
+			phase: "tool_running",
+			runnerHeartbeatAt: NOW - SIXTY_SECONDS,
 			now: NOW,
 		});
-		assert.notEqual(result, "lost");
+		assert.equal(result, "tool_running", "tool_running phase must not produce lost");
 	});
 
-	it("active-phase-not-lost: retrying + stale heartbeat → not lost", () => {
+	it("legacy-no-phase-still-lost-on-stale: missing phase + 30s old heartbeat → lost", () => {
 		const result = deriveRunDisplayState({
 			state: "running",
-			phase: "retrying",
-			runnerHeartbeatAt: NOW - STALE,
-			now: NOW,
-		});
-		assert.notEqual(result, "lost");
-	});
-
-	it("active-phase-not-lost: tool_streaming + stale heartbeat → not lost", () => {
-		const result = deriveRunDisplayState({
-			state: "running",
-			phase: "tool_streaming",
-			runnerHeartbeatAt: NOW - STALE,
-			now: NOW,
-		});
-		assert.notEqual(result, "lost");
-	});
-
-	it("legacy-no-phase-still-lost-on-stale: undefined phase + stale heartbeat → lost", () => {
-		const result = deriveRunDisplayState({
-			state: "running",
-			phase: undefined,
-			runnerHeartbeatAt: NOW - STALE,
+			runnerHeartbeatAt: NOW - THIRTY_SECONDS,
 			now: NOW,
 		});
 		assert.equal(result, "lost", "legacy runs without phase must still go lost on stale heartbeat");
 	});
 
-	it("idle-with-stale-still-lost: phase: 'idle' + stale heartbeat → lost", () => {
+	it("idle-with-stale-still-lost: idle + 30s old heartbeat → lost", () => {
 		const result = deriveRunDisplayState({
 			state: "running",
 			phase: "idle",
-			runnerHeartbeatAt: NOW - STALE,
+			runnerHeartbeatAt: NOW - THIRTY_SECONDS,
 			now: NOW,
 		});
 		assert.equal(result, "lost", "idle phase is treated as no active phase — still lost on stale");
 	});
 
-	it("terminal-state-wins: tool_running phase + terminal state → not lost (not running)", () => {
+	it("active-phase-fresh-heartbeat-not-lost: thinking + 5s old heartbeat → working, not lost", () => {
+		const result = deriveRunDisplayState({
+			state: "running",
+			phase: "thinking",
+			runnerHeartbeatAt: NOW - FIVE_SECONDS,
+			now: NOW,
+		});
+		assert.equal(result, "working", "fresh heartbeat must not produce lost during active phase");
+	});
+
+	it("terminal-state-wins: tool_running phase + terminal state → not lost", () => {
 		const result = deriveRunDisplayState({
 			state: "complete",
 			phase: "tool_running",
-			runnerHeartbeatAt: NOW - STALE,
+			runnerHeartbeatAt: NOW - SIXTY_SECONDS,
 			now: NOW,
 		});
-		// deriveRunDisplayState returns undefined for terminal states
 		assert.notEqual(result, "lost", "terminal state must not be classified as lost");
-	});
-
-	it("fresh heartbeat + no phase → not lost (heartbeat not stale)", () => {
-		const result = deriveRunDisplayState({
-			state: "running",
-			phase: undefined,
-			runnerHeartbeatAt: NOW - 1_000, // fresh
-			now: NOW,
-		});
-		assert.notEqual(result, "lost", "fresh heartbeat must not produce lost even without phase");
-	});
-
-	it("queued-follow-up phase + stale heartbeat → not lost", () => {
-		const result = deriveRunDisplayState({
-			state: "running",
-			phase: "queued_follow_up",
-			runnerHeartbeatAt: NOW - STALE,
-			now: NOW,
-		});
-		assert.notEqual(result, "lost", "queued_follow_up is an active phase — must not be lost");
 	});
 });

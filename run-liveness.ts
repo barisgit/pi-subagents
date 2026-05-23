@@ -1,3 +1,4 @@
+import type { RunPhase } from "./run-phase.ts";
 import type { ActivityState, RunDisplayState } from "./types.ts";
 
 export const RUNNER_HEARTBEAT_STALE_MS = 15_000;
@@ -7,6 +8,8 @@ export interface RunDisplayStateInput {
 	state: "queued" | "running" | "complete" | "failed" | "paused" | string;
 	activityState?: ActivityState;
 	currentTool?: string;
+	phase?: RunPhase;
+	phaseStartedAt?: number;
 	lastActivityAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
@@ -23,7 +26,8 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
 	const heartbeatAt = input.runnerHeartbeatAt ?? input.lastUpdate;
 	const heartbeatAge = heartbeatAt !== undefined ? now - heartbeatAt : undefined;
 	const heartbeatStaleMs = input.heartbeatStaleMs ?? RUNNER_HEARTBEAT_STALE_MS;
-	if (heartbeatAge !== undefined && heartbeatAge > heartbeatStaleMs) {
+	const phaseCanBeLost = input.phase === undefined || input.phase === "idle";
+	if (phaseCanBeLost && heartbeatAge !== undefined && heartbeatAge > heartbeatStaleMs) {
 		return "lost";
 	}
 

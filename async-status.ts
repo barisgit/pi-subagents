@@ -127,6 +127,8 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 		state: status.state,
 		activityState,
 		currentTool: status.currentTool,
+		phase: status.phase,
+		phaseStartedAt: status.phaseStartedAt,
 		lastActivityAt,
 		lastUpdate: status.lastUpdate,
 		runnerHeartbeatAt: status.runnerHeartbeatAt,
@@ -155,12 +157,16 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 		steps: (status.steps ?? []).map((step, index) => {
 			const stepActivityState = step.activityState ?? (step.status === "running" ? activityState : undefined);
 			const stepLastActivityAt = step.lastActivityAt ?? (step.status === "running" ? lastActivityAt : undefined);
+			const stepPhase = step.live?.phase ?? (index === status.currentStep ? status.phase : undefined);
+			const stepPhaseStartedAt = step.live?.phaseStartedAt ?? (index === status.currentStep ? status.phaseStartedAt : undefined);
 			const stepDisplayState = displayState === "lost" && step.status === "running"
 				? "lost"
 				: deriveRunDisplayState({
 					state: step.status,
 					activityState: stepActivityState,
 					currentTool: step.currentTool,
+					phase: stepPhase,
+					phaseStartedAt: stepPhaseStartedAt,
 					lastActivityAt: stepLastActivityAt,
 					lastUpdate: status.lastUpdate,
 					runnerHeartbeatAt: status.runnerHeartbeatAt,

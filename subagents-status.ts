@@ -112,6 +112,8 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 				state: "running",
 				activityState: control.currentActivityState,
 				currentTool: control.currentTool,
+				phase: control.phase,
+				phaseStartedAt: control.phaseStartedAt,
 				lastActivityAt: control.lastActivityAt,
 				lastUpdate: control.updatedAt,
 			});
