@@ -830,21 +830,27 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage runs",
-		description: `Delegate to subagents or manage runs.
+		description: `Delegate bounded work to subagents, or manage an existing run.
 
-Dispatch:
-• run:[{agent,task}] starts one task.
-• run:[{agent,task},{agent,task}] runs entries in parallel by default.
-• chain:true runs run[] sequentially; inside chain:true a run item may be Task[] for a parallel sub-step.
-• message adds shared framing for dispatch, or the next turn for action:"resume".
+Shape: run: Step[] dispatches work. Step is a Task; inside chain:true a Step may be Task[] for a parallel sub-step.
 
-Run management:
-• action is one of "list", "status", "interrupt", "resume"; id targets status/interrupt/resume.
-• Use { action: "list" } when available agents/chains are unknown or may have changed; execute only agents known to be executable/non-disabled.
-• Agent CRUD removed; write a file under \`agents/<name>.md\`.
+Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async returns immediately with an id; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets the default isolated-worktree mode; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status/interrupt/resume.
 
-Task fields: agent, task, label, context, worktree, output.
-Gotchas: context defaults to "fresh"; "fork" is main-only same-role self-branching, not role switching. Nested delegation is depth-limited.`,
+Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; worktree per-task override; output path/boolean capture override.
+
+Substitution: in message, {task} and {in} become each Task.task; in chained task text, {previous} becomes the prior/merged output. context defaults to "fresh". "fork" is same-role/main self-branching only, never role switching; cross-agent delegation uses "fresh".
+
+Examples:
+// single
+{ run:[{ agent:"fixer", task:"Patch the bug" }] }
+// parallel
+{ run:[{ agent:"explorer", task:"Find relevant tests" },{ agent:"qa", task:"Run the checks" }], batch:true }
+// chain with parallel review+QA sub-step
+{ chain:true, run:[{ agent:"explorer", task:"Trace the flow" },{ agent:"fixer", task:"Patch using {previous}" },[{ agent:"review", task:"Review {previous}" },{ agent:"qa", task:"Verify {previous}" }]] }
+
+Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only agents known to be executable/non-disabled. Then use action:"status"|"interrupt"|"resume" with id; resume uses message.
+
+Agent CRUD removed; write a file under \`agents/<name>.md\`. For advanced patterns see skills/subagent.`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
