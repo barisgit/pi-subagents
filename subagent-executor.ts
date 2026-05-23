@@ -269,6 +269,87 @@ function validateSlimTask(task: unknown, pathLabel: string): AgentToolResult<Det
 	return null;
 }
 
+function isTaskStep(step: unknown): step is TaskParam {
+	return isRecord(step)
+		&& typeof step.agent === "string"
+		&& typeof step.task === "string";
+}
+
+function applySharedMessage(message: string, task: string): string {
+	return message.includes("{in}")
+		? message.replace("{in}", task)
+		: `${message}\n\n${task}`;
+}
+
+function normalizeRunDispatchParams(params: LegacySubagentParamsLike): { params?: LegacySubagentParamsLike; error?: AgentToolResult<Details> } {
+	const slimValidationError = validateSubagentToolInput(params);
+	if (slimValidationError) return { error: slimValidationError };
+
+	const input = params as LegacySubagentParamsLike & { run?: unknown[]; message?: string; chain?: boolean; concurrency?: number };
+	if (!Array.isArray(input.run) || input.run.length === 0) {
+		return { error: validationError("`run` must contain at least one task") };
+	}
+
+	if (input.message) {
+		const placeholderCount = (input.message.match(/\{in\}/g) ?? []).length;
+		if (placeholderCount > 1) {
+			return { error: validationError(`message contains ${placeholderCount} occurrences of {in}; only one is allowed.`) };
+		}
+	}
+
+	if (input.chain === true) {
+		const chain = input.run.map((step) => Array.isArray(step)
+			? { parallel: step as TaskParam[] }
+			: step as SequentialStep) as ChainStep[];
+		return { params: { ...params, chain, task: undefined, tasks: undefined, agent: undefined, prompt: undefined } };
+	}
+
+	const firstNestedIndex = input.run.findIndex(Array.isArray);
+	if (firstNestedIndex !== -1) {
+		return { error: validationError(`Nested run[${firstNestedIndex}] arrays are only legal with chain:true.`) };
+	}
+
+	const tasks = input.run as TaskParam[];
+	const invalidIndex = tasks.findIndex((task) => !isTaskStep(task));
+	if (invalidIndex !== -1) {
+		return { error: validationError(`run[${invalidIndex}] must be a task with agent and task.`) };
+	}
+
+	if (tasks.length === 1) {
+		const [task] = tasks;
+		const singleTask = task! as TaskParam & { context?: "fresh" | "fork"; worktree?: boolean; output?: string | boolean };
+		return {
+			params: {
+				...params,
+				agent: singleTask.agent,
+				task: singleTask.task,
+				...(singleTask.label ? { label: singleTask.label } : { label: undefined }),
+				...(singleTask.context ? { context: singleTask.context } : { context: undefined }),
+				...(singleTask.worktree !== undefined ? { worktree: singleTask.worktree } : {}),
+				...(singleTask.output !== undefined ? { output: singleTask.output } : {}),
+				tasks: undefined,
+				chain: undefined,
+				prompt: undefined,
+			},
+		};
+	}
+
+	const parallelTasks = input.message
+		? tasks.map((task) => ({ ...task, task: applySharedMessage(input.message!, task.task) }))
+		: tasks;
+	return {
+		params: {
+			...params,
+			agent: undefined,
+			task: undefined,
+			tasks: parallelTasks as RawTaskParam[],
+			chain: undefined,
+			prompt: undefined,
+			concurrency: input.concurrency ?? parallelTasks.length,
+		},
+	};
+}
+
 export function validateSubagentToolInput(input: unknown): AgentToolResult<Details> | null {
 	if (!isRecord(input)) return null;
 	const action = typeof input.action === "string" ? input.action : undefined;
@@ -278,6 +359,7 @@ export function validateSubagentToolInput(input: unknown): AgentToolResult<Detai
 	const unknownKey = Object.keys(input).find((key) => !SLIM_TOP_LEVEL_KEYS.has(key));
 	if (unknownKey) return validationError(`Unknown top-level key '${unknownKey}'.`);
 	if (!Array.isArray(input.run)) return null;
+	if (input.run.length === 0) return validationError("`run` must contain at least one task");
 	for (let i = 0; i < input.run.length; i++) {
 		const step = input.run[i];
 		if (Array.isArray(step)) {
@@ -2451,8 +2533,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const shouldApplySlimValidation = Object.hasOwn(params as object, "run")
 			|| Object.hasOwn(params as object, "message")
 			|| Object.hasOwn(params as object, "batch")
-			|| params.action === "resume"
-			|| (typeof params.action === "string" && REMOVED_CRUD_ACTIONS.has(params.action));
+			|| typeof params.action === "string";
 		if (shouldApplySlimValidation) {
 			const slimValidationError = validateSubagentToolInput(params);
 			if (slimValidationError) return slimValidationError;
@@ -2510,6 +2591,22 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return handleManagementAction(params.action, paramsWithResolvedCwd as { action?: string; agent?: string; chainName?: string; agentScope?: string; includeInternal?: boolean; config?: unknown; preset?: string }, { ...ctx, cwd: requestCwd });
 		}
 
+		const hasRunShape = Object.hasOwn(paramsWithResolvedCwd as object, "run");
+		const legacyBridgeDispatch = !hasRunShape && (
+			paramsWithResolvedCwd.agentScope !== undefined
+			|| paramsWithResolvedCwd.rawAgentConfig !== undefined
+			|| paramsWithResolvedCwd.clarify !== undefined
+			|| paramsWithResolvedCwd.sessionDir !== undefined
+			|| paramsWithResolvedCwd.chainDir !== undefined
+			|| paramsWithResolvedCwd.metadata !== undefined
+			|| paramsWithResolvedCwd.includeProgress !== undefined
+		);
+		const runNormalized = legacyBridgeDispatch
+			? { params: paramsWithResolvedCwd }
+			: normalizeRunDispatchParams(paramsWithResolvedCwd);
+		if (runNormalized.error) return runNormalized.error;
+		const dispatchParams = runNormalized.params!;
+
 		const { blocked, depth, maxDepth } = checkSubagentDepth(deps.config.maxSubagentDepth);
 		if (blocked) {
 			return {
@@ -2527,7 +2624,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			};
 		}
 
-		const normalized = normalizeRepeatedParallelCounts(paramsWithResolvedCwd);
+		const normalized = normalizeRepeatedParallelCounts(dispatchParams);
 		if (normalized.error) return normalized.error;
 		const normalizedParams = normalized.params!;
 

@@ -93,7 +93,7 @@ describe("subagent executor child-session async guard", () => {
 		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
 		const result = await executor.execute(
 			"id-single",
-			{ agent: "tester", task: "do stuff", async: true },
+			{ run: [{ agent: "tester", task: "do stuff" }], async: true },
 			new AbortController().signal,
 			undefined,
 			makeCtx("/tmp/pi-subagent-child-async-guard"),
@@ -109,7 +109,7 @@ describe("subagent executor child-session async guard", () => {
 		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
 		const result = await executor.execute(
 			"id-parallel",
-			{ tasks: [{ agent: "tester", task: "a" }, { agent: "tester", task: "b" }], async: true },
+			{ run: [{ agent: "tester", task: "a" }, { agent: "tester", task: "b" }], async: true },
 			new AbortController().signal,
 			undefined,
 			makeCtx("/tmp/pi-subagent-child-async-guard"),
@@ -124,7 +124,7 @@ describe("subagent executor child-session async guard", () => {
 		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
 		const result = await executor.execute(
 			"id-chain",
-			{ chain: [{ agent: "tester", task: "step1" }], async: true },
+			{ run: [{ agent: "tester", task: "step1" }], chain: true, async: true },
 			new AbortController().signal,
 			undefined,
 			makeCtx("/tmp/pi-subagent-child-async-guard"),
@@ -142,7 +142,7 @@ describe("subagent executor child-session async guard", () => {
 		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
 		const result = await executor.execute(
 			"id-host",
-			{ agent: "tester", task: "ok", async: true },
+			{ run: [{ agent: "tester", task: "ok" }], async: true },
 			new AbortController().signal,
 			undefined,
 			makeCtx("/tmp/pi-subagent-child-async-guard"),
@@ -171,7 +171,7 @@ describe("subagent executor child-session async guard", () => {
 			const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
 			const result = await executor.execute(
 				"id-lineage",
-				{ agent: "tester", task: "do stuff", async: true },
+				{ run: [{ agent: "tester", task: "do stuff" }], async: true },
 				new AbortController().signal,
 				undefined,
 				{
@@ -208,7 +208,7 @@ describe("subagent executor child-session async guard", () => {
 			const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
 			const result = await executor.execute(
 				"id-host-lineage",
-				{ agent: "tester", task: "ok", async: true },
+				{ run: [{ agent: "tester", task: "ok" }], async: true },
 				new AbortController().signal,
 				undefined,
 				{
