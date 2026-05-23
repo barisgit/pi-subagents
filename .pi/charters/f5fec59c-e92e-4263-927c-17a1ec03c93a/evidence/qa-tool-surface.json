@@ -1,0 +1,123 @@
+{
+  "kind": "qa",
+  "criterionId": "VAL-QA-001",
+  "featureId": "f15-qa-tool-surface",
+  "milestone": "m5-migrate",
+  "surfaces": [
+    "description-text",
+    "terminal"
+  ],
+  "source": "subagent",
+  "outcome": "pass",
+  "summary": "QA tool surface scenarios passed: description is 423/700 tokens with no field-purpose ambiguities; 5 canonical slim dispatch shapes validate; 3 negative cases reject with helpful migration/context hints.",
+  "because": "The fixer walked the QA brief directly without dispatching charter-qa: a Node inline check used the registered description tokenizer plus SubagentParams/validateSubagentToolInput to exercise each documented positive and negative slim-schema scenario. All expected positive calls validated and all expected negative calls returned the documented hints.",
+  "artifacts": [
+    {
+      "kind": "terminal_capture",
+      "path": "test/unit/qa-tool-surface.test.ts",
+      "caption": "Unit test asserting evidence shape, scenario outcomes, source, and negative hints."
+    }
+  ],
+  "findings": [],
+  "scenarios": [
+    {
+      "name": "single",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({run:[{agent:\"explorer\", task:\"echo hello\"}]})",
+        "check": "SubagentParams schema accepted and validateSubagentToolInput returned null."
+      },
+      "artifacts": [
+        "inline-node-validation"
+      ]
+    },
+    {
+      "name": "parallel",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({run:[{agent:\"explorer\", task:\"A\"},{agent:\"explorer\", task:\"B\"}]})",
+        "check": "SubagentParams schema accepted and validateSubagentToolInput returned null."
+      },
+      "artifacts": [
+        "inline-node-validation"
+      ]
+    },
+    {
+      "name": "chain",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({chain:true, run:[{agent:\"explorer\", task:\"map types\"},{agent:\"oracle\", task:\"assess: {previous}\"}]})",
+        "check": "SubagentParams schema accepted and validateSubagentToolInput returned null."
+      },
+      "artifacts": [
+        "inline-node-validation"
+      ]
+    },
+    {
+      "name": "chain with parallel sub-step",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({chain:true, run:[{agent:\"explorer\", task:\"recon\"}, [{agent:\"fixer\", task:\"impl A: {previous}\"},{agent:\"fixer\", task:\"impl B: {previous}\"}], {agent:\"review\", task:\"verify: {previous}\"}]})",
+        "check": "SubagentParams schema accepted nested Task[] only because chain:true was present; validateSubagentToolInput returned null."
+      },
+      "artifacts": [
+        "inline-node-validation"
+      ]
+    },
+    {
+      "name": "resume",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({action:\"resume\", id:\"run-qa-tool-surface\", message:\"follow-up question\"})",
+        "check": "Resume control shape validated with id and message; validateSubagentToolInput returned null. Existing resume-action tests cover posting the message to a live run."
+      },
+      "artifacts": [
+        "inline-node-validation",
+        "test/unit/resume-action.test.ts"
+      ]
+    },
+    {
+      "name": "negative: prompt renamed to message",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({prompt:\"shared\"})",
+        "rejected": true,
+        "rejectionHint": "Unknown top-level key 'prompt'; `prompt` renamed to `message`."
+      },
+      "artifacts": [
+        "inline-node-validation"
+      ]
+    },
+    {
+      "name": "negative: CRUD removed uses file-based agent workflow",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({action:\"create\", agent:\"foo\"})",
+        "rejected": true,
+        "rejectionHint": "Agent CRUD removed; write a file under agents/<name>.md instead of action:\"create\"."
+      },
+      "artifacts": [
+        "inline-node-validation"
+      ]
+    },
+    {
+      "name": "negative: fork is main-only",
+      "outcome": "pass",
+      "details": {
+        "input": "subagent({run:[{agent:\"explorer\", task:\"x\", context:\"fork\"}]})",
+        "rejected": true,
+        "rejectionHint": "context:\"fork\" is same-role/main only; run[0].agent must be \"main\"."
+      },
+      "artifacts": [
+        "inline-node-validation"
+      ]
+    }
+  ],
+  "descriptionReadability": {
+    "outcome": "pass",
+    "tokenizer": "gpt-4o-compatible via countCl100kTokens",
+    "tokens": 423,
+    "limit": 700,
+    "fieldPurposeAmbiguities": []
+  }
+}
