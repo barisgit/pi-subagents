@@ -162,6 +162,7 @@ export interface LegacySubagentParamsLike {
 	chain?: ChainStep[];
 	tasks?: RawTaskParam[];
 	prompt?: string;
+	message?: string;
 	concurrency?: number;
 	worktree?: boolean;
 	context?: "fresh" | "fork";
@@ -260,9 +261,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function validateSlimTask(task: unknown, pathLabel: string): AgentToolResult<Details> | null {
-	if (!isRecord(task)) return null;
+	if (!isRecord(task)) return validationError(`${pathLabel} must be a task with agent and task.`);
 	const unknownKey = Object.keys(task).find((key) => !SLIM_TASK_KEYS.has(key));
 	if (unknownKey) return validationError(`Unknown task key '${unknownKey}' at ${pathLabel}.`);
+	if (typeof task.agent !== "string" || typeof task.task !== "string") {
+		return validationError(`${pathLabel} must be a task with agent and task.`);
+	}
 	if (task.context === "fork" && task.agent !== "main") {
 		return validationError(`context:\"fork\" is same-role/main only; ${pathLabel}.agent must be \"main\".`);
 	}
@@ -276,9 +280,11 @@ function isTaskStep(step: unknown): step is TaskParam {
 }
 
 function applySharedMessage(message: string, task: string): string {
-	return message.includes("{in}")
-		? message.replace("{in}", task)
-		: `${message}\n\n${task}`;
+	if (message === "") return task;
+	if (message.includes("{task}") || message.includes("{in}") || message.includes("{previous}")) {
+		return message.replaceAll("{task}", task).replaceAll("{in}", task);
+	}
+	return `${message}\n\n${task}`;
 }
 
 function normalizeRunDispatchParams(params: LegacySubagentParamsLike): { params?: LegacySubagentParamsLike; error?: AgentToolResult<Details> } {
@@ -299,14 +305,14 @@ function normalizeRunDispatchParams(params: LegacySubagentParamsLike): { params?
 
 	if (input.chain === true) {
 		const chain = input.run.map((step) => Array.isArray(step)
-			? { parallel: step as TaskParam[] }
-			: step as SequentialStep) as ChainStep[];
-		return { params: { ...params, chain, task: undefined, tasks: undefined, agent: undefined, prompt: undefined } };
+			? { parallel: (input.message ? step.map((task) => ({ ...task as TaskParam, task: applySharedMessage(input.message!, (task as TaskParam).task) })) : step) as TaskParam[] }
+			: input.message ? { ...step as SequentialStep, task: applySharedMessage(input.message, (step as SequentialStep).task ?? "") } : step as SequentialStep) as ChainStep[];
+		return { params: { ...params, chain, task: undefined, tasks: undefined, agent: undefined, message: undefined, prompt: undefined } };
 	}
 
 	const firstNestedIndex = input.run.findIndex(Array.isArray);
 	if (firstNestedIndex !== -1) {
-		return { error: validationError(`Nested run[${firstNestedIndex}] arrays are only legal with chain:true.`) };
+		return { error: validationError("Nested Task[] only allowed inside `chain:true`") };
 	}
 
 	const tasks = input.run as TaskParam[];
@@ -318,17 +324,19 @@ function normalizeRunDispatchParams(params: LegacySubagentParamsLike): { params?
 	if (tasks.length === 1) {
 		const [task] = tasks;
 		const singleTask = task! as TaskParam & { context?: "fresh" | "fork"; worktree?: boolean; output?: string | boolean };
+		const taskText = input.message ? applySharedMessage(input.message, singleTask.task) : singleTask.task;
 		return {
 			params: {
 				...params,
 				agent: singleTask.agent,
-				task: singleTask.task,
+				task: taskText,
 				...(singleTask.label ? { label: singleTask.label } : { label: undefined }),
 				...(singleTask.context ? { context: singleTask.context } : { context: undefined }),
 				...(singleTask.worktree !== undefined ? { worktree: singleTask.worktree } : {}),
 				...(singleTask.output !== undefined ? { output: singleTask.output } : {}),
 				tasks: undefined,
 				chain: undefined,
+				message: undefined,
 				prompt: undefined,
 			},
 		};
@@ -344,6 +352,7 @@ function normalizeRunDispatchParams(params: LegacySubagentParamsLike): { params?
 			task: undefined,
 			tasks: parallelTasks as RawTaskParam[],
 			chain: undefined,
+			message: undefined,
 			prompt: undefined,
 			concurrency: input.concurrency ?? parallelTasks.length,
 		},
@@ -357,13 +366,20 @@ export function validateSubagentToolInput(input: unknown): AgentToolResult<Detai
 		return validationError(`Agent CRUD removed; write a file under agents/<name>.md instead of action:\"${action}\".`);
 	}
 	const unknownKey = Object.keys(input).find((key) => !SLIM_TOP_LEVEL_KEYS.has(key));
-	if (unknownKey) return validationError(`Unknown top-level key '${unknownKey}'.`);
+	if (unknownKey) {
+		if (unknownKey === "prompt") return validationError("Unknown top-level key 'prompt'; `prompt` renamed to `message`.");
+		return validationError(`Unknown top-level key '${unknownKey}'.`);
+	}
+	// f6 owns the message field shape; f7 owns full resume behavior.
+	if (action === "resume" && !Object.hasOwn(input, "message")) {
+		return validationError('action:"resume" requires `message`; `prompt` renamed to `message`.');
+	}
 	if (!Array.isArray(input.run)) return null;
 	if (input.run.length === 0) return validationError("`run` must contain at least one task");
 	for (let i = 0; i < input.run.length; i++) {
 		const step = input.run[i];
 		if (Array.isArray(step)) {
-			if (input.chain !== true) return validationError(`Nested run[${i}] arrays are only legal with chain:true.`);
+			if (input.chain !== true) return validationError("Nested Task[] only allowed inside `chain:true`");
 			for (let j = 0; j < step.length; j++) {
 				const error = validateSlimTask(step[j], `run[${i}][${j}]`);
 				if (error) return error;
@@ -864,6 +880,11 @@ interface AsyncDispatchStep {
 	agentConfig: AgentConfig;
 }
 
+interface AsyncChainStepGroup {
+	items: AsyncDispatchStep[];
+	concurrency: number;
+}
+
 function buildAsyncChildStep(input: {
 	data: ExecutionContextData;
 	deps: ExecutorDeps;
@@ -990,6 +1011,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	const parentRunId = resolveDispatchParentRunId(ctx);
 	const steps: AsyncDispatchStep[] = [];
+	const chainGroups: AsyncChainStepGroup[] = [];
 	let mode: "single" | "chain" | "parallel" = "single";
 	let runLabel = params.label;
 
@@ -1044,6 +1066,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		let flatIndex = 0;
 		for (const chainStep of wrapChainTasksForFork(params.chain as ChainStep[], params.context)) {
 			if (isParallelStep(chainStep)) {
+				const group: AsyncDispatchStep[] = [];
 				for (const task of chainStep.parallel) {
 					const agentConfig = agents.find((agent) => agent.name === task.agent);
 					if (!agentConfig) return { content: [{ type: "text", text: `Unknown agent: ${task.agent}` }], isError: true, details: { mode: "chain" as const, results: [] } };
@@ -1063,7 +1086,9 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 					});
 					if ("error" in built) return built.error;
 					steps.push(built);
+					group.push(built);
 				}
+				chainGroups.push({ items: group, concurrency: chainStep.concurrency ?? group.length });
 				continue;
 			}
 			const sequential = chainStep as SequentialStep;
@@ -1085,6 +1110,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			});
 			if ("error" in built) return built.error;
 			steps.push(built);
+			chainGroups.push({ items: [built], concurrency: 1 });
 		}
 	}
 
@@ -1210,13 +1236,32 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		handlesPromise = (async () => {
 			const handles: ChildAgentHandle[] = [];
 			let previous = params.task ?? "";
-			for (const item of steps) {
-				item.step.task = item.step.task.replaceAll("{previous}", previous).replaceAll("{task}", params.task ?? "");
-				const handle = dispatchAsyncChild(item.step, asyncCtx);
-				handles.push(handle);
-				const result = await handle.completed;
-				previous = result.outputText;
-				if (result.state !== "complete") break;
+			for (const group of chainGroups) {
+				if (group.items.length === 1) {
+					const item = group.items[0]!;
+					item.step.task = item.step.task.replaceAll("{previous}", previous).replaceAll("{task}", params.task ?? "");
+					const handle = dispatchAsyncChild(item.step, asyncCtx);
+					handles.push(handle);
+					const result = await handle.completed;
+					previous = result.outputText;
+					if (result.state !== "complete") break;
+					continue;
+				}
+
+				const parallelResults = await mapConcurrent(group.items, group.concurrency, async (item) => {
+					item.step.task = item.step.task.replaceAll("{previous}", previous).replaceAll("{task}", params.task ?? "");
+					const handle = dispatchAsyncChild(item.step, asyncCtx);
+					handles.push(handle);
+					return { item, result: await handle.completed };
+				});
+				previous = aggregateParallelOutputs(parallelResults.map(({ item, result }, index) => ({
+					agent: item.step.agentName,
+					taskIndex: index,
+					output: result.outputText,
+					exitCode: result.exitCode,
+					...(result.error?.message ? { error: result.error.message } : {}),
+				})));
+				if (parallelResults.some(({ result }) => result.state !== "complete")) break;
 			}
 			return handles;
 		})();
@@ -2659,28 +2704,28 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const runId = randomUUID();
 		const shareEnabled = effectiveParams.share === true;
 
-		// Expand shared prompt into tasks (swarm-style dispatch)
-		if (effectiveParams.prompt && effectiveParams.tasks && effectiveParams.tasks.length > 0) {
-			const template = effectiveParams.prompt;
+		// Expand shared message into legacy tasks (swarm-style dispatch). `prompt`
+		// remains only for internal/legacy bridge callers; slim tool callers use `message`.
+		const sharedMessage = effectiveParams.message ?? effectiveParams.prompt;
+		if (sharedMessage && effectiveParams.tasks && effectiveParams.tasks.length > 0) {
+			const template = sharedMessage;
 			const placeholderCount = (template.match(/\{in\}/g) ?? []).length;
 			if (placeholderCount > 1) {
 				return {
-					content: [{ type: "text", text: `prompt contains ${placeholderCount} occurrences of {in}; only one is allowed.` }],
+					content: [{ type: "text", text: `message contains ${placeholderCount} occurrences of {in}; only one is allowed.` }],
 					isError: true,
 					details: { mode: "parallel" as const, results: [] },
 				};
 			}
-			const hasPlaceholder = placeholderCount === 1;
 			effectiveParams.tasks = effectiveParams.tasks.map((t) => {
 				const task = typeof t === "string" ? t : t.task;
 				const taskObject = typeof t === "string" ? {} : t as Record<string, unknown>;
 				return {
 					...taskObject,
-					task: hasPlaceholder
-						? template.replace("{in}", task ?? "")
-						: `${template}\n\n${task ?? ""}`,
+					task: applySharedMessage(template, task ?? ""),
 				};
 			});
+			effectiveParams.message = undefined;
 			effectiveParams.prompt = undefined;
 		}
 
