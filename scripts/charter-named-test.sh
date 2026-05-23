@@ -45,10 +45,11 @@ node "${loader[@]}" --test --test-name-pattern="$pattern" "$file" | tee "$out"
 status=${PIPESTATUS[0]}
 set -e
 
-# node --test prints `# tests N` in the TAP summary. If N is 0 the run
-# silently "passed" without executing anything matching the pattern — treat
-# that as failure for charter evidence purposes.
-tests_run=$(grep -E '^# tests ' "$out" | tail -1 | awk '{print $3}' || true)
+# node --test prints `# tests N` in TAP mode and `ℹ tests N` with the
+# default Node 24 reporter. If N is 0 the run silently "passed" without
+# executing anything matching the pattern — treat that as failure for charter
+# evidence purposes.
+tests_run=$(awk '/^# tests / { value=$3 } /^ℹ tests / { value=$3 } END { print value }' "$out" || true)
 if [[ -z "${tests_run:-}" ]]; then
   echo "charter-named-test: could not determine tests-run count from output" >&2
   exit 1
