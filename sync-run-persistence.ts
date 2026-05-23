@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { RunPhase } from "./run-phase.ts";
 import { RUNS_DIR, type AsyncStatus, type TokenUsage } from "./types.ts";
 
 const MIN_UPDATE_INTERVAL_MS = 250;
@@ -10,6 +11,21 @@ export interface SyncRunStepInit {
 	label?: string;
 	task?: string;
 	sessionFile?: string;
+}
+
+export type SyncRunStatusPatch = Partial<AsyncStatus> & {
+	phase?: RunPhase;
+	phaseStartedAt?: number;
+};
+
+let statusUpdateObserverForTest: ((runId: string, patch: SyncRunStatusPatch, options: { flush?: boolean }, runRecordDir?: string) => void) | undefined;
+
+export function __setSyncRunStatusUpdateObserverForTest(observer: typeof statusUpdateObserverForTest): () => void {
+	const previous = statusUpdateObserverForTest;
+	statusUpdateObserverForTest = observer;
+	return () => {
+		statusUpdateObserverForTest = previous;
+	};
 }
 
 export function ensureSyncRunDir(runId: string): string {
@@ -104,7 +120,8 @@ export function writeSyncRunStatusStart(runId: string, init: {
 	}, runRecordDir);
 }
 
-export function writeSyncRunStatusUpdate(runId: string, patch: Partial<AsyncStatus>, options: { flush?: boolean } = {}, runRecordDir?: string): void {
+export function writeSyncRunStatusUpdate(runId: string, patch: SyncRunStatusPatch, options: { flush?: boolean } = {}, runRecordDir?: string): void {
+	statusUpdateObserverForTest?.(runId, patch, options, runRecordDir);
 	let current: AsyncStatus;
 	try {
 		current = readStatus(runId, runRecordDir);

@@ -86,6 +86,10 @@ export interface AgentProgress {
 	currentToolArgs?: string;
 	currentToolRawArgs?: Record<string, unknown>;
 	currentToolStartedAt?: number;
+	/** Current execution phase for live inline/status rendering. */
+	phase?: RunPhase;
+	/** Milliseconds since epoch when the current phase was entered. */
+	phaseStartedAt?: number;
 	lastToolEndAt?: number;
 	recentTools: Array<{ tool: string; args: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
 	recentOutput: string[];
@@ -109,7 +113,7 @@ export interface ToolCallSummary {
 	expandedText: string;
 }
 
-export interface ProgressSummary extends Partial<Pick<AgentProgress, "status" | "index" | "skills" | "currentTool" | "currentToolStartedAt" | "currentToolArgs" | "lastActivityAt" | "activityState" | "recentTools" | "recentOutput">> {
+export interface ProgressSummary extends Partial<Pick<AgentProgress, "status" | "index" | "skills" | "currentTool" | "currentToolStartedAt" | "currentToolArgs" | "phase" | "phaseStartedAt" | "lastActivityAt" | "activityState" | "recentTools" | "recentOutput">> {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
@@ -458,6 +462,10 @@ export interface SubagentState {
 		lastActivityAt?: number;
 		currentTool?: string;
 		currentToolStartedAt?: number;
+		/** Current execution phase for live status rendering. */
+		phase?: RunPhase;
+		/** Milliseconds since epoch when the current phase was entered. */
+		phaseStartedAt?: number;
 		lastToolEndAt?: number;
 		recentTools?: Array<{ tool: string; args?: string; endMs?: number; durationMs?: number }>;
 		recentOutput?: string[];

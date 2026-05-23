@@ -22,7 +22,7 @@ import {
 } from "./settings.ts";
 import { buildSkillInjection, discoverAvailableSkills, normalizeSkillInput, resolveSkillsWithFallback } from "./skills.ts";
 import { createForkContextResolver } from "./fork-context.ts";
-import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, ChildAgentRegistry, dispatchAsyncChild, runChildAgent } from "./in-process-executor.ts";
+import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, type StatusPatch, ChildAgentRegistry, dispatchAsyncChild, runChildAgent } from "./in-process-executor.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutput, resolveSingleOutputPath } from "./single-output.ts";
@@ -1508,6 +1508,18 @@ async function runInProcessChildStep(input: {
 		};
 		input.onUpdate?.(input.wrapUpdateDetails ? input.wrapUpdateDetails(update) : update);
 	};
+	const applyStatusPatchToProgress = (patch: StatusPatch) => {
+		let shouldEmit = false;
+		if (patch.phase !== undefined) {
+			progress.phase = patch.phase;
+			shouldEmit = true;
+		}
+		if (patch.phaseStartedAt !== undefined) {
+			progress.phaseStartedAt = patch.phaseStartedAt;
+			shouldEmit = true;
+		}
+		if (shouldEmit) emitUpdate();
+	};
 	const startedAt = Date.now();
 	const childResult = await runChildAgent(step, {
 		extensionCtx: data.ctx,
@@ -1574,6 +1586,7 @@ async function runInProcessChildStep(input: {
 				emitUpdate();
 			}
 		},
+		onStatusUpdate: applyStatusPatchToProgress,
 		registry: deps.childRegistry,
 		pi: deps.pi,
 	});
@@ -1774,6 +1787,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
 							input.foregroundControl.currentTool = current?.currentTool;
 							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
+							input.foregroundControl.phase = current?.phase;
+							input.foregroundControl.phaseStartedAt = current?.phaseStartedAt;
 							input.foregroundControl.lastToolEndAt = current?.lastToolEndAt;
 							input.foregroundControl.recentTools = current?.recentTools;
 							input.foregroundControl.recentOutput = current?.recentOutput;
@@ -1784,6 +1799,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 								lastActivityAt: current?.lastActivityAt,
 								currentTool: current?.currentTool,
 								currentToolStartedAt: current?.currentToolStartedAt,
+								phase: current?.phase,
+								phaseStartedAt: current?.phaseStartedAt,
 								steps: input.tasks.map((_, stepIndex) => stepIndex === index ? {
 									status: current?.status ?? "running",
 									lastActivityAt: current?.lastActivityAt,
@@ -2182,6 +2199,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
 				foregroundControl.currentTool = firstProgress?.currentTool;
 				foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
+				foregroundControl.phase = firstProgress?.phase;
+				foregroundControl.phaseStartedAt = firstProgress?.phaseStartedAt;
 				foregroundControl.lastToolEndAt = firstProgress?.lastToolEndAt;
 				foregroundControl.recentTools = firstProgress?.recentTools;
 				foregroundControl.recentOutput = firstProgress?.recentOutput;
@@ -2192,6 +2211,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 					lastActivityAt: firstProgress?.lastActivityAt,
 					currentTool: firstProgress?.currentTool,
 					currentToolStartedAt: firstProgress?.currentToolStartedAt,
+					phase: firstProgress?.phase,
+					phaseStartedAt: firstProgress?.phaseStartedAt,
 					steps: [{
 						agent: firstProgress?.agent ?? params.agent!,
 						status: firstProgress?.status ?? "running",
@@ -2244,6 +2265,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		foregroundControl.lastActivityAt = r.progress?.lastActivityAt;
 		foregroundControl.currentTool = r.progress?.currentTool;
 		foregroundControl.currentToolStartedAt = r.progress?.currentToolStartedAt;
+		foregroundControl.phase = r.progress?.phase;
+		foregroundControl.phaseStartedAt = r.progress?.phaseStartedAt;
 		foregroundControl.lastToolEndAt = r.progress?.lastToolEndAt;
 		foregroundControl.recentTools = r.progress?.recentTools;
 		foregroundControl.recentOutput = r.progress?.recentOutput;
