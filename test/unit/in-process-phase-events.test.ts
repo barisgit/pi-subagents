@@ -24,7 +24,7 @@ let testsRun = 0;
 afterEach(() => { testsRun++; });
 after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
-describe("in-process phase events", () => {
+describe("in-process phase events (emits phase patches)", () => {
 	it("thinking_delta event produces patch with phase: 'thinking'", () => {
 		const { patches, onStatusUpdate } = makeCollector();
 		const { handle } = createPhaseEventHandler({ runId: "r1", stepIndex: 0, onStatusUpdate, initialNow: 1000 });

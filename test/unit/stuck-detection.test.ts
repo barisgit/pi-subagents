@@ -75,7 +75,7 @@ let testsRun = 0;
 afterEach(() => { testsRun++; });
 after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
 
-describe("stuck detection", () => {
+describe("stuck detection (subagent:stuck emits once per phase)", () => {
 	it("stuck-after-60s in thinking emits ONE stuck event", (t) => {
 		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 

@@ -185,7 +185,7 @@ function pretendLegacyReader(status: AsyncStatus): { steps: Array<{ live?: Recor
 	};
 }
 
-describe("schema-compat", () => {
+describe("schema-compat (backward compatible)", () => {
 	it("schema-compat legacy async status without phase reads with undefined phase", () => {
 		const dir = createTempDir("pi-schema-compat-legacy-async-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "legacy-async", debounceMs: 1 });
