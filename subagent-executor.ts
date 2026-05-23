@@ -165,6 +165,7 @@ export interface LegacySubagentParamsLike {
 	message?: string;
 	concurrency?: number;
 	worktree?: boolean;
+	batch?: boolean;
 	context?: "fresh" | "fork";
 	async?: boolean;
 	clarify?: boolean;
@@ -982,6 +983,10 @@ function asyncStartedResult(input: { mode: "single" | "chain" | "parallel"; runI
 	};
 }
 
+function childCompletionRunId(dispatchRunId: string, stepIndex: number, total: number): string {
+	return total > 1 ? `${dispatchRunId}:${stepIndex}` : dispatchRunId;
+}
+
 function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
 	const { params, effectiveCwd, agents, ctx, effectiveAsync, controlConfig } = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
@@ -1198,13 +1203,28 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			const completeAgent = mode === "chain" || mode === "parallel"
 				? steps.map(({ step }) => step.agentName).join(",")
 				: first.step.agentName;
-			const chainResults = mode === "chain" || mode === "parallel"
-				? settled.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : []).map((r, i) => ({
-					agent: steps[i]?.step.agentName ?? "unknown",
-					output: r.outputText ?? "",
-					success: r.state === "complete",
-				}))
-				: undefined;
+			const childResults = settled
+				.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : [])
+				.sort((a, b) => a.stepIndex - b.stepIndex)
+				.map((r) => {
+					const step = steps.find((candidate) => candidate.step.stepIndex === r.stepIndex)?.step;
+					const childRunId = childCompletionRunId(runId, r.stepIndex, steps.length);
+					return {
+						id: childRunId,
+						runId: childRunId,
+						dispatchRunId: runId,
+						...(params.batch === true ? { batchId: runId } : {}),
+						stepIndex: r.stepIndex,
+						agent: step?.agentName ?? "unknown",
+						state: r.state,
+						success: r.state === "complete",
+						exitCode: r.exitCode,
+						output: r.outputText ?? "",
+						summary: r.outputText ?? "",
+						durationMs: r.durationMs,
+						sessionFile: r.sessionFile,
+					};
+				});
 			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
 				id: runId,
 				runId,
@@ -1218,7 +1238,12 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				shareUrl: finalResult?.shareUrl,
 				timestamp: Date.now(),
 				result: finalResult,
-				results: chainResults,
+				results: childResults,
+				children: childResults,
+				batch: params.batch === true,
+				...(params.batch === true ? { batchId: runId } : {}),
+				total: childResults.length,
+				completed: childResults.filter((child) => child.state === "complete").length,
 				totalUsage,
 				asyncDir: runRecordDir,
 				metadata: params.metadata,
