@@ -7,6 +7,7 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RunPhase } from "./run-phase.ts";
+export type { SubagentToolInput, Step, Task } from "./schemas.ts";
 
 // ============================================================================
 // Basic Types

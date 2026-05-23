@@ -7,7 +7,7 @@ import { discoverAgents, discoverAgentsAll } from "./agents.ts";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
 import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-status.ts";
 import { discoverAvailableSkills } from "./skills.ts";
-import type { SubagentParamsLike } from "./subagent-executor.ts";
+import type { LegacySubagentParamsLike as SubagentParamsLike } from "./subagent-executor.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import {
 	applySlashUpdate,

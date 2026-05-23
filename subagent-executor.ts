@@ -147,7 +147,10 @@ interface TaskParam {
 
 type RawTaskParam = string | Partial<TaskParam>;
 
-export interface SubagentParamsLike {
+export type { SubagentToolInput, Step, Task } from "./schemas.ts";
+export type { SubagentToolInput as SubagentParamsLike } from "./schemas.ts";
+
+export interface LegacySubagentParamsLike {
 	action?: string;
 	id?: string;
 	runId?: string;
@@ -194,7 +197,7 @@ interface ExecutorDeps {
 }
 
 interface ExecutionContextData {
-	params: SubagentParamsLike;
+	params: LegacySubagentParamsLike;
 	effectiveCwd: string;
 	ctx: ExtensionContext;
 	signal: AbortSignal;
@@ -238,6 +241,57 @@ function formatForegroundActivity(control: SubagentState["foregroundControls"] e
 	if (!control.lastActivityAt) return control.currentActivityState === "needs_attention" ? "needs attention" : undefined;
 	const seconds = Math.floor(Math.max(0, Date.now() - control.lastActivityAt) / 1000);
 	return control.currentActivityState === "needs_attention" ? `no activity for ${seconds}s` : `active ${seconds}s ago`;
+}
+
+const SLIM_TOP_LEVEL_KEYS = new Set(["run", "chain", "async", "batch", "concurrency", "worktree", "message", "action", "id"]);
+const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "worktree", "output"]);
+const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);
+
+function validationError(message: string): AgentToolResult<Details> {
+	return {
+		content: [{ type: "text", text: message }],
+		isError: true,
+		details: { mode: "management" as const, results: [] },
+	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateSlimTask(task: unknown, pathLabel: string): AgentToolResult<Details> | null {
+	if (!isRecord(task)) return null;
+	const unknownKey = Object.keys(task).find((key) => !SLIM_TASK_KEYS.has(key));
+	if (unknownKey) return validationError(`Unknown task key '${unknownKey}' at ${pathLabel}.`);
+	if (task.context === "fork" && task.agent !== "main") {
+		return validationError(`context:\"fork\" is same-role/main only; ${pathLabel}.agent must be \"main\".`);
+	}
+	return null;
+}
+
+export function validateSubagentToolInput(input: unknown): AgentToolResult<Details> | null {
+	if (!isRecord(input)) return null;
+	const action = typeof input.action === "string" ? input.action : undefined;
+	if (action && REMOVED_CRUD_ACTIONS.has(action)) {
+		return validationError(`Agent CRUD removed; write a file under agents/<name>.md instead of action:\"${action}\".`);
+	}
+	const unknownKey = Object.keys(input).find((key) => !SLIM_TOP_LEVEL_KEYS.has(key));
+	if (unknownKey) return validationError(`Unknown top-level key '${unknownKey}'.`);
+	if (!Array.isArray(input.run)) return null;
+	for (let i = 0; i < input.run.length; i++) {
+		const step = input.run[i];
+		if (Array.isArray(step)) {
+			if (input.chain !== true) return validationError(`Nested run[${i}] arrays are only legal with chain:true.`);
+			for (let j = 0; j < step.length; j++) {
+				const error = validateSlimTask(step[j], `run[${i}][${j}]`);
+				if (error) return error;
+			}
+			continue;
+		}
+		const error = validateSlimTask(step, `run[${i}]`);
+		if (error) return error;
+	}
+	return null;
 }
 
 function foregroundStatusResult(control: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never): AgentToolResult<Details> {
@@ -377,7 +431,7 @@ function createForegroundControlNotifier(data: Pick<ExecutionContextData, "contr
 }
 
 function validateExecutionInput(
-	params: SubagentParamsLike,
+	params: LegacySubagentParamsLike,
 	agents: AgentConfig[],
 	hasChain: boolean,
 	hasTasks: boolean,
@@ -457,14 +511,14 @@ function validateExecutionInput(
 	return null;
 }
 
-function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
+function getRequestedModeLabel(params: LegacySubagentParamsLike): Details["mode"] {
 	if ((params.chain?.length ?? 0) > 0) return "chain";
 	if ((params.tasks?.length ?? 0) > 0) return "parallel";
 	if (params.agent) return "single";
 	return "single";
 }
 
-function buildRequestedModeError(params: SubagentParamsLike, message: string): AgentToolResult<Details> {
+function buildRequestedModeError(params: LegacySubagentParamsLike, message: string): AgentToolResult<Details> {
 	return withForkContext(
 		{
 			content: [{ type: "text", text: message }],
@@ -475,7 +529,7 @@ function buildRequestedModeError(params: SubagentParamsLike, message: string): A
 	);
 }
 
-function collectRequestedAgentNames(params: SubagentParamsLike): string[] {
+function collectRequestedAgentNames(params: LegacySubagentParamsLike): string[] {
 	if ((params.tasks?.length ?? 0) > 0) {
 		return params.tasks!
 			.map((task) => typeof task === "object" && task && !Array.isArray(task) ? normalizeName(task.agent) : undefined)
@@ -492,7 +546,7 @@ function normalizeName(value: unknown): string | undefined {
 	return trimmed || undefined;
 }
 
-function collectForkOverridePaths(params: SubagentParamsLike): string[] {
+function collectForkOverridePaths(params: LegacySubagentParamsLike): string[] {
 	const paths: string[] = [];
 	if (params.clarify === true) paths.push("clarify");
 	if (params.model !== undefined) paths.push("model");
@@ -521,7 +575,7 @@ function collectForkOverridePaths(params: SubagentParamsLike): string[] {
 }
 
 function resolveForkReuse(
-	params: SubagentParamsLike,
+	params: LegacySubagentParamsLike,
 	ctx: ExtensionContext,
 	deps: ExecutorDeps,
 ): ForkReuseConfig | undefined {
@@ -566,7 +620,7 @@ function resolveForkReuse(
 	};
 }
 
-export function normalizeTopLevelTasks(params: SubagentParamsLike): { tasks?: TaskParam[]; error?: string } {
+export function normalizeTopLevelTasks(params: LegacySubagentParamsLike): { tasks?: TaskParam[]; error?: string } {
 	const rawTasks = params.tasks;
 	if (!rawTasks) return { tasks: undefined };
 	const defaultAgent = normalizeName(params.agent);
@@ -634,7 +688,7 @@ function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; e
 	return { chain: expandedChain };
 }
 
-function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: AgentToolResult<Details> } {
+function normalizeRepeatedParallelCounts(params: LegacySubagentParamsLike): { params?: LegacySubagentParamsLike; error?: AgentToolResult<Details> } {
 	if (params.tasks) {
 		const normalizedTasks = normalizeTopLevelTasks(params);
 		if (normalizedTasks.error) {
@@ -658,7 +712,7 @@ function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?:
 
 function withForkContext(
 	result: AgentToolResult<Details>,
-	context: SubagentParamsLike["context"],
+	context: LegacySubagentParamsLike["context"],
 ): AgentToolResult<Details> {
 	if (context !== "fork" || !result.details) return result;
 	return {
@@ -670,7 +724,7 @@ function withForkContext(
 	};
 }
 
-function toExecutionErrorResult(params: SubagentParamsLike, error: unknown): AgentToolResult<Details> {
+function toExecutionErrorResult(params: LegacySubagentParamsLike, error: unknown): AgentToolResult<Details> {
 	const message = error instanceof Error ? error.message : String(error);
 	return withForkContext(
 		{
@@ -702,7 +756,7 @@ function collectChainSessionFiles(
 	return sessionFiles;
 }
 
-function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["context"]): ChainStep[] {
+function wrapChainTasksForFork(chain: ChainStep[], context: LegacySubagentParamsLike["context"]): ChainStep[] {
 	if (context !== "fork") return chain;
 	return chain.map((step, stepIndex) => {
 		if (isParallelStep(step)) {
@@ -2378,7 +2432,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
-		params: SubagentParamsLike,
+		params: LegacySubagentParamsLike,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
@@ -2386,7 +2440,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 } {
 	const execute = async (
 		_id: string,
-		params: SubagentParamsLike,
+		params: LegacySubagentParamsLike,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
@@ -2394,6 +2448,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
+		const shouldApplySlimValidation = Object.hasOwn(params as object, "run")
+			|| Object.hasOwn(params as object, "message")
+			|| Object.hasOwn(params as object, "batch")
+			|| params.action === "resume"
+			|| (typeof params.action === "string" && REMOVED_CRUD_ACTIONS.has(params.action));
+		if (shouldApplySlimValidation) {
+			const slimValidationError = validateSubagentToolInput(params);
+			if (slimValidationError) return slimValidationError;
+		}
+
 		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
 		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
 		if (params.action) {
@@ -2435,7 +2499,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					details: { mode: "management", results: [] },
 				};
 			}
-			const validActions = ["list", "get", "create", "update", "delete", "status", "interrupt"];
+			const validActions = ["list", "status", "interrupt", "resume"];
 			if (!validActions.includes(params.action)) {
 				return {
 					content: [{ type: "text", text: `Unknown action: ${params.action}. Valid: ${validActions.join(", ")}` }],

@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import type { SubagentParamsLike } from "./subagent-executor.ts";
+import type { LegacySubagentParamsLike as SubagentParamsLike } from "./subagent-executor.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { type Details, type SingleResult, type Usage, SLASH_RESULT_TYPE } from "./types.ts";
 

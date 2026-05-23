@@ -829,24 +829,21 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
-		promptSnippet: "Delegate to subagents or manage agent definitions",
-		description: `Delegate to subagents or manage agent and chain definitions.
+		promptSnippet: "Delegate to subagents or control runs",
+		description: `Delegate to subagents or control runs.
 
-Execution modes (use exactly one):
-• single: { agent, task? }
-• parallel: { tasks: [{ agent, task, count? }], concurrency?, worktree? }
-• chain: { chain: [{ agent, task? }, { parallel: [...] }] } with {task}, {previous}, {chain_dir}
-• swarm: { prompt, tasks } for shared-prompt variants; {in} inserts each task
-• async: add async:true; inspect with action:"status" or /subagents-status
+Dispatch:
+• run:[{agent,task}] starts one task.
+• run:[{agent,task},{agent,task}] runs tasks in parallel by default.
+• chain:true runs run[] sequentially; inside chain:true a run item may be Task[] for a parallel sub-step.
+• message adds shared framing for dispatch, or the next turn for action:"resume".
 
-Management/control:
-• action:"list|get|create|update|delete|status|interrupt"
+Control:
+• action is one of "list", "status", "interrupt", "resume"; id targets status/interrupt/resume.
 • Use { action: "list" } when available agents/chains are unknown or may have changed; execute only agents known to be executable/non-disabled.
-• Add short labels for visible multi-agent work when helpful.
 
-Gotchas:
-• context defaults to "fresh"; "fork" is only same-role self-branching, not role switching.
-• Nested delegation requires agent config permission and is depth-limited.`,
+Task fields: agent, task, label, context, worktree, output.
+Gotchas: context defaults to "fresh"; "fork" is main-only same-role self-branching, not role switching. Nested delegation is depth-limited.`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
@@ -855,29 +852,30 @@ Gotchas:
 
 		renderCall(args, theme) {
 			if (args.action) {
-				const target = args.agent || args.chainName || "";
+				const target = args.id || "";
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
 					0, 0,
 				);
 			}
-			const isParallel = (args.tasks?.length ?? 0) > 0;
-			const parallelCount = effectiveParallelTaskCount(args.tasks as Array<{ count?: unknown }> | undefined);
+			const run = args.run ?? [];
 			const asyncLabel = args.async === true ? theme.fg("warning", " [async]") : "";
-			if (args.chain?.length)
+			if (args.chain === true)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${run.length})${asyncLabel}`,
 					0,
 					0,
 				);
-			if (isParallel)
+			if (run.length > 1)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${parallelCount})${asyncLabel}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${run.length})${asyncLabel}`,
 					0,
 					0,
 				);
+			const first = run[0];
+			const agent = first && !Array.isArray(first) ? first.agent : "?";
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", agent)}${asyncLabel}`,
 				0,
 				0,
 			);
