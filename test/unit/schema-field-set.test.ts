@@ -67,8 +67,8 @@ describe("schema field set", () => {
 			const first = error?.content[0];
 			const text = first?.type === "text" ? first.text : "";
 
-			assert.match(text, /Agent CRUD removed/);
 			assert.match(text, /agents\/<name>\.md/);
+			assert.match(text, /Allowed actions: list, status, interrupt, resume/);
 		}
 	});
 });

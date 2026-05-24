@@ -1193,11 +1193,35 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		if (sawProgress) totalSummary = summary;
 	}
 	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
-	const totalCount = hasParallelInChain ? d.results.length : (d.totalSteps ?? d.results.length);
-	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : Math.min(totalCount, ok + (hasRunning ? 1 : 0));
+	// For chains with nested parallel sub-steps, count parent chain steps (e.g. 3) rather than
+	// flattened tasks (e.g. 4) so header/body share the same denominator. Compute parent-aware
+	// done count by checking whether every child in a parallel group has settled.
+	const chainParentTotal = hasParallelInChain && d.chainAgents?.length
+		? d.chainAgents.length
+		: (d.totalSteps ?? d.results.length);
+	const chainParentOk = (() => {
+		if (!hasParallelInChain || !d.chainAgents?.length) return ok;
+		let done = 0;
+		let cursor = 0;
+		for (const entry of d.chainAgents) {
+			const childCount = entry.startsWith("[") && entry.endsWith("]")
+				? entry.slice(1, -1).split("+").length
+				: 1;
+			const slice = d.results.slice(cursor, cursor + childCount);
+			const allSettled = slice.length === childCount && slice.every((r) => {
+				const p = r?.progress;
+				return r && (!p || p.status !== "running");
+			});
+			if (allSettled) done++;
+			cursor += childCount;
+		}
+		return done;
+	})();
+	const totalCount = chainParentTotal;
+	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : Math.min(totalCount, chainParentOk + (hasRunning ? 1 : 0));
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
-	const stepInfo = hasRunning ? `${itemLabel} ${currentStep}/${totalCount}` : `${itemLabel} ${ok}/${totalCount}`;
+	const stepInfo = hasRunning ? `${itemLabel} ${currentStep}/${totalCount}` : `${itemLabel} ${chainParentOk}/${totalCount}`;
 	const stats = statJoin(theme, [stepInfo, formatTurnStat(totalTurns), formatProgressStats(theme, totalSummary)]);
 	const glyph = hasRunning
 		? theme.fg("accent", multiSpinnerFrame())
@@ -1209,9 +1233,9 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	// Chain progress bar for chain mode only (parallel/swarm have no inherent order).
-	const chainBar = (d.mode === "chain" && !hasParallelInChain && totalCount > 1)
-		? buildChainBar(theme, ok, hasRunning ? 1 : 0, totalCount, adaptiveBarWidth())
+	// Chain progress bar: parent-step granularity already computed above as chainParentTotal/Ok.
+	const chainBar = (d.mode === "chain" && chainParentTotal > 1)
+		? buildChainBar(theme, chainParentOk, hasRunning ? 1 : 0, chainParentTotal, adaptiveBarWidth())
 		: "";
 	const chainBarPrefix = chainBar ? `${chainBar} ` : "";
 	// Child tally lives on each per-row header in multi-compact; the top-level mode
@@ -1230,6 +1254,27 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
+
+	// When parallel sub-steps are nested in a chain, results are flattened but chainAgents preserves
+	// the grouping (e.g. ["a", "[b+c]", "d"] for 3 chain steps / 4 results). Build a per-result
+	// label override so the body shows "Step 2.1 / Step 2.2" instead of misleading sequential numbering.
+	const chainStepLabels: string[] | undefined = (() => {
+		if (!hasParallelInChain || !d.chainAgents?.length) return undefined;
+		const labels: string[] = [];
+		let resultCursor = 0;
+		for (let stepIdx = 0; stepIdx < d.chainAgents.length; stepIdx++) {
+			const entry = d.chainAgents[stepIdx];
+			if (entry.startsWith("[") && entry.endsWith("]")) {
+				const children = entry.slice(1, -1).split("+");
+				for (let childIdx = 0; childIdx < children.length; childIdx++) {
+					labels[resultCursor++] = `${stepIdx + 1}.${childIdx + 1}∥`;
+				}
+			} else {
+				labels[resultCursor++] = `${stepIdx + 1}`;
+			}
+		}
+		return labels;
+	})();
 
 	// Count concurrently-running agents so we can adapt history density.
 	let runningCount = 0;
@@ -1254,7 +1299,8 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
-		const stepNumber = r.progress?.index !== undefined ? r.progress.index + 1 : progressFromArray?.index !== undefined ? progressFromArray.index + 1 : i + 1;
+		const stepNumber: string | number = chainStepLabels?.[i]
+			?? (r.progress?.index !== undefined ? r.progress.index + 1 : progressFromArray?.index !== undefined ? progressFromArray.index + 1 : i + 1);
 		const stepStats = statJoin(theme, [
 			formatTurnStat(r.usage?.turns),
 			formatProgressStats(theme, rProg),
@@ -1501,28 +1547,37 @@ export function renderSubagentResult(
 	const stepInfo = hasRunning ? ` ${currentStep}/${totalCount}` : ` ${ok}/${totalCount}`;
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
 	
-	const chainVis = d.chainAgents?.length && !hasParallelInChain
-		? d.chainAgents
-				.map((agent, i) => {
-					const result = d.results[i];
-					const isFailed = result && result.exitCode !== 0 && result.progress?.status !== "running";
-					const isComplete = result && result.exitCode === 0 && result.progress?.status !== "running";
-					const isEmptyWithoutTarget = Boolean(result)
-						&& Boolean(isComplete)
-						&& hasEmptyTextOutputWithoutOutputTarget(result.task, getSingleResultOutput(result));
-					const isCurrent = i === (d.currentStepIndex ?? d.results.length);
-					const stepIcon = isFailed
-						? theme.fg("error", "failed")
-						: isEmptyWithoutTarget
-							? theme.fg("warning", "warning")
-							: isComplete
-								? theme.fg("success", "done")
-								: isCurrent && hasRunning
-									? theme.fg("warning", "running")
-									: theme.fg("dim", "pending");
-					return `${stepIcon} ${agent}`;
-				})
-				.join(theme.fg("dim", " → "))
+	const chainVis = d.chainAgents?.length
+		? (() => {
+				let resultCursor = 0;
+				const pieces = d.chainAgents.map((entry, stepIdx) => {
+					const isParallel = entry.startsWith("[") && entry.endsWith("]");
+					const children = isParallel ? entry.slice(1, -1).split("+") : [entry];
+					const childPieces = children.map((agent) => {
+						const result = d.results[resultCursor++];
+						const isRunning = result?.progress?.status === "running";
+						const isFailed = result && result.exitCode !== 0 && !isRunning;
+						const isComplete = result && result.exitCode === 0 && !isRunning;
+						const isEmptyWithoutTarget = Boolean(result)
+							&& Boolean(isComplete)
+							&& hasEmptyTextOutputWithoutOutputTarget(result!.task, getSingleResultOutput(result!));
+						const stepIcon = isFailed
+							? theme.fg("error", "failed")
+							: isEmptyWithoutTarget
+								? theme.fg("warning", "warning")
+								: isComplete
+									? theme.fg("success", "done")
+									: isRunning
+										? theme.fg("warning", "running")
+										: theme.fg("dim", "pending");
+						return `${stepIcon} ${agent}`;
+					});
+					return isParallel
+						? `${theme.fg("dim", "[")}${childPieces.join(theme.fg("dim", " ∥ "))}${theme.fg("dim", "]")}`
+						: childPieces[0];
+				});
+				return pieces.join(theme.fg("dim", " → "));
+			})()
 		: null;
 
 	const w = getTermWidth() - 4;
@@ -1542,6 +1597,26 @@ export function renderSubagentResult(
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
 
+	// Mirror the background-renderer logic so nested parallel sub-steps display as "2.1∥ / 2.2∥"
+	// instead of falsely-sequential "Step 2 / Step 3".
+	const chainStepLabelsFg: string[] | undefined = (() => {
+		if (!hasParallelInChain || !d.chainAgents?.length) return undefined;
+		const labels: string[] = [];
+		let resultCursor = 0;
+		for (let stepIdx = 0; stepIdx < d.chainAgents.length; stepIdx++) {
+			const entry = d.chainAgents[stepIdx];
+			if (entry.startsWith("[") && entry.endsWith("]")) {
+				const children = entry.slice(1, -1).split("+");
+				for (let childIdx = 0; childIdx < children.length; childIdx++) {
+					labels[resultCursor++] = `${stepIdx + 1}.${childIdx + 1}∥`;
+				}
+			} else {
+				labels[resultCursor++] = `${stepIdx + 1}`;
+			}
+		}
+		return labels;
+	})();
+
 	c.addChild(new Spacer(1));
 
 	for (let i = 0; i < stepsToShow; i++) {
@@ -1551,7 +1626,8 @@ export function renderSubagentResult(
 			: (d.chainAgents![i] || r?.agent || `step-${i + 1}`);
 
 		if (!r) {
-			c.addChild(new Text(fit(theme.fg("dim", `  ${itemTitle} ${i + 1}: ${agentName}`)), 0, 0));
+			const pendingLabel = chainStepLabelsFg?.[i] ?? `${i + 1}`;
+			c.addChild(new Text(fit(theme.fg("dim", `  ${itemTitle} ${pendingLabel}: ${agentName}`)), 0, 0));
 			c.addChild(new Text(theme.fg("dim", `    status: pending`), 0, 0));
 			c.addChild(new Spacer(1));
 			continue;
@@ -1561,7 +1637,8 @@ export function renderSubagentResult(
 			|| d.progress?.find((p) => p.agent === r.agent && p.status === "running");
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg?.status === "running";
-		const stepNumber = typeof rProg?.index === "number" ? rProg.index + 1 : i + 1;
+		const stepNumber: string | number = chainStepLabelsFg?.[i]
+			?? (typeof rProg?.index === "number" ? rProg.index + 1 : i + 1);
 
 		const resultOutput = getSingleResultOutput(r);
 		const statusIcon = rRunning

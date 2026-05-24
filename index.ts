@@ -867,12 +867,21 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 			}
 			const run = args.run ?? [];
 			const asyncLabel = args.async === true ? theme.fg("warning", " [async]") : "";
-			if (args.chain === true)
+			if (args.chain === true) {
+				const parallelSubSteps = run.filter((step) => Array.isArray(step)) as unknown[][];
+				const flatTaskCount = run.reduce<number>(
+					(sum, step) => sum + (Array.isArray(step) ? step.length : 1),
+					0,
+				);
+				const chainLabel = parallelSubSteps.length > 0
+					? `chain (${run.length} steps, ${flatTaskCount} tasks)`
+					: `chain (${run.length})`;
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${run.length})${asyncLabel}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}${chainLabel}${asyncLabel}`,
 					0,
 					0,
 				);
+			}
 			if (run.length > 1)
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${run.length})${asyncLabel}`,

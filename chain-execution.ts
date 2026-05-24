@@ -196,6 +196,12 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 	const failFast = input.step.failFast ?? false;
 	let aborted = false;
 
+	// Shared live mailbox: each parallel child writes its latest streaming snapshot into its own slot.
+	// onUpdate broadcasts the merged array so the renderer sees all parallel siblings concurrently
+	// instead of one-at-a-time. Filled in slot order; gaps stay undefined until that child emits.
+	const liveSlots: (SingleResult | undefined)[] = new Array(input.step.parallel.length).fill(undefined);
+	const liveProgressSlots: (AgentProgress | undefined)[] = new Array(input.step.parallel.length).fill(undefined);
+
 	const parallelResults = await mapConcurrent(
 		input.step.parallel,
 		concurrency,
@@ -296,13 +302,25 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
 							input.foregroundControl.updatedAt = Date.now();
 						}
+						// Park this child's latest snapshot in its own slot so the merged view
+						// exposes all parallel siblings to the renderer at once.
+						if (stepResults.length > 0) liveSlots[taskIndex] = stepResults[0];
+						if (stepProgress.length > 0) {
+							const p = stepProgress[0];
+							liveProgressSlots[taskIndex] = {
+								...p,
+								index: input.globalTaskIndex + taskIndex,
+							} as AgentProgress;
+						}
+						const mergedResults = liveSlots.filter((r): r is SingleResult => r !== undefined);
+						const mergedProgress = liveProgressSlots.filter((p): p is AgentProgress => p !== undefined);
 						input.onUpdate?.({
 							...progressUpdate,
 							details: {
 								mode: "chain",
 								...(input.runId ? { runId: input.runId } : {}),
-								results: input.results.concat(stepResults),
-								progress: input.allProgress.concat(stepProgress),
+								results: input.results.concat(mergedResults),
+								progress: input.allProgress.concat(mergedProgress),
 								controlEvents: progressUpdate.details?.controlEvents,
 								chainAgents: input.chainAgents,
 								totalSteps: input.totalSteps,

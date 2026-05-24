@@ -350,4 +350,34 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.doesNotMatch(text, /Step 3: worker/);
 		assert.doesNotMatch(text, /Agent 1: worker/);
 	});
+
+	it("renders nested parallel chain with parent-step counts and ∥ sub-step labels", () => {
+		const widget = renderSubagentResult!({
+			content: [{ type: "text", text: "done" }],
+			details: {
+				mode: "chain",
+				// chain shape: seed -> [left, right] -> tail
+				chainAgents: ["explorer", "[explorer+explorer]", "explorer"],
+				totalSteps: 4,
+				results: [
+					{ agent: "explorer", task: "seed", exitCode: 0, messages: [], usage: emptyUsage },
+					{ agent: "explorer", task: "left", exitCode: 0, messages: [], usage: emptyUsage },
+					{ agent: "explorer", task: "right", exitCode: 0, messages: [], usage: emptyUsage },
+					{ agent: "explorer", task: "tail", exitCode: 0, messages: [], usage: emptyUsage },
+				],
+			},
+		}, { expanded: false }, theme);
+
+		const text = widget.render(160).join("\n");
+		// Body shows parent-step total (3), not flattened (4)
+		assert.match(text, /step 3\/3/);
+		// Sub-step labels for the parallel group use parent.child∥ form
+		assert.match(text, /Step 2\.1∥/);
+		assert.match(text, /Step 2\.2∥/);
+		// Sequential bookends keep flat numbering
+		assert.match(text, /Step 1:/);
+		assert.match(text, /Step 3:/);
+		// Must NOT fall back to false-sequential numbering for parallel siblings
+		assert.doesNotMatch(text, /Step 4:/);
+	});
 });
