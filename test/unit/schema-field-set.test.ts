@@ -60,6 +60,19 @@ describe("schema field set", () => {
 		assert.equal(additionalProperty(validator.Errors(input)), "foo");
 	});
 
+	it("rejects Task.worktree as an unknown task key", () => {
+		const validator = Compile(SubagentParams);
+		const input = { run: [{ agent: "x", task: "y", worktree: true }] };
+
+		assert.equal(validator.Check(input), false);
+		assert.equal(additionalProperty(validator.Errors(input)), "worktree");
+
+		const error = validateSubagentToolInput(input);
+		const first = error?.content[0];
+		const text = first?.type === "text" ? first.text : "";
+		assert.match(text, /Unknown task key 'worktree' at run\[0\]/);
+	});
+
 	it("rejects removed CRUD actions with file-based authoring hint", () => {
 		for (const action of ["create", "update", "delete", "get"]) {
 			const error = validateSubagentToolInput({ action });

@@ -35,7 +35,7 @@ subagent({
   worktree?: boolean,         // top-level isolated git worktree mode for parallel runs
   message?: string,           // shared dispatch framing, or next turn for resume
   action?: "list" | "status" | "interrupt" | "resume",
-  id?: string,                // target run for status; required for interrupt/resume
+  id?: string,                // target run; optional for status/interrupt, required for resume
 })
 
 type Task = {
@@ -64,7 +64,7 @@ subagent({ chain:true, run:[{ agent:"explorer", task:"Trace flow" },{ agent:"fix
 
 - `subagent({ action:"list" })` — list available agents/chains. Run this when persona names or enabled status are uncertain.
 - `subagent({ action:"status", id? })` — inspect active/recent runs.
-- `subagent({ action:"interrupt", id })` — ask a drifting live run to stop.
+- `subagent({ action:"interrupt", id? })` — ask a drifting live run to stop; without `id`, targets the newest running run.
 - `subagent({ action:"resume", id, message })` — send the next turn to a live async run awaiting input; paused/interrupted runs are terminal.
 
 ## Load on demand

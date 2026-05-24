@@ -245,7 +245,7 @@ function formatForegroundActivity(control: SubagentState["foregroundControls"] e
 }
 
 const SLIM_TOP_LEVEL_KEYS = new Set(["run", "chain", "async", "batch", "concurrency", "worktree", "message", "action", "id"]);
-const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "worktree", "output"]);
+const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "output"]);
 const ALLOWED_CONTROL_ACTIONS = ["list", "status", "interrupt", "resume"] as const;
 const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);
 
@@ -324,7 +324,7 @@ function normalizeRunDispatchParams(params: InternalSubagentParams): { params?: 
 
 	if (tasks.length === 1) {
 		const [task] = tasks;
-		const singleTask = task! as TaskParam & { context?: "fresh" | "fork"; worktree?: boolean; output?: string | boolean };
+		const singleTask = task! as TaskParam & { context?: "fresh" | "fork"; output?: string | boolean };
 		const taskText = input.message ? applySharedMessage(input.message, singleTask.task) : singleTask.task;
 		return {
 			params: {
@@ -333,7 +333,6 @@ function normalizeRunDispatchParams(params: InternalSubagentParams): { params?: 
 				task: taskText,
 				...(singleTask.label ? { label: singleTask.label } : { label: undefined }),
 				...(singleTask.context ? { context: singleTask.context } : { context: undefined }),
-				...(singleTask.worktree !== undefined ? { worktree: singleTask.worktree } : {}),
 				...(singleTask.output !== undefined ? { output: singleTask.output } : {}),
 				tasks: undefined,
 				chain: undefined,

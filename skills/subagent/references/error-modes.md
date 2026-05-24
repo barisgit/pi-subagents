@@ -15,7 +15,7 @@ The schema is intentionally strict and rejects unknown fields. Fix the call rath
 | `summarized-context-rejected` | Reserved future `context:"summarized"` was sent. | Use `fresh` or same-role `fork`. |
 | `parallel-step-without-chain-rejected` | A nested `Task[]` appeared in `run` without `chain:true`. | Set `chain:true` or flatten the tasks into top-level parallel `run` items. |
 | `empty-run-rejected` | Dispatch provided `run:[]` or no work/control action. | Provide at least one `Task`, or use a valid `action`. |
-| `missing-id-rejected` | `interrupt` or `resume` needed a target id. | Provide the run/batch id or call broad `status` when inspecting runs. |
+| `missing-id-rejected` | `resume` needed a target id. | Provide the run id; `interrupt` may omit `id` to target the newest running run. |
 | `resume-message-rejected` | Resume had no non-empty `message`. | Send the next instruction in `message`. |
 | `terminated-run-rejected` | Resume or interrupt targeted a completed, failed, or otherwise terminal run. | Start a new `run` if more work is needed. |
 | `unknown-run-rejected` | The `id` did not match any active/recent run. | Check `action:"status"` and copy the current id. |

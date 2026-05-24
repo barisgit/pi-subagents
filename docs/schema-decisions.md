@@ -25,7 +25,7 @@ Post-charter input keeps only the fields below.
 | `async` | Starts work in the background and returns a run identifier instead of waiting for completion. | `false` |
 | `batch` | Collapses completion notifications for a multi-task dispatch into one rollup. | `false` |
 | `concurrency` | Caps how many parallel tasks run at once. | Runtime default when omitted. |
-| `worktree` | Applies isolated worktree execution to every task unless a task overrides it. | `false` |
+| `worktree` | Applies isolated worktree execution to every task. | `false` |
 | `message` | Shared dispatch framing string, or the next user message for `action:"resume"`. | Omitted. |
 | `action` | Control verb: `list`, `status`, `interrupt`, or `resume`. | Omitted for dispatch. |
 | `id` | Identifier used by control verbs; batch/run id for status or interrupt, run id for resume. | Required only for actions that target a run. |
@@ -45,7 +45,7 @@ Post-charter input keeps only the fields below.
 | `task` | Concrete instruction for that agent. | Required. |
 | `label` | Short human-readable label for status and notifications. | Derived from task text when omitted. |
 | `context` | Context mode: `fresh` starts clean; `fork` is same-role only and inherits the parent context. | `fresh` |
-| `worktree` | Per-task override for the top-level worktree setting. | Inherits top-level `worktree`. |
+| `worktree` | Top-level only; per-task override is not accepted. | Use top-level `worktree`. |
 | `output` | Requests a saved output artifact path, or disables/specializes output capture with a boolean/string. | Runtime default when omitted. |
 
 ## Dropped fields

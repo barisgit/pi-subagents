@@ -848,7 +848,7 @@ Examples:
 // chain with parallel review+QA sub-step
 { chain:true, run:[{ agent:"explorer", task:"Trace the flow" },{ agent:"fixer", task:"Patch using {previous}" },[{ agent:"review", task:"Review {previous}" },{ agent:"qa", task:"Verify {previous}" }]] }
 
-Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only executable/non-disabled agents. Use action:"status" (id optional; lists all when omitted) / action:"interrupt" id / action:"resume" id message.
+Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only executable/non-disabled agents. Use action:"status" (id optional; lists all when omitted) / action:"interrupt" (id optional; newest running run when omitted) / action:"resume" id message.
 
 Author agents as files under \`agents/<name>.md\`. For advanced patterns see skills/subagent.`,
 		parameters: SubagentParams,
