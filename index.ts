@@ -834,7 +834,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 Shape: run: Step[] dispatches work. Step is a Task; inside chain:true a Step may be Task[] for a parallel sub-step.
 
-Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async returns immediately with an id so the parent can keep working; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets top-level isolated-worktree mode for parallel runs; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status or required interrupt/resume.
+Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async returns immediately with an id so the parent can keep working; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets top-level isolated-worktree mode for parallel runs; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status/interrupt (optional; newest run when omitted) and is required for resume.
 
 Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; output path/boolean capture override.
 
