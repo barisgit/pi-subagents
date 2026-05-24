@@ -4,7 +4,7 @@
 
 ## `{previous}` threading
 
-Use `{previous}` in a chained task when that step needs the prior result. The first step has no previous output. In `message`, `{task}` and `{in}` expand to each task's `task` text; in chained task text, `{previous}` expands to the prior or merged step output.
+Use `{previous}` in a chained task when that step needs the prior result. The first step has no previous output. In `message`, `{task}` and `{in}` expand to each task's `task` text; `{in}` may appear at most once per message. In chained task text, `{previous}` expands to the prior or merged step output.
 
 ```ts
 subagent({

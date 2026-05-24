@@ -834,11 +834,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 Shape: run: Step[] dispatches work. Step is a Task; inside chain:true a Step may be Task[] for a parallel sub-step.
 
-Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async returns immediately with an id so the parent can keep working; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets the default isolated-worktree mode for concurrent writers; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status/interrupt/resume.
+Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async returns immediately with an id so the parent can keep working; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets top-level isolated-worktree mode for parallel runs; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status or required interrupt/resume.
 
-Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; worktree per-task override; output path/boolean capture override.
+Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; output path/boolean capture override.
 
-Substitution: in message, {task} and {in} become each Task.task; in chained task text, {previous} becomes the prior/merged output. context defaults to "fresh". "fork" is same-role/main self-branching only, never role switching; cross-agent delegation uses "fresh".
+Substitution: in message, {task} and {in} become each Task.task; at most one {in} per message. In chained task text, {previous} becomes the prior/merged output. context defaults to "fresh". "fork" is same-role/main self-branching only, never role switching; cross-agent delegation uses "fresh".
 
 Examples:
 // single
@@ -848,7 +848,7 @@ Examples:
 // chain with parallel review+QA sub-step
 { chain:true, run:[{ agent:"explorer", task:"Trace the flow" },{ agent:"fixer", task:"Patch using {previous}" },[{ agent:"review", task:"Review {previous}" },{ agent:"qa", task:"Verify {previous}" }]] }
 
-Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only agents known to be executable/non-disabled. Then use action:"status"|"interrupt"|"resume" with id; resume uses message.
+Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only executable/non-disabled agents. Use action:"status" (id optional; lists all when omitted) / action:"interrupt" id / action:"resume" id message.
 
 Author agents as files under \`agents/<name>.md\`. For advanced patterns see skills/subagent.`,
 		parameters: SubagentParams,

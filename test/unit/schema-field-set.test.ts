@@ -49,7 +49,6 @@ describe("schema field set", () => {
 			"label",
 			"output",
 			"task",
-			"worktree",
 		].sort());
 	});
 

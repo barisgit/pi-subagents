@@ -81,7 +81,7 @@ describe("SubagentParams schema", () => {
 		const validValues = [
 			{ run: [{ agent: "main", task: "check this" }] },
 			{ run: [{ agent: "main", task: "a" }, { agent: "explorer", task: "b", context: "fresh", output: false }], concurrency: 2 },
-			{ chain: true, run: [{ agent: "main", task: "a" }, [{ agent: "main", task: "b" }, { agent: "main", task: "c", worktree: true }]] },
+			{ chain: true, run: [{ agent: "main", task: "a" }, [{ agent: "main", task: "b" }, { agent: "main", task: "c" }]], worktree: true },
 			{ action: "list" },
 			{ action: "status", id: "run-123" },
 			{ action: "interrupt", id: "run-123" },

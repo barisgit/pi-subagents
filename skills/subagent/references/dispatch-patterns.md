@@ -43,7 +43,7 @@ subagent({
 
 ## Swarm-style parallel
 
-For a shared framing across several specialists, put the framing in `message` and specialize each `run` task. `{task}` in `message` substitutes per-task.
+For a shared framing across several specialists, put the framing in `message` and specialize each `run` task. `{task}` in `message` substitutes per-task; `{in}` does the same but may appear at most once per message.
 
 ```ts
 subagent({

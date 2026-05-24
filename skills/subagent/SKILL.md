@@ -32,10 +32,10 @@ subagent({
   async?: boolean,            // return immediately with an id
   batch?: boolean,            // collapse multi-task completions into one rollup
   concurrency?: number,       // cap parallel starts
-  worktree?: boolean,         // isolated git worktree per task
+  worktree?: boolean,         // top-level isolated git worktree mode for parallel runs
   message?: string,           // shared dispatch framing, or next turn for resume
   action?: "list" | "status" | "interrupt" | "resume",
-  id?: string,                // target run for status/interrupt/resume
+  id?: string,                // target run for status; required for interrupt/resume
 })
 
 type Task = {
@@ -43,7 +43,6 @@ type Task = {
   task: string,
   label?: string,
   context?: "fresh" | "fork", // default "fresh"; "fork" is same-role/main only
-  worktree?: boolean,
   output?: string | boolean,
 }
 ```
@@ -65,8 +64,8 @@ subagent({ chain:true, run:[{ agent:"explorer", task:"Trace flow" },{ agent:"fix
 
 - `subagent({ action:"list" })` — list available agents/chains. Run this when persona names or enabled status are uncertain.
 - `subagent({ action:"status", id? })` — inspect active/recent runs.
-- `subagent({ action:"interrupt", id })` — softly pause a drifting run.
-- `subagent({ action:"resume", id, message })` — continue a paused run with the next turn.
+- `subagent({ action:"interrupt", id })` — ask a drifting live run to stop.
+- `subagent({ action:"resume", id, message })` — send the next turn to a live async run awaiting input; paused/interrupted runs are terminal.
 
 ## Load on demand
 

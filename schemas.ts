@@ -22,7 +22,6 @@ export const TaskSchema = Type.Object({
 	], {
 		description: "fresh is default; fork is same-role/main only.",
 	})),
-	worktree: Type.Optional(Type.Boolean({ description: "Per-task worktree override." })),
 	output: Type.Optional(OutputOverride),
 }, { additionalProperties: false });
 
@@ -39,7 +38,7 @@ export const SubagentParams = Type.Object({
 	async: Type.Optional(Type.Boolean({ description: "Run in background." })),
 	batch: Type.Optional(Type.Boolean({ description: "Collapse completion notifications into one rollup." })),
 	concurrency: Type.Optional(Type.Number({ description: "Max parallel tasks." })),
-	worktree: Type.Optional(Type.Boolean({ description: "Default worktree setting for tasks." })),
+	worktree: Type.Optional(Type.Boolean({ description: "Top-level worktree mode for parallel runs." })),
 	message: Type.Optional(Type.String({ description: "Shared dispatch framing or resume follow-up message." })),
 	action: Type.Optional(Type.Union([
 		Type.Literal("list"),

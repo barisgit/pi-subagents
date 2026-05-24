@@ -1,6 +1,6 @@
 # Resume
 
-Use `action:"resume"` to send the next instruction to a paused async run. Resume is a control action, not a new dispatch, so it targets an existing run id.
+Use `action:"resume"` to send the next instruction to a live async run that is awaiting follow-up input. Resume is a control action, not a new dispatch, so it targets an existing run id.
 
 ## Required shape
 
@@ -16,7 +16,7 @@ subagent({
 
 ## When to resume
 
-Resume after an interrupt, a paused run, or an explicit child request for direction. Keep the message concrete: state what changed, what to do next, and whether prior constraints still apply.
+Resume only while the async run is still live and waiting for direction. Paused or interrupted runs are terminal in the current runtime and cannot be resumed. Keep the message concrete: state what changed, what to do next, and whether prior constraints still apply.
 
 ```ts
 subagent({
@@ -29,4 +29,4 @@ Check status first when the run state is unclear.
 
 ## Rejection cases
 
-Resume is rejected when the run id is missing or unknown, the run has already terminated, the run is not paused/resumable, or the `message` is empty. If the old work should not continue, start a new `run` instead of resuming.
+Resume is rejected when the run id is missing or unknown, the run has terminated, the run is not live/waiting for input, or the `message` is empty. If the old work should not continue, start a new `run` instead of resuming.
