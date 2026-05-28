@@ -531,10 +531,12 @@ export function registerSlashCommands(
 	// Shared opener so the slash command and the shortcut stay in sync.
 	const openSubagentsStatus = async (ctx: ExtensionContext) => {
 		const sessionCwd = (ctx as { cwd?: string }).cwd ?? state.baseCwd;
+		const sessionId = ctx.sessionManager?.getSessionId?.() ?? state.currentSessionId ?? undefined;
 		await ctx.ui.custom<void>(
 			(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
 				listForegroundRuns: () => foregroundRunsFromState(state),
 				sessionCwd,
+				...(sessionId ? { sessionId } : {}),
 			}),
 			{ overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
 		);

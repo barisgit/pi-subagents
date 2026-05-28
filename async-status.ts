@@ -38,6 +38,11 @@ export interface AsyncRunSummary {
 	asyncDir: string;
 	// charter nested-subagent-display: dashboard hierarchy parent link.
 	parentRunId?: string;
+	// Immediate dispatcher session. Carried from the registry entry.
+	parentSessionId?: string;
+	// Top-of-tree user session. Carried from the registry entry so the overlay
+	// can scope strictly to the current session and its full nested subtree.
+	rootSessionId?: string;
 	label?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost";
 	activityState?: ActivityState;
@@ -266,23 +271,64 @@ export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"
 	return options.limit !== undefined ? sorted.slice(0, options.limit) : sorted;
 }
 
-export function listRunsFromRegistryForOverlay(recentLimit = 5): AsyncRunOverlayData {
+export function listRunsFromRegistryForOverlay(
+	recentLimit = 5,
+	options: { sessionCwd?: string; sessionId?: string } = {},
+): AsyncRunOverlayData {
 	const all = listRunsFromRegistry();
-	const recent = all
+	// Scope BEFORE the recent-limit slice. Otherwise the top-N most recent
+	// completed runs across every project drown out the current session's
+	// history and the overlay renders "0 total" even though runs-index.jsonl
+	// has matching entries.
+	//
+	// sessionId is the strict scope: only runs whose tree rooted at the current
+	// user session. We match on rootSessionId for nested runs and fall back to
+	// parentSessionId for legacy entries that predate the rootSessionId field.
+	// sessionCwd is the looser project-scoped fallback when no sessionId is
+	// known. In every mode entries with unknown metadata are kept permissively
+	// so legacy and in-flight rows do not silently vanish.
+	let scoped = all;
+	if (options.sessionId) {
+		const sid = options.sessionId;
+		scoped = scoped.filter((run) => {
+			const tag = run.rootSessionId ?? run.parentSessionId;
+			return !tag || tag === sid;
+		});
+	} else if (options.sessionCwd) {
+		scoped = scoped.filter((run) => !run.cwd || run.cwd === options.sessionCwd);
+	}
+	const recent = scoped
 		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused")
 		.sort((a, b) => b.startedAt - a.startedAt)
 		.slice(0, recentLimit);
 	return {
-		active: all.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
+		active: scoped.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
 		recent,
 	};
 }
 
+// Synthesized queued stubs are only useful within a narrow post-dispatch
+// window before status.json gets written. Beyond this age, an entry without a
+// status.json is almost always an orphan: test temp-dir runs that wiped their
+// runRecordDir, or runs from sessions that crashed before the first status
+// flush. Surfacing thousands of these as live `queued` rows is what produced
+// the `subagent({ action: "status" })` wall the user hit.
+const QUEUED_STUB_MAX_AGE_MS = 60_000;
+
 function readSummaryForEntry(entry: RunsRegistryEntry): AsyncRunSummary | null {
 	const status = readStatus(entry.runRecordDir) as (AsyncStatus & { cwd?: string }) | null;
-	if (status) return statusToSummary(entry.runRecordDir, status);
-	// No status.json yet: synthesize a minimal queued/running stub from the
-	// registry entry. Keeps the overlay populated the moment a run is dispatched.
+	const sessionLineage = {
+		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
+		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
+	};
+	if (status) return { ...statusToSummary(entry.runRecordDir, status), ...sessionLineage };
+	// No status.json on disk. Either (a) the run was dispatched within the last
+	// few seconds and the writer hasn't flushed yet — keep the stub so the
+	// overlay reflects the spawn immediately — or (b) the entry is an orphan
+	// whose runRecordDir is gone. Drop orphans so the registry's append-only
+	// history doesn't masquerade as live work.
+	const age = Date.now() - entry.startedAt;
+	if (age > QUEUED_STUB_MAX_AGE_MS) return null;
 	const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : []);
 	return {
 		id: entry.runId,
@@ -294,6 +340,7 @@ function readSummaryForEntry(entry: RunsRegistryEntry): AsyncRunSummary | null {
 		currentStep: 0,
 		...(entry.label ? { label: entry.label } : {}),
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+		...sessionLineage,
 		steps: agents.map((agent, index) => ({ index, agent, status: "queued" as const })),
 	};
 }

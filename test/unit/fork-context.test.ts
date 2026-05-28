@@ -119,4 +119,176 @@ describe("createForkContextResolver", () => {
 			/Failed to create forked subagent session: Session manager did not return a session file\./,
 		);
 	});
+
+	it("walks back past the dispatching subagent tool_use so child does not inherit an orphan tool_use", () => {
+		const seenLeafIds: string[] = [];
+		const entries = {
+			"assistant-leaf": {
+				type: "message",
+				id: "assistant-leaf",
+				parentId: "user-prompt",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "" },
+						{ type: "toolCall", id: "call_1", name: "subagent", arguments: { run: [] } },
+					],
+				},
+			},
+			"user-prompt": {
+				type: "message",
+				id: "user-prompt",
+				parentId: "session-header",
+				message: { role: "user", content: [{ type: "text", text: "go" }] },
+			},
+		} as const;
+		const resolver = createForkContextResolver(manager({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "assistant-leaf",
+			getEntry: (id: string) => entries[id as keyof typeof entries],
+			constructor: {
+				open: () => ({
+					createBranchedSession: (leafId: string) => {
+						seenLeafIds.push(leafId);
+						return `/tmp/child-${seenLeafIds.length}.jsonl`;
+					},
+				}),
+			},
+		}), "fork");
+
+		resolver.sessionFileForIndex(0);
+		assert.deepEqual(seenLeafIds, ["user-prompt"]);
+	});
+
+	it("does not walk back when the leaf assistant turn has no subagent tool_use", () => {
+		const seenLeafIds: string[] = [];
+		const entries = {
+			"assistant-leaf": {
+				type: "message",
+				id: "assistant-leaf",
+				parentId: "user-prompt",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "text", text: "hi" },
+						{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "x" } },
+					],
+				},
+			},
+		} as const;
+		const resolver = createForkContextResolver(manager({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "assistant-leaf",
+			getEntry: (id: string) => entries[id as keyof typeof entries],
+			constructor: {
+				open: () => ({
+					createBranchedSession: (leafId: string) => {
+						seenLeafIds.push(leafId);
+						return "/tmp/child.jsonl";
+					},
+				}),
+			},
+		}), "fork");
+
+		resolver.sessionFileForIndex(0);
+		assert.deepEqual(seenLeafIds, ["assistant-leaf"]);
+	});
+
+	it("does not walk back when the leaf is a user message", () => {
+		const seenLeafIds: string[] = [];
+		const entries = {
+			"user-leaf": {
+				type: "message",
+				id: "user-leaf",
+				parentId: "session-header",
+				message: { role: "user", content: [{ type: "text", text: "go" }] },
+			},
+		} as const;
+		const resolver = createForkContextResolver(manager({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "user-leaf",
+			getEntry: (id: string) => entries[id as keyof typeof entries],
+			constructor: {
+				open: () => ({
+					createBranchedSession: (leafId: string) => {
+						seenLeafIds.push(leafId);
+						return "/tmp/child.jsonl";
+					},
+				}),
+			},
+		}), "fork");
+
+		resolver.sessionFileForIndex(0);
+		assert.deepEqual(seenLeafIds, ["user-leaf"]);
+	});
+
+	it("falls back to original leafId when getEntry is unavailable", () => {
+		const seenLeafIds: string[] = [];
+		const resolver = createForkContextResolver(manager({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "leaf-xyz",
+			constructor: {
+				open: () => ({
+					createBranchedSession: (leafId: string) => {
+						seenLeafIds.push(leafId);
+						return "/tmp/child.jsonl";
+					},
+				}),
+			},
+		}), "fork");
+
+		resolver.sessionFileForIndex(0);
+		assert.deepEqual(seenLeafIds, ["leaf-xyz"]);
+	});
+
+	it("falls back to original leafId when getEntry throws", () => {
+		const seenLeafIds: string[] = [];
+		const resolver = createForkContextResolver(manager({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "leaf-xyz",
+			getEntry: () => { throw new Error("boom"); },
+			constructor: {
+				open: () => ({
+					createBranchedSession: (leafId: string) => {
+						seenLeafIds.push(leafId);
+						return "/tmp/child.jsonl";
+					},
+				}),
+			},
+		}), "fork");
+
+		resolver.sessionFileForIndex(0);
+		assert.deepEqual(seenLeafIds, ["leaf-xyz"]);
+	});
+
+	it("falls back to original leafId when the dispatching assistant has no parentId", () => {
+		const seenLeafIds: string[] = [];
+		const entries = {
+			"assistant-leaf": {
+				type: "message",
+				id: "assistant-leaf",
+				parentId: null,
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call_1", name: "subagent", arguments: {} }],
+				},
+			},
+		} as const;
+		const resolver = createForkContextResolver(manager({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "assistant-leaf",
+			getEntry: (id: string) => entries[id as keyof typeof entries],
+			constructor: {
+				open: () => ({
+					createBranchedSession: (leafId: string) => {
+						seenLeafIds.push(leafId);
+						return "/tmp/child.jsonl";
+					},
+				}),
+			},
+		}), "fork");
+
+		resolver.sessionFileForIndex(0);
+		assert.deepEqual(seenLeafIds, ["assistant-leaf"]);
+	});
 });

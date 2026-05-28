@@ -12,7 +12,20 @@ export interface RunStatusParams {
 	id?: string;
 	runId?: string;
 	dir?: string;
+	// Scope for the no-id list mode. When set, the returned list is filtered to
+	// runs belonging to the current session's tree (rootSessionId/parentSessionId)
+	// or, as a fallback, the current cwd. Without these, every entry in
+	// runs-index.jsonl across every project ever spawned would be returned —
+	// including thousands of long-dead test temp-dir runs that synthesize a
+	// fake `queued` summary because their status.json no longer exists.
+	sessionId?: string;
+	sessionCwd?: string;
 }
+
+// Default cap on the no-id list. Even after scoping, the registry can carry
+// hundreds of entries from one long-running session; the agent rarely needs
+// more than the freshest handful to understand what's still running.
+const DEFAULT_LIST_LIMIT = 30;
 
 function activityText(activityState: unknown, lastActivityAt: unknown): string | undefined {
 	if (typeof lastActivityAt !== "number") return undefined;
@@ -20,10 +33,34 @@ function activityText(activityState: unknown, lastActivityAt: unknown): string |
 	return activityState === "needs_attention" ? `no activity for ${seconds}s` : `active ${seconds}s ago`;
 }
 
+// Mirrors the scoping rule used by listRunsFromRegistryForOverlay: sessionId
+// is the strict match (rootSessionId/parentSessionId), sessionCwd is the looser
+// project fallback. Entries with unknown lineage are kept permissively so
+// legacy/in-flight rows don't silently vanish.
+function scopeRunsForSession<T extends { rootSessionId?: string; parentSessionId?: string; cwd?: string }>(
+	runs: T[],
+	scope: { sessionId?: string; sessionCwd?: string },
+): T[] {
+	if (scope.sessionId) {
+		const sid = scope.sessionId;
+		return runs.filter((run) => {
+			const tag = run.rootSessionId ?? run.parentSessionId;
+			return !tag || tag === sid;
+		});
+	}
+	if (scope.sessionCwd) {
+		const cwd = scope.sessionCwd;
+		return runs.filter((run) => !run.cwd || run.cwd === cwd);
+	}
+	return runs;
+}
+
 export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<Details> {
 	if (!params.id && !params.runId && !params.dir) {
 		try {
-			const runs = listRunsFromRegistry({ states: ["queued", "running", "lost"] });
+			const all = listRunsFromRegistry({ states: ["queued", "running", "lost"] });
+			const scoped = scopeRunsForSession(all, { sessionId: params.sessionId, sessionCwd: params.sessionCwd });
+			const runs = scoped.slice(0, DEFAULT_LIST_LIMIT);
 			return {
 				content: [{ type: "text", text: formatAsyncRunList(runs) }],
 				details: { mode: "single", results: [] },

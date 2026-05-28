@@ -8,8 +8,12 @@
  *    files on disk are .ts — the loader rewrites .js → .ts at resolve time.
  * 2. Some source files use TypeScript parameter properties (constructor(private x: T))
  *    which require --experimental-transform-types (not just strip-types).
+ *
+ * Side-effect import isolate-registry.mjs so integration tests cannot pollute
+ * the real ~/.pi/agent/pi-subagents/runs-index.jsonl.
  */
 
 import { register } from "node:module";
+import "./isolate-registry.mjs";
 
 register(new URL("./ts-loader.mjs", import.meta.url));

@@ -22,7 +22,15 @@ export interface RunsRegistryEntry {
 	agentName?: string;
 	agentNames?: string[];
 	label?: string;
+	// Immediate dispatcher session (parent subagent for nested runs, user
+	// session for top-level runs).
 	parentSessionId?: string;
+	// Top-of-tree user session. Equal to parentSessionId for top-level dispatches
+	// and to the user session for any nested subagent run. Resolved from
+	// PI_SUBAGENT_ROOT_SESSION_ID env when the dispatcher is itself a subagent.
+	// Used by the /subagents-status overlay to scope strictly to the current
+	// session's tree.
+	rootSessionId?: string;
 	parentRunId?: string;
 	cwd: string;
 	startedAt: number;
@@ -37,7 +45,13 @@ export function setRegistryPathForTests(p: string | null): void {
 }
 
 export function getRegistryPath(): string {
-	return registryPathOverride ?? DEFAULT_REGISTRY_PATH;
+	// Test isolation: setRegistryPathForTests wins, then PI_SUBAGENTS_REGISTRY_PATH
+	// env (set by integration test scaffolding so subprocess-spawned executors
+	// can pick it up without explicit wiring), then the real registry under HOME.
+	if (registryPathOverride) return registryPathOverride;
+	const envPath = process.env.PI_SUBAGENTS_REGISTRY_PATH;
+	if (envPath && envPath.length > 0) return envPath;
+	return DEFAULT_REGISTRY_PATH;
 }
 
 export function appendRunEntry(entry: RunsRegistryEntry): void {

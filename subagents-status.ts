@@ -91,15 +91,33 @@ interface StatusOverlayDeps {
 	refreshMs?: number;
 	leftPaneCap?: number;
 	sessionCwd?: string;
+	// Current user session id. When set, the overlay scopes strictly to this
+	// session's tree (matches rootSessionId/parentSessionId on registry entries).
+	// Falls back to cwd scoping when absent.
+	sessionId?: string;
 }
 
 // Decides whether a run belongs to the current session. Sync runs always belong
 // to the current session (they share the in-process cwd). Async runs are
-// included only when their recorded cwd matches sessionCwd; unknown cwd is
-// conservatively hidden in scoped mode.
-export function runMatchesSession(run: LiveRun, sessionCwd: string | undefined): boolean {
-	if (!sessionCwd) return true;
+// included only when their recorded session-lineage tag matches the current
+// sessionId; unknown lineage is conservatively hidden in scoped mode. When
+// only sessionCwd is known (legacy), fall back to cwd matching with the same
+// conservative rule.
+export function runMatchesSession(
+	run: LiveRun,
+	scope: { sessionId?: string; sessionCwd?: string } | string | undefined,
+): boolean {
+	// Back-compat: previously the second arg was just sessionCwd as a string.
+	const { sessionId, sessionCwd } = typeof scope === "string"
+		? { sessionId: undefined, sessionCwd: scope }
+		: scope ?? {};
+	if (!sessionId && !sessionCwd) return true;
 	if (run.source === "sync") return true;
+	if (sessionId) {
+		const tag = run.run.rootSessionId ?? run.run.parentSessionId;
+		if (!tag) return false;
+		return tag === sessionId;
+	}
 	const runCwd = run.run.cwd;
 	if (!runCwd) return false;
 	return runCwd === sessionCwd;
@@ -531,8 +549,13 @@ export class SubagentsStatusComponent implements Component {
 	private rightScroll = new Map<string, ScrollState>();
 	private lastRightHeight = MIN_VIEWPORT_HEIGHT;
 	private lastRightWidth = 0;
+	// Captured at the end of each render so keyboard handlers (j/k/g/G) can
+	// scroll the left run list relative to its actual visible window rather than
+	// guessing from the right pane's height.
+	private lastLeftListHeight = 0;
 	private errorMessage?: string;
 	private sessionCwd: string | undefined;
+	private sessionId: string | undefined;
 	private showAllSessions = false;
 	// Charter-style focus: `tab` toggles which pane receives j/k/g/G/PgUp/PgDn.
 	// Left = move selection; right = scroll transcript.
@@ -551,10 +574,13 @@ export class SubagentsStatusComponent implements Component {
 		this.tui = tui;
 		this.theme = theme;
 		this.done = done;
-		this.listRunsForOverlay = deps.listRunsForOverlay ?? ((limit) => listRunsFromRegistryForOverlay(limit));
+		this.listRunsForOverlay = deps.listRunsForOverlay ?? ((limit) => listRunsFromRegistryForOverlay(limit, this.showAllSessions ? {} : {
+			...(this.sessionId ? { sessionId: this.sessionId } : { sessionCwd: this.sessionCwd }),
+		}));
 		this.listForegroundRuns = deps.listForegroundRuns ?? (() => []);
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
 		this.sessionCwd = deps.sessionCwd;
+		this.sessionId = deps.sessionId;
 		const refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.reload();
 		this.refreshTimer = setInterval(() => {
@@ -572,8 +598,8 @@ export class SubagentsStatusComponent implements Component {
 			// charter nested-subagent-display: prefer in-memory sync rows while disk mirrors exist.
 			const combined = [...overlay.active, ...overlay.recent].filter((run) => !syncIds.has(run.id));
 			this.runs = sortLiveRuns(sync, combined);
-			if (!this.showAllSessions && this.sessionCwd) {
-				this.runs = this.runs.filter((r) => runMatchesSession(r, this.sessionCwd));
+			if (!this.showAllSessions && (this.sessionId || this.sessionCwd)) {
+				this.runs = this.runs.filter((r) => runMatchesSession(r, { sessionId: this.sessionId, sessionCwd: this.sessionCwd }));
 			}
 			this.errorMessage = undefined;
 		} catch (error) {
@@ -619,9 +645,12 @@ export class SubagentsStatusComponent implements Component {
 		const index = this.selectedIndex();
 		if (index < 0) return;
 		if (index < this.leftScroll) this.leftScroll = index;
-		const bodyHeight = this.lastRightHeight || computeBodyHeight(this.tui);
-		const limit = this.leftScroll + bodyHeight;
-		if (index >= limit) this.leftScroll = index - bodyHeight + 1;
+		// The left list shares the body with the legend block; use the actual list
+		// height captured at last render so j/k/G/g keep the selection in view
+		// instead of letting it scroll behind the legend or off the bottom.
+		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
+		const limit = this.leftScroll + listHeight;
+		if (index >= limit) this.leftScroll = index - listHeight + 1;
 	}
 
 	private moveSelection(delta: number): void {
@@ -914,6 +943,16 @@ export class SubagentsStatusComponent implements Component {
 		const legendHeight = legendLines.length;
 		const legendBlockHeight = legendHeight > 0 ? legendHeight + 1 : 0; // +1 divider
 		const listHeight = Math.max(1, bodyHeight - legendBlockHeight);
+		this.lastLeftListHeight = listHeight;
+		// Re-clamp leftScroll so j/k/G that ran before the first render (or after a
+		// terminal resize) produce a visible selection instead of an empty slice.
+		const selectedIdx = this.selectedIndex();
+		if (selectedIdx >= 0) {
+			if (selectedIdx < this.leftScroll) this.leftScroll = selectedIdx;
+			else if (selectedIdx >= this.leftScroll + listHeight) this.leftScroll = selectedIdx - listHeight + 1;
+			const maxLeftScroll = Math.max(0, leftListLines.length - listHeight);
+			if (this.leftScroll > maxLeftScroll) this.leftScroll = maxLeftScroll;
+		}
 		const divider = flatRule(this.theme, "keys", leftWidth);
 
 		// Right pane scroll bookkeeping: sticky-to-bottom for the selected run.
@@ -971,17 +1010,17 @@ export class SubagentsStatusComponent implements Component {
 function selectedRunTitle(run: LiveRun): string {
 	if (run.run.label) return run.run.label;
 	if (run.source === "sync") {
-		return run.run.currentAgent ?? run.run.mode;
+		return run.run.currentAgent ?? run.run.mode ?? "(run)";
 	}
-	const running = run.run.steps.find((s) => s.status === "running");
-	const step = running ?? run.run.steps[0];
-	return step?.agent ?? run.run.mode;
+	const running = run.run.steps?.find((s) => s.status === "running");
+	const step = running ?? run.run.steps?.[0];
+	return step?.agent ?? run.run.mode ?? "(run)";
 }
 
 function selectedRunTailPlain(run: LiveRun): string {
 	const state = run.run.state ?? "";
 	const tool = run.run.currentTool ? ` · ${run.run.currentTool}` : "";
-	return `[${state}]${tool}`;
+	return state || tool ? `[${state}]${tool}` : "";
 }
 
 function selectedRunTailRendered(theme: Theme, run: LiveRun): string {

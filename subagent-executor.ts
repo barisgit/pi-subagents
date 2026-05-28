@@ -1161,6 +1161,10 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		...(runLabel ? { label: runLabel } : {}),
 		...(parentRunId ? { parentRunId } : {}),
 		...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
+		...(() => {
+			const root = process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager?.getSessionId?.();
+			return root ? { rootSessionId: root } : {};
+		})(),
 		cwd: effectiveCwd,
 		startedAt,
 	});
@@ -2647,7 +2651,18 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (params.action === "status") {
 				const foreground = getForegroundControl(deps.state, paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId);
 				if (foreground) return foregroundStatusResult(foreground);
-				return inspectSubagentStatus(paramsWithResolvedCwd as { action?: "status"; id?: string; runId?: string; dir?: string; cwd?: string; includeProgress?: boolean; includeCompleted?: boolean });
+				// Auto-scope the no-id list to the current session's tree (matches the
+				// /subagents-status overlay) so `subagent({ action: "status" })` doesn't
+				// dump every entry in runs-index.jsonl across every project ever spawned.
+				const statusSessionId = process.env.PI_SUBAGENT_ROOT_SESSION_ID
+					?? ctx.sessionManager?.getSessionId?.()
+					?? deps.state.currentSessionId
+					?? undefined;
+				return inspectSubagentStatus({
+					...(paramsWithResolvedCwd as { action?: "status"; id?: string; runId?: string; dir?: string; cwd?: string; includeProgress?: boolean; includeCompleted?: boolean }),
+					...(statusSessionId ? { sessionId: statusSessionId } : {}),
+					sessionCwd: requestCwd,
+				});
 			}
 			if (params.action === "interrupt") {
 				const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id;
@@ -2961,6 +2976,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				...(foregroundRunLabel ? { label: foregroundRunLabel } : {}),
 				...(parentRunId ? { parentRunId } : {}),
 				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
+				...(() => {
+					const root = process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager?.getSessionId?.();
+					return root ? { rootSessionId: root } : {};
+				})(),
 				cwd: effectiveCwd,
 				startedAt: foregroundControl.startedAt,
 			});

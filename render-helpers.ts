@@ -126,7 +126,9 @@ export function titledTopSegment(theme: ChromeTheme, opts: TitledTopSegmentOptio
 	const tailColor = opts.tailColor ?? "dim";
 	// Reserve at least `─ ` + label + ` ─` (4 chars) and 1 dash on each side of the tail when present.
 	const labelBudget = opts.width <= 4 ? 0 : opts.width - 4;
-	const labelText = truncateToWidth(opts.label, labelBudget);
+	// Defensive: callers occasionally pass undefined labels for transient/legacy
+	// runs that lack agent+mode+label; treat as empty rather than crashing pi.
+	const labelText = truncateToWidth(opts.label ?? "", labelBudget);
 	const labelStyled = opts.labelBold && theme.bold
 		? theme.bold(theme.fg(labelColor, labelText))
 		: theme.fg(labelColor, labelText);
