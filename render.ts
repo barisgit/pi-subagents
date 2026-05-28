@@ -238,7 +238,7 @@ function formatCurrentToolLine(progress: Pick<AgentProgress, "currentTool" | "cu
 	const toolArgsPreview = progress.currentToolArgs
 		? (expanded || progress.currentToolArgs.length <= maxToolArgsLen
 			? progress.currentToolArgs
-			: `${progress.currentToolArgs.slice(0, maxToolArgsLen)}...`)
+			: `${progress.currentToolArgs.slice(0, Math.max(0, maxToolArgsLen - 1))}…`)
 		: "";
 	const durationSuffix = progress.currentToolStartedAt !== undefined
 		? ` | ${formatDuration(Math.max(0, Date.now() - progress.currentToolStartedAt))}`
@@ -377,7 +377,7 @@ function buildLiveHistoryLines(
 function formatLiveHistoryEntry(entry: AgentProgress["recentTools"][number], availableWidth: number): string {
 	const maxArgsLen = Math.max(20, availableWidth - 24);
 	const args = entry.args
-		? (entry.args.length <= maxArgsLen ? entry.args : `${entry.args.slice(0, maxArgsLen)}...`)
+		? (entry.args.length <= maxArgsLen ? entry.args : `${entry.args.slice(0, Math.max(0, maxArgsLen - 1))}…`)
 		: "";
 	const durationSuffix = entry.durationMs !== undefined ? `  ${formatDuration(entry.durationMs)}` : "";
 	return args
@@ -524,9 +524,13 @@ function countCollapsedNested(runId: string): { nested: number; tools: number } 
 	return { nested, tools };
 }
 
-function formatInlineTool(event: Extract<TranscriptLine, { kind: "tool" }>): string {
-	const args = event.rawArgs ? previewArgs(event.rawArgs) : event.argsPreview;
+function formatInlineTool(event: Extract<TranscriptLine, { kind: "tool" }>, maxWidth?: number): string {
 	const duration = event.durationMs !== undefined ? `  ${formatDuration(event.durationMs)}` : "";
+	const prefix = `${event.toolName}: `;
+	const argsBudget = maxWidth === undefined
+		? undefined
+		: Math.max(1, maxWidth - visibleWidth(prefix) - visibleWidth(duration));
+	const args = event.rawArgs ? previewArgs(event.rawArgs, argsBudget) : event.argsPreview;
 	return args ? `${event.toolName}: ${args}${duration}` : `${event.toolName}${duration}`;
 }
 
@@ -570,7 +574,7 @@ export function countInlineChildTally(parentRunId: string, tools: Array<{ tool: 
 	return { sync, async };
 }
 
-export function renderNestedChild(runId: string, depth = 1, args?: Record<string, unknown>, used = new Set<string>()): string[] {
+export function renderNestedChild(runId: string, depth = 1, args?: Record<string, unknown>, used = new Set<string>(), maxWidth?: number): string[] {
 	const data = readInlineRun(runId);
 	if (!data) return [];
 	const { summary, events } = data;
@@ -590,16 +594,16 @@ export function renderNestedChild(runId: string, depth = 1, args?: Record<string
 			if (argBoolean(event.rawArgs, "async")) {
 				const asyncLine = renderInlineAsyncToolLine(summary.id, event.rawArgs, used);
 				if (asyncLine) lines.push(`${"  ".repeat(depth)}${asyncLine.slice(3)}`);
-				else lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event)}`);
+				else lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event, maxWidth === undefined ? undefined : maxWidth - visibleWidth(inlinePrefix(depth + 1)) - 1)}`);
 				continue;
 			}
 			const child = findInlineChildRun(summary.id, event.rawArgs, used);
 			if (child) {
-				lines.push(...renderNestedChild(child.id, depth + 1, event.rawArgs, used));
+				lines.push(...renderNestedChild(child.id, depth + 1, event.rawArgs, used, maxWidth));
 				continue;
 			}
 		}
-		lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event)}`);
+		lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event, maxWidth === undefined ? undefined : maxWidth - visibleWidth(inlinePrefix(depth + 1)) - 1)}`);
 	}
 	return lines;
 }
@@ -802,9 +806,9 @@ function buildChainBar(theme: Theme, done: number, running: number, total: numbe
 	const doneCells = Math.round((d / total) * width);
 	const runCells = Math.round(((d + r) / total) * width) - doneCells;
 	const emptyCells = Math.max(0, width - doneCells - runCells);
-	return theme.fg("success", "\u25b0".repeat(doneCells))
-		+ theme.fg("accent", "\u25b0".repeat(Math.max(0, runCells)))
-		+ theme.fg("dim", "\u25b1".repeat(emptyCells));
+	return theme.fg("success", "\u2588".repeat(doneCells))
+		+ theme.fg("accent", "\u2588".repeat(Math.max(0, runCells)))
+		+ theme.fg("dim", "\u2591".repeat(emptyCells));
 }
 
 /**
@@ -913,7 +917,11 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 		fallbackLabel: "step",
 	});
 	if (badge) parts.push(badge);
-	const phaseLabel = formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool);
+	// Suppress phase chip for terminal runs so finished jobs don't keep
+	// ticking `streaming Xs` / `tool: bash Xs` (stale phase from status.json
+	// written before the finalize phase-clear lands).
+	const phaseAllowed = job.status !== "complete" && job.status !== "failed" && job.status !== "lost";
+	const phaseLabel = phaseAllowed ? formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool) : "";
 	if (phaseLabel) parts.push(phaseLabel);
 	else if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
 	else if (job.displayState === "tool_running" && job.currentTool) parts.push(`tool ${job.currentTool}`);
@@ -1432,7 +1440,7 @@ export function renderSubagentResult(
 		const taskMaxLen = Math.max(20, w - 8);
 		const taskPreview = expanded || r.task.length <= taskMaxLen
 			? r.task
-			: `${r.task.slice(0, taskMaxLen)}...`;
+			: `${r.task.slice(0, Math.max(0, taskMaxLen - 1))}…`;
 		c.addChild(
 			new Text(fit(theme.fg("dim", `Task: ${taskPreview}`)), 0, 0),
 		);
@@ -1456,7 +1464,7 @@ export function renderSubagentResult(
 					const maxArgsLen = Math.max(40, w - 24);
 					const argsPreview = expanded || t.args.length <= maxArgsLen
 						? t.args
-						: `${t.args.slice(0, maxArgsLen)}...`;
+						: `${t.args.slice(0, Math.max(0, maxArgsLen - 1))}…`;
 					c.addChild(new Text(fit(theme.fg("dim", `${t.tool}: ${argsPreview}`)), 0, 0));
 				}
 			}
@@ -1659,7 +1667,7 @@ export function renderSubagentResult(
 		const taskMaxLen = Math.max(20, w - 12);
 		const taskPreview = expanded || r.task.length <= taskMaxLen
 			? r.task
-			: `${r.task.slice(0, taskMaxLen)}...`;
+			: `${r.task.slice(0, Math.max(0, taskMaxLen - 1))}…`;
 		c.addChild(new Text(fit(theme.fg("dim", `    task: ${taskPreview}`)), 0, 0));
 
 		const outputTarget = extractOutputTarget(r.task);
@@ -1694,7 +1702,7 @@ export function renderSubagentResult(
 					const maxArgsLen = Math.max(40, w - 30);
 					const argsPreview = expanded || t.args.length <= maxArgsLen
 						? t.args
-						: `${t.args.slice(0, maxArgsLen)}...`;
+						: `${t.args.slice(0, Math.max(0, maxArgsLen - 1))}…`;
 					c.addChild(new Text(fit(theme.fg("dim", `      ${t.tool}: ${argsPreview}`)), 0, 0));
 				}
 			}

@@ -4,7 +4,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryForOverlay, sortRuns } from "./async-status.ts";
-import { readRunTranscript } from "./run-transcript.ts";
+import { previewArgs, readRunTranscript } from "./run-transcript.ts";
 import { formatDuration } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
 import { deriveRunDisplayState, displayStatePriority } from "./run-liveness.ts";
@@ -372,7 +372,13 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
 	const glyph = statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
 	const agent = runAgentLabel(run, theme);
-	const phase = formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
+	// Terminal runs must not advertise a live phase chip (`streaming Xs`,
+	// `tool: bash Xs`). Older status.json files written before the
+	// status-writer finalize phase-clear may still carry stale phase fields;
+	// suppress here so the seconds counter doesn't keep ticking after
+	// `complete`/`failed`/`lost`.
+	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "lost";
+	const phase = isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
 	const status = run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
 	const elapsed = runElapsed(run, now);
 	const dateStamp = runEndedStamp(run);
@@ -439,17 +445,20 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 				if (!isAsync) {
 					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
 					if (child) {
-						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
+						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed, width)) {
 							step.lines.push(theme.fg("dim", truncateToWidth(line, width)));
 						}
 						continue;
 					}
 				}
 			}
-			const argsPart = event.argsPreview ? ` ${event.argsPreview}` : "";
-			const base = `→ ${event.toolName}${argsPart}`;
-			if (event.durationMs !== undefined) {
-				const suffix = ` · ${event.durationMs}ms`;
+			const suffix = event.durationMs !== undefined ? ` · ${event.durationMs}ms` : "";
+			const prefix = `→ ${event.toolName}`;
+			const argsBudget = Math.max(1, width - visibleWidth(prefix) - 1 - visibleWidth(suffix));
+			const argsPreview = event.rawArgs ? previewArgs(event.rawArgs, argsBudget) : event.argsPreview;
+			const argsPart = argsPreview ? ` ${argsPreview}` : "";
+			const base = `${prefix}${argsPart}`;
+			if (suffix) {
 				const baseTrim = truncateToWidth(base, Math.max(0, width - visibleWidth(suffix)));
 				step.lines.push(`${baseTrim}${theme.fg("dim", suffix)}`);
 			} else {

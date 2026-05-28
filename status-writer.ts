@@ -131,6 +131,13 @@ export class StatusWriter {
 			this.status.endedAt = result.endedAt;
 			this.status.lastUpdate = result.endedAt;
 			this.status.outputText = result.outputText;
+			// Clear phase on terminal write so dashboards stop computing
+			// `streaming Xs` / `tool: bash Xs` for runs that finished long ago
+			// (formatPhase treats idle/undefined as the empty string).
+			this.status.phase = "idle";
+			this.status.phaseStartedAt = undefined;
+			this.status.currentTool = undefined;
+			this.status.currentToolStartedAt = undefined;
 			if (result.error?.message) this.status.error = result.error.message;
 			// Prefer caller-provided aggregate (chain/parallel sum across all
 			// steps); fall back to single-step result.usage.

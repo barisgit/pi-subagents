@@ -114,7 +114,7 @@ export function getOutputTail(outputFile: string | undefined, maxLines: number =
 		fs.readSync(fd, buffer, 0, buffer.length, start);
 		const content = buffer.toString("utf-8");
 		const allLines = content.split("\n").filter((l) => l.trim());
-		const lines = allLines.slice(-maxLines).map((l) => l.slice(0, 120) + (l.length > 120 ? "..." : ""));
+		const lines = allLines.slice(-maxLines).map((l) => l.slice(0, 119) + (l.length > 120 ? "…" : ""));
 
 		outputTailCache.set(outputFile, { mtime: stat.mtimeMs, size: stat.size, lines });
 		if (outputTailCache.size > 20) {
@@ -454,7 +454,7 @@ export function detectSubagentError(messages: Message[]): ErrorInfo {
  */
 export function extractToolArgsPreview(args: Record<string, unknown>): string {
 	const truncatePreview = (value: string, maxLength: number): string =>
-		value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
+		value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 1))}…` : value;
 
 	const stringifyPreviewValue = (value: unknown): string | undefined => {
 		if (typeof value === "string" && value.trim().length > 0) return value;

@@ -66,7 +66,7 @@ describe("foreground tool-call compaction", () => {
 			extractToolArgsPreview({
 				urls: ["https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging", "https://example.com/backup"],
 			}),
-			"https://developer.chrome.com/docs/extensions/develop/conc...",
+			"https://developer.chrome.com/docs/extensions/develop/concep…",
 		);
 	});
 

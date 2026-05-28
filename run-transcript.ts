@@ -22,7 +22,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const ARGS_PREVIEW_MAX = 60;
 
-export function previewArgs(args: unknown): string {
+export function previewArgs(args: unknown, maxLength = ARGS_PREVIEW_MAX): string {
 	if (args === undefined || args === null) return "";
 	let json: string;
 	try {
@@ -31,8 +31,9 @@ export function previewArgs(args: unknown): string {
 		return "";
 	}
 	if (!json) return "";
-	if (json.length <= ARGS_PREVIEW_MAX) return json;
-	return `${json.slice(0, ARGS_PREVIEW_MAX - 1)}…`;
+	const limit = Math.max(1, maxLength);
+	if (json.length <= limit) return json;
+	return `${json.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 function readJsonFile<T>(filePath: string): T | undefined {

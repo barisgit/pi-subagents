@@ -88,7 +88,7 @@ export function formatToolCall(name: string, args: Record<string, unknown>, expa
 		case "bash": {
 			const command = typeof args.command === "string" ? args.command : "";
 			const maxLength = expanded ? 240 : 60;
-			return `$ ${command.slice(0, maxLength)}${command.length > maxLength ? "..." : ""}`;
+			return `$ ${command.slice(0, Math.max(0, maxLength - 1))}${command.length > maxLength ? "…" : ""}`;
 		}
 		case "read":
 		case "write":
@@ -103,7 +103,7 @@ export function formatToolCall(name: string, args: Record<string, unknown>, expa
 		default: {
 			const s = JSON.stringify(args);
 			const maxLength = expanded ? 160 : 40;
-			return `${name} ${s.slice(0, maxLength)}${s.length > maxLength ? "..." : ""}`;
+			return `${name} ${s.slice(0, Math.max(0, maxLength - 1))}${s.length > maxLength ? "…" : ""}`;
 		}
 	}
 }

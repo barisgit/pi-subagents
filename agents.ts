@@ -331,7 +331,7 @@ function applyPresetOverlay(agent: AgentConfig, overlay: AgentPresetOverlay): Ag
 function applyPresetOverlays(
 	agents: AgentConfig[],
 	options?: AgentDiscoveryOptions,
-): { agents: AgentConfig[]; preset: DiscoveryPresetInfo } {
+): { agents: AgentConfig[]; preset: DiscoveryPresetInfo; overlays: Record<string, AgentPresetOverlay> } {
 	const config = loadExtensionConfig(options?.config);
 	const { requested, source } = normalizePresetSource(normalizePresetName(options?.preset), config);
 	const presetInfo: DiscoveryPresetInfo = {
@@ -339,13 +339,13 @@ function applyPresetOverlays(
 		...(source ? { source } : {}),
 		warnings: [],
 	};
-	if (!requested) return { agents, preset: presetInfo };
+	if (!requested) return { agents, preset: presetInfo, overlays: {} };
 	const preset = config.presets && typeof config.presets === "object" && !Array.isArray(config.presets)
 		? config.presets[requested]
 		: undefined;
 	if (!preset) {
 		presetInfo.warnings.push(`Requested preset '${requested}' was not found in ${getExtensionConfigPath()}.`);
-		return { agents, preset: presetInfo };
+		return { agents, preset: presetInfo, overlays: {} };
 	}
 	const overlays = getPresetAgentOverlays(preset);
 	const overlayNames = new Set(Object.keys(overlays));
@@ -359,6 +359,7 @@ function applyPresetOverlays(
 			return overlay ? applyPresetOverlay(agent, overlay) : agent;
 		}),
 		preset: presetInfo,
+		overlays,
 	};
 }
 
@@ -978,8 +979,17 @@ export function discoverAgents(cwd: string, scope: AgentScope, options?: AgentDi
 	const projectAgents = scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project"));
 	const mergedAgents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents);
 	const presetApplied = applyPresetOverlays(mergedAgents, options);
+	// Extension-registered personas are appended AFTER preset overlay + strict
+	// filtering so they always survive strict mode. We still apply per-agent
+	// overlays (model/thinking/etc.) when the preset names them — that's how
+	// users override e.g. `charter-qa`'s model without forking the persona
+	// file. Omitted = use frontmatter; present = overlay wins.
 	const registeredAgents = loadRegisteredPersonaAgents(options)
-		.filter((agent) => !presetApplied.agents.some((existing) => existing.name === agent.name));
+		.filter((agent) => !presetApplied.agents.some((existing) => existing.name === agent.name))
+		.map((agent) => {
+			const overlay = presetApplied.overlays[agent.name];
+			return overlay ? applyPresetOverlay(agent, overlay) : agent;
+		});
 	const visibleAgents = [...presetApplied.agents, ...registeredAgents]
 		.filter((agent) => agent.disabled !== true)
 		.filter((agent) => isVisibleOnSurface(agent, options?.surface, options?.includeInternal));
@@ -1028,8 +1038,15 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 	];
 
 	const presetBuiltin = applyPresetOverlays(builtinBase, options);
+	// See note in `discoverAgents`: extension-registered personas bypass the
+	// strictAgents filter, but they still receive per-agent overlays from the
+	// preset's `agents:` map when present (model/thinking/etc.).
 	const registeredAgents = loadRegisteredPersonaAgents(options)
-		.filter((agent) => !presetBuiltin.agents.some((existing) => existing.name === agent.name));
+		.filter((agent) => !presetBuiltin.agents.some((existing) => existing.name === agent.name))
+		.map((agent) => {
+			const overlay = presetBuiltin.overlays[agent.name];
+			return overlay ? applyPresetOverlay(agent, overlay) : agent;
+		});
 	const presetUser = applyPresetOverlays(userBase, options);
 	const presetProject = applyPresetOverlays(projectBase, options);
 	// Prefer ~/.pi/agent/agents/ as primary; fall back to ~/.agents/ if only that exists

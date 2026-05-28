@@ -115,6 +115,60 @@ describe("agent presets", () => {
 		assert.match(result.preset.warnings[0] ?? "", /Requested preset 'missing' was not found/);
 	});
 
+	it("applies preset overlays to extension-registered personas while keeping them strict-mode survivable", () => {
+		const personaDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-registered-persona-"));
+		fs.writeFileSync(path.join(personaDir, "charter-qa.md"), `---
+name: charter-qa
+description: Charter QA persona
+model: anthropic/claude-sonnet-4-6
+thinking: high
+---
+You are charter-qa.
+`, "utf-8");
+
+		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
+			presets: {
+				workflow: {
+					strictAgents: true,
+					agents: {
+						fixer: { model: "openai/gpt-5" },
+						"charter-qa": { model: "openai-codex/gpt-5.5-fast", thinking: "low" },
+					},
+				},
+				"workflow-no-override": {
+					strictAgents: true,
+					agents: { fixer: { model: "openai/gpt-5" } },
+				},
+			},
+		});
+
+		try {
+			// strictAgents + overlay present -> registered persona survives AND overlay applies
+			const withOverlay = discoverAgents(tempProject, "project", {
+				preset: "workflow",
+				registeredPersonaDirs: [{ extensionId: "pi-charter", path: personaDir }],
+				includeInternal: true,
+			});
+			const charterQa = withOverlay.agents.find((agent) => agent.name === "charter-qa");
+			assert.ok(charterQa, "registered persona should survive strict mode");
+			assert.equal(charterQa.model, "openai-codex/gpt-5.5-fast");
+			assert.equal(charterQa.thinking, "low");
+
+			// strictAgents + no overlay for charter-qa -> still survives, frontmatter values kept
+			const withoutOverlay = discoverAgents(tempProject, "project", {
+				preset: "workflow-no-override",
+				registeredPersonaDirs: [{ extensionId: "pi-charter", path: personaDir }],
+				includeInternal: true,
+			});
+			const untouched = withoutOverlay.agents.find((agent) => agent.name === "charter-qa");
+			assert.ok(untouched, "registered persona without overlay should still survive strict mode");
+			assert.equal(untouched.model, "anthropic/claude-sonnet-4-6");
+			assert.equal(untouched.thinking, "high");
+		} finally {
+			fs.rmSync(personaDir, { recursive: true, force: true });
+		}
+	});
+
 	it("supports strict workflow role catalogs and main/subagent surface filtering", () => {
 		writeProjectAgent("build", "anthropic/claude-sonnet-4", "surface: main");
 		writeProjectAgent("explorer", "anthropic/claude-sonnet-4", "surface: subagent");
