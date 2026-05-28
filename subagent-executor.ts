@@ -2313,7 +2313,17 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		}
 
 		const worktreeSuffix = buildParallelWorktreeSuffix(worktreeSetup, artifactsDir, tasks);
-		const ok = results.filter((result) => result.exitCode === 0).length;
+		// A run "succeeded" only if the executor reported exitCode 0 AND it produced
+		// something usable (any text output, regardless of byte count). exitCode 0 +
+		// empty output gets reported as "empty" so the parent doesn't read 5/5 success
+		// when half the agents returned nothing. After in-process-executor's
+		// detectProviderFailure landed, provider-error runs already exit non-zero;
+		// this catches any other empty-completion edge case (refusals, legit-empty
+		// model output, etc.).
+		const hasOutput = (result: SingleResult): boolean =>
+			Boolean((result.truncation?.text || getSingleResultOutput(result)).trim());
+		const ok = results.filter((result) => result.exitCode === 0 && hasOutput(result)).length;
+		const emptyCount = results.filter((result) => result.exitCode === 0 && !hasOutput(result)).length;
 		const downgradeNote = backgroundRequestedWhileClarifying ? " (background requested, but clarify kept this run foreground)" : "";
 		const aggregatedOutput = aggregateParallelOutputs(
 			results.map((result) => ({
@@ -2325,7 +2335,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			(i, agent) => `=== Task ${i + 1}: ${agent} ===`,
 		);
 
-		const summary = `${ok}/${results.length} succeeded${downgradeNote}`;
+		const emptyNote = emptyCount > 0 ? `, ${emptyCount} empty` : "";
+		const summary = `${ok}/${results.length} succeeded${emptyNote}${downgradeNote}`;
 		const fullContent = worktreeSuffix
 			? `${summary}\n\n${aggregatedOutput}\n\n${worktreeSuffix}`
 			: `${summary}\n\n${aggregatedOutput}`;

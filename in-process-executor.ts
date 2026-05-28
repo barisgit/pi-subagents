@@ -619,6 +619,33 @@ async function executeChildAgent(
 			outputText = session.getLastAssistantText?.() ?? "";
 		}
 
+		// Detect provider-level failures that the SDK swallows.
+		//
+		// When the upstream provider returns an error response (e.g. cursor proxy
+		// replying "500 Not logged in" during a token-bootstrap race), the SDK
+		// records an assistant message with `stopReason: "error"` and an empty
+		// content array, retries internally, and ultimately resolves
+		// `session.prompt()` without throwing. The naive read of that is "success":
+		// no exception, no aborted signal. The honest read is "the model produced
+		// nothing usable." We downgrade those runs to `failed` with the actual
+		// provider errorMessage so the parent agent sees a real exit code instead
+		// of a misleading 5/5-succeeded summary.
+		const providerFailure = detectProviderFailure(session, outputText, toolCallCount);
+		if (providerFailure) {
+			const result = baseResult("failed", {
+				message: providerFailure,
+				reason: "provider_error",
+			});
+			ctx.onStatusUpdate?.({
+				runId: step.runId,
+				stepIndex: step.stepIndex,
+				state: result.state,
+				endedAt: result.endedAt,
+				outputText: result.outputText,
+			});
+			return result;
+		}
+
 		const result = baseResult("complete");
 		if (step.shareEnabled) {
 			try {
@@ -673,6 +700,46 @@ async function executeChildAgent(
  * Idempotent: if the target already exists (e.g. a retry after a transient
  * failure), the existing file is preserved.
  */
+
+/**
+ * Inspect a session's recorded messages after `prompt()` resolves and return a
+ * provider-error description when the SDK swallowed an upstream failure.
+ *
+ * Triggers when EVERY assistant message in the session has `stopReason === "error"`
+ * AND the agent produced no usable output (no text, no tool calls). That pattern
+ * indicates the SDK exhausted its internal retries on a provider error and
+ * resolved the prompt with empty content rather than throwing — e.g. the cursor
+ * proxy returning "500 Not logged in" during a token-bootstrap race.
+ *
+ * Returns the first non-empty `errorMessage` from the session's assistant
+ * messages, or a generic fallback. Returns undefined when the run looks healthy
+ * (at least one assistant message succeeded, or the agent did real work).
+ */
+function detectProviderFailure(
+	session: AgentSession,
+	outputText: string,
+	toolCallCount: number,
+): string | undefined {
+	if (outputText.trim().length > 0) return undefined;
+	if (toolCallCount > 0) return undefined;
+	const messages = session.messages;
+	if (!messages || messages.length === 0) return undefined;
+	let sawAssistant = false;
+	let firstErrorMessage: string | undefined;
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		sawAssistant = true;
+		const stopReason = (msg as { stopReason?: string }).stopReason;
+		if (stopReason !== "error") return undefined;
+		if (!firstErrorMessage) {
+			const em = (msg as { errorMessage?: string }).errorMessage;
+			if (typeof em === "string" && em.trim()) firstErrorMessage = em.trim();
+		}
+	}
+	if (!sawAssistant) return undefined;
+	return firstErrorMessage ?? "Provider returned no usable response (all assistant messages errored)";
+}
+
 function seedForkSessionFile(input: { sourcePath: string; targetPath: string; childCwd: string }): void {
 	if (existsSync(input.targetPath)) return;
 	void input.childCwd;
