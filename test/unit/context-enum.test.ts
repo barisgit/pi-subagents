@@ -11,12 +11,6 @@ function valid(input: unknown): boolean {
 	return validator.Check(input) && validateSubagentToolInput(input) === null;
 }
 
-function errorText(input: unknown): string {
-	const error = validateSubagentToolInput(input);
-	const first = error?.content[0];
-	return first?.type === "text" ? first.text : "";
-}
-
 describe("context enum", () => {
 	it("accepts an absent context as fresh default", () => {
 		assert.equal(valid({ run: [{ agent: "main", task: "work" }] }), true);
@@ -30,11 +24,9 @@ describe("context enum", () => {
 		assert.equal(valid({ run: [{ agent: "main", task: "continue", context: "fork" }] }), true);
 	});
 
-	it("rejects context fork for non-main agents", () => {
-		const input = { run: [{ agent: "explorer", task: "inspect", context: "fork" }] };
-
-		assert.equal(validator.Check(input), true, "the enum admits fork structurally");
-		assert.match(errorText(input), /same-role|main only/);
+	it("accepts context fork for any agent (same-agent enforced at dispatch)", () => {
+		assert.equal(valid({ run: [{ agent: "fixer", task: "second pass", context: "fork" }] }), true);
+		assert.equal(valid({ run: [{ agent: "explorer", task: "branch out", context: "fork" }] }), true);
 	});
 
 	it("rejects summarized until the reserved future mode is implemented", () => {

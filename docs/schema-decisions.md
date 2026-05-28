@@ -44,7 +44,7 @@ Post-charter input keeps only the fields below.
 | `agent` | Agent persona to invoke, such as `fixer`, `explorer`, `qa`, or a project-defined agent. | Required. |
 | `task` | Concrete instruction for that agent. | Required. |
 | `label` | Short human-readable label for status and notifications. | Derived from task text when omitted. |
-| `context` | Context mode: `fresh` starts clean; `fork` is same-role only and inherits the parent context. | `fresh` |
+| `context` | Context mode: `fresh` starts clean; `fork` is same-agent self-branching only and inherits the parent context. | `fresh` |
 | `output` | Requests a saved output artifact path, or disables/specializes output capture with a boolean/string. | Runtime default when omitted. |
 
 Note: `worktree` is top-level only; per-task overrides are rejected by the validator. Use the top-level `worktree` field on the dispatch call.

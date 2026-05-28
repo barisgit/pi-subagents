@@ -42,7 +42,7 @@ type Task = {
   agent: string,
   task: string,
   label?: string,
-  context?: "fresh" | "fork", // default "fresh"; "fork" is same-role/main only
+  context?: "fresh" | "fork", // default "fresh"; "fork" is same-agent self-branching only
   output?: string | boolean,
 }
 ```
@@ -73,7 +73,7 @@ Open a reference only when its trigger fires — keep this file in working memor
 
 - `references/dispatch-patterns.md` — when **choosing a shape** (single vs parallel vs chain vs swarm-style).
 - `references/chain-semantics.md` — before using **`{previous}` substitution** or a **nested `Task[]` parallel sub-step**.
-- `references/context-fork.md` — before setting **`context:"fork"`**; confirms the same-role/main rule and rejection cases.
+- `references/context-fork.md` — before setting **`context:"fork"`**; confirms the same-agent rule and rejection cases.
 - `references/resume.md` — before using **`action:"resume"`**; required fields and terminal-run rejections.
 - `references/batch-notifications.md` — before setting **`batch:true`**; rollup payload shape and notification semantics.
 - `references/error-modes.md` — when the validator **rejects a call**; rejection table with remediations.

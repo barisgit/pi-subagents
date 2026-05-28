@@ -66,7 +66,7 @@ describe("qa tool surface", () => {
 		const negatives = [
 			["negative: prompt renamed to message", /prompt.*message/i],
 			["negative: CRUD removed uses file-based agent workflow", /agents\/<name>\.md/i],
-			["negative: fork is main-only", /fork.*same-role\/main|same-role\/main.*fork/i],
+			["negative: fork is same-agent only", /fork.*current agent.*fork itself|same-agent/i],
 		] as const;
 
 		for (const [name, pattern] of negatives) {

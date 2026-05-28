@@ -8,7 +8,7 @@
     "terminal"
   ],
   "outcome": "pass",
-  "summary": "QA tool surface scenarios passed: description is 423/700 tokens with no field-purpose ambiguities; 5 canonical slim dispatch shapes validate (single, parallel, chain, chain-with-parallel-sub-step, resume); 3 negative cases reject with helpful migration/context hints (prompt-renamed-to-message, CRUD-removed-file-based-workflow-hint, fork-main-only-hint).",
+  "summary": "QA tool surface scenarios passed: description is 423/700 tokens with no field-purpose ambiguities; 5 canonical slim dispatch shapes validate (single, parallel, chain, chain-with-parallel-sub-step, resume); 3 negative cases reject with helpful migration/context hints (prompt-renamed-to-message, CRUD-removed-file-based-workflow-hint, fork-cross-agent-hint).",
   "because": "The fixer walked the QA brief directly without dispatching charter-qa: an inline Node check used the registered description tokenizer plus SubagentParams/validateSubagentToolInput to exercise each documented positive and negative slim-schema scenario. All 5 positive calls validated and all 3 negative calls returned the documented hints. Test test/unit/qa-tool-surface.test.ts asserts evidence shape, scenario outcomes, source, and negative hints; 5/5 pass under `bash scripts/charter-named-test.sh test/unit/qa-tool-surface.test.ts 'qa tool surface'`.",
   "scenarios": [
     {
@@ -61,10 +61,10 @@
       }
     },
     {
-      "name": "negative: fork is main-only",
+      "name": "negative: fork is same-agent only",
       "outcome": "pass",
       "details": {
-        "hint": "fork context is same-role/main only"
+        "hint": "fork context only allows the current agent to fork itself"
       }
     }
   ],

@@ -838,7 +838,7 @@ Top fields: run work steps; chain runs steps sequentially (false/default = paral
 
 Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; output path/boolean capture override.
 
-Substitution: in message, {task} and {in} become each Task.task; at most one {in} per message. In chained task text, {previous} becomes the prior/merged output. context defaults to "fresh". "fork" is same-role/main self-branching only, never role switching; cross-agent delegation uses "fresh".
+Substitution: in message, {task} and {in} become each Task.task; at most one {in} per message. In chained task text, {previous} becomes the prior/merged output. context defaults to "fresh". "fork" is same-agent self-branching only (e.g. fixer→fixer, explorer→explorer, main→main), never role switching; cross-agent delegation uses "fresh".
 
 Examples:
 // single

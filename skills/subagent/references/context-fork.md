@@ -1,6 +1,6 @@
 # Context and fork
 
-`context` is a per-task choice. Omit it for the default `fresh` behavior unless you are deliberately branching the current same-role session.
+`context` is a per-task choice. Omit it for the default `fresh` behavior unless you are deliberately branching the current same-agent session.
 
 ## Fresh context
 
@@ -14,14 +14,22 @@ subagent({
 
 ## Fork context
 
-`context:"fork"` is same-role/main self-branching only. It creates a branched child from the current persisted parent session and is useful for alternate implementation attempts, second-pass checks, or same-agent scratch work. It is not a filtered review context and must not be used to switch personas. Fork is main-role-only; cross-agent delegation uses `context:"fresh"`.
+`context:"fork"` is same-agent self-branching. It creates a branched child from the current persisted parent session and is useful for alternate implementation attempts, second-pass checks, or same-agent scratch work. It is not a filtered review context and must not be used to switch personas. Any agent can fork itself (`main→main`, `fixer→fixer`, `explorer→explorer`, etc.); cross-agent delegation uses `context:"fresh"`.
 
 ```ts
+// main self-fork
 subagent({
   run: [{ agent: "main", task: "Explore an alternate minimal patch in a branch.", context: "fork" }]
 })
+
+// fixer self-fork from inside a fixer run
+subagent({
+  run: [{ agent: "fixer", task: "Second-pass: re-check the edge case in the patch.", context: "fork" }]
+})
 ```
+
+The runtime resolves the current agent identity from (1) the `PI_SUBAGENT_CURRENT_AGENT` env set by the executor for child runs, (2) the active root role, or (3) a single requested agent when no other signal exists. Requesting a different agent name under `context:"fork"` is rejected at dispatch with `Fork context only allows the current agent '<name>' to fork itself.`
 
 ## Reserved future mode
 
-`summarized` is reserved for a future context mode but is not accepted by the current runtime schema. Use `fresh` when unsure; use `fork` only with target agent `main`.
+`summarized` is reserved for a future context mode but is not accepted by the current runtime schema. Use `fresh` when unsure.

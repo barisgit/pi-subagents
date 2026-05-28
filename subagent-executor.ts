@@ -268,9 +268,8 @@ function validateSlimTask(task: unknown, pathLabel: string): AgentToolResult<Det
 	if (typeof task.agent !== "string" || typeof task.task !== "string") {
 		return validationError(`${pathLabel} must be a task with agent and task.`);
 	}
-	if (task.context === "fork" && task.agent !== "main") {
-		return validationError(`context:\"fork\" is same-role/main only; ${pathLabel}.agent must be \"main\".`);
-	}
+	// Same-agent enforcement for context:"fork" happens at dispatch time in
+	// resolveForkReuseConfig, where the current agent identity is known.
 	return null;
 }
 

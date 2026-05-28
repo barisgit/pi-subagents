@@ -20,7 +20,7 @@ export const TaskSchema = Type.Object({
 		Type.Literal("fresh"),
 		Type.Literal("fork"),
 	], {
-		description: "fresh is default; fork is same-role/main only.",
+		description: "fresh is default; fork is same-agent self-branching only.",
 	})),
 	output: Type.Optional(OutputOverride),
 }, { additionalProperties: false });
