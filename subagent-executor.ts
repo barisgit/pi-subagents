@@ -45,7 +45,7 @@ import { evictCompletionDedupeForRunId } from "./completion-dedupe.ts";
 import { interruptRun, spawnRun, openGroup, awaitRun } from "./layer0-runs.ts";
 import { logger } from "./logger.ts";
 import { getCurrentPi } from "./current-pi.ts";
-import { getLineageForSession } from "./lineage.ts";
+import { getLineageForSession, resolveRootSessionIdForSession } from "./lineage.ts";
 import type { SubagentToolInput, Step, Task } from "./schemas.ts";
 /**
  * Resolve the parent runId for a dispatch happening NOW. The dispatching
@@ -69,6 +69,13 @@ export function resolveDispatchRootRunId(ctx: { sessionManager?: { getSessionId?
 		if (lineage?.rootRunId) return lineage.rootRunId;
 	}
 	return process.env.PI_SUBAGENT_ROOT_RUN_ID || runId;
+}
+
+export function resolveDispatchRootSessionId(
+	ctx: { sessionManager?: { getSessionId?: () => string | undefined } },
+	fallbackSessionId?: string,
+): string | undefined {
+	return resolveRootSessionIdForSession(ctx.sessionManager?.getSessionId?.() ?? fallbackSessionId);
 }
 
 /**
@@ -562,8 +569,11 @@ export function resolveResumeTarget(runId: string, stepIndex = 0): ResumeTarget 
 	const status = readStatus(entry.runRecordDir);
 	if (!status) throw new Error(`No status.json found for runId '${runId}' at ${entry.runRecordDir}.`);
 	const step = status.steps?.[stepIndex];
-	const sessionFile = status.sessionFile
-		?? step?.sessionFile
+	// Prefer the targeted step's own session file: async chain status stores the run-level
+	// `sessionFile` as step 0's file, so a non-zero stepIndex must read the per-step file first
+	// or it would silently reopen step 0's session.
+	const sessionFile = step?.sessionFile
+		?? status.sessionFile
 		?? path.join(entry.runRecordDir, `run-${stepIndex}`, "session.jsonl");
 	if (!fs.existsSync(sessionFile)) throw new Error(`Session file for run ${runId} is missing at ${sessionFile}; cannot resume without the original session.`);
 	const agentName = step?.agent ?? entry.agentName ?? entry.agentNames?.[stepIndex] ?? entry.agentNames?.[0] ?? "unknown";
@@ -612,7 +622,10 @@ function postResumeMessage(handle: ChildAgentHandle, runId: string, message: str
 async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry, runId: string, message: string, asyncMode: boolean | undefined, data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
 	const parsed = parseChildRunId(runId);
 	const tracked = state.asyncJobs.get(parsed.dispatchRunId);
-	if (resumeInFlight.has(runId)) return validationError(`Resume already in progress for run ${runId}.`);
+	// Key the in-flight guard by the canonical target (dispatchRunId + step), not the raw caller
+	// id, so aliases like `runId` and `runId:0` cannot bypass the guard and double-open the session.
+	const resumeKey = `${parsed.dispatchRunId}:${parsed.stepIndex ?? 0}`;
+	if (resumeInFlight.has(resumeKey)) return validationError(`Resume already in progress for run ${runId}.`);
 	const handles = childRegistry.list().filter((handle) => handle.runId === parsed.dispatchRunId);
 	if (parsed.stepIndex === undefined) {
 		if ((tracked?.mode && tracked.mode !== "single") || handles.length > 1 || (handles.length === 1 && handles[0]!.stepIndex !== 0)) {
@@ -692,7 +705,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 			...(statusStep.live ? { live: statusStep.live } : {}),
 		})) ?? [{ agent: target.agentName, status: "running", startedAt: target.startedAt, sessionFile: target.sessionFile }],
 	});
-	resumeInFlight.add(runId);
+	resumeInFlight.add(resumeKey);
 	evictCompletionDedupeForRunId(target.runId);
 	const detachedAbort = new AbortController();
 	const asyncCtx = {
@@ -727,7 +740,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 			});
 		} finally {
 			statusWriter.dispose();
-			resumeInFlight.delete(runId);
+			resumeInFlight.delete(resumeKey);
 		}
 		return result;
 	};
@@ -1160,7 +1173,7 @@ function buildAsyncChildStep(input: {
 		...(input.label ? { label: input.label } : {}),
 		parentAgentName: data.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 		parentSessionId: data.forkReuse?.sessionId ?? data.ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
-		rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? data.ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
+		rootSessionId: resolveDispatchRootSessionId(data.ctx, deps.state.currentSessionId ?? undefined),
 		rootRunId: data.rootRunId,
 		maxSubagentDepth: input.maxSubagentDepth,
 		...(data.params.preset ? { preset: data.params.preset } : {}),
@@ -1331,7 +1344,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	const first = steps[0];
 	if (!first) return null;
 	if (mode === "parallel" && hasTasks) {
-		const rootSessionId = process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager?.getSessionId?.();
+		const rootSessionId = resolveDispatchRootSessionId(ctx);
 		const parentSessionId = ctx.sessionManager?.getSessionId?.();
 		const notifyPolicy = batchToNotifyPolicy(params.batch);
 		const group = openGroup({
@@ -1524,7 +1537,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		rootRunId,
 		...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 		...(() => {
-			const root = process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager?.getSessionId?.();
+			const root = resolveDispatchRootSessionId(ctx);
 			return root ? { rootSessionId: root } : {};
 		})(),
 		cwd: effectiveCwd,
@@ -2050,7 +2063,7 @@ async function runInProcessChildStep(input: {
 		...(input.label ? { label: input.label } : {}),
 		parentAgentName: data.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 		parentSessionId: data.forkReuse?.sessionId ?? data.ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
-		rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? data.ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined,
+		rootSessionId: resolveDispatchRootSessionId(data.ctx, deps.state.currentSessionId ?? undefined),
 		rootRunId: input.layer0?.rootRunId ?? data.rootRunId,
 		maxSubagentDepth: input.maxSubagentDepth,
 		...(data.params.preset ? { preset: data.params.preset } : {}),
@@ -2391,7 +2404,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				...(input.deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(input.deps.expandTilde(input.deps.config.defaultSessionDir)) } : {}),
 				...(input.ctx.sessionManager?.getSessionId ? { parentSessionId: input.ctx.sessionManager.getSessionId() } : {}),
 				...(() => {
-					const root = process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? input.ctx.sessionManager?.getSessionId?.();
+					const root = resolveDispatchRootSessionId(input.ctx);
 					return root ? { rootSessionId: root } : {};
 				})(),
 				source: "sync",
@@ -3038,10 +3051,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				// Auto-scope the no-id list to the current session's tree (matches the
 				// /subagents-status overlay) so `subagent({ action: "status" })` doesn't
 				// dump every entry in runs-index.jsonl across every project ever spawned.
-				const statusSessionId = process.env.PI_SUBAGENT_ROOT_SESSION_ID
-					?? ctx.sessionManager?.getSessionId?.()
-					?? deps.state.currentSessionId
-					?? undefined;
+				const statusSessionId = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 				return inspectSubagentStatus({
 					...(paramsWithResolvedCwd as { action?: "status"; id?: string; runId?: string; dir?: string; cwd?: string; includeProgress?: boolean; includeCompleted?: boolean }),
 					...(statusSessionId ? { sessionId: statusSessionId } : {}),
@@ -3292,7 +3302,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				parentSessionFile,
 				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 				...(() => {
-					const root = process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager?.getSessionId?.();
+					const root = resolveDispatchRootSessionId(ctx);
 					return root ? { rootSessionId: root } : {};
 				})(),
 				source: "sync",
@@ -3413,7 +3423,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				rootRunId,
 				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 				...(() => {
-					const root = process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager?.getSessionId?.();
+					const root = resolveDispatchRootSessionId(ctx);
 					return root ? { rootSessionId: root } : {};
 				})(),
 				cwd: effectiveCwd,

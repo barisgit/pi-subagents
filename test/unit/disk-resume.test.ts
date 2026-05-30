@@ -119,6 +119,17 @@ describe("disk resume", () => {
 		h.session.resolvePrompt?.();
 	});
 
+	it("concurrent resume guard collides across runId aliases (runId vs runId:0)", async () => {
+		const h = setup({ pending: true });
+		writeCompleteRun(tempDir!);
+		const first = await h.execute({ action: "resume", id: "resume-run", message: "one", async: true });
+		const second = await h.execute({ action: "resume", id: "resume-run:0", message: "two", async: true });
+		assert.equal(first.isError, undefined, first.content[0]?.text);
+		assert.equal(second.isError, true);
+		assert.match(second.content[0]?.text ?? "", /already in progress/);
+		h.session.resolvePrompt?.();
+	});
+
 	it("async handle returns immediately for disk continuation", async () => {
 		const h = setup({ pending: true });
 		writeCompleteRun(tempDir!);
