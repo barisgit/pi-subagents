@@ -123,17 +123,17 @@ describe("resume action", () => {
 		assert.match(text(error), /resume requires `message` to send to the child/);
 	});
 
-	it("terminated-run-rejected", async () => {
+	it("terminated-tracker-live-handle-still-posts", async () => {
 		const tempDir = createTempDir("pi-subagent-resume-action-");
 		try {
 			const harness = makeHarness(tempDir);
-			registerHandle(harness.childRegistry, "run-done", 0);
+			const session = registerHandle(harness.childRegistry, "run-done", 0);
 			markAsync(harness.state, "run-done", "complete");
 
 			const result = await harness.execute({ action: "resume", id: "run-done", message: "again" });
 
-			assert.equal(result.isError, true);
-			assert.match(text(result), /cannot resume terminated run/);
+			assert.equal(result.isError, undefined, text(result));
+			assert.deepEqual(session.messages, ["again"]);
 		} finally {
 			removeTempDir(tempDir);
 		}

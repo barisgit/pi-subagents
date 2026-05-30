@@ -61,3 +61,7 @@ export function getGlobalSeenMap(storeKey: string): Map<string, number> {
 	globalStore[storeKey] = map;
 	return map;
 }
+
+export function evictCompletionDedupeForRunId(runId: string): void {
+	getGlobalSeenMap("__pi_subagents_notify_seen__").delete(`id:${runId}`);
+}

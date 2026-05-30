@@ -40,7 +40,8 @@ import {
 	writeSyncRunStatusUpdate,
 	type SyncRunStepInit,
 } from "./sync-run-persistence.ts";
-import { appendRunEntry, readAllEntries } from "./runs-registry.ts";
+import { appendRunEntry, readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
+import { evictCompletionDedupeForRunId } from "./completion-dedupe.ts";
 import { interruptRun, spawnRun, openGroup, awaitRun } from "./layer0-runs.ts";
 import { logger } from "./logger.ts";
 import { getCurrentPi } from "./current-pi.ts";
@@ -69,6 +70,7 @@ export function resolveDispatchRootRunId(ctx: { sessionManager?: { getSessionId?
 	}
 	return process.env.PI_SUBAGENT_ROOT_RUN_ID || runId;
 }
+
 /**
  * Emit a subagent lifecycle event on the host pi.events bus, resolving the
  * CURRENT pi at emit time. The SDK invalidates captured pi on session
@@ -538,22 +540,57 @@ function parseChildRunId(id: string): { dispatchRunId: string; stepIndex?: numbe
 function isResumeTerminalStatus(status: unknown): boolean {
 	return status === "complete" || status === "failed" || status === "interrupted" || status === "paused" || status === "lost";
 }
-function resumeAsyncRun(state: SubagentState, childRegistry: ChildAgentRegistry, runId: string, message: string): AgentToolResult<Details> {
-	const parsed = parseChildRunId(runId);
-	const tracked = state.asyncJobs.get(parsed.dispatchRunId);
-	const handles = childRegistry.list().filter((handle) => handle.runId === parsed.dispatchRunId);
-	if (parsed.stepIndex === undefined) {
-		if ((tracked?.mode && tracked.mode !== "single") || handles.length > 1 || (handles.length === 1 && handles[0]!.stepIndex !== 0)) {
-			return validationError("`id` must be a runId, not batchId");
-		}
-	} else if ((tracked?.mode && tracked.mode === "single") || (handles.length === 1 && handles[0]!.stepIndex === 0 && handles[0]!.runId === parsed.dispatchRunId)) {
-		return validationError(`No resumable run found for '${runId}'.`);
+
+export interface ResumeTarget {
+	runId: string;
+	sessionFile: string;
+	runRecordDir: string;
+	agentName: string;
+	cwd: string;
+	parentRunId?: string;
+	rootRunId: string;
+	startedAt: number;
+	state: string;
+	status: NonNullable<ReturnType<typeof readStatus>>;
+	registryEntry: RunsRegistryEntry;
+}
+
+export function resolveResumeTarget(runId: string, stepIndex = 0): ResumeTarget {
+	const entry = readAllEntries().find((candidate) => candidate.runId === runId);
+	if (!entry) throw new Error(`Unknown runId '${runId}'.`);
+	if (entry.mode === "parallel") throw new Error(`Run ${runId} is a parallel group; resume an individual child runId instead.`);
+	const status = readStatus(entry.runRecordDir);
+	if (!status) throw new Error(`No status.json found for runId '${runId}' at ${entry.runRecordDir}.`);
+	const step = status.steps?.[stepIndex];
+	const sessionFile = status.sessionFile
+		?? step?.sessionFile
+		?? path.join(entry.runRecordDir, `run-${stepIndex}`, "session.jsonl");
+	if (!fs.existsSync(sessionFile)) throw new Error(`Session file for run ${runId} is missing at ${sessionFile}; cannot resume without the original session.`);
+	const agentName = step?.agent ?? entry.agentName ?? entry.agentNames?.[stepIndex] ?? entry.agentNames?.[0] ?? "unknown";
+	return {
+		runId,
+		sessionFile,
+		runRecordDir: entry.runRecordDir,
+		agentName,
+		cwd: status.cwd ?? entry.cwd,
+		...(status.parentRunId ?? entry.parentRunId ? { parentRunId: status.parentRunId ?? entry.parentRunId } : {}),
+		rootRunId: entry.rootRunId ?? entry.runId,
+		startedAt: status.startedAt ?? entry.startedAt,
+		state: status.state,
+		status,
+		registryEntry: entry,
+	};
+}
+
+export function assertCompleteResumeTarget(target: Pick<ResumeTarget, "runId" | "state">): void {
+	if (target.state !== "complete") {
+		throw new Error(`Run ${target.runId} is '${target.state}', not complete; disk resume currently supports only completed runs. Wait for it to complete or start a new run.`);
 	}
-	if (isResumeTerminalStatus(tracked?.status)) return validationError("cannot resume terminated run");
-	const handle = parsed.stepIndex === undefined
-		? handles[0]
-		: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
-	if (!handle) return validationError(`No resumable run found for '${runId}'.`);
+}
+
+const resumeInFlight = new Set<string>();
+
+function postResumeMessage(handle: ChildAgentHandle, runId: string, message: string): AgentToolResult<Details> | null {
 	try {
 		const session = handle.session as unknown as {
 			postUserMessage?: (message: string, options?: unknown) => unknown;
@@ -565,6 +602,31 @@ function resumeAsyncRun(state: SubagentState, childRegistry: ChildAgentRegistry,
 		void Promise.resolve(post.call(session, message, { expandPromptTemplates: false, source: "extension" })).catch((error) => {
 			logger.warn("resume action failed after dispatch", { runId, error: error instanceof Error ? error.message : String(error) });
 		});
+		return null;
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
+	}
+}
+
+async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry, runId: string, message: string, asyncMode: boolean | undefined, data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
+	const parsed = parseChildRunId(runId);
+	const tracked = state.asyncJobs.get(parsed.dispatchRunId);
+	if (resumeInFlight.has(runId)) return validationError(`Resume already in progress for run ${runId}.`);
+	const handles = childRegistry.list().filter((handle) => handle.runId === parsed.dispatchRunId);
+	if (parsed.stepIndex === undefined) {
+		if ((tracked?.mode && tracked.mode !== "single") || handles.length > 1 || (handles.length === 1 && handles[0]!.stepIndex !== 0)) {
+			return validationError("`id` must be a runId, not batchId");
+		}
+	} else if ((tracked?.mode && tracked.mode === "single") || (handles.length === 1 && handles[0]!.stepIndex === 0 && handles[0]!.runId === parsed.dispatchRunId)) {
+		return validationError(`No resumable run found for '${runId}'.`);
+	}
+	const handle = parsed.stepIndex === undefined
+		? handles[0]
+		: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
+	if (handle) {
+		const error = postResumeMessage(handle, runId, message);
+		if (error) return error;
 		if (tracked) {
 			tracked.status = "running";
 			tracked.activityState = undefined;
@@ -574,10 +636,120 @@ function resumeAsyncRun(state: SubagentState, childRegistry: ChildAgentRegistry,
 			content: [{ type: "text", text: `Resume message sent to run ${runId}.` }],
 			details: { mode: "management", results: [] },
 		};
-	} catch (error) {
-		const errorMessage = error instanceof Error ? error.message : String(error);
-		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
 	}
+	let target: ResumeTarget;
+	try {
+		target = resolveResumeTarget(parsed.dispatchRunId, parsed.stepIndex ?? 0);
+		assertCompleteResumeTarget(target);
+	} catch (error) {
+		const messageText = error instanceof Error ? error.message : String(error);
+		return validationError(messageText);
+	}
+	const agentConfig = data.agents.find((agent) => agent.name === target.agentName) ?? data.agents[0];
+	if (!agentConfig) return validationError(`No agent config available to resume run ${runId}.`);
+	const built = buildAsyncChildStep({
+		data: {
+			...data,
+			params: { ...data.params, sessionDir: undefined },
+			effectiveCwd: target.cwd,
+			runId: target.runId,
+			rootRunId: target.rootRunId,
+			forkReuse: undefined,
+		},
+		deps,
+		agentConfig,
+		task: message,
+		stepIndex: parsed.stepIndex ?? 0,
+		cwd: target.cwd,
+		maxSubagentDepth: resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth),
+	});
+	if ("error" in built) return built.error;
+	const step: ChildAgentStep = {
+		...built.step,
+		runId: target.runId,
+		stepIndex: parsed.stepIndex ?? 0,
+		sessionFile: target.sessionFile,
+		runRecordDir: target.runRecordDir,
+		forkReuse: undefined,
+		rootRunId: target.rootRunId,
+	};
+	const statusWriter = new StatusWriter({ runRecordDir: target.runRecordDir, runId: target.runId });
+	statusWriter.initialize({
+		mode: target.status.mode,
+		state: "running",
+		startedAt: target.startedAt,
+		cwd: target.cwd,
+		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
+		currentStep: step.stepIndex,
+		sessionFile: target.sessionFile,
+		sessionDir: target.runRecordDir,
+		steps: target.status.steps?.map((statusStep, index) => ({
+			agent: statusStep.agent,
+			...(statusStep.label ? { label: statusStep.label } : {}),
+			status: index === step.stepIndex ? "running" : statusStep.status,
+			startedAt: statusStep.startedAt ?? target.startedAt,
+			sessionFile: statusStep.sessionFile ?? (index === step.stepIndex ? target.sessionFile : undefined),
+			...(statusStep.live ? { live: statusStep.live } : {}),
+		})) ?? [{ agent: target.agentName, status: "running", startedAt: target.startedAt, sessionFile: target.sessionFile }],
+	});
+	resumeInFlight.add(runId);
+	evictCompletionDedupeForRunId(target.runId);
+	const detachedAbort = new AbortController();
+	const asyncCtx = {
+		extensionCtx: data.ctx,
+		abortSignal: detachedAbort.signal,
+		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => statusWriter.enqueue(patch),
+		registry: deps.childRegistry,
+		pi: deps.pi,
+	};
+	const childHandle = dispatchAsyncChild(step, asyncCtx);
+	const finalize = async () => {
+		let result: ChildAgentResult | undefined;
+		try {
+			result = await childHandle.completed;
+			await statusWriter.finalize(result);
+			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+				id: target.runId,
+				runId: target.runId,
+				...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
+				rootRunId: target.rootRunId,
+				notifyPolicy: "each",
+				success: result.state === "complete",
+				agent: target.agentName,
+				summary: result.outputText,
+				exitCode: result.exitCode,
+				state: result.state,
+				durationMs: result.durationMs,
+				sessionFile: result.sessionFile,
+				timestamp: Date.now(),
+				result,
+				asyncDir: target.runRecordDir,
+			});
+		} finally {
+			statusWriter.dispose();
+			resumeInFlight.delete(runId);
+		}
+		return result;
+	};
+	const completed = finalize();
+	safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
+		id: target.runId,
+		runId: target.runId,
+		agent: target.agentName,
+		task: message.slice(0, 50),
+		cwd: target.cwd,
+		asyncDir: target.runRecordDir,
+		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
+	});
+	if (asyncMode === false) {
+		await completed;
+		return {
+			content: [{ type: "text", text: `Resume completed for run ${runId}.` }],
+			details: { mode: "management", results: [] },
+		};
+	}
+	void completed.catch((error) => logger.warn("disk resume failed after dispatch", { runId, error: error instanceof Error ? error.message : String(error) }));
+	return asyncStartedResult({ mode: "single", runId: target.runId, asyncDir: target.runRecordDir, text: `Async resume: ${target.agentName} [${target.runId}]` });
 }
 function createForegroundControlNotifier(data: Pick<ExecutionContextData, "controlConfig" | "intercomBridge">, deps: Pick<ExecutorDeps, "pi">): (event: ControlEvent) => void {
 	return (event) => emitControlNotification({
@@ -2910,7 +3082,30 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				};
 			}
 			if (params.action === "resume") {
-				return resumeAsyncRun(deps.state, deps.childRegistry, paramsWithResolvedCwd.id!, paramsWithResolvedCwd.message!);
+				const resumeCwd = paramsWithResolvedCwd.cwd ?? requestCwd;
+				const scope: AgentScope = resolveExecutionAgentScope(paramsWithResolvedCwd.agentScope);
+				const agents = deps.discoverAgents(resumeCwd, scope, { preset: paramsWithResolvedCwd.preset, includeInternal: true }).agents;
+				const resumeData: ExecutionContextData = {
+					params: paramsWithResolvedCwd,
+					effectiveCwd: resumeCwd,
+					ctx,
+					signal,
+					onUpdate,
+					agents,
+					runId: paramsWithResolvedCwd.id!,
+					rootRunId: paramsWithResolvedCwd.id!,
+					shareEnabled: false,
+					sessionRoot: "",
+					sessionDirForIndex: () => "",
+					sessionFileForIndex: () => undefined,
+					artifactConfig: { ...DEFAULT_ARTIFACT_CONFIG, enabled: false },
+					artifactsDir: deps.tempArtifactsDir,
+					backgroundRequestedWhileClarifying: false,
+					effectiveAsync: paramsWithResolvedCwd.async !== false,
+					controlConfig: resolveControlConfig(deps.config.control, paramsWithResolvedCwd.control),
+					intercomBridge: resolveIntercomBridge({ config: deps.config.intercomBridge, context: paramsWithResolvedCwd.context, orchestratorTarget: undefined }),
+				};
+				return resumeRun(deps.state, deps.childRegistry, paramsWithResolvedCwd.id!, paramsWithResolvedCwd.message!, paramsWithResolvedCwd.async, resumeData, deps);
 			}
 			if (!(ALLOWED_CONTROL_ACTIONS as readonly string[]).includes(params.action)) {
 				return validationError(`Unknown action: ${params.action}. Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
