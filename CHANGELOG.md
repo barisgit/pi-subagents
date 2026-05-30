@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+- Raised the default `needs_attention` inactivity threshold to 15 minutes to avoid interrupting long silent reasoning.
+
+### Fixed
+- Foreground/sync subagents now auto-interrupt on `needs_attention` instead of emitting an unrouteable parent notice that could only surface after the tool call ended.
+
 ## [1.0.0] - 2026-05-23
 
 ### Changed

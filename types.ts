@@ -38,6 +38,10 @@ export interface Usage {
 export interface TokenUsage {
 	input: number;
 	output: number;
+	/** Prompt-cache tokens read/reused by the provider. Included in total. */
+	cacheRead?: number;
+	/** Prompt-cache tokens written by the provider. Included in total. */
+	cacheWrite?: number;
 	total: number;
 }
 
@@ -167,6 +171,7 @@ export interface SubagentLineage {
 	rootSessionId: string | null;
 	depth: number;
 	runId: string | null;
+	rootRunId?: string | null;
 }
 
 export interface SubagentExposedAPI {
@@ -473,7 +478,7 @@ export interface SubagentState {
 		recentTools?: Array<{ tool: string; args?: string; endMs?: number; durationMs?: number }>;
 		recentOutput?: string[];
 		finalOutput?: string;
-		interrupt?: () => boolean;
+		interrupt?: (reason?: string) => boolean;
 	}>;
 	lastForegroundControlId: string | null;
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -532,6 +537,7 @@ export const SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT = "subagent:unregister-person
 export const SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT = "subagent:register-persona-dir-error";
 export const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
 export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
+export const SUBAGENT_ASYNC_RUN_COMPLETE_EVENT = "subagent:async-run-complete";
 export const SUBAGENT_SPAWN_STARTED_EVENT = "subagent:spawn_started";
 export const SUBAGENT_COMPLETED_EVENT = "subagent:completed";
 export const SUBAGENT_FAILED_EVENT = "subagent:failed";
@@ -877,7 +883,7 @@ export function isAllowedNestedOrchestratorChild(name: unknown): boolean {
 export function getSubagentIdentityEnv(
 	currentAgentName: string,
 	parentAgentName?: string | null,
-	options?: { canDelegate?: boolean; allowedDelegateAgents?: string[]; parentRunId?: string; parentSessionId?: string; rootSessionId?: string },
+	options?: { canDelegate?: boolean; allowedDelegateAgents?: string[]; parentRunId?: string; rootRunId?: string; parentSessionId?: string; rootSessionId?: string },
 ): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		PI_SUBAGENT_CURRENT_AGENT: currentAgentName,
@@ -888,6 +894,7 @@ export function getSubagentIdentityEnv(
 	if (options?.rootSessionId) env.PI_SUBAGENT_ROOT_SESSION_ID = options.rootSessionId;
 	// charter nested-subagent-display: expose parent run id to child Pi processes.
 	if (options?.parentRunId) env.PI_SUBAGENT_PARENT_RUN_ID = options.parentRunId;
+	if (options?.rootRunId) env.PI_SUBAGENT_ROOT_RUN_ID = options.rootRunId;
 	if (options?.canDelegate !== undefined) env.PI_SUBAGENT_CAN_DELEGATE = options.canDelegate ? "1" : "0";
 	const allowedDelegateAgents = normalizeAgentList(options?.allowedDelegateAgents);
 	if (allowedDelegateAgents) env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS = allowedDelegateAgents.join(",");

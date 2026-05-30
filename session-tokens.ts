@@ -4,6 +4,8 @@ import * as path from "node:path";
 export interface TokenUsage {
 	input: number;
 	output: number;
+	cacheRead?: number;
+	cacheWrite?: number;
 	total: number;
 }
 
@@ -27,6 +29,8 @@ export function parseSessionTokens(sessionDir: string): TokenUsage | null {
 		const content = fs.readFileSync(sessionFile, "utf-8");
 		let input = 0;
 		let output = 0;
+		let cacheRead = 0;
+		let cacheWrite = 0;
 		for (const line of content.split("\n")) {
 			if (!line.trim()) continue;
 			try {
@@ -35,12 +39,21 @@ export function parseSessionTokens(sessionDir: string): TokenUsage | null {
 				if (usage) {
 					input += usage.inputTokens ?? usage.input ?? 0;
 					output += usage.outputTokens ?? usage.output ?? 0;
+					cacheRead += usage.cacheReadTokens ?? usage.cacheRead ?? 0;
+					cacheWrite += usage.cacheWriteTokens ?? usage.cacheWrite ?? 0;
 				}
 			} catch {
 				// Ignore malformed lines while scanning usage entries.
 			}
 		}
-		return { input, output, total: input + output };
+		const total = input + output + cacheRead + cacheWrite;
+		return {
+			input,
+			output,
+			...(cacheRead > 0 ? { cacheRead } : {}),
+			...(cacheWrite > 0 ? { cacheWrite } : {}),
+			total,
+		};
 	} catch {
 		// Usage extraction should not fail the run.
 		return null;

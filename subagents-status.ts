@@ -3,7 +3,7 @@ import { colorForAgentName } from "./agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryForOverlay, sortRuns } from "./async-status.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryForOverlay, sortRuns, statusToSummary } from "./async-status.ts";
 import { previewArgs, readRunTranscript } from "./run-transcript.ts";
 import { formatDuration } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
@@ -12,6 +12,9 @@ import { formatPhase, type RunPhase } from "./run-phase.ts";
 import { flatRule, formatScrollInfo, padRight, titledBottomSegment, titledTopSegment } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { type ActivityState, type RunDisplayState, type SubagentState } from "./types.ts";
+import { listRunsByRootRunIds, readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
+import { readStatus } from "./utils.ts";
+import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
 
 const AUTO_REFRESH_MS = 1000;
 const RECENT_LIMIT = 20;
@@ -95,6 +98,95 @@ interface StatusOverlayDeps {
 	// session's tree (matches rootSessionId/parentSessionId on registry entries).
 	// Falls back to cwd scoping when absent.
 	sessionId?: string;
+}
+
+function entryMatchesOverlayScope(entry: RunsRegistryEntry, scope: { sessionCwd?: string; sessionId?: string }): boolean {
+	if (scope.sessionId) {
+		const tag = entry.rootSessionId ?? entry.parentSessionId;
+		return !tag || tag === scope.sessionId;
+	}
+	if (scope.sessionCwd) return !entry.cwd || entry.cwd === scope.sessionCwd;
+	return true;
+}
+
+export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntries?: RunsRegistryEntry[]): AsyncRunSummary {
+	const status = readStatus(entry.runRecordDir) as Parameters<typeof statusToSummary>[1] | null;
+	const lineage = {
+		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
+		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
+	};
+	if (status) {
+		const summary = statusToSummary(entry.runRecordDir, status);
+		return {
+			...summary,
+			...(entry.parentRunId && !summary.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+			...lineage,
+		};
+	}
+	if (!entry.agentName && !entry.agentNames) {
+		const entries = registryEntries ?? readAllEntries();
+		const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
+		const childSummaries = children.map((child) => summaryFromRegistryEntry(child, entries));
+		const state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
+		const childEndedAt = childSummaries
+			.map((child) => child.endedAt)
+			.filter((endedAt): endedAt is number => typeof endedAt === "number");
+		const endedAt = state === "running" || childEndedAt.length === 0 ? undefined : Math.max(...childEndedAt);
+		return {
+			id: entry.runId,
+			asyncDir: entry.runRecordDir,
+			mode: entry.mode,
+			state,
+			startedAt: entry.startedAt,
+			...(endedAt !== undefined ? { endedAt, lastUpdate: endedAt } : {}),
+			cwd: entry.cwd,
+			currentStep: 0,
+			...(entry.label ? { label: entry.label } : {}),
+			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+			...lineage,
+			steps: [],
+		};
+	}
+	const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : []);
+	return {
+		id: entry.runId,
+		asyncDir: entry.runRecordDir,
+		mode: entry.mode,
+		state: "queued",
+		startedAt: entry.startedAt,
+		cwd: entry.cwd,
+		currentStep: 0,
+		...(entry.label ? { label: entry.label } : {}),
+		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+		...lineage,
+		steps: agents.map((agent, index) => ({ index, agent, status: "queued" as const })),
+	};
+}
+
+function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd?: string; sessionId?: string }): AsyncRunOverlayData {
+	const seedIds = new Set([...seed.active, ...seed.recent].map((run) => run.id));
+	if (seedIds.size === 0) return seed;
+
+	const rootRunIds = new Set<string>();
+	for (const entry of readAllEntries()) {
+		if (!seedIds.has(entry.runId) || !entryMatchesOverlayScope(entry, scope)) continue;
+		rootRunIds.add(entry.rootRunId ?? entry.runId);
+	}
+	if (rootRunIds.size === 0) return seed;
+
+	const byId = new Map<string, AsyncRunSummary>();
+	for (const run of [...seed.active, ...seed.recent]) byId.set(run.id, run);
+	const entries = listRunsByRootRunIds(rootRunIds);
+	for (const entry of entries) {
+		if (!entryMatchesOverlayScope(entry, scope)) continue;
+		byId.set(entry.runId, summaryFromRegistryEntry(entry, entries));
+	}
+
+	const all = [...byId.values()];
+	return {
+		active: all.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
+		recent: all.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused"),
+	};
 }
 
 // Decides whether a run belongs to the current session. Sync runs always belong
@@ -388,7 +480,11 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
 	// charter nested-subagent-display: indent between cursor and glyph keeps cursor aligned.
 	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
-	const glyph = statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
+	// Agentless group rows have no step glyph of their own; keep the hollow group
+	// marker while the adjacent status text carries the derived terminal state.
+	const glyph = run.source === "async" && run.run.state === "complete" && run.run.steps.length === 0
+		? theme.fg("dim", "○")
+		: statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
 	const agent = runAgentLabel(run, theme);
 	// Terminal runs must not advertise a live phase chip (`streaming Xs`,
 	// `tool: bash Xs`). Older status.json files written before the
@@ -420,12 +516,26 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	return truncateToWidth(text, width, "");
 }
 
-export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number): string[] {
+function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs: LiveRun[]): string[] {
+	const children = runs.filter((candidate) => parentRunIdOf(candidate) === run.run.id);
+	if (children.length === 0) return [];
+	const agents = children.map((child) => {
+		if (child.source === "sync") return child.run.currentAgent ?? child.run.mode;
+		return child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode;
+	});
+	const uniqueAgents = Array.from(new Set(agents.filter(Boolean)));
+	const agentWord = children.length === 1 ? "agent" : "agents";
+	const suffix = uniqueAgents.length > 0 ? `: ${uniqueAgents.join(", ")}` : "";
+	return [theme.fg("dim", truncateToWidth(`${children.length} ${agentWord}${suffix}`, width))];
+}
+
+export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
+	const childSummary = buildChildSummaryLines(theme, run, width, runs);
 	const asyncDir = run.run.asyncDir;
-	if (!asyncDir) return [theme.fg("dim", "(no events yet)")];
+	if (!asyncDir) return childSummary.length > 0 ? childSummary : [theme.fg("dim", "(no events yet)")];
 	const events = readRunTranscript(asyncDir);
-	if (events.length === 0) return [theme.fg("dim", "(no events yet)")];
+	if (events.length === 0) return childSummary.length > 0 ? childSummary : [theme.fg("dim", "(no events yet)")];
 	// Shared set so each nested child run is rendered at most once across all steps.
 	const rightPaneUsed = new Set<string>();
 
@@ -574,9 +684,12 @@ export class SubagentsStatusComponent implements Component {
 		this.tui = tui;
 		this.theme = theme;
 		this.done = done;
-		this.listRunsForOverlay = deps.listRunsForOverlay ?? ((limit) => listRunsFromRegistryForOverlay(limit, this.showAllSessions ? {} : {
-			...(this.sessionId ? { sessionId: this.sessionId } : { sessionCwd: this.sessionCwd }),
-		}));
+		this.listRunsForOverlay = deps.listRunsForOverlay ?? ((limit) => {
+			const scope = this.showAllSessions ? {} : {
+				...(this.sessionId ? { sessionId: this.sessionId } : { sessionCwd: this.sessionCwd }),
+			};
+			return expandOverlayByRootRunId(listRunsFromRegistryForOverlay(limit, scope), scope);
+		});
 		this.listForegroundRuns = deps.listForegroundRuns ?? (() => []);
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
 		this.sessionCwd = deps.sessionCwd;
@@ -686,7 +799,7 @@ export class SubagentsStatusComponent implements Component {
 		const run = this.selectedRun();
 		if (!run) return;
 		const state = this.getRightScrollState();
-		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80);
+		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
 		const maxTop = Math.max(0, lines.length - this.lastRightHeight);
 		state.top = Math.max(0, Math.min(maxTop, state.top + delta));
 		state.sticky = state.top >= maxTop;
@@ -931,7 +1044,7 @@ export class SubagentsStatusComponent implements Component {
 		}
 
 		const selected = this.selectedRun();
-		const rightLines = buildRightLines(this.theme, selected, rightWidth);
+		const rightLines = buildRightLines(this.theme, selected, rightWidth, this.runs);
 
 		const bodyHeight = computeBodyHeight(this.tui);
 		this.lastRightHeight = bodyHeight;

@@ -2,11 +2,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ChildAgentResult, ChildAgentExitState, StatusPatch } from "./in-process-executor.ts";
 import type { RunPhase } from "./run-phase.ts";
+import { tokenUsageFromUsage } from "./usage-totals.ts";
 
 type StatusState = ChildAgentExitState | "queued" | "running" | "paused" | "lost";
 
-type TokenUsage = { input: number; output: number; total: number };
+type TokenUsage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number };
 type StatusUsage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
+
+export const STATUS_JSON_VERSION = 1;
 
 type StatusStep = {
 	agent?: string;
@@ -48,6 +51,7 @@ export interface StatusMeta {
 }
 
 type StatusPayload = {
+	version: typeof STATUS_JSON_VERSION;
 	runId: string;
 	mode: "single" | "chain" | "parallel";
 	label?: string;
@@ -93,6 +97,7 @@ export class StatusWriter {
 	initialize(meta: StatusMeta): void {
 		const startedAt = meta.startedAt ?? Date.now();
 		this.status = {
+			version: STATUS_JSON_VERSION,
 			runId: this.opts.runId,
 			mode: meta.mode ?? "single",
 			state: meta.state ?? "queued",
@@ -144,11 +149,7 @@ export class StatusWriter {
 			const aggregate = options?.totalUsage ?? result.usage;
 			if (aggregate) {
 				this.status.totalUsage = { ...aggregate };
-				this.status.totalTokens = {
-					input: aggregate.input,
-					output: aggregate.output,
-					total: aggregate.input + aggregate.output,
-				};
+				this.status.totalTokens = tokenUsageFromUsage(aggregate);
 			}
 			const step = this.stepFor(result.stepIndex);
 			step.status = result.state;
@@ -156,11 +157,7 @@ export class StatusWriter {
 			step.durationMs = result.durationMs;
 			if (result.error?.message) step.error = result.error.message;
 			if (result.usage) {
-				step.tokens = {
-					input: result.usage.input,
-					output: result.usage.output,
-					total: result.usage.input + result.usage.output,
-				};
+				step.tokens = tokenUsageFromUsage(result.usage);
 			}
 			step.live = {
 				...(step.live ?? {}),

@@ -66,6 +66,7 @@ export interface ChildAgentStep {
 	parentAgentName?: string;
 	parentSessionId?: string;
 	rootSessionId?: string;
+	rootRunId?: string;
 	maxSubagentDepth: number;
 	preset?: string;
 	shareEnabled: boolean;
@@ -781,6 +782,7 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 		rootSessionId: step.rootSessionId ?? step.parentSessionId ?? null,
 		depth: 1, // minimum; refined by child activate using rootSessionId vs parentSessionId
 		runId: step.runId,
+		rootRunId: step.rootRunId ?? step.runId,
 	};
 	pushPendingChildLineage(lineage);
 	try {

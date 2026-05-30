@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./completion-dedupe.ts";
 import { getCurrentPi } from "./current-pi.ts";
 import { logger } from "./logger.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "./types.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from "./types.ts";
 
 interface ChainStepResult {
 	agent: string;
@@ -35,9 +35,13 @@ export interface SubagentNotifyDetails {
 	sessionValue?: string;
 }
 
+type NotifyPolicy = "rollup" | "each" | "silent";
+
 interface SubagentResult {
 	id: string | null;
 	runId?: string;
+	parentRunId?: string;
+	rootRunId?: string;
 	agent: string | null;
 	success: boolean;
 	summary: string;
@@ -53,6 +57,7 @@ interface SubagentResult {
 	children?: ChainStepResult[];
 	batch?: boolean;
 	batchId?: string;
+	notifyPolicy?: NotifyPolicy;
 	total?: number;
 	completed?: number;
 	taskIndex?: number;
@@ -115,6 +120,29 @@ function batchNotificationContent(result: SubagentResult, children: ChainStepRes
 	].join("\n");
 }
 
+function notifyPolicyFor(result: SubagentResult): NotifyPolicy {
+	if (result.notifyPolicy === "rollup" || result.notifyPolicy === "each" || result.notifyPolicy === "silent") return result.notifyPolicy;
+	return result.batch === true ? "rollup" : "each";
+}
+
+function childResultFrom(result: SubagentResult, child: ChainStepResult, index: number, total: number): SubagentResult {
+	return {
+		...result,
+		id: child.id ?? child.runId ?? `${result.id ?? "subagent"}:${index}`,
+		runId: child.runId,
+		agent: child.agent ?? null,
+		success: child.success,
+		summary: child.summary ?? child.output ?? "",
+		exitCode: child.exitCode,
+		state: child.state,
+		durationMs: child.durationMs,
+		sessionFile: child.sessionFile,
+		shareUrl: child.shareUrl,
+		taskIndex: child.stepIndex ?? index,
+		totalTasks: total,
+	};
+}
+
 export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	const unsubscribeStoreKey = "__pi_subagents_notify_unsubscribe__";
 	const childSessionFlagKey = "__piSubagentInsideChildSession";
@@ -140,6 +168,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 
 	const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
 	const ttlMs = 10 * 60 * 1000;
+	const groupedRuns = new Map<string, SubagentResult[]>();
 
 	const sendNotification = (idLabel: string, content: string) => {
 		// Cannot use the captured `pi` from registration time: the activate that
@@ -163,36 +192,87 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		}
 	};
 
+	const sendOnce = (result: SubagentResult, now: number) => {
+		const key = buildCompletionKey(result, "notify");
+		if (markSeenWithTtl(seen, key, now, ttlMs)) {
+			logger.info("notify.handleComplete: DEDUPED", { id: result.id ?? "<null>", key });
+			return;
+		}
+		sendNotification(result.id ?? "<null>", singleNotificationContent(result));
+	};
+
+	const notifyChildren = (result: SubagentResult, children: ChainStepResult[], now: number) => {
+		const total = result.total ?? children.length;
+		for (const [index, child] of children.entries()) {
+			sendOnce(childResultFrom(result, child, index, total), now);
+		}
+	};
+
+	const handleRunComplete = (data: unknown) => {
+		const result = data as SubagentResult;
+		const parentRunId = result.parentRunId;
+		if (!parentRunId) return;
+		const policy = notifyPolicyFor(result);
+		if (policy === "silent") return;
+		const now = Date.now();
+		if (policy === "each") {
+			sendOnce(result, now);
+			return;
+		}
+		const bucket = groupedRuns.get(parentRunId) ?? [];
+		bucket.push(result);
+		groupedRuns.set(parentRunId, bucket);
+	};
+
 	const handleComplete = (data: unknown) => {
 		const result = data as SubagentResult;
 		const idLabel = result.id ?? "<null>";
 		logger.info("notify.handleComplete: FIRED", { id: idLabel, agent: result.agent ?? undefined, success: result.success });
 		const now = Date.now();
 		const children = Array.isArray(result.children) && result.children.length > 0 ? result.children : undefined;
-		if (children && result.batch !== true) {
-			for (const [index, child] of children.entries()) {
-				const childResult: SubagentResult = {
-					...result,
-					id: child.id ?? child.runId ?? `${result.id ?? "subagent"}:${index}`,
+		const policy = notifyPolicyFor(result);
+		const groupRunId = result.runId ?? result.id ?? undefined;
+		const accumulated = groupRunId ? groupedRuns.get(groupRunId) : undefined;
+		if (groupRunId) groupedRuns.delete(groupRunId);
+
+		if (policy === "silent") return;
+
+		if (accumulated && accumulated.length > 0) {
+			if (policy === "rollup") {
+				const rollupChildren = accumulated.map((child, index) => ({
+					id: child.id ?? child.runId ?? `${groupRunId}:${index}`,
 					runId: child.runId,
-					agent: child.agent ?? null,
-					success: child.success,
-					summary: child.summary ?? child.output ?? "",
-					exitCode: child.exitCode,
+					dispatchRunId: child.parentRunId,
+					stepIndex: child.taskIndex ?? index,
+					agent: child.agent ?? "unknown",
 					state: child.state,
+					success: child.success,
+					exitCode: child.exitCode,
+					summary: child.summary,
 					durationMs: child.durationMs,
 					sessionFile: child.sessionFile,
 					shareUrl: child.shareUrl,
-					taskIndex: child.stepIndex ?? index,
-					totalTasks: result.total ?? children.length,
+				}));
+				const rollup: SubagentResult = {
+					...result,
+					total: result.total ?? rollupChildren.length,
+					completed: result.completed ?? rollupChildren.filter((child) => child.state === "complete" || child.success).length,
 				};
-				const childKey = buildCompletionKey(childResult, "notify");
-				if (markSeenWithTtl(seen, childKey, now, ttlMs)) {
-					logger.info("notify.handleComplete: DEDUPED", { id: childResult.id ?? "<null>", key: childKey });
-					continue;
+				const key = buildCompletionKey(rollup, "notify");
+				if (markSeenWithTtl(seen, key, now, ttlMs)) {
+					logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
+					return;
 				}
-				sendNotification(childResult.id ?? "<null>", singleNotificationContent(childResult));
+				sendNotification(idLabel, batchNotificationContent(rollup, rollupChildren));
 			}
+			return;
+		}
+
+		// Back-compat: older emitters and chain/single paths only send the group
+		// completion event with children[]. Preserve the previous behavior when no
+		// time-separated per-run events were accumulated for this group.
+		if (children && policy === "each") {
+			notifyChildren(result, children, now);
 			return;
 		}
 
@@ -202,7 +282,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const content = children && result.batch === true
+		const content = children && policy === "rollup"
 			? batchNotificationContent(result, children)
 			: singleNotificationContent(result);
 		sendNotification(idLabel, content);
@@ -214,7 +294,12 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	// Child sessions subscribe on their own ephemeral bus and let their bus
 	// disposal clean up the listener; they must not write the host's slot.
 	logger.info("registerSubagentNotify: subscribing to async-complete", { isChildSession });
-	const unsubscribe = pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete);
+	const unsubscribeComplete = pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete);
+	const unsubscribeRunComplete = pi.events.on(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, handleRunComplete);
+	const unsubscribe = () => {
+		unsubscribeComplete();
+		unsubscribeRunComplete();
+	};
 	if (!isChildSession) {
 		globalStore[unsubscribeStoreKey] = unsubscribe;
 	}

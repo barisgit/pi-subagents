@@ -53,6 +53,7 @@ import {
 	resolveChildMaxSubagentDepth,
 } from "./types.ts";
 import { resolveModelCandidate } from "./model-fallback.ts";
+import { formatControlInterruptReason } from "./subagent-control.ts";
 
 interface ChainRunStepOptions {
 	cwd?: string;
@@ -82,6 +83,7 @@ interface ChainRunStepOptions {
 	parentAgentName?: string;
 	parentSessionId?: string;
 	rootSessionId?: string;
+	rootRunId?: string;
 	parentRunId?: string;
 }
 
@@ -97,6 +99,31 @@ interface ChainExecutionDetailsInput {
 	totalSteps: number;
 	currentStepIndex?: number;
 	runId?: string;
+}
+
+type ForegroundControlHandle = {
+	updatedAt: number;
+	currentAgent?: string;
+	currentIndex?: number;
+	currentActivityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
+	interrupt?: (reason?: string) => boolean;
+};
+
+function interruptForegroundOnNeedsAttention(
+	event: ControlEvent,
+	interruptController: AbortController,
+	foregroundControl?: ForegroundControlHandle,
+): boolean {
+	if (event.type !== "needs_attention" || interruptController.signal.aborted) return false;
+	interruptController.abort(formatControlInterruptReason(event));
+	if (foregroundControl) {
+		foregroundControl.currentActivityState = undefined;
+		foregroundControl.updatedAt = Date.now();
+	}
+	return true;
 }
 
 interface ParallelChainRunInput {
@@ -123,16 +150,7 @@ interface ParallelChainRunInput {
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig: ResolvedControlConfig;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
-	foregroundControl?: {
-		updatedAt: number;
-		currentAgent?: string;
-		currentIndex?: number;
-		currentActivityState?: ActivityState;
-		lastActivityAt?: number;
-		currentTool?: string;
-		currentToolStartedAt?: number;
-		interrupt?: () => boolean;
-	};
+	foregroundControl?: ForegroundControlHandle;
 	results: SingleResult[];
 	allProgress: AgentProgress[];
 	chainAgents: string[];
@@ -253,9 +271,9 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				input.foregroundControl.currentIndex = input.globalTaskIndex + taskIndex;
 				input.foregroundControl.currentActivityState = undefined;
 				input.foregroundControl.updatedAt = Date.now();
-				input.foregroundControl.interrupt = () => {
+				input.foregroundControl.interrupt = (reason?: string) => {
 					if (interruptController.signal.aborted) return false;
-					interruptController.abort();
+					interruptController.abort(reason ?? "interrupt requested");
 					input.foregroundControl!.currentActivityState = undefined;
 					input.foregroundControl!.updatedAt = Date.now();
 					return true;
@@ -277,7 +295,11 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				outputPath,
 				maxSubagentDepth,
 				controlConfig: input.controlConfig,
-				onControlEvent: input.onControlEvent,
+				onControlEvent: (event) => {
+					if (!interruptForegroundOnNeedsAttention(event, interruptController, input.foregroundControl)) {
+						input.onControlEvent?.(event);
+					}
+				},
 				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
 				modelOverride: effectiveModel,
 				availableModels: input.availableModels,
@@ -288,6 +310,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				parentAgentName: input.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 				parentSessionId: input.ctx.sessionManager.getSessionId(),
 				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? input.ctx.sessionManager.getSessionId(),
+				rootRunId: process.env.PI_SUBAGENT_ROOT_RUN_ID ?? input.runId,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -365,16 +388,7 @@ export interface ChainExecutionParams {
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig: ResolvedControlConfig;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
-	foregroundControl?: {
-		updatedAt: number;
-		currentAgent?: string;
-		currentIndex?: number;
-		currentActivityState?: ActivityState;
-		lastActivityAt?: number;
-		currentTool?: string;
-		currentToolStartedAt?: number;
-		interrupt?: () => boolean;
-	};
+	foregroundControl?: ForegroundControlHandle;
 	chainSkills?: string[];
 	chainDir?: string;
 	maxSubagentDepth: number;
@@ -771,9 +785,9 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				foregroundControl.currentIndex = globalTaskIndex;
 				foregroundControl.currentActivityState = undefined;
 				foregroundControl.updatedAt = Date.now();
-				foregroundControl.interrupt = () => {
+				foregroundControl.interrupt = (reason?: string) => {
 					if (interruptController.signal.aborted) return false;
-					interruptController.abort();
+					interruptController.abort(reason ?? "interrupt requested");
 					foregroundControl.currentActivityState = undefined;
 					foregroundControl.updatedAt = Date.now();
 					return true;
@@ -795,7 +809,11 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputPath,
 				maxSubagentDepth,
 				controlConfig,
-				onControlEvent,
+				onControlEvent: (event) => {
+					if (!interruptForegroundOnNeedsAttention(event, interruptController, foregroundControl)) {
+						onControlEvent?.(event);
+					}
+				},
 				intercomSessionName: childIntercomTarget?.(seqStep.agent, globalTaskIndex),
 				modelOverride: effectiveModel,
 				availableModels,
@@ -806,6 +824,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 				parentSessionId: ctx.sessionManager.getSessionId(),
 				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId(),
+				rootRunId: process.env.PI_SUBAGENT_ROOT_RUN_ID ?? runId,
 				onUpdate: onUpdate
 					? (p) => {
 						const stepResults = p.details?.results || [];

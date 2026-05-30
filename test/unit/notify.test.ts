@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify from "../../notify.ts";
 import { setCurrentPi } from "../../current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../types.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from "../../types.ts";
 
 /**
  * Build a pi.events stand-in whose `on()` returns an unsubscribe function
@@ -240,5 +240,89 @@ describe("registerSubagentNotify", () => {
 			},
 			options: { triggerTurn: true },
 		});
+	});
+
+	it("batch rollup aggregates time-separated per-run completions by notifyPolicy", () => {
+		const rollup = createPi();
+		for (const child of [
+			{ runId: "child-a", agent: "A", summary: "from child A" },
+			{ runId: "child-b", agent: "B", summary: "from child B" },
+			{ runId: "child-c", agent: "C", summary: "from child C" },
+		]) {
+			rollup.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
+				id: child.runId,
+				runId: child.runId,
+				parentRunId: "group-rollup",
+				rootRunId: "group-rollup",
+				notifyPolicy: "rollup",
+				agent: child.agent,
+				success: true,
+				state: "complete",
+				summary: child.summary,
+				timestamp: Date.now(),
+			});
+		}
+		rollup.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "group-rollup",
+			runId: "group-rollup",
+			rootRunId: "group-rollup",
+			notifyPolicy: "rollup",
+			agent: "A,B,C",
+			success: true,
+			state: "complete",
+			summary: "group summary without children",
+			timestamp: Date.now(),
+		});
+
+		assert.equal(rollup.sent.length, 1);
+		const rollupContent = (rollup.sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(rollupContent.startsWith("Background batch completed:"));
+		for (const childRunId of ["child-a", "child-b", "child-c"]) {
+			assert.ok(rollupContent.includes(childRunId), `rollup should include ${childRunId}`);
+		}
+
+		const each = createPi();
+		for (const child of ["each-a", "each-b", "each-c"]) {
+			each.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
+				id: child,
+				runId: child,
+				parentRunId: "group-each",
+				rootRunId: "group-each",
+				notifyPolicy: "each",
+				agent: child,
+				success: true,
+				state: "complete",
+				summary: `done ${child}`,
+				timestamp: Date.now(),
+			});
+		}
+		assert.equal(each.sent.length, 3);
+		assert.ok(each.sent.every((entry) => ((entry.message as { content?: string }).content ?? "").startsWith("Background task completed:")));
+
+		const silent = createPi();
+		silent.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
+			id: "silent-a",
+			runId: "silent-a",
+			parentRunId: "group-silent",
+			rootRunId: "group-silent",
+			notifyPolicy: "silent",
+			agent: "quiet",
+			success: true,
+			state: "complete",
+			summary: "quiet",
+			timestamp: Date.now(),
+		});
+		silent.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "group-silent",
+			runId: "group-silent",
+			rootRunId: "group-silent",
+			notifyPolicy: "silent",
+			agent: "quiet",
+			success: true,
+			state: "complete",
+			summary: "quiet",
+			timestamp: Date.now(),
+		});
+		assert.equal(silent.sent.length, 0);
 	});
 });

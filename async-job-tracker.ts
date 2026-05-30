@@ -244,6 +244,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			asyncDir?: string;
 			agent?: string;
 			chain?: string[];
+			parentRunId?: string;
 			controlConfig?: ResolvedControlConfig;
 		};
 		logger.info("handleStarted: FIRED", { id: info.id, agent: info.agent, hasUi: !!state.lastUiContext });
@@ -255,13 +256,15 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			return;
 		}
 		const agents = info.chain && info.chain.length > 0 ? info.chain : info.agent ? [info.agent] : undefined;
+		const mode = info.parentRunId ? "parallel" : info.chain ? "chain" : "single";
 		idleTracker?.onAsyncStarted(info.id);
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
 			asyncDir,
 			status: "queued",
 			displayState: "quiet",
-			mode: info.chain ? "chain" : "single",
+			mode,
+			parentRunId: info.parentRunId,
 			agents,
 			stepsTotal: agents?.length,
 			startedAt: now,

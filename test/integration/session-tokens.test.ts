@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
 
 interface SessionTokensModule {
-	parseSessionTokens(sessionDir: string): { input: number; output: number; total: number } | null;
+	parseSessionTokens(sessionDir: string): { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number } | null;
 }
 
 const tokensMod = await tryImport<SessionTokensModule>("./session-tokens.ts");
@@ -28,14 +28,14 @@ describe("session tokens", { skip: !available ? "pi packages not available" : un
 					type: "message",
 					message: {
 						role: "assistant",
-						usage: { inputTokens: 80, outputTokens: 20 },
+						usage: { inputTokens: 80, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 7 },
 					},
 				}),
 			].join("\n");
 			fs.writeFileSync(sessionFile, lines + "\n", "utf-8");
 
 			const tokens = tokensMod!.parseSessionTokens(sessionDir);
-			assert.deepEqual(tokens, { input: 200, output: 50, total: 250 });
+			assert.deepEqual(tokens, { input: 200, output: 50, cacheRead: 300, cacheWrite: 7, total: 557 });
 		} finally {
 			removeTempDir(sessionDir);
 		}

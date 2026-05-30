@@ -159,6 +159,21 @@ describe("StatusWriter", () => {
 		assert.equal(step.currentTool, "read");
 	});
 
+	it("includes cache read/write tokens in persisted token totals", async () => {
+		const dir = tempDir("pi-status-writer-token-total-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 50 });
+		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "fixer", status: "running" }] });
+
+		await writer.finalize(result({
+			usage: { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, cost: 0, turns: 1 },
+		}));
+		const status = readStatus(dir);
+
+		assert.deepEqual(status.totalTokens, { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, total: 260_000 });
+		const step = (status.steps as Array<Record<string, unknown>>)[0]!;
+		assert.deepEqual(step.tokens, { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, total: 260_000 });
+	});
+
 	it("writes interrupted as a terminal state", async () => {
 		const dir = tempDir("pi-status-writer-interrupted-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 50 });

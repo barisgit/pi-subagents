@@ -31,6 +31,8 @@ export interface SubagentLineage {
 	depth: number;
 	/** Run id (subagent dispatch correlation id) — null for host. */
 	runId: string | null;
+	/** Root run id for this run tree — null for host. */
+	rootRunId?: string | null;
 }
 
 const STORE_KEY = "__piSubagentLineageBySession";
@@ -122,6 +124,7 @@ export function setHostLineage(sessionId: string): SubagentLineage {
 		rootSessionId: sessionId,
 		depth: 0,
 		runId: null,
+		rootRunId: null,
 	};
 	m.set(sessionId, lineage);
 	return lineage;

@@ -10,10 +10,11 @@ import {
 const CONTROL_EVENT_TYPES: ControlEventType[] = ["needs_attention"];
 const CONTROL_NOTIFICATION_CHANNELS: ControlNotificationChannel[] = ["event", "async", "intercom"];
 const DEFAULT_NOTIFY_ON: ControlEventType[] = ["needs_attention"];
+export const DEFAULT_NEEDS_ATTENTION_AFTER_MS = 15 * 60 * 1000;
 
 export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
 	enabled: true,
-	needsAttentionAfterMs: 60_000,
+	needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_AFTER_MS,
 	notifyOn: DEFAULT_NOTIFY_ON,
 	notifyChannels: CONTROL_NOTIFICATION_CHANNELS,
 };
@@ -196,6 +197,10 @@ export function claimControlNotification(config: ResolvedControlConfig, event: C
 	if (seenKeys.has(key)) return false;
 	seenKeys.add(key);
 	return true;
+}
+
+export function formatControlInterruptReason(event: ControlEvent): string {
+	return `needs_attention auto-interrupt: ${event.message}`;
 }
 
 export function formatControlNoticeMessage(event: ControlEvent, childIntercomTarget?: string): string {

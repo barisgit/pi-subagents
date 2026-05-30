@@ -32,6 +32,9 @@ export interface RunsRegistryEntry {
 	// session's tree.
 	rootSessionId?: string;
 	parentRunId?: string;
+	// Top-of-tree run id. Equal to runId for top-level dispatches and inherited
+	// from the ancestor run for nested subagent dispatches.
+	rootRunId?: string;
 	cwd: string;
 	startedAt: number;
 }
@@ -87,4 +90,14 @@ export function readAllEntries(opts: ReadOptions = {}): RunsRegistryEntry[] {
 	}
 	entries.reverse(); // most-recent first
 	return opts.limit !== undefined ? entries.slice(0, opts.limit) : entries;
+}
+
+export function listRunsByRootRunId(rootRunId: string): RunsRegistryEntry[] {
+	return listRunsByRootRunIds([rootRunId]);
+}
+
+export function listRunsByRootRunIds(rootRunIds: Iterable<string>): RunsRegistryEntry[] {
+	const wanted = new Set(rootRunIds);
+	if (wanted.size === 0) return [];
+	return readAllEntries().filter((entry) => wanted.has(entry.rootRunId ?? entry.runId));
 }

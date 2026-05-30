@@ -6,6 +6,7 @@ import { after, afterEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
 import { __setSyncRunStatusUpdateObserverForTest, ensureSyncRunDir, writeSyncRunStatusEnd, writeSyncRunStatusStart, writeSyncRunStatusUpdate } from "../../sync-run-persistence.ts";
+import { SUBAGENT_CONTROL_EVENT, SUBAGENT_NEEDS_ATTENTION_EVENT } from "../../types.ts";
 
 const restoreFns: Array<() => void> = [];
 let testsRun = 0;
@@ -28,6 +29,7 @@ class FakeResourceLoader {
 class FakeAgentSession {
 	private listeners: Listener[] = [];
 	readonly promptImpl: (session: FakeAgentSession) => Promise<void>;
+	abortCount = 0;
 
 	constructor(promptImpl: (session: FakeAgentSession) => Promise<void>) {
 		this.promptImpl = promptImpl;
@@ -48,7 +50,9 @@ class FakeAgentSession {
 		await this.promptImpl(this);
 	}
 
-	async abort(): Promise<void> {}
+	async abort(): Promise<void> {
+		this.abortCount++;
+	}
 
 	dispose(): void {}
 
@@ -68,10 +72,10 @@ function installFakeRuntime(sessions: FakeAgentSession[]): void {
 	}));
 }
 
-function makeExecutor(cwd: string) {
+function makeExecutor(cwd: string, emit: (event: string, payload: unknown) => void = () => {}) {
 	return createSubagentExecutor({
 		pi: {
-			events: { emit: () => {} },
+			events: { emit },
 			getAllTools: () => [],
 			getSessionName: () => undefined,
 			setSessionName: () => {},
@@ -239,6 +243,44 @@ describe("phase", () => {
 			assert.deepEqual(readStatus(runId), first);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("sync-needs-attention-auto-interrupts-without-control-notice", async (t) => {
+		t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-attention-interrupt-"));
+		const emitted: string[] = [];
+		let markPromptStarted!: () => void;
+		const promptStarted = new Promise<void>((resolve) => {
+			markPromptStarted = resolve;
+		});
+		const session = new FakeAgentSession(async () => {
+			markPromptStarted();
+			return new Promise<void>(() => {});
+		});
+		installFakeRuntime([session]);
+		try {
+			const run = makeExecutor(tempDir, (event) => emitted.push(event)).executeInternal(
+				"id",
+				{ agent: "phase-tester", task: "stall", sessionDir: tempDir, control: { needsAttentionAfterMs: 10 }, includeProgress: true },
+				new AbortController().signal,
+				undefined,
+				makeCtx(tempDir) as never,
+			);
+
+			await promptStarted;
+			t.mock.timers.tick(5_000);
+
+			const result = await run;
+			const child = result.details.results[0];
+			assert.equal(result.isError, undefined);
+			assert.equal(child?.interrupted, true);
+			assert.match(child?.error ?? "", /needs_attention auto-interrupt/);
+			assert.equal(session.abortCount, 1);
+			assert.equal(emitted.includes(SUBAGENT_CONTROL_EVENT), false);
+			assert.equal(emitted.includes(SUBAGENT_NEEDS_ATTENTION_EVENT), false);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
 	});
 

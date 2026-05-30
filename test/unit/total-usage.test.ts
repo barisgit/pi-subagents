@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { compactForegroundDetails, computeDetailsTotalUsage } from "../../utils.ts";
+import { tokenUsageFromUsage, totalUsageTokens } from "../../usage-totals.ts";
 import type { Details, SingleResult } from "../../types.ts";
 
 describe("computeDetailsTotalUsage", () => {
@@ -25,6 +26,21 @@ describe("computeDetailsTotalUsage", () => {
 			{ usage: { input: 0, output: 0, cacheRead: 7 } },
 		]);
 		assert.deepEqual(total, { input: 10, output: 5, cacheRead: 7, cacheWrite: 0, cost: 0, turns: 0 });
+	});
+});
+
+describe("usage token totals", () => {
+	it("sums input, output, cache read, and cache write for compact token stats", () => {
+		const usage = { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000 };
+
+		assert.equal(totalUsageTokens(usage), 260_000);
+		assert.deepEqual(tokenUsageFromUsage(usage), {
+			input: 74_000,
+			output: 2_000,
+			cacheRead: 180_000,
+			cacheWrite: 4_000,
+			total: 260_000,
+		});
 	});
 });
 
