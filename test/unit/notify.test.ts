@@ -245,9 +245,9 @@ describe("registerSubagentNotify", () => {
 	it("batch rollup aggregates time-separated per-run completions by notifyPolicy", () => {
 		const rollup = createPi();
 		for (const child of [
-			{ runId: "child-a", agent: "A", summary: "from child A" },
-			{ runId: "child-b", agent: "B", summary: "from child B" },
-			{ runId: "child-c", agent: "C", summary: "from child C" },
+			{ runId: "00000000-0000-4000-8000-00000000000a", agent: "A", label: "Alpha check", summary: "from child A" },
+			{ runId: "00000000-0000-4000-8000-00000000000b", agent: "B", label: "Bravo check", summary: "from child B" },
+			{ runId: "00000000-0000-4000-8000-00000000000c", agent: "C", label: "Charlie check", summary: "from child C" },
 		]) {
 			rollup.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
 				id: child.runId,
@@ -256,6 +256,7 @@ describe("registerSubagentNotify", () => {
 				rootRunId: "group-rollup",
 				notifyPolicy: "rollup",
 				agent: child.agent,
+				label: child.label,
 				success: true,
 				state: "complete",
 				summary: child.summary,
@@ -275,11 +276,24 @@ describe("registerSubagentNotify", () => {
 		});
 
 		assert.equal(rollup.sent.length, 1);
-		const rollupContent = (rollup.sent[0]!.message as { content?: string }).content ?? "";
+		const rollupMessage = rollup.sent[0]!.message as { content?: string; details?: { kind?: string; completed?: number; total?: number; children?: Array<{ label?: string; agent?: string; state?: string; runId?: string }> } };
+		const rollupContent = rollupMessage.content ?? "";
 		assert.ok(rollupContent.startsWith("Background batch completed:"));
-		for (const childRunId of ["child-a", "child-b", "child-c"]) {
-			assert.ok(rollupContent.includes(childRunId), `rollup should include ${childRunId}`);
+		for (const label of ["Alpha check", "Bravo check", "Charlie check"]) {
+			assert.ok(rollupContent.includes(label), `rollup should include ${label}`);
 		}
+		assert.ok(!rollupContent.includes("00000000-0000-4000-8000-00000000000a"));
+		assert.ok(rollupContent.includes("✓ Alpha check (A): complete"));
+		assert.deepEqual(rollupMessage.details, {
+			kind: "batch",
+			completed: 3,
+			total: 3,
+			children: [
+				{ label: "Alpha check", agent: "A", state: "complete", runId: "00000000-0000-4000-8000-00000000000a" },
+				{ label: "Bravo check", agent: "B", state: "complete", runId: "00000000-0000-4000-8000-00000000000b" },
+				{ label: "Charlie check", agent: "C", state: "complete", runId: "00000000-0000-4000-8000-00000000000c" },
+			],
+		});
 
 		const each = createPi();
 		for (const child of ["each-a", "each-b", "each-c"]) {

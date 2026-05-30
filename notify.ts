@@ -10,6 +10,7 @@ import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from
 
 interface ChainStepResult {
 	agent: string;
+	label?: string;
 	output?: string;
 	summary?: string;
 	success: boolean;
@@ -26,6 +27,7 @@ interface ChainStepResult {
 }
 
 export interface SubagentNotifyDetails {
+	kind?: "single";
 	agent: string;
 	status: "completed" | "failed" | "paused";
 	taskInfo?: string;
@@ -33,6 +35,13 @@ export interface SubagentNotifyDetails {
 	durationMs?: number;
 	sessionLabel?: string;
 	sessionValue?: string;
+}
+
+export interface SubagentBatchNotifyDetails {
+	kind: "batch";
+	completed: number;
+	total: number;
+	children: Array<{ label?: string; agent: string; state: string; runId: string }>;
 }
 
 type NotifyPolicy = "rollup" | "each" | "silent";
@@ -47,6 +56,7 @@ interface SubagentResult {
 	summary: string;
 	exitCode?: number;
 	state?: string;
+	label?: string;
 	timestamp: number;
 	durationMs?: number;
 	sessionFile?: string;
@@ -111,13 +121,44 @@ function batchNotificationContent(result: SubagentResult, children: ChainStepRes
 		const childRunId = child.runId ?? child.id ?? "unknown";
 		const state = child.state ?? (child.success ? "complete" : "failed");
 		const agent = child.agent || "unknown";
-		return `- ${childRunId} (${agent}): ${state}`;
+		const name = child.label?.trim() || agent || shortRunId(childRunId);
+		return `- ${stateGlyph(state)} ${name} (${agent}): ${state}`;
 	});
 	return [
 		`Background batch completed: **${completed}/${total} tasks complete**`,
 		"",
 		...lines,
 	].join("\n");
+}
+
+function shortRunId(runId: string): string {
+	return runId.length > 8 ? runId.slice(0, 8) : runId;
+}
+
+function stateGlyph(state: string): string {
+	if (state === "complete" || state === "completed") return "✓";
+	if (state === "paused") return "■";
+	return "✗";
+}
+
+function batchNotificationDetails(result: SubagentResult, children: ChainStepResult[]): SubagentBatchNotifyDetails {
+	const total = result.total ?? children.length;
+	const completed = result.completed ?? children.filter((child) => child.state === "complete" || child.success).length;
+	return {
+		kind: "batch",
+		completed,
+		total,
+		children: children.map((child) => {
+			const runId = child.runId ?? child.id ?? "unknown";
+			const state = child.state ?? (child.success ? "complete" : "failed");
+			return {
+				...(child.label ? { label: child.label } : {}),
+				agent: child.agent || "unknown",
+				state,
+				runId,
+			};
+		}),
+	};
 }
 
 function notifyPolicyFor(result: SubagentResult): NotifyPolicy {
@@ -138,6 +179,7 @@ function childResultFrom(result: SubagentResult, child: ChainStepResult, index: 
 		durationMs: child.durationMs,
 		sessionFile: child.sessionFile,
 		shareUrl: child.shareUrl,
+		label: child.label,
 		taskIndex: child.stepIndex ?? index,
 		totalTasks: total,
 	};
@@ -170,7 +212,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	const ttlMs = 10 * 60 * 1000;
 	const groupedRuns = new Map<string, SubagentResult[]>();
 
-	const sendNotification = (idLabel: string, content: string) => {
+	const sendNotification = (idLabel: string, content: string, details?: SubagentNotifyDetails | SubagentBatchNotifyDetails) => {
 		// Cannot use the captured `pi` from registration time: the activate that
 		// registered this handler may have been replaced by ctx.reload()/fork()/
 		// newSession()/switchSession(), invalidating that pi. We must resolve the
@@ -183,6 +225,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 					customType: "subagent-notify",
 					content,
 					display: true,
+					...(details ? { details } : {}),
 				},
 				{ triggerTurn: true },
 			);
@@ -252,6 +295,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 					durationMs: child.durationMs,
 					sessionFile: child.sessionFile,
 					shareUrl: child.shareUrl,
+					label: child.label,
 				}));
 				const rollup: SubagentResult = {
 					...result,
@@ -263,7 +307,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 					logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
 					return;
 				}
-				sendNotification(idLabel, batchNotificationContent(rollup, rollupChildren));
+				sendNotification(idLabel, batchNotificationContent(rollup, rollupChildren), batchNotificationDetails(rollup, rollupChildren));
 			}
 			return;
 		}
@@ -285,7 +329,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		const content = children && policy === "rollup"
 			? batchNotificationContent(result, children)
 			: singleNotificationContent(result);
-		sendNotification(idLabel, content);
+		sendNotification(idLabel, content, children && policy === "rollup" ? batchNotificationDetails(result, children) : undefined);
 	};
 
 	// Subscribe on this session's pi.events bus. The subscription is re-attached

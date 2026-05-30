@@ -999,10 +999,23 @@ function buildAsyncChildStep(input: {
 	return { step, cleanTask, agentConfig };
 }
 
-function asyncStartedResult(input: { mode: "single" | "chain" | "parallel"; runId: string; asyncDir: string; text: string }): AgentToolResult<Details> {
+function asyncStartedResult(input: {
+	mode: "single" | "chain" | "parallel";
+	runId: string;
+	asyncDir: string;
+	text: string;
+	children?: Array<{ runId: string; agent: string; label?: string; stepIndex: number }>;
+}): AgentToolResult<Details> {
 	return {
 		content: [{ type: "text", text: `${input.text}\nState: running\n${formatAsyncStatusHint(input.runId)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-		details: { mode: input.mode, results: [], runId: input.runId, asyncId: input.runId, asyncDir: input.asyncDir },
+		details: {
+			mode: input.mode,
+			results: [],
+			runId: input.runId,
+			asyncId: input.runId,
+			asyncDir: input.asyncDir,
+			...(input.children ? { children: input.children } : {}),
+		},
 	};
 }
 
@@ -1224,6 +1237,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 						metadata: params.metadata,
 						notifyPolicy,
 						agent: item.step.agentName,
+						...(item.step.label ? { label: item.step.label } : {}),
 						success: result ? result.state === "complete" : false,
 						summary: result?.outputText ?? (event.error ? String(event.error) : ""),
 						exitCode: result?.exitCode,
@@ -1263,6 +1277,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 							...(params.batch === true ? { batchId: groupRunId } : {}),
 							stepIndex: child.originalStepIndex,
 							agent: child.item.step.agentName,
+							...(child.item.step.label ? { label: child.item.step.label } : {}),
 							state: r.state,
 							success: r.state === "complete",
 							exitCode: r.exitCode,
@@ -1306,8 +1321,22 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			}
 		})();
 
-		const handleText = `Async parallel: ${formatRunHandle({ mode: "parallel", agents: steps.map(({ step }) => step.agentName), style: "verbose" })} [${groupRunId}]`;
-		return asyncStartedResult({ mode, runId: groupRunId, asyncDir: group.runRecordDir, text: handleText });
+		const childDetails = childRuns.map((child) => ({
+			runId: child.handle.runId,
+			agent: child.item.step.agentName,
+			...(child.item.step.label ? { label: child.item.step.label } : {}),
+			stepIndex: child.originalStepIndex,
+		}));
+		const childLines = childDetails.map((child) => {
+			const label = child.label ? ` · ${child.label}` : "";
+			return `- ${child.agent}${label}: ${child.runId}`;
+		});
+		const handleText = [
+			"Async parallel children:",
+			...childLines,
+			`Group handle: ${formatRunHandle({ mode: "parallel", agents: steps.map(({ step }) => step.agentName), style: "verbose" })} [${groupRunId}]`,
+		].join("\n");
+		return asyncStartedResult({ mode, runId: groupRunId, asyncDir: group.runRecordDir, text: handleText, children: childDetails });
 	}
 	const runRecordDir = first.step.runRecordDir;
 	const statusWriter = new StatusWriter({ runRecordDir, runId });

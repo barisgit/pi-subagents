@@ -38,7 +38,7 @@ import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge
 import { registerSlashSubagentBridge } from "./slash-bridge.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
-import registerSubagentNotify, { type SubagentNotifyDetails } from "./notify.ts";
+import registerSubagentNotify, { type SubagentBatchNotifyDetails, type SubagentNotifyDetails } from "./notify.ts";
 import { formatDuration, shortenPath } from "./formatters.ts";
 import {
 	type ControlEvent,
@@ -262,6 +262,81 @@ class SubagentControlNoticeComponent implements Component {
 			lines.push(this.theme.fg("accent", `│${text}${" ".repeat(padding)}│`));
 		}
 		lines.push(this.theme.fg("accent", `╰${borderChar.repeat(bodyWidth)}╯`));
+		return lines;
+	}
+}
+
+class SubagentNotifyNoticeComponent implements Component {
+	private readonly details: SubagentNotifyDetails | SubagentBatchNotifyDetails;
+	private readonly options: { expanded: boolean };
+	private readonly theme: ExtensionContext["ui"]["theme"];
+
+	constructor(
+		details: SubagentNotifyDetails | SubagentBatchNotifyDetails,
+		options: { expanded: boolean },
+		theme: ExtensionContext["ui"]["theme"],
+	) {
+		this.details = details;
+		this.options = options;
+		this.theme = theme;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		if (width < 3) return [truncateToWidth("Subagent notification", width)];
+		const bodyWidth = Math.max(1, Math.min(width - 2, 68));
+		const borderChar = "─";
+		const header = this.details.kind === "batch"
+			? ` Subagent batch complete · ${this.details.completed}/${this.details.total} `
+			: ` Subagent ${this.details.status}: ${this.details.agent} `;
+		const headerText = truncateToWidth(header, bodyWidth, "");
+		const headerPadding = Math.max(0, bodyWidth - visibleWidth(headerText));
+		const lines = [this.theme.fg("accent", `╭${headerText}${borderChar.repeat(headerPadding)}╮`)];
+
+		for (const line of this.bodyLines()) {
+			const text = truncateToWidth(line, bodyWidth, "");
+			const padding = Math.max(0, bodyWidth - visibleWidth(text));
+			lines.push(this.theme.fg("accent", `│${text}${" ".repeat(padding)}│`));
+		}
+		lines.push(this.theme.fg("accent", `╰${borderChar.repeat(bodyWidth)}╯`));
+		return lines;
+	}
+
+	private bodyLines(): string[] {
+		if (this.details.kind === "batch") {
+			const lines = this.details.children.map((child) => {
+				const glyph = child.state === "complete" || child.state === "completed"
+					? this.theme.fg("success", "✓")
+					: child.state === "paused"
+						? this.theme.fg("warning", "■")
+						: this.theme.fg("error", "✗");
+				const name = child.label?.trim() || child.agent || child.runId.slice(0, 8);
+				return `${glyph} ${name} ${this.theme.fg("dim", `(${child.agent}) · ${child.state}`)}`;
+			});
+			return lines.length > 0 ? lines : ["(no child results)"];
+		}
+
+		const icon = this.details.status === "completed"
+			? this.theme.fg("success", "✓")
+			: this.details.status === "paused"
+				? this.theme.fg("warning", "■")
+				: this.theme.fg("error", "✗");
+		const parts: string[] = [];
+		if (this.details.taskInfo) parts.push(this.details.taskInfo);
+		if (this.details.durationMs !== undefined) parts.push(formatDuration(this.details.durationMs));
+		let first = `${icon} ${this.theme.bold(this.details.agent)} ${this.theme.fg("dim", this.details.status)}`;
+		if (parts.length > 0) first += ` ${this.theme.fg("dim", "·")} ${parts.map((part) => this.theme.fg("dim", part)).join(` ${this.theme.fg("dim", "·")} `)}`;
+		const lines = [first];
+		const trimmedPreview = this.details.resultPreview.trim();
+		const previewLines = this.options.expanded
+			? trimmedPreview.split("\n").filter((line) => line.trim())
+			: [trimmedPreview.split("\n", 1)[0] ?? ""].filter((line) => line.trim());
+		for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
+			lines.push(`  └─ ${line}`);
+		}
+		if (!this.options.expanded && trimmedPreview.includes("\n")) lines.push("  Ctrl+O full notification");
+		if (this.details.sessionLabel && this.details.sessionValue) lines.push(`  ${this.details.sessionLabel}: ${shortenPath(this.details.sessionValue)}`);
 		return lines;
 	}
 }
@@ -531,34 +606,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		});
 	});
 
-	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
+	pi.registerMessageRenderer<SubagentNotifyDetails | SubagentBatchNotifyDetails>("subagent-notify", (message, options, theme) => {
 		const content = typeof message.content === "string" ? message.content : "";
-		const details = (message.details as SubagentNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
+		const details = (message.details as SubagentNotifyDetails | SubagentBatchNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
 		if (!details) return new Text(content, 0, 0);
-		const icon = details.status === "completed"
-			? theme.fg("success", "✓")
-			: details.status === "paused"
-				? theme.fg("warning", "■")
-				: theme.fg("error", "✗");
-		const parts: string[] = [];
-		if (details.taskInfo) parts.push(details.taskInfo);
-		if (details.durationMs !== undefined) parts.push(formatDuration(details.durationMs));
-		let text = `${icon} ${theme.bold(details.agent)} ${theme.fg("dim", details.status)}`;
-		if (parts.length > 0) text += ` ${theme.fg("dim", "·")} ${parts.map((part) => theme.fg("dim", part)).join(` ${theme.fg("dim", "·")} `)}`;
-		const trimmedPreview = details.resultPreview.trim();
-		const previewLines = options.expanded
-			? trimmedPreview.split("\n").filter((line) => line.trim())
-			: [trimmedPreview.split("\n", 1)[0] ?? ""].filter((line) => line.trim());
-		for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
-			text += `\n  ${theme.fg("dim", `└─ ${line}`)}`;
-		}
-		if (!options.expanded && trimmedPreview.includes("\n")) {
-			text += `\n  ${theme.fg("dim", "Ctrl+O full notification")}`;
-		}
-		if (details.sessionLabel && details.sessionValue) {
-			text += `\n  ${theme.fg("muted", `${details.sessionLabel}: ${shortenPath(details.sessionValue)}`)}`;
-		}
-		return new Text(text, 0, 0);
+		return new SubagentNotifyNoticeComponent(details, options, theme);
 	});
 
 	pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, (message, _options, theme) => {

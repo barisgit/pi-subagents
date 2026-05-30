@@ -105,8 +105,10 @@ describe("notifyPolicy node behavior", () => {
 
 		assert.equal(sent.length, 1);
 		const content = (sent[0]!.message as { content?: string }).content ?? "";
-		assert.ok(content.includes("phase-a"));
-		assert.ok(content.includes("phase-b"));
+		assert.ok(content.includes("✓ A (A): complete"));
+		assert.ok(content.includes("✓ B (B): complete"));
+		assert.ok(!content.includes("phase-a"));
+		assert.ok(!content.includes("phase-b"));
 		assert.ok(!content.includes("silent-subtree-child"));
 		assert.ok(!content.includes("silent-subtree done"));
 	});

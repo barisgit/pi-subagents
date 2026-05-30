@@ -95,7 +95,7 @@ function makeCtx(cwd: string) {
 }
 
 async function execute(cwd: string, params: Record<string, unknown>, emitted: Array<{ event: string; payload: Record<string, unknown> }>) {
-	return await makeExecutor(cwd, emitted).execute("id", params as never, new AbortController().signal, undefined, makeCtx(cwd) as never) as { details?: { runId?: string; asyncDir?: string } };
+	return await makeExecutor(cwd, emitted).execute("id", params as never, new AbortController().signal, undefined, makeCtx(cwd) as never) as { content?: Array<{ type: "text"; text: string }>; details?: { runId?: string; asyncDir?: string; children?: Array<{ runId: string; agent: string; label?: string; stepIndex: number }> } };
 }
 
 async function waitForEntries(count: number): Promise<void> {
@@ -122,7 +122,7 @@ describe("async parallel Layer-0 run wiring", () => {
 		installFakeRuntime();
 		const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
 
-		const parallel = await execute(root, { async: true, run: [{ agent: "A", task: "alpha" }, { agent: "B", task: "bravo" }] }, emitted);
+		const parallel = await execute(root, { async: true, run: [{ agent: "A", label: "Alpha lane", task: "alpha" }, { agent: "B", label: "Bravo lane", task: "bravo" }] }, emitted);
 		await waitForEntries(3);
 
 		const entries = readAllEntries();
@@ -137,6 +137,19 @@ describe("async parallel Layer-0 run wiring", () => {
 		assert.equal(new Set(children.map((entry) => entry.runId)).size, 2);
 		assert.equal(children.every((entry) => UUID_RE.test(entry.runId)), true);
 		assert.deepEqual(children.map((entry) => entry.agentName).sort(), ["A", "B"]);
+		assert.deepEqual(parallel.details?.children?.map((child) => ({ agent: child.agent, label: child.label, stepIndex: child.stepIndex })).sort((a, b) => a.stepIndex - b.stepIndex), [
+			{ agent: "A", label: "Alpha lane", stepIndex: 0 },
+			{ agent: "B", label: "Bravo lane", stepIndex: 1 },
+		]);
+		assert.deepEqual(new Set(parallel.details?.children?.map((child) => child.runId)), new Set(children.map((child) => child.runId)));
+		const parallelText = parallel.content?.[0]?.text ?? "";
+		for (const child of parallel.details?.children ?? []) {
+			assert.ok(parallelText.includes(child.runId), `result text should include child runId ${child.runId}`);
+			assert.ok(parallelText.includes(child.agent), `result text should include child agent ${child.agent}`);
+			assert.ok(child.label && parallelText.includes(child.label), `result text should include child label ${child.label}`);
+		}
+		assert.ok(parallelText.includes(`Group handle:`));
+		assert.ok(parallelText.includes(group.runId));
 
 		setRegistryPathForTests(path.join(root, ".pi", "agent", "pi-subagents", "chain-runs-index.jsonl"));
 		const chain = await execute(root, { async: true, chain: true, run: [{ agent: "A", task: "first" }, { agent: "B", task: "second {previous}" }] }, emitted);
@@ -144,6 +157,7 @@ describe("async parallel Layer-0 run wiring", () => {
 		await waitForCompleteStatus(chain.details!.asyncDir!);
 		const chainEntries = readAllEntries();
 		assert.equal(chainEntries.length, 1);
+		assert.equal(chain.details?.children, undefined);
 		assert.equal(chainEntries[0]?.runId, chain.details?.runId);
 		assert.equal(chainEntries[0]?.mode, "chain");
 		const status = JSON.parse(fs.readFileSync(path.join(chain.details!.asyncDir!, "status.json"), "utf-8")) as { steps?: unknown[] };

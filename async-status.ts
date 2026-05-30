@@ -8,6 +8,7 @@ import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.
 import { deriveRunDisplayState } from "./run-liveness.ts";
 import { readStatus } from "./utils.ts";
 import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
+import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
 
 export interface AsyncRunStepSummary {
 	index: number;
@@ -262,7 +263,7 @@ export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"
 	for (const entry of entries) {
 		if (seen.has(entry.runId)) continue;
 		seen.add(entry.runId);
-		const summary = readSummaryForEntry(entry);
+		const summary = readSummaryForEntry(entry, entries);
 		if (!summary) continue;
 		if (allowedStates && !allowedStates.has(summary.state)) continue;
 		runs.push(summary);
@@ -315,13 +316,38 @@ export function listRunsFromRegistryForOverlay(
 // the `subagent({ action: "status" })` wall the user hit.
 const QUEUED_STUB_MAX_AGE_MS = 60_000;
 
-function readSummaryForEntry(entry: RunsRegistryEntry): AsyncRunSummary | null {
+function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries()): AsyncRunSummary | null {
 	const status = readStatus(entry.runRecordDir) as (AsyncStatus & { cwd?: string }) | null;
 	const sessionLineage = {
 		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
 		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
 	};
 	if (status) return { ...statusToSummary(entry.runRecordDir, status), ...sessionLineage };
+	const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
+	const isGroup = entry.mode === "parallel" && (!entry.agentName && !entry.agentNames || children.length > 0);
+	if (isGroup) {
+		const childSummaries = children
+			.map((child) => readSummaryForEntry(child, entries))
+			.filter((child): child is AsyncRunSummary => Boolean(child));
+		const state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
+		const childEndedAt = childSummaries
+			.map((child) => child.endedAt)
+			.filter((endedAt): endedAt is number => typeof endedAt === "number");
+		const endedAt = state === "running" || childEndedAt.length === 0 ? undefined : Math.max(...childEndedAt);
+		return {
+			id: entry.runId,
+			asyncDir: entry.runRecordDir,
+			mode: entry.mode,
+			state,
+			startedAt: entry.startedAt,
+			...(endedAt !== undefined ? { endedAt } : {}),
+			cwd: entry.cwd,
+			...(entry.label ? { label: entry.label } : {}),
+			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+			...sessionLineage,
+			steps: [],
+		};
+	}
 	// No status.json on disk. Either (a) the run was dispatched within the last
 	// few seconds and the writer hasn't flushed yet — keep the stub so the
 	// overlay reflects the spawn immediately — or (b) the entry is an orphan
@@ -362,9 +388,16 @@ function formatStepLine(step: AsyncRunStepSummary): string {
 	return parts.join(" | ");
 }
 
-function formatRunHeader(run: AsyncRunSummary): string {
-	const stepCount = run.steps.length || 1;
-	const completedParallelSteps = run.steps.filter((step) => step.status === "complete" || step.status === "failed" || step.status === "skipped").length;
+function isTerminalState(state: string): boolean {
+	return state === "complete" || state === "failed" || state === "interrupted" || state === "skipped" || state === "paused";
+}
+
+function formatRunHeader(run: AsyncRunSummary, children: AsyncRunSummary[] = []): string {
+	const isParallelGroup = run.mode === "parallel" && children.length > 0;
+	const stepCount = isParallelGroup ? children.length : run.steps.length || 1;
+	const completedParallelSteps = isParallelGroup
+		? children.filter((child) => isTerminalState(child.state)).length
+		: run.steps.filter((step) => step.status === "complete" || step.status === "failed" || step.status === "skipped").length;
 	const stepLabel = run.mode === "parallel"
 		? `tasks ${completedParallelSteps}/${stepCount} complete`
 		: run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
@@ -374,14 +407,56 @@ function formatRunHeader(run: AsyncRunSummary): string {
 	return `${run.id} | ${state}${activity ? ` | ${activity}` : ""} | ${run.mode} | ${stepLabel} | ${cwd}`;
 }
 
-export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {
+function isGroupRun(run: AsyncRunSummary, children: AsyncRunSummary[]): boolean {
+	return run.mode === "parallel" && (run.steps.length === 0 || children.length > 0);
+}
+
+function formatChildRunLine(run: AsyncRunSummary): string {
+	const step = run.steps[0];
+	const agent = step?.agent || "unknown";
+	const parts = [run.id, agent, run.label, run.displayState ? `${run.state}/${run.displayState}` : run.state];
+	const activity = formatActivityFacts({
+		activityState: run.activityState,
+		lastActivityAt: run.lastActivityAt,
+		currentTool: run.currentTool,
+		currentToolStartedAt: run.currentToolStartedAt,
+	});
+	if (activity) parts.push(activity);
+	if (step?.model) parts.push(step.model);
+	const durationMs = step?.durationMs ?? (run.endedAt !== undefined ? run.endedAt - run.startedAt : undefined);
+	if (durationMs !== undefined) parts.push(formatDuration(durationMs));
+	const tokens = step?.tokens ?? run.totalTokens;
+	if (tokens) parts.push(`${formatTokens(tokens.total)} tok`);
+	return parts.filter((part): part is string => Boolean(part)).join(" | ");
+}
+
+export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Async runs"): string {
 	if (runs.length === 0) return `No ${heading.toLowerCase()}.`;
 
 	const lines = [`${heading}: ${runs.length}`, ASYNC_NO_POLL_GUIDANCE, ""];
+	const runIds = new Set(runs.map((run) => run.id));
+	const childrenByParent = new Map<string, AsyncRunSummary[]>();
 	for (const run of runs) {
-		lines.push(`- ${formatRunHeader(run)}`);
-		for (const step of run.steps) {
-			lines.push(`  ${formatStepLine(step)}`);
+		if (!run.parentRunId || !runIds.has(run.parentRunId)) continue;
+		const siblings = childrenByParent.get(run.parentRunId) ?? [];
+		siblings.push(run);
+		childrenByParent.set(run.parentRunId, siblings);
+	}
+	const childIds = new Set<string>();
+	for (const children of childrenByParent.values()) {
+		children.sort((a, b) => b.startedAt - a.startedAt);
+		for (const child of children) childIds.add(child.id);
+	}
+	for (const run of runs) {
+		if (childIds.has(run.id)) continue;
+		const children = childrenByParent.get(run.id) ?? [];
+		lines.push(`- ${formatRunHeader(run, children)}`);
+		if (isGroupRun(run, children)) {
+			for (const child of children) lines.push(`  - ${formatChildRunLine(child)}`);
+		} else {
+			for (const step of run.steps) {
+				lines.push(`  ${formatStepLine(step)}`);
+			}
 		}
 		if (run.sessionFile) lines.push(`  session: ${shortenPath(run.sessionFile)}`);
 		lines.push("");

@@ -20,6 +20,7 @@ export interface RunStatusParams {
 	// fake `queued` summary because their status.json no longer exists.
 	sessionId?: string;
 	sessionCwd?: string;
+	includeCompleted?: boolean;
 }
 
 // Default cap on the no-id list. Even after scoping, the registry can carry
@@ -58,9 +59,14 @@ function scopeRunsForSession<T extends { rootSessionId?: string; parentSessionId
 export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<Details> {
 	if (!params.id && !params.runId && !params.dir) {
 		try {
-			const all = listRunsFromRegistry({ states: ["queued", "running", "lost"] });
+			const states = params.includeCompleted === false
+				? ["queued", "running", "lost"] as const
+				: ["queued", "running", "lost", "complete", "failed", "paused"] as const;
+			const all = listRunsFromRegistry({ states: [...states] });
 			const scoped = scopeRunsForSession(all, { sessionId: params.sessionId, sessionCwd: params.sessionCwd });
-			const runs = scoped.slice(0, DEFAULT_LIST_LIMIT);
+			const runs = scoped
+				.sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
+				.slice(0, DEFAULT_LIST_LIMIT);
 			return {
 				content: [{ type: "text", text: formatAsyncRunList(runs) }],
 				details: { mode: "single", results: [] },

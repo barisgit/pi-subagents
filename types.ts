@@ -265,6 +265,7 @@ export interface Details {
 	controlEvents?: ControlEvent[];
 	asyncId?: string;
 	asyncDir?: string;
+	children?: Array<{ runId: string; agent: string; label?: string; stepIndex: number }>;
 	progress?: AgentProgress[];
 	progressSummary?: ProgressSummary;
 	artifacts?: {
