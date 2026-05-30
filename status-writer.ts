@@ -48,6 +48,8 @@ export interface StatusMeta {
 	sessionFile?: string;
 	outputFile?: string;
 	sessionDir?: string;
+	lastActivityAt?: number;
+	runnerHeartbeatAt?: number;
 }
 
 type StatusPayload = {
@@ -102,7 +104,9 @@ export class StatusWriter {
 			mode: meta.mode ?? "single",
 			state: meta.state ?? "queued",
 			startedAt,
-			lastUpdate: startedAt,
+			lastUpdate: meta.lastActivityAt ?? startedAt,
+			...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
+			...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),
 			steps: meta.steps ? meta.steps.map((step) => ({ ...step, live: step.live ? { ...step.live } : undefined })) : [],
 			...(meta.label ? { label: meta.label } : {}),
 			...(meta.cwd ? { cwd: meta.cwd } : {}),

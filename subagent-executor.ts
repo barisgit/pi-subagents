@@ -687,10 +687,16 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		rootRunId: target.rootRunId,
 	};
 	const statusWriter = new StatusWriter({ runRecordDir: target.runRecordDir, runId: target.runId });
+	// Resume reseeds the activity/heartbeat clocks to now so the inactivity
+	// watchdog measures from the resume moment, not the original run's last
+	// activity (startedAt stays immutable for duration semantics).
+	const resumedAt = Date.now();
 	statusWriter.initialize({
 		mode: target.status.mode,
 		state: "running",
 		startedAt: target.startedAt,
+		lastActivityAt: resumedAt,
+		runnerHeartbeatAt: resumedAt,
 		cwd: target.cwd,
 		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
 		currentStep: step.stepIndex,
@@ -701,9 +707,10 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 			...(statusStep.label ? { label: statusStep.label } : {}),
 			status: index === step.stepIndex ? "running" : statusStep.status,
 			startedAt: statusStep.startedAt ?? target.startedAt,
+			...(index === step.stepIndex ? { lastActivityAt: resumedAt } : {}),
 			sessionFile: statusStep.sessionFile ?? (index === step.stepIndex ? target.sessionFile : undefined),
 			...(statusStep.live ? { live: statusStep.live } : {}),
-		})) ?? [{ agent: target.agentName, status: "running", startedAt: target.startedAt, sessionFile: target.sessionFile }],
+		})) ?? [{ agent: target.agentName, status: "running", startedAt: target.startedAt, lastActivityAt: resumedAt, sessionFile: target.sessionFile }],
 	});
 	resumeInFlight.add(resumeKey);
 	evictCompletionDedupeForRunId(target.runId);
