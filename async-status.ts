@@ -57,6 +57,8 @@ export interface AsyncRunSummary {
 	lastUpdate?: number;
 	endedAt?: number;
 	runnerHeartbeatAt?: number;
+	resumedAt?: number;
+	resumeCount?: number;
 	/** Current execution phase mirrored from status.json. */
 	phase?: RunPhase;
 	/** Milliseconds since epoch when the current phase was entered. */
@@ -157,6 +159,8 @@ export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: 
 		lastUpdate: status.lastUpdate,
 		endedAt: status.endedAt,
 		runnerHeartbeatAt: status.runnerHeartbeatAt,
+		...(status.resumedAt !== undefined ? { resumedAt: status.resumedAt } : {}),
+		resumeCount: status.resumeCount ?? 0,
 		...(status.phase !== undefined ? { phase: status.phase } : {}),
 		...(status.phaseStartedAt !== undefined ? { phaseStartedAt: status.phaseStartedAt } : {}),
 		currentStep: status.currentStep,

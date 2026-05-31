@@ -54,4 +54,15 @@ describe("resume notify group", () => {
 		assert.match(h.sent[1]!.message.content, /Background task completed/);
 		assert.doesNotMatch(h.sent[1]!.message.content, /Background batch completed/);
 	});
+
+	it("rollup dedups resumed child completions by runId keeping latest", () => {
+		const h = createPi();
+		h.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, { id: "child-a", runId: "child-a", parentRunId: "group-latest", notifyPolicy: "rollup", agent: "a", success: true, state: "complete", summary: "old", timestamp: 1 });
+		h.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, { id: "child-a", runId: "child-a", parentRunId: "group-latest", notifyPolicy: "rollup", agent: "a", success: true, state: "complete", summary: "latest", timestamp: 2 });
+		h.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, { id: "child-b", runId: "child-b", parentRunId: "group-latest", notifyPolicy: "rollup", agent: "b", success: true, state: "complete", summary: "other", timestamp: 3 });
+		h.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, { id: "group-latest", runId: "group-latest", notifyPolicy: "rollup", agent: "a,b", success: true, state: "complete", summary: "group", timestamp: 4 });
+		assert.equal(h.sent.length, 1);
+		assert.equal(h.sent[0]!.message.details.children.length, 2);
+		assert.deepEqual(h.sent[0]!.message.details.children.map((child: { runId: string }) => child.runId), ["child-a", "child-b"]);
+	});
 });

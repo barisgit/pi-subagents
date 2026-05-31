@@ -352,6 +352,8 @@ export interface AsyncStatus {
 	endedAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
+	resumedAt?: number;
+	resumeCount?: number;
 	/** Current execution phase, written by status-writer on every patch. */
 	phase?: RunPhase;
 	/** Milliseconds since epoch when the current phase was entered. */
@@ -415,6 +417,8 @@ export interface AsyncJobState {
 	startedAt?: number;
 	updatedAt?: number;
 	runnerHeartbeatAt?: number;
+	resumedAt?: number;
+	resumeCount?: number;
 	/** Control notification settings captured at async dispatch start. */
 	controlConfig?: ResolvedControlConfig;
 	/** Current execution phase, mirrored from status.json per-patch. */

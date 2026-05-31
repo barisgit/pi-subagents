@@ -14,7 +14,7 @@ import {
 	WIDGET_KEY,
 } from "./types.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
-import { displayStatePriority } from "./run-liveness.ts";
+import { compareRunsForDisplay } from "./run-liveness.ts";
 import { formatPhase } from "./run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { getDisplayItems, getSingleResultOutput, readStatus } from "./utils.ts";
@@ -928,9 +928,10 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	else if (job.displayState === "needs_attention") parts.push(theme.fg("warning", "needs attention"));
 	else if (job.displayState === "quiet") parts.push("quiet");
 	if (job.totalTokens?.total) parts.push(formatTokenStat(job.totalTokens.total));
+	if ((job.resumeCount ?? 0) > 0) parts.push(`↻${job.resumeCount}`);
 	if (job.startedAt) {
 		const endTs = job.status === "running" || job.status === "queued" ? Date.now() : (job.updatedAt ?? Date.now());
-		parts.push(formatDuration(Math.max(0, endTs - job.startedAt)));
+		parts.push(formatDuration(Math.max(0, endTs - (job.resumedAt ?? job.startedAt))));
 	}
 	return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
 }
@@ -986,12 +987,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	// spawn time (newest first). Bucket-by-status would pin old failures above
 	// recently completed/running runs, which fights the user's mental model. The
 	// glyph on each row already communicates status.
-	const sorted = orderWidgetJobsWithChildren([...jobs].sort((a, b) => {
-		const displayA = displayStatePriority(a.displayState ?? (a.activityState === "needs_attention" ? "needs_attention" : undefined));
-		const displayB = displayStatePriority(b.displayState ?? (b.activityState === "needs_attention" ? "needs_attention" : undefined));
-		if (displayA !== displayB) return displayA - displayB;
-		return (b.startedAt ?? 0) - (a.startedAt ?? 0);
-	}));
+	const sorted = orderWidgetJobsWithChildren([...jobs].sort(compareRunsForDisplay));
 	const visible = sorted.slice(0, MAX_WIDGET_JOBS);
 	const overflow = sorted.length - visible.length;
 	const depthMap = widgetDepths(visible);

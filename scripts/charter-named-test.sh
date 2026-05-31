@@ -3,23 +3,25 @@
 # fail loudly on a 0-match silent pass.
 #
 # Usage:
-#   bash scripts/charter-named-test.sh <test-file> '<name-pattern>'
+#   bash scripts/charter-named-test.sh <test-file> ['<name-pattern>']
 #
 # - <test-file>      path to a .test.ts file under test/unit or test/integration
-# - <name-pattern>   substring or regex; passed to --test-name-pattern
+# - <name-pattern>   OPTIONAL substring or regex; passed to --test-name-pattern.
+#                    Omit to run the whole file (skill-preferred behavior-level
+#                    verifier). Either form fails loudly if 0 tests ran.
 #
-# Exits non-zero if no test in the file matches the pattern, even if node --test
-# would otherwise report success.
+# Exits non-zero if no test ran (file absent, or pattern matched nothing), even
+# if node --test would otherwise report success.
 
 set -euo pipefail
 
-if [[ $# -lt 2 ]]; then
-  echo "usage: $0 <test-file> <name-pattern>" >&2
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <test-file> [name-pattern]" >&2
   exit 2
 fi
 
 file="$1"
-pattern="$2"
+pattern="${2:-}"
 
 if [[ ! -f "$file" ]]; then
   echo "charter-named-test: test file not found: $file" >&2
@@ -41,7 +43,11 @@ out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
 set +e
-node "${loader[@]}" --test --test-name-pattern="$pattern" "$file" | tee "$out"
+if [[ -n "$pattern" ]]; then
+  node "${loader[@]}" --test --test-name-pattern="$pattern" "$file" | tee "$out"
+else
+  node "${loader[@]}" --test "$file" | tee "$out"
+fi
 status=${PIPESTATUS[0]}
 set -e
 
@@ -56,7 +62,7 @@ if [[ -z "${tests_run:-}" ]]; then
 fi
 
 if [[ "$tests_run" -eq 0 ]]; then
-  echo "charter-named-test: 0 tests matched pattern '$pattern' in $file" >&2
+  echo "charter-named-test: 0 tests ran${pattern:+ matching pattern '$pattern'} in $file" >&2
   exit 1
 fi
 

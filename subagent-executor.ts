@@ -691,12 +691,15 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 	// watchdog measures from the resume moment, not the original run's last
 	// activity (startedAt stays immutable for duration semantics).
 	const resumedAt = Date.now();
+	const resumeCount = (target.status.resumeCount ?? 0) + 1;
 	statusWriter.initialize({
 		mode: target.status.mode,
 		state: "running",
 		startedAt: target.startedAt,
 		lastActivityAt: resumedAt,
 		runnerHeartbeatAt: resumedAt,
+		resumedAt,
+		resumeCount,
 		cwd: target.cwd,
 		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
 		currentStep: step.stepIndex,

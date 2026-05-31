@@ -58,6 +58,8 @@ function appendCompleteRun(root: string, entry: Omit<RunsRegistryEntry, "runReco
 		...(entry.label ? { label: entry.label } : {}),
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 		...(entry.rootRunId ? { rootRunId: entry.rootRunId } : {}),
+		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
+		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
 		cwd: entry.cwd ?? root,
 		startedAt: entry.startedAt,
 	});
@@ -69,6 +71,59 @@ afterEach(() => {
 });
 
 describe("dashboard tree rows", () => {
+	it("session-scoped dashboard keeps nested descendants with stale session tags", () => {
+		const root = tmpRegistry();
+		appendCompleteRun(root, {
+			runId: "parent-visible",
+			agentName: "fixer",
+			label: "visible parent",
+			rootRunId: "parent-visible",
+			parentSessionId: "sess-host",
+			rootSessionId: "sess-host",
+			startedAt: 100,
+		});
+		appendCompleteRun(root, {
+			runId: "child-stale-lineage",
+			agentName: "review",
+			label: "stale child",
+			parentRunId: "parent-visible",
+			rootRunId: "parent-visible",
+			parentSessionId: "sess-child",
+			rootSessionId: "sess-child",
+			startedAt: 200,
+		});
+		appendCompleteRun(root, {
+			runId: "unrelated-other-session",
+			agentName: "qa",
+			label: "other session",
+			rootRunId: "unrelated-other-session",
+			parentSessionId: "sess-other",
+			rootSessionId: "sess-other",
+			startedAt: 300,
+		});
+
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{ refreshMs: 1000, sessionId: "sess-host", sessionCwd: root },
+		);
+
+		try {
+			const rows = component.render(180).map(stripBorders);
+			const parentIndex = rows.findIndex((line) => line.includes("fixer") && line.includes("visible parent"));
+			const childIndex = rows.findIndex((line) => line.includes("review") && line.includes("stale child"));
+			assert.notEqual(parentIndex, -1);
+			assert.notEqual(childIndex, -1);
+			assert.equal(childIndex, parentIndex + 1);
+			assert.match(rows[childIndex]!, /└─/);
+			assert.doesNotMatch(rows.join("\n"), /other session/);
+			assert.match(rows.join("\n"), /Subagent runs · 2 total/);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("parallel dispatch renders N rows nested under their group node", () => {
 		const root = tmpRegistry();
 		const groupId = "group-parallel";

@@ -54,6 +54,7 @@ import {
 } from "./types.ts";
 import { resolveModelCandidate } from "./model-fallback.ts";
 import { formatControlInterruptReason } from "./subagent-control.ts";
+import { resolveRootSessionIdForSession } from "./lineage.ts";
 
 interface ChainRunStepOptions {
 	cwd?: string;
@@ -309,7 +310,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				preset: input.preset,
 				parentAgentName: input.forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 				parentSessionId: input.ctx.sessionManager.getSessionId(),
-				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? input.ctx.sessionManager.getSessionId(),
+				rootSessionId: resolveRootSessionIdForSession(input.ctx.sessionManager.getSessionId()),
 				rootRunId: process.env.PI_SUBAGENT_ROOT_RUN_ID ?? input.runId,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
@@ -823,7 +824,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				preset: params.preset,
 				parentAgentName: forkReuse?.agentName ?? process.env.PI_SUBAGENT_CURRENT_AGENT,
 				parentSessionId: ctx.sessionManager.getSessionId(),
-				rootSessionId: process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? ctx.sessionManager.getSessionId(),
+				rootSessionId: resolveRootSessionIdForSession(ctx.sessionManager.getSessionId()),
 				rootRunId: process.env.PI_SUBAGENT_ROOT_RUN_ID ?? runId,
 				onUpdate: onUpdate
 					? (p) => {

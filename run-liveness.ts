@@ -48,3 +48,30 @@ export function displayStatePriority(state: RunDisplayState | undefined): number
 		default: return 5;
 	}
 }
+
+export interface RunDisplaySortProjection {
+	displayState?: RunDisplayState;
+	activityState?: ActivityState;
+	startedAt?: number;
+	endedAt?: number;
+	updatedAt?: number;
+	state?: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | string;
+}
+
+function activeDisplayBucket(run: RunDisplaySortProjection): boolean {
+	return run.state === "queued" || run.state === "running" || run.displayState !== undefined;
+}
+
+function terminalDisplayKey(run: RunDisplaySortProjection): number {
+	return run.endedAt ?? run.updatedAt ?? run.startedAt ?? 0;
+}
+
+export function compareRunsForDisplay(a: RunDisplaySortProjection, b: RunDisplaySortProjection): number {
+	const displayA = displayStatePriority(a.displayState ?? (a.activityState === "needs_attention" ? "needs_attention" : undefined));
+	const displayB = displayStatePriority(b.displayState ?? (b.activityState === "needs_attention" ? "needs_attention" : undefined));
+	if (displayA !== displayB) return displayA - displayB;
+	const activeA = activeDisplayBucket(a);
+	const activeB = activeDisplayBucket(b);
+	if (activeA || activeB) return (a.startedAt ?? 0) - (b.startedAt ?? 0);
+	return terminalDisplayKey(b) - terminalDisplayKey(a);
+}

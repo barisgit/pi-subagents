@@ -50,6 +50,8 @@ export interface StatusMeta {
 	sessionDir?: string;
 	lastActivityAt?: number;
 	runnerHeartbeatAt?: number;
+	resumedAt?: number;
+	resumeCount?: number;
 }
 
 type StatusPayload = {
@@ -81,6 +83,10 @@ type StatusPayload = {
 	phaseStartedAt?: number;
 	/** Milliseconds since epoch of last runner heartbeat (bumped on every patch). */
 	runnerHeartbeatAt?: number;
+	/** Milliseconds since epoch of the latest accepted resume. */
+	resumedAt?: number;
+	/** Number of accepted resumes for this run. */
+	resumeCount?: number;
 };
 
 export class StatusWriter {
@@ -107,6 +113,8 @@ export class StatusWriter {
 			lastUpdate: meta.lastActivityAt ?? startedAt,
 			...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
 			...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),
+			...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
+			...(meta.resumeCount !== undefined ? { resumeCount: meta.resumeCount } : {}),
 			steps: meta.steps ? meta.steps.map((step) => ({ ...step, live: step.live ? { ...step.live } : undefined })) : [],
 			...(meta.label ? { label: meta.label } : {}),
 			...(meta.cwd ? { cwd: meta.cwd } : {}),

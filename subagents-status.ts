@@ -7,7 +7,7 @@ import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryFor
 import { previewArgs, readRunTranscript } from "./run-transcript.ts";
 import { formatDuration } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
-import { deriveRunDisplayState, displayStatePriority } from "./run-liveness.ts";
+import { compareRunsForDisplay, deriveRunDisplayState } from "./run-liveness.ts";
 import { formatPhase, type RunPhase } from "./run-phase.ts";
 import { flatRule, formatScrollInfo, padRight, titledBottomSegment, titledTopSegment } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
@@ -65,6 +65,8 @@ export interface ForegroundRunSummary {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
+	resumedAt?: number;
+	resumeCount?: number;
 	phase?: RunPhase;
 	phaseStartedAt?: number;
 	mode: "single" | "parallel" | "chain";
@@ -178,7 +180,9 @@ function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd
 	for (const run of [...seed.active, ...seed.recent]) byId.set(run.id, run);
 	const entries = listRunsByRootRunIds(rootRunIds);
 	for (const entry of entries) {
-		if (!entryMatchesOverlayScope(entry, scope)) continue;
+		// The scoped seed has already proven this root run belongs to the current
+		// session. Include the whole run tree by rootRunId so descendants with
+		// stale/missing session tags are still rendered under their visible parent.
 		byId.set(entry.runId, summaryFromRegistryEntry(entry, entries));
 	}
 
@@ -189,12 +193,11 @@ function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd
 	};
 }
 
-// Decides whether a run belongs to the current session. Sync runs always belong
-// to the current session (they share the in-process cwd). Async runs are
-// included only when their recorded session-lineage tag matches the current
-// sessionId; unknown lineage is conservatively hidden in scoped mode. When
-// only sessionCwd is known (legacy), fall back to cwd matching with the same
-// conservative rule.
+// Decides whether a run row directly belongs to the current session. Sync runs
+// always belong to the current session (they share the in-process cwd). Async
+// rows are direct matches only when their own session/cwd metadata matches; the
+// overlay separately keeps descendants of matching rows so nested runs with
+// stale lineage still render under their visible parent.
 export function runMatchesSession(
 	run: LiveRun,
 	scope: { sessionId?: string; sessionCwd?: string } | string | undefined,
@@ -213,6 +216,29 @@ export function runMatchesSession(
 	const runCwd = run.run.cwd;
 	if (!runCwd) return false;
 	return runCwd === sessionCwd;
+}
+
+function filterRunsToSessionTree(runs: LiveRun[], scope: { sessionId?: string; sessionCwd?: string }): LiveRun[] {
+	if (!scope.sessionId && !scope.sessionCwd) return runs;
+	const byParent = new Map<string, LiveRun[]>();
+	for (const run of runs) {
+		const parentRunId = parentRunIdOf(run);
+		if (!parentRunId) continue;
+		const siblings = byParent.get(parentRunId) ?? [];
+		siblings.push(run);
+		byParent.set(parentRunId, siblings);
+	}
+
+	const included = new Set<string>();
+	const includeWithDescendants = (run: LiveRun): void => {
+		if (included.has(run.run.id)) return;
+		included.add(run.run.id);
+		for (const child of byParent.get(run.run.id) ?? []) includeWithDescendants(child);
+	};
+	for (const run of runs) {
+		if (runMatchesSession(run, scope)) includeWithDescendants(run);
+	}
+	return runs.filter((run) => included.has(run.run.id));
 }
 
 export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundControls"> & { baseCwd?: string }): ForegroundRunSummary[] {
@@ -301,15 +327,21 @@ function runShapeBadge(run: LiveRun): string {
 }
 
 function runElapsed(run: LiveRun, now: number): string {
+	const legStartedAt = run.run.resumedAt ?? run.run.startedAt;
 	// Terminal runs (lost/complete/failed) must not keep ticking. lost runs have no
 	// endedAt because the child crashed without writing one, so fall back to lastUpdate.
 	if (run.source === "async") {
-		if (run.run.endedAt) return formatDuration(Math.max(0, run.run.endedAt - run.run.startedAt));
+		if (run.run.endedAt) return formatDuration(Math.max(0, run.run.endedAt - legStartedAt));
 		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed") {
 			const frozen = run.run.lastUpdate ?? run.run.startedAt;
-			return formatDuration(Math.max(0, frozen - run.run.startedAt));
+			return formatDuration(Math.max(0, frozen - legStartedAt));
 		}
 	}
+	return formatDuration(Math.max(0, now - legStartedAt));
+}
+
+function runIdentityAge(run: LiveRun, now: number): string | undefined {
+	if ((run.run.resumeCount ?? 0) <= 0) return undefined;
 	return formatDuration(Math.max(0, now - run.run.startedAt));
 }
 
@@ -325,12 +357,7 @@ function stateBucket(state: AsyncRunSummary["state"]): number {
 }
 
 function baseSortLiveRuns(runs: LiveRun[]): LiveRun[] {
-	return [...runs].sort((a, b) => {
-		const displayA = displayStatePriority(a.run.displayState ?? (a.run.activityState === "needs_attention" ? "needs_attention" : undefined));
-		const displayB = displayStatePriority(b.run.displayState ?? (b.run.activityState === "needs_attention" ? "needs_attention" : undefined));
-		if (displayA !== displayB) return displayA - displayB;
-		return b.run.startedAt - a.run.startedAt;
-	});
+	return [...runs].sort((a, b) => compareRunsForDisplay({ ...a.run, updatedAt: a.run.lastUpdate }, { ...b.run, updatedAt: b.run.lastUpdate }));
 }
 
 function parentRunIdOf(run: LiveRun): string | undefined {
@@ -476,7 +503,7 @@ function runEndedStamp(run: LiveRun): string {
 	return `${mo}-${dd} ${hh}:${mm}`;
 }
 
-function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number, depth = 0, showCwd = false): string {
+export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number, depth = 0, showCwd = false): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
 	// charter nested-subagent-display: indent between cursor and glyph keeps cursor aligned.
 	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
@@ -495,9 +522,11 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const phase = isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
 	const status = run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
 	const elapsed = runElapsed(run, now);
+	const identityAge = runIdentityAge(run, now);
 	const dateStamp = runEndedStamp(run);
 	const badge = runShapeBadge(run);
 	const badgePart = badge ? ` · ${theme.fg("dim", badge)}` : "";
+	const resumePart = (run.run.resumeCount ?? 0) > 0 ? ` · ${theme.fg("dim", `resumed ${run.run.resumeCount}×`)}` : "";
 	// Don't pre-truncate the label here — the final `truncateToWidth(text, width)`
 	// below clips the whole row once at the right edge. Pre-truncating produced
 	// `tally-v4-showcase ... ...` style double-ellipsis noise.
@@ -509,8 +538,15 @@ function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: numbe
 	const cwdPart = cwdBadge ? ` · ${theme.fg("dim", cwdBadge)}` : "";
 	// Elapsed for active runs (`5.2s`), date stamp for terminated runs (`HH:MM`
 	// or `MM-DD HH:MM`). Both never apply to the same row.
-	const tail = dateStamp ? ` · ${theme.fg("dim", dateStamp)}` : ` · ${elapsed}`;
-	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${labelPart}${cwdPart}${tail}`;
+	const identityPart = identityAge ? ` · ${theme.fg("dim", `age ${identityAge}`)}` : "";
+	// Never-resumed rows stay byte-identical to the pre-resume layout: terminal =
+	// date stamp only, active = leg elapsed. Resumed rows additionally surface the
+	// current-leg elapsed (and identity age) alongside the terminal date stamp.
+	const resumed = (run.run.resumeCount ?? 0) > 0;
+	const tail = dateStamp
+		? (resumed ? ` · ${elapsed}${identityPart} · ${theme.fg("dim", dateStamp)}` : ` · ${theme.fg("dim", dateStamp)}`)
+		: ` · ${elapsed}${identityPart}`;
+	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${resumePart}${labelPart}${cwdPart}${tail}`;
 	// Hard-clip with no ellipsis — the row already ends at the pane border, so an
 	// ellipsis adds zero information and steals 1–3 columns of label space.
 	return truncateToWidth(text, width, "");
@@ -712,7 +748,7 @@ export class SubagentsStatusComponent implements Component {
 			const combined = [...overlay.active, ...overlay.recent].filter((run) => !syncIds.has(run.id));
 			this.runs = sortLiveRuns(sync, combined);
 			if (!this.showAllSessions && (this.sessionId || this.sessionCwd)) {
-				this.runs = this.runs.filter((r) => runMatchesSession(r, { sessionId: this.sessionId, sessionCwd: this.sessionCwd }));
+				this.runs = filterRunsToSessionTree(this.runs, { sessionId: this.sessionId, sessionCwd: this.sessionCwd });
 			}
 			this.errorMessage = undefined;
 		} catch (error) {
@@ -967,7 +1003,8 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private topBorder(leftWidth: number, rightWidth: number): string {
-		const scopeMarker = this.showAllSessions || !this.sessionCwd ? " · [all sessions]" : "";
+		const scoped = Boolean(this.sessionId || this.sessionCwd);
+		const scopeMarker = this.showAllSessions || !scoped ? " · [all sessions]" : "";
 		const leftLabel = `Subagent runs · ${this.runs.length} total${scopeMarker}`;
 		const leftFocused = this.focus === "left";
 		const leftSegment = titledTopSegment(this.theme, {
@@ -1030,7 +1067,7 @@ export class SubagentsStatusComponent implements Component {
 		this.lastRightWidth = rightWidth;
 
 		const now = Date.now();
-		const showCwd = this.showAllSessions || !this.sessionCwd;
+		const showCwd = this.showAllSessions || !(this.sessionId || this.sessionCwd);
 		const leftListLines: string[] = [];
 		if (this.runs.length === 0) {
 			leftListLines.push(this.theme.fg("dim", "No subagent runs"));

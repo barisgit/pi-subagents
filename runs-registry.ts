@@ -26,9 +26,9 @@ export interface RunsRegistryEntry {
 	// session for top-level runs).
 	parentSessionId?: string;
 	// Top-of-tree user session. Equal to parentSessionId for top-level dispatches
-	// and to the user session for any nested subagent run. Resolved from
-	// PI_SUBAGENT_ROOT_SESSION_ID env when the dispatcher is itself a subagent.
-	// Used by the /subagents-status overlay to scope strictly to the current
+	// and to the user session for any nested subagent run. Resolved from session
+	// lineage first and PI_SUBAGENT_ROOT_SESSION_ID env for subprocess/legacy
+	// paths. Used by the /subagents-status overlay to scope to the current
 	// session's tree.
 	rootSessionId?: string;
 	parentRunId?: string;

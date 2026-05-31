@@ -369,7 +369,7 @@ describe("SubagentsStatusComponent", () => {
 			refreshMs: 1000,
 		});
 		try {
-			const rows = component.render(160).map(stripBorders).filter((line) => /running/.test(line));
+			const rows = component.render(160).slice(1, -1).map(stripBorders).map((line) => line.split("│")[0] ?? line).filter((line) => /running/.test(line));
 			const parentIndex = rows.findIndex((line) => line.includes("parent"));
 			const childIndex = rows.findIndex((line) => line.includes("child"));
 			assert.equal(childIndex, parentIndex + 1);

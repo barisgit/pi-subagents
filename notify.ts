@@ -26,6 +26,20 @@ interface ChainStepResult {
 	shareUrl?: string;
 }
 
+function dedupeChildrenByRunIdKeepLatest(children: ChainStepResult[]): ChainStepResult[] {
+	const byRunId = new Map<string, ChainStepResult>();
+	const passthrough: ChainStepResult[] = [];
+	for (const child of children) {
+		const runId = child.runId ?? child.id;
+		if (!runId) {
+			passthrough.push(child);
+			continue;
+		}
+		byRunId.set(runId, child);
+	}
+	return [...passthrough, ...byRunId.values()];
+}
+
 export interface SubagentNotifyDetails {
 	kind?: "single";
 	agent: string;
@@ -282,7 +296,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 
 		if (accumulated && accumulated.length > 0) {
 			if (policy === "rollup") {
-				const rollupChildren = accumulated.map((child, index) => ({
+				const rollupChildren = dedupeChildrenByRunIdKeepLatest(accumulated.map((child, index) => ({
 					id: child.id ?? child.runId ?? `${groupRunId}:${index}`,
 					runId: child.runId,
 					dispatchRunId: child.parentRunId,
@@ -296,7 +310,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 					sessionFile: child.sessionFile,
 					shareUrl: child.shareUrl,
 					label: child.label,
-				}));
+				})));
 				const rollup: SubagentResult = {
 					...result,
 					total: result.total ?? rollupChildren.length,
@@ -326,10 +340,11 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const content = children && policy === "rollup"
-			? batchNotificationContent(result, children)
+		const rollupChildren = children && policy === "rollup" ? dedupeChildrenByRunIdKeepLatest(children) : undefined;
+		const content = rollupChildren
+			? batchNotificationContent(result, rollupChildren)
 			: singleNotificationContent(result);
-		sendNotification(idLabel, content, children && policy === "rollup" ? batchNotificationDetails(result, children) : undefined);
+		sendNotification(idLabel, content, rollupChildren ? batchNotificationDetails(result, rollupChildren) : undefined);
 	};
 
 	// Subscribe on this session's pi.events bus. The subscription is re-attached

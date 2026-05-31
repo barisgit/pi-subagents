@@ -154,6 +154,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.startedAt = status.startedAt ?? job.startedAt;
 						job.updatedAt = status.lastUpdate ?? Date.now();
 						job.runnerHeartbeatAt = status.runnerHeartbeatAt ?? job.runnerHeartbeatAt;
+						job.resumedAt = status.resumedAt;
+						job.resumeCount = status.resumeCount ?? 0;
 						if (status.phase !== undefined) job.phase = status.phase;
 						if (status.phaseStartedAt !== undefined) job.phaseStartedAt = status.phaseStartedAt;
 						const activityState = updateActivityState(job);
@@ -257,6 +259,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 		const agents = info.chain && info.chain.length > 0 ? info.chain : info.agent ? [info.agent] : undefined;
 		const mode = info.parentRunId ? "parallel" : info.chain ? "chain" : "single";
+		const status = readStatus(asyncDir);
 		idleTracker?.onAsyncStarted(info.id);
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
@@ -267,8 +270,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			parentRunId: info.parentRunId,
 			agents,
 			stepsTotal: agents?.length,
-			startedAt: now,
-			updatedAt: now,
+			startedAt: status?.startedAt ?? now,
+			updatedAt: status?.lastUpdate ?? now,
+			resumedAt: status?.resumedAt,
+			resumeCount: status?.resumeCount ?? 0,
 			controlConfig: info.controlConfig,
 		});
 		ensurePoller();

@@ -134,3 +134,17 @@ export function setHostLineage(sessionId: string): SubagentLineage {
 export function getLineageForSession(sessionId: string): SubagentLineage | null {
 	return store().get(sessionId) ?? null;
 }
+
+/**
+ * Resolve the root host session for a dispatch from the current session.
+ * In-process children do not necessarily inherit PI_SUBAGENT_ROOT_SESSION_ID,
+ * so session lineage is the canonical source; env remains the fallback for
+ * subprocess/legacy paths, then the current session id for top-level hosts.
+ */
+export function resolveRootSessionIdForSession(sessionId: string | undefined): string | undefined {
+	if (sessionId) {
+		const lineage = getLineageForSession(sessionId);
+		if (lineage?.rootSessionId) return lineage.rootSessionId;
+	}
+	return process.env.PI_SUBAGENT_ROOT_SESSION_ID ?? sessionId;
+}

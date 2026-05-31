@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { resolveDispatchParentRunId, resolveDispatchRootRunId } from "../../subagent-executor.ts";
+import { resolveDispatchParentRunId, resolveDispatchRootRunId, resolveDispatchRootSessionId } from "../../subagent-executor.ts";
 import type { SubagentLineage } from "../../lineage.ts";
 
 const globalStore = globalThis as Record<string, unknown>;
@@ -30,11 +30,14 @@ function ctxWith(sid: string | undefined) {
 describe("resolveDispatchParentRunId", () => {
 	const savedEnv = process.env.PI_SUBAGENT_PARENT_RUN_ID;
 	const savedRootEnv = process.env.PI_SUBAGENT_ROOT_RUN_ID;
+	const savedRootSessionEnv = process.env.PI_SUBAGENT_ROOT_SESSION_ID;
 	afterEach(() => {
 		if (savedEnv === undefined) delete process.env.PI_SUBAGENT_PARENT_RUN_ID;
 		else process.env.PI_SUBAGENT_PARENT_RUN_ID = savedEnv;
 		if (savedRootEnv === undefined) delete process.env.PI_SUBAGENT_ROOT_RUN_ID;
 		else process.env.PI_SUBAGENT_ROOT_RUN_ID = savedRootEnv;
+		if (savedRootSessionEnv === undefined) delete process.env.PI_SUBAGENT_ROOT_SESSION_ID;
+		else process.env.PI_SUBAGENT_ROOT_SESSION_ID = savedRootSessionEnv;
 	});
 
 	it("returns the child's own runId for nested dispatches (mid-prompt-loop)", () => {
@@ -131,5 +134,28 @@ describe("resolveDispatchParentRunId", () => {
 		assert.equal(resolveDispatchRootRunId(ctxWith(undefined), "new-runid"), "root-runid-from-env");
 		delete process.env.PI_SUBAGENT_ROOT_RUN_ID;
 		assert.equal(resolveDispatchRootRunId(ctxWith(undefined), "new-runid"), "new-runid");
+	});
+
+	it("resolves root session id from lineage before env and current session", () => {
+		const sid = "session-child-root-session";
+		setLineageForSession(sid, {
+			role: "child",
+			currentAgent: "tester",
+			parentAgent: "main",
+			parentSessionId: "session-host",
+			rootSessionId: "session-host-from-lineage",
+			depth: 1,
+			runId: "child-runid",
+			rootRunId: "root-runid",
+		});
+		process.env.PI_SUBAGENT_ROOT_SESSION_ID = "session-host-from-env";
+		try {
+			assert.equal(resolveDispatchRootSessionId(ctxWith(sid)), "session-host-from-lineage");
+		} finally {
+			clearLineage(sid);
+		}
+		assert.equal(resolveDispatchRootSessionId(ctxWith(undefined), "session-fallback"), "session-host-from-env");
+		delete process.env.PI_SUBAGENT_ROOT_SESSION_ID;
+		assert.equal(resolveDispatchRootSessionId(ctxWith("session-current")), "session-current");
 	});
 });
