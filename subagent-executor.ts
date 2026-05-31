@@ -459,7 +459,7 @@ function interruptAllAsyncRuns(state: SubagentState, childRegistry: ChildAgentRe
 	const asyncHandles = handles.filter((handle) => state.asyncJobs.has(handle.runId));
 	if (asyncHandles.length === 0) {
 		return {
-			content: [{ type: "text", text: "No running async runs to interrupt." }],
+			content: [{ type: "text", text: "No running runs to interrupt." }],
 			details: { mode: "management", results: [] },
 		};
 	}
@@ -481,7 +481,7 @@ function interruptAllAsyncRuns(state: SubagentState, childRegistry: ChildAgentRe
 		}
 	}
 	return {
-		content: [{ type: "text", text: `Interrupt requested for ${ids.length} async run(s): ${ids.join(", ")}.` }],
+		content: [{ type: "text", text: `Interrupt requested for ${ids.length} run(s): ${ids.join(", ")}.` }],
 		details: { mode: "management", results: [] },
 	};
 }
@@ -498,7 +498,7 @@ function interruptAsyncRun(state: SubagentState, childRegistry: ChildAgentRegist
 				tracked.updatedAt = Date.now();
 			}
 			return {
-				content: [{ type: "text", text: `Interrupt requested for async run ${target.asyncId}.` }],
+				content: [{ type: "text", text: `Interrupt requested for run ${target.asyncId}.` }],
 				details: { mode: "management", results: [] },
 			};
 		}
@@ -521,19 +521,19 @@ function interruptAsyncRun(state: SubagentState, childRegistry: ChildAgentRegist
 		}
 		if (abortedChildRunIds.length === 0) {
 			return {
-				content: [{ type: "text", text: `No running in-process async run was found for '${runId ?? "current"}'.` }],
+				content: [{ type: "text", text: `No running in-process run was found for '${runId ?? "current"}'.` }],
 				isError: true,
 				details: { mode: "management", results: [] },
 			};
 		}
 		return {
-			content: [{ type: "text", text: `Interrupt requested for async run ${target.asyncId} (${abortedChildRunIds.length} descendant run(s): ${abortedChildRunIds.join(", ")}).` }],
+			content: [{ type: "text", text: `Interrupt requested for run ${target.asyncId} (${abortedChildRunIds.length} descendant run(s): ${abortedChildRunIds.join(", ")}).` }],
 			details: { mode: "management", results: [] },
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
-			content: [{ type: "text", text: `Failed to interrupt async run ${target.asyncId}: ${message}` }],
+			content: [{ type: "text", text: `Failed to interrupt run ${target.asyncId}: ${message}` }],
 			isError: true,
 			details: { mode: "management", results: [] },
 		};
@@ -717,6 +717,151 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 	});
 	resumeInFlight.add(resumeKey);
 	evictCompletionDedupeForRunId(target.runId);
+	if (asyncMode === false) {
+		const interruptController = new AbortController();
+		const foregroundControl: ForegroundControlRef = {
+			runId: target.runId,
+			asyncDir: target.runRecordDir,
+			...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
+			mode: "single",
+			startedAt: resumedAt,
+			updatedAt: resumedAt,
+			currentAgent: target.agentName,
+			currentIndex: step.stepIndex,
+			currentActivityState: undefined,
+			interrupt: (reason?: string) => {
+				if (interruptController.signal.aborted) return false;
+				interruptController.abort(reason ?? "interrupt requested");
+				foregroundControl.currentActivityState = undefined;
+				foregroundControl.updatedAt = Date.now();
+				return true;
+			},
+		};
+		deps.state.foregroundControls.set(target.runId, foregroundControl);
+		deps.state.lastForegroundControlId = target.runId;
+		const resumeData: ExecutionContextData = {
+			...data,
+			params: { ...data.params, sessionDir: undefined },
+			effectiveCwd: target.cwd,
+			runId: target.runId,
+			rootRunId: target.rootRunId,
+			forkReuse: undefined,
+		};
+		const onControlEvent = createForegroundControlNotifier(resumeData, deps);
+		const forwardUpdate = (update: AgentToolResult<Details>) => {
+			const firstProgress = update.details?.progress?.[0];
+			foregroundControl.currentAgent = target.agentName;
+			foregroundControl.currentAgentColor = firstProgress?.color;
+			foregroundControl.currentIndex = firstProgress?.index ?? step.stepIndex;
+			foregroundControl.currentActivityState = firstProgress?.activityState;
+			foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
+			foregroundControl.currentTool = firstProgress?.currentTool;
+			foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
+			foregroundControl.phase = firstProgress?.phase;
+			foregroundControl.phaseStartedAt = firstProgress?.phaseStartedAt;
+			foregroundControl.lastToolEndAt = firstProgress?.lastToolEndAt;
+			foregroundControl.recentTools = firstProgress?.recentTools;
+			foregroundControl.recentOutput = firstProgress?.recentOutput;
+			foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
+			foregroundControl.updatedAt = Date.now();
+			const statusStepPatch = target.status.steps?.map((_, index) => index === step.stepIndex
+				? {
+					agent: firstProgress?.agent ?? target.agentName,
+					status: firstProgress?.status ?? "running",
+					startedAt: target.status.steps?.[step.stepIndex]?.startedAt ?? target.startedAt,
+					lastActivityAt: firstProgress?.lastActivityAt,
+					currentTool: firstProgress?.currentTool,
+					currentToolStartedAt: firstProgress?.currentToolStartedAt,
+				}
+				: {}) ?? [{
+					agent: firstProgress?.agent ?? target.agentName,
+					status: firstProgress?.status ?? "running",
+					startedAt: target.startedAt,
+					lastActivityAt: firstProgress?.lastActivityAt,
+					currentTool: firstProgress?.currentTool,
+					currentToolStartedAt: firstProgress?.currentToolStartedAt,
+				}];
+			writeSyncRunStatusUpdate(target.runId, {
+				currentStep: firstProgress?.index ?? step.stepIndex,
+				lastActivityAt: firstProgress?.lastActivityAt,
+				currentTool: firstProgress?.currentTool,
+				currentToolStartedAt: firstProgress?.currentToolStartedAt,
+				phase: firstProgress?.phase,
+				phaseStartedAt: firstProgress?.phaseStartedAt,
+				steps: statusStepPatch as never,
+			}, {}, target.runRecordDir);
+			data.onUpdate?.(update);
+		};
+		const eventPayload = {
+			runId: target.runId,
+			agent: target.agentName,
+			task: message,
+			cwd: target.cwd,
+			metadata: data.params.metadata,
+		};
+		let result: SingleResult | undefined;
+		let failureMessage: string | undefined;
+		try {
+			emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
+			result = await runInProcessChildStep({
+				data: resumeData,
+				deps,
+				agentConfig,
+				task: message,
+				cleanTask: message,
+				stepIndex: step.stepIndex,
+				cwd: target.cwd,
+				...(step.label ? { label: step.label } : {}),
+				interruptSignal: interruptController.signal,
+				maxSubagentDepth: step.maxSubagentDepth,
+				onUpdate: forwardUpdate,
+				onControlEvent: (event) => {
+					if (!interruptForegroundOnNeedsAttention(event, interruptController, foregroundControl)) {
+						onControlEvent(event);
+					}
+				},
+				layer0: { runId: target.runId, runRecordDir: target.runRecordDir, sessionFile: target.sessionFile, rootRunId: target.rootRunId },
+			});
+			emitSyncLifecycleEvent(deps.pi, result.exitCode === 0 ? SUBAGENT_COMPLETED_EVENT : SUBAGENT_FAILED_EVENT, {
+				...eventPayload,
+				exitCode: result.exitCode,
+				error: result.error,
+			});
+			return {
+				content: [{ type: "text", text: `Resume completed for run ${runId}.` }],
+				details: { mode: "management", results: [] },
+			};
+		} catch (error) {
+			failureMessage = error instanceof Error ? error.message : String(error);
+			emitSyncLifecycleEvent(deps.pi, SUBAGENT_FAILED_EVENT, { ...eventPayload, exitCode: 1, error: failureMessage });
+			return validationError(`Failed to resume run ${runId}: ${failureMessage}`);
+		} finally {
+			writeSyncRunStatusEnd(target.runId, {
+				state: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
+				// Only the resumed step is finalized; siblings echo their existing
+				// fields so writeSyncRunStatusEnd's force-overrides become no-ops
+				// (a patchless `{}` would flip siblings to the run-level end state).
+				steps: target.status.steps?.map((existingStep, index) => index === step.stepIndex
+					? {
+						status: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
+						tokens: result ? tokenUsageFromResult(result) : undefined,
+						durationMs: result?.progressSummary?.durationMs,
+						error: result?.error ?? failureMessage,
+					}
+					: existingStep) ?? [{
+					status: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
+					tokens: result ? tokenUsageFromResult(result) : undefined,
+					durationMs: result?.progressSummary?.durationMs,
+					error: result?.error ?? failureMessage,
+				}],
+				sessionFile: result?.sessionFile ?? target.sessionFile,
+			}, target.runRecordDir);
+			statusWriter.dispose();
+			deps.state.foregroundControls.delete(target.runId);
+			if (deps.state.lastForegroundControlId === target.runId) deps.state.lastForegroundControlId = null;
+			resumeInFlight.delete(resumeKey);
+		}
+	}
 	const detachedAbort = new AbortController();
 	const asyncCtx = {
 		extensionCtx: data.ctx,
@@ -764,13 +909,6 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		asyncDir: target.runRecordDir,
 		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
 	});
-	if (asyncMode === false) {
-		await completed;
-		return {
-			content: [{ type: "text", text: `Resume completed for run ${runId}.` }],
-			details: { mode: "management", results: [] },
-		};
-	}
 	void completed.catch((error) => logger.warn("disk resume failed after dispatch", { runId, error: error instanceof Error ? error.message : String(error) }));
 	return asyncStartedResult({ mode: "single", runId: target.runId, asyncDir: target.runRecordDir, text: `Async resume: ${target.agentName} [${target.runId}]` });
 }

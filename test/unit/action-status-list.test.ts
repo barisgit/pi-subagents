@@ -102,7 +102,7 @@ describe("action status list", () => {
 		appendStatusRun(root, { runId: "live-run", agentName: "qa", state: "running", startedAt: 3000 });
 
 		const defaultText = statusText({ sessionCwd: root });
-		assert.match(defaultText, /^Async runs: 2/m);
+		assert.match(defaultText, /^Subagent runs: 2/m);
 		assert.doesNotMatch(defaultText, /^Active async runs:/m);
 		assert.match(defaultText, /done-run/);
 		assert.match(defaultText, /live-run/);

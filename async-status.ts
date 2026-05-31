@@ -434,7 +434,7 @@ function formatChildRunLine(run: AsyncRunSummary): string {
 	return parts.filter((part): part is string => Boolean(part)).join(" | ");
 }
 
-export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Async runs"): string {
+export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Subagent runs"): string {
 	if (runs.length === 0) return `No ${heading.toLowerCase()}.`;
 
 	const lines = [`${heading}: ${runs.length}`, ASYNC_NO_POLL_GUIDANCE, ""];

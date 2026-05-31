@@ -13,7 +13,7 @@ describe("inline async child tool line", () => {
 		it(`renders the same plain line while ${state}`, () => {
 			writeRun(parent);
 			writeRun(child, { parentRunId: parent, state, agent: "explorer", label: "find pattern" });
-			assert.equal(renderInlineAsyncToolLine(parent, { async: true, agent: "explorer", label: "find pattern" }), "└─ subagent (async): explorer · find pattern → a1b2c3d4");
+			assert.equal(renderInlineAsyncToolLine(parent, { async: true, agent: "explorer", label: "find pattern" }), "└─ subagent (background): explorer · find pattern → a1b2c3d4");
 		});
 	}
 });

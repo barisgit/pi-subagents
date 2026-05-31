@@ -538,7 +538,7 @@ export function renderInlineAsyncToolLine(parentRunId: string, args: Record<stri
 	const child = findInlineChildRun(parentRunId, args, used);
 	if (!child) return undefined;
 	used.add(child.id);
-	return `${inlinePrefix(1)} subagent (async): ${inlineRunAgent(child, args)} · ${inlineRunLabel(child, args)} → ${child.id.slice(0, 8)}`;
+	return `${inlinePrefix(1)} subagent (background): ${inlineRunAgent(child, args)} · ${inlineRunLabel(child, args)} → ${child.id.slice(0, 8)}`;
 }
 
 export function countLiveInlineAsyncChildren(parentRunId: string, tools: Array<{ tool: string; rawArgs?: Record<string, unknown> }>): number {

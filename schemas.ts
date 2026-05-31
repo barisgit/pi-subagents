@@ -35,7 +35,7 @@ export const StepSchema = Type.Union([
 export const SubagentParams = Type.Object({
 	run: Type.Optional(Type.Array(StepSchema, { minItems: 1, description: "Work steps to dispatch." })),
 	chain: Type.Optional(Type.Boolean({ description: "Run steps sequentially; default false means parallel." })),
-	async: Type.Optional(Type.Boolean({ description: "Run in background." })),
+	async: Type.Optional(Type.Boolean({ description: "Run detached (returns immediately)." })),
 	batch: Type.Optional(Type.Boolean({ description: "Collapse completion notifications into one rollup." })),
 	concurrency: Type.Optional(Type.Number({ description: "Max parallel tasks." })),
 	worktree: Type.Optional(Type.Boolean({ description: "Top-level worktree mode for parallel runs." })),

@@ -96,7 +96,7 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 
 	if (!asyncDir) {
 		return {
-			content: [{ type: "text", text: "Async run not found. Provide id or dir." }],
+			content: [{ type: "text", text: "Run not found. Provide id or dir." }],
 			isError: true,
 			details: { mode: "single", results: [] },
 		};

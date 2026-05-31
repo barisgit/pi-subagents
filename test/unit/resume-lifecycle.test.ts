@@ -9,7 +9,6 @@ import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts"
 import { setCurrentPi } from "../../current-pi.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
 import { createAsyncJobTracker } from "../../async-job-tracker.ts";
-import { SUBAGENT_ASYNC_STARTED_EVENT } from "../../types.ts";
 import type { SubagentState } from "../../types.ts";
 
 let tempDir: string | undefined;
@@ -92,6 +91,5 @@ describe("resume lifecycle", () => {
 		await h.execute({ action: "resume", id: run.runId, message: "again", async: false });
 		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
 		assert.equal(status.startedAt, 9876);
-		assert.ok(h.events.some((event) => event.channel === SUBAGENT_ASYNC_STARTED_EVENT && event.data.runId === run.runId));
 	});
 });

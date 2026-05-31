@@ -543,7 +543,7 @@ export function registerSlashCommands(
 	};
 
 	pi.registerCommand("subagents-status", {
-		description: "Show live sync and async subagent runs",
+		description: "Show live subagent runs",
 		handler: async (_args, ctx) => {
 			await openSubagentsStatus(ctx);
 		},
