@@ -48,7 +48,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 	assert.equal(predicate(), true, "timed out waiting for condition");
 }
 
-function setup(opts: { pending?: boolean } = {}) {
+function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 	tempDir = createTempDir("pi-subagent-sync-resume-foreground-");
 	setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	const state = makeState(tempDir);
@@ -71,7 +71,7 @@ function setup(opts: { pending?: boolean } = {}) {
 	});
 	const childRegistry = new ChildAgentRegistry();
 	const executor = createSubagentExecutor({
-		pi, state, config: { parallel: { concurrency: 1 } }, asyncByDefault: false, tempArtifactsDir: tempDir, childRegistry, expandTilde: (v: string) => v,
+		pi, state, config: { parallel: { concurrency: 1 } }, asyncByDefault: opts.asyncByDefault ?? false, tempArtifactsDir: tempDir, childRegistry, expandTilde: (v: string) => v,
 		discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }),
 	} as never);
 	const execute = (params: Record<string, unknown>) => executor.execute("id", params as never, new AbortController().signal, undefined, {
@@ -137,6 +137,31 @@ describe("sync resume foreground", () => {
 		assert.equal(result.isError, undefined, result.content[0]?.text);
 		assert.match(result.content[0]?.text ?? "", /Async resume/);
 		assert.equal(h.state.asyncJobs.has("resume-run"), true);
+		h.session.resolvePrompt?.();
+	});
+
+	it("bare resume (async omitted) follows asyncByDefault=false as foreground", async () => {
+		const h = setup({ pending: true, asyncByDefault: false });
+		writeCompleteRun(tempDir!);
+		const pending = h.execute({ action: "resume", id: "resume-run", message: "continue" });
+		await waitFor(() => h.session.prompts.length === 1);
+		// No async:false passed, yet it routes foreground because the host default is sync.
+		assert.equal(h.state.foregroundControls.has("resume-run"), true);
+		assert.equal(h.state.asyncJobs.size, 0);
+		assert.equal(h.events.some((event) => event.channel === SUBAGENT_ASYNC_STARTED_EVENT), false);
+		h.session.resolvePrompt?.();
+		const result = await pending;
+		assert.match(result.content[0]?.text ?? "", /Resume completed for run resume-run\./);
+	});
+
+	it("bare resume (async omitted) follows asyncByDefault=true as background", async () => {
+		const h = setup({ pending: true, asyncByDefault: true });
+		writeCompleteRun(tempDir!);
+		const result = await h.execute({ action: "resume", id: "resume-run", message: "continue" });
+		// No async:true passed, yet it routes background because the host default is async.
+		assert.match(result.content[0]?.text ?? "", /Async resume/);
+		assert.equal(h.state.asyncJobs.has("resume-run"), true);
+		assert.equal(h.state.foregroundControls.size, 0);
 		h.session.resolvePrompt?.();
 	});
 

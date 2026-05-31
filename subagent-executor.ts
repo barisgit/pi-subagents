@@ -3243,6 +3243,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				const resumeCwd = paramsWithResolvedCwd.cwd ?? requestCwd;
 				const scope: AgentScope = resolveExecutionAgentScope(paramsWithResolvedCwd.agentScope);
 				const agents = deps.discoverAgents(resumeCwd, scope, { preset: paramsWithResolvedCwd.preset, includeInternal: true }).agents;
+				// async omitted => follow the host default; async:false => foreground; async:true => background.
+				const resumeAsyncMode = paramsWithResolvedCwd.async ?? deps.asyncByDefault;
 				const resumeData: ExecutionContextData = {
 					params: paramsWithResolvedCwd,
 					effectiveCwd: resumeCwd,
@@ -3259,11 +3261,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					artifactConfig: { ...DEFAULT_ARTIFACT_CONFIG, enabled: false },
 					artifactsDir: deps.tempArtifactsDir,
 					backgroundRequestedWhileClarifying: false,
-					effectiveAsync: paramsWithResolvedCwd.async !== false,
+					effectiveAsync: resumeAsyncMode,
 					controlConfig: resolveControlConfig(deps.config.control, paramsWithResolvedCwd.control),
 					intercomBridge: resolveIntercomBridge({ config: deps.config.intercomBridge, context: paramsWithResolvedCwd.context, orchestratorTarget: undefined }),
 				};
-				return resumeRun(deps.state, deps.childRegistry, paramsWithResolvedCwd.id!, paramsWithResolvedCwd.message!, paramsWithResolvedCwd.async, resumeData, deps);
+				// Bare resume (async omitted) follows the host's asyncByDefault, exactly
+				// like normal dispatch (see requestedAsync below) — so the two surfaces
+				// share one mode default instead of resume hard-defaulting to async.
+				return resumeRun(deps.state, deps.childRegistry, paramsWithResolvedCwd.id!, paramsWithResolvedCwd.message!, resumeAsyncMode, resumeData, deps);
 			}
 			if (!(ALLOWED_CONTROL_ACTIONS as readonly string[]).includes(params.action)) {
 				return validationError(`Unknown action: ${params.action}. Allowed actions: ${ALLOWED_CONTROL_ACTIONS.join(", ")}.`);
