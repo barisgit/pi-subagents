@@ -24,7 +24,7 @@ import { logger } from "./logger.ts";
 import { pushPendingChildLineage, setChildLineage } from "./lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhase, type RunPhaseState } from "./run-phase.ts";
 import { SUBAGENT_PHASE_CHANGE_EVENT, SUBAGENT_STUCK_EVENT, type ControlConfig, type SubagentLineage, type SubagentPhaseChangePayload, type SubagentStuckPayload } from "./types.ts";
-import { extractSubmitResultEnvelope, fallbackSubmitResultEnvelope, hasSubmitResultToolResult, SUBMIT_RESULT_REPROMPT, type SubmitResultEnvelope } from "./submit-result.ts";
+import { extractSubmitResultEnvelope, fallbackSubmitResultEnvelope, hasSubmitResultToolResult, SUBMIT_RESULT_REPROMPT, SUBMIT_RESULT_TOOL_NAME, type SubmitResultEnvelope } from "./submit-result.ts";
 
 export interface ResolvedAgentConfig {
 	name: string;
@@ -940,21 +940,29 @@ function handleSessionEvent(
 		};
 	} else if (type === "tool_execution_start") {
 		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-		counters.incrementToolCall();
-		patchBody = {
-			toolCallDelta: 1,
-			activity: { state: "tool_running", toolName, updatedAt: now },
-		};
+		if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
+			counters.incrementToolCall();
+			patchBody = {
+				toolCallDelta: 1,
+				activity: { state: "tool_running", toolName, updatedAt: now },
+			};
+		}
 	} else if (type === "tool_execution_end") {
 		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-		counters.incrementToolResult();
-		const isError = record.isError === true;
-		if (isError) counters.incrementToolError();
-		patchBody = {
-			toolResultDelta: 1,
-			...(isError ? { toolErrorDelta: 1 } : {}),
-			activity: { state: "running", toolName, updatedAt: now },
-		};
+		// submit_result is the structured-finish call, surfaced via the `finishing`
+		// phase rather than a tool line. Skip its result-counting and activity patch
+		// symmetrically with tool_execution_start so it never re-sets currentTool nor
+		// inflates the tool-result count on the async surface.
+		if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
+			counters.incrementToolResult();
+			const isError = record.isError === true;
+			if (isError) counters.incrementToolError();
+			patchBody = {
+				toolResultDelta: 1,
+				...(isError ? { toolErrorDelta: 1 } : {}),
+				activity: { state: "running", toolName, updatedAt: now },
+			};
+		}
 	}
 
 	return phaseEvents.handle(event, now, patchBody);

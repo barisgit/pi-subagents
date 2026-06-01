@@ -2316,11 +2316,14 @@ async function runInProcessChildStep(input: {
 			const now = Date.now();
 			progress.lastActivityAt = now;
 			if (record.type === "tool_execution_start") {
-				progress.toolCount++;
-				progress.currentTool = typeof record.toolName === "string" ? record.toolName : undefined;
-				progress.currentToolRawArgs = record.args && typeof record.args === "object" && !Array.isArray(record.args) ? record.args as Record<string, unknown> : undefined;
-				progress.currentToolArgs = progress.currentToolRawArgs ? JSON.stringify(progress.currentToolRawArgs).slice(0, 200) : undefined;
-				progress.currentToolStartedAt = now;
+				const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
+				if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
+					progress.toolCount++;
+					progress.currentTool = toolName;
+					progress.currentToolRawArgs = record.args && typeof record.args === "object" && !Array.isArray(record.args) ? record.args as Record<string, unknown> : undefined;
+					progress.currentToolArgs = progress.currentToolRawArgs ? JSON.stringify(progress.currentToolRawArgs).slice(0, 200) : undefined;
+					progress.currentToolStartedAt = now;
+				}
 				emitUpdate();
 			} else if (record.type === "tool_execution_end") {
 				if (progress.currentTool) {
