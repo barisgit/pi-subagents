@@ -702,7 +702,7 @@ describe("SubagentsStatusComponent", () => {
 				phaseStartedAt: now - 12_000,
 			}));
 
-			assert.match(output, /thinking 12s/);
+			assert.match(output, /thinking 12\.0s/);
 		});
 
 		it("phase label renders tool name in the left pane", () => {
@@ -713,7 +713,7 @@ describe("SubagentsStatusComponent", () => {
 				phaseStartedAt: now - 45_000,
 			}));
 
-			assert.match(output, /tool: bash 45s/);
+			assert.match(output, /tool: bash 45\.0s/);
 		});
 
 		it("phase label keeps the lost glyph for stale legacy rows", () => {
@@ -733,7 +733,7 @@ describe("SubagentsStatusComponent", () => {
 				phaseStartedAt: Date.now() - 12_000,
 			});
 
-			assert.match(output, /thinking 12s/);
+			assert.match(output, /thinking 12\.0s/);
 		});
 
 		it("phase label keeps current tool rendering in inline progress", () => {

@@ -1,4 +1,5 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { formatDuration } from "./formatters.ts";
 
 /** Observable execution phase for a child agent run. */
 export type RunPhase =
@@ -203,7 +204,7 @@ function hasFollowUp(record: Record<string, unknown>): boolean {
  * Format a run phase into a short human-readable label for dashboard rendering.
  *
  * Returns strings like `"thinking 12s"`, `"tool: bash 45s"`, `"retrying 3s"`,
- * `"streaming 7s"`, or `"queued 2s"` with no surrounding whitespace.
+ * `"writing 7s"`, or `"queued 2s"` with no surrounding whitespace.
  *
  * When `phase` is undefined, `"idle"`, or unrecognised, returns an empty string so
  * callers can fall back to legacy rendering (e.g. the `!` lost glyph or
@@ -220,7 +221,7 @@ export function formatPhase(
 	if (phase === undefined || phase === "idle") return "";
 
 	const dur = phaseStartedAt !== undefined
-		? ` ${Math.max(0, Math.floor((now - phaseStartedAt) / 1000))}s`
+		? ` ${formatDuration(Math.max(0, now - phaseStartedAt))}`
 		: "";
 
 	switch (phase) {
@@ -229,7 +230,7 @@ export function formatPhase(
 		case "thinking":
 			return `thinking${dur}`;
 		case "streaming_text":
-			return `streaming${dur}`;
+			return `writing${dur}`;
 		case "tool_running":
 		case "tool_streaming":
 			return `tool: ${toolName ?? "tool"}${dur}`;

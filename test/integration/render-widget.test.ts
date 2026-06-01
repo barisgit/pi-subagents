@@ -245,7 +245,7 @@ describe("subagent async widget rendering", () => {
 		const row = lines.find((line) => line.includes("thinker")) ?? "";
 
 		assert.doesNotMatch(row, /!/);
-		assert.match(row, /thinking 12s/);
+		assert.match(row, /thinking 12\.0s/);
 	});
 
 	it("phase label keeps the lost glyph for stale unknown-phase jobs", () => {

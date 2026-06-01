@@ -11,7 +11,21 @@ describe("formatPhase", () => {
 		const label = formatPhase("thinking", 88_000, 100_000);
 
 		assert.match(label, /thinking/);
-		assert.match(label, /12s/);
+		assert.match(label, /12\.0s/);
+	});
+
+	it("formats streaming text as writing", () => {
+		const label = formatPhase("streaming_text", 88_000, 100_000);
+
+		assert.match(label, /writing/);
+		assert.doesNotMatch(label, /streaming/);
+	});
+
+	it("formats long phase durations with the shared humanized formatter", () => {
+		const label = formatPhase("thinking", 84_000, 200_000);
+
+		assert.match(label, /1m56s/);
+		assert.doesNotMatch(label, /116s/);
 	});
 
 	it("formats tool phases with the current tool name", () => {

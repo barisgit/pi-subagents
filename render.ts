@@ -348,11 +348,11 @@ function buildLiveCurrentLine(
 	if (phaseLine) return { text: phaseLine, tone: "accent" };
 	if (progress.lastToolEndAt !== undefined) {
 		// Thinking pressure bar removed: visual fill added little over the elapsed
-		// number, and being the widest bar it dominated attention. The thinking
+		// number, and being the widest bar it dominated attention. The waiting
 		// level's tone-flip (warning past saturation) is preserved via thinkingBarMaxMs.
 		const thinkingMs = Math.max(0, Date.now() - progress.lastToolEndAt);
 		const tone: "dim" | "warning" = thinkingMs > thinkingBarMaxMs(progress.thinking) ? "warning" : "dim";
-		return { text: `thinking ${formatDuration(thinkingMs)}`, tone };
+		return { text: `waiting ${formatDuration(thinkingMs)}`, tone };
 	}
 	if (progress.toolCount === 0) return { text: "starting…", tone: "dim" };
 	return { text: "thinking…", tone: "dim" };
