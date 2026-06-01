@@ -345,7 +345,15 @@ function runElapsed(run: LiveRun, now: number): string {
 
 function runIdentityAge(run: LiveRun, now: number): string | undefined {
 	if ((run.run.resumeCount ?? 0) <= 0) return undefined;
-	return formatDuration(Math.max(0, now - run.run.startedAt));
+	// Identity age = wall time since the run first started. For a terminal run it
+	// must freeze at the end (endedAt, or lastUpdate for a lost run that crashed
+	// without one) instead of ticking against `now` forever.
+	const isLost = run.run.state === "lost" || run.run.displayState === "lost";
+	const frozenEnd = run.source === "async"
+		? run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || isLost ? run.run.lastUpdate : undefined)
+		: undefined;
+	const end = frozenEnd ?? now;
+	return formatDuration(Math.max(0, end - run.run.startedAt));
 }
 
 function stateBucket(state: AsyncRunSummary["state"]): number {
@@ -491,7 +499,11 @@ function runCwdBadge(run: LiveRun, forceShow: boolean): string {
 // `endedAt` (running rows already show a live `Xs` elapsed counter).
 function runEndedStamp(run: LiveRun): string {
 	if (run.source !== "async") return "";
-	const ended = run.run.endedAt;
+	// A lost run crashed without writing endedAt; its last heartbeat (lastUpdate) is
+	// the best estimate of when it died, so stamp that like any other terminal row
+	// instead of leaving the tail to fall back to a frozen elapsed duration.
+	const isLost = run.run.state === "lost" || run.run.displayState === "lost";
+	const ended = run.run.endedAt ?? (isLost ? run.run.lastUpdate : undefined);
 	if (typeof ended !== "number" || !Number.isFinite(ended)) return "";
 	const d = new Date(ended);
 	const now = new Date();

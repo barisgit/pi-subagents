@@ -730,6 +730,40 @@ describe("SubagentsStatusComponent", () => {
 			assert.doesNotMatch(output, /running\/lost/);
 		});
 
+		it("stamps a lost run with a clock time, not a frozen elapsed duration", () => {
+			const died = new Date();
+			died.setHours(14, 7, 0, 0);
+			const output = renderStatus(createRun("phase-lost-stamp", "running", {
+				currentTool: undefined,
+				currentToolStartedAt: undefined,
+				displayState: "lost",
+				endedAt: undefined,
+				lastUpdate: died.getTime(),
+				runnerHeartbeatAt: died.getTime(),
+			}));
+
+			// A lost run has no endedAt; stamp its last heartbeat as the clock time like
+			// any other terminal row, rather than the frozen 'Xs' elapsed duration.
+			assert.match(output, /14:07/);
+			assert.doesNotMatch(output, /\d+(\.\d+)?s\b/);
+		});
+
+		it("freezes the resumed identity age once a run is terminal", () => {
+			const ended = Date.now() - 60_000;
+			const started = ended - 600_000; // ran for 10m, ended 1m ago
+			const output = renderStatus(createRun("phase-resumed-age", "complete", {
+				resumeCount: 1,
+				startedAt: started,
+				resumedAt: ended - 120_000,
+				endedAt: ended,
+				lastUpdate: ended,
+			}));
+
+			// age must freeze at (endedAt - startedAt) = 10m0s, not keep ticking toward now
+			// (the trailing 's' can be clipped at the pane border, so match the stem).
+			assert.match(output, /age 10m0/);
+		});
+
 		it("phase label renders thinking in inline progress", () => {
 			const output = renderInlineProgress({
 				phase: "thinking",
