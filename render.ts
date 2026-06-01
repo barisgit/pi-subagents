@@ -17,6 +17,7 @@ import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath 
 import { compareRunsForDisplay } from "./run-liveness.ts";
 import { formatPhase } from "./run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
+import { colorForAgentName } from "./agents.ts";
 import { getDisplayItems, getSingleResultOutput, readStatus } from "./utils.ts";
 import { readRunTranscript, previewArgs, type TranscriptLine } from "./run-transcript.ts";
 import { statusToSummary, type AsyncRunSummary } from "./async-status.ts";
@@ -879,12 +880,17 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 	// Parallel runs race N children; `currentAgent` would be misleading (it's just the
 	// most recent step's agent). Show the parallel shape and unique agents instead, with
 	// each agent piece tinted by its own color when available.
+	// job.agentColors/job.agentColor are not populated by the async start event or
+	// status.json, so fall back to the name -> color map (same source the dashboard
+	// uses) — otherwise every async agent name renders uncolored in the widget.
+	const agents = job.agents ?? [];
+	const fallbackName = job.currentAgent ?? job.agents?.[0] ?? "agent";
 	const desc = describeAgentLabel({
 		mode: job.mode,
-		agents: job.agents ?? [],
-		agentColors: job.agentColors,
-		fallbackName: job.currentAgent ?? job.agents?.[0] ?? "agent",
-		fallbackColor: job.agentColor,
+		agents,
+		agentColors: job.agentColors ?? agents.map((a) => colorForAgentName(a)),
+		fallbackName,
+		fallbackColor: job.agentColor ?? colorForAgentName(fallbackName),
 	});
 	const tint = (text: string, color: string | undefined): string => {
 		const bold = themeBold(theme, text);

@@ -64,6 +64,26 @@ describe("subagent async widget rendering", () => {
 		assert.equal(lines[4], "", "trailing newline");
 	});
 
+	it("tints real async agent names by their configured color (widget had no fallback)", () => {
+		// Regression: job.agentColor(s) are never populated by the async start event or
+		// status.json, and unlike the dashboard the widget had no colorForAgentName
+		// fallback -- so async agent names rendered uncolored. tintAgentName emits the
+		// ANSI escape directly (bypassing theme.fg), so a color-stripping theme still
+		// preserves the tint. explorer=cyan(51), fixer=green(76).
+		const cyan = "\u001b[38;5;51m";
+		const green = "\u001b[38;5;76m";
+		const single = buildWidgetLines([
+			{ asyncId: "r-single", asyncDir: "/tmp/s", status: "running", agents: ["explorer"], currentAgent: "explorer" },
+		], theme, 200);
+		assert.ok(single[1]!.includes(`${cyan}explorer`), "single async explorer name should be tinted cyan");
+
+		const mixed = buildWidgetLines([
+			{ asyncId: "r-par", asyncDir: "/tmp/p", status: "running", mode: "parallel", agents: ["explorer", "fixer"], currentAgent: "explorer" },
+		], theme, 200);
+		assert.ok(mixed[1]!.includes(`${cyan}explorer`), "parallel explorer piece should be tinted cyan");
+		assert.ok(mixed[1]!.includes(`${green}fixer`), "parallel fixer piece should be tinted green");
+	});
+
 	it("caps visible rows at MAX_WIDGET_JOBS and adds an overflow line", () => {
 		const jobs = Array.from({ length: 7 }, (_, i) => ({
 			asyncId: `run-${i}`,
