@@ -858,13 +858,15 @@ function adaptiveSingleHistoryCount(): number {
 }
 
 function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
-	return jobs.some((job) => job.status === "running");
+	// A 'lost' run (stale runner heartbeat) must not drive the spinner animation.
+	return jobs.some((job) => job.status === "running" && job.displayState !== "lost");
 }
 
 function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
-	// TODO(f5): Replace this local phase check with phase-aware display-state derivation.
-	const hasKnownActivePhase = formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool) !== "";
-	if (job.status === "lost" || (job.displayState === "lost" && !hasKnownActivePhase)) return theme.fg("error", "!");
+	// A stale runner heartbeat makes displayState 'lost' even while a frozen phase
+	// still lingers in status.json (e.g. a force-killed run stuck mid 'streaming_text').
+	// Honor displayState directly so a dead run stops rendering as a live spinner (f5).
+	if (job.status === "lost" || job.displayState === "lost") return theme.fg("error", "!");
 	if (job.displayState === "needs_attention" || job.activityState === "needs_attention") return theme.fg("warning", "!");
 	if (job.status === "running") return theme.fg("accent", multiSpinnerFrame());
 	if (job.status === "queued") return theme.fg("dim", "·");
@@ -920,7 +922,7 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	// Suppress phase chip for terminal runs so finished jobs don't keep
 	// ticking `streaming Xs` / `tool: bash Xs` (stale phase from status.json
 	// written before the finalize phase-clear lands).
-	const phaseAllowed = job.status !== "complete" && job.status !== "failed" && job.status !== "lost";
+	const phaseAllowed = job.status !== "complete" && job.status !== "failed" && job.status !== "lost" && job.displayState !== "lost";
 	const phaseLabel = phaseAllowed ? formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool) : "";
 	if (phaseLabel) parts.push(phaseLabel);
 	else if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
@@ -930,7 +932,10 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	if (job.totalTokens?.total) parts.push(formatTokenStat(job.totalTokens.total));
 	if ((job.resumeCount ?? 0) > 0) parts.push(`↻${job.resumeCount}`);
 	if (job.startedAt) {
-		const endTs = job.status === "running" || job.status === "queued" ? Date.now() : (job.updatedAt ?? Date.now());
+		// A 'lost' run is dead: freeze elapsed at its last known update instead of
+		// ticking live, even though job.status may still read 'running' on disk.
+		const isLive = (job.status === "running" || job.status === "queued") && job.displayState !== "lost";
+		const endTs = isLive ? Date.now() : (job.updatedAt ?? Date.now());
 		parts.push(formatDuration(Math.max(0, endTs - (job.resumedAt ?? job.startedAt))));
 	}
 	return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";

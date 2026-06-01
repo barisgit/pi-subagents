@@ -31,10 +31,24 @@ interface AsyncJobTrackerOptions {
 	idleTracker?: IdleTracker;
 }
 
-type AsyncJobLifecycleStatus = AsyncJobState["status"];
+// Widen to string: the on-disk status.json can carry terminal exit states
+// ('interrupted'/'skipped') that the narrow AsyncJobState['status'] union does
+// not model, but which reclaim/cleanup must still treat as terminal.
+type AsyncJobLifecycleStatus = AsyncJobState["status"] | string;
 
 function isTerminalAsyncStatus(status: AsyncJobLifecycleStatus): boolean {
-	return status === "complete" || status === "failed" || status === "paused" || status === "lost";
+	// 'interrupted'/'skipped' are genuine terminal exit states (in-process-executor
+	// ChildAgentExitState). Omitting them let reclaim re-attach a finished run on
+	// every reload (and re-fire its stale needs-attention alarm). Keep this in sync
+	// with the terminal sets in async-status.ts and subagent-executor.ts.
+	return (
+		status === "complete" ||
+		status === "failed" ||
+		status === "interrupted" ||
+		status === "skipped" ||
+		status === "paused" ||
+		status === "lost"
+	);
 }
 
 function asyncAgentName(job: AsyncJobState): string {
@@ -78,6 +92,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	handleStarted: (data: unknown) => void;
 	handleComplete: (data: unknown) => void;
 	resetJobs: (ctx?: ExtensionContext) => void;
+	rehydrateFromRegistry: (ctx?: ExtensionContext) => number;
 } {
 	const completionRetentionMs = options.completionRetentionMs ?? 10000;
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
@@ -319,5 +334,40 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 	};
 
-	return { ensurePoller, handleStarted, handleComplete, resetJobs };
+	const rehydrateFromRegistry = (ctx?: ExtensionContext): number => {
+		const hostSessionId = ctx?.sessionManager?.getSessionId?.();
+		if (!hostSessionId) return 0;
+		let added = 0;
+		for (const entry of readAllEntries()) {
+			if ((entry.rootSessionId ?? entry.parentSessionId) !== hostSessionId) continue;
+			if (state.asyncJobs.has(entry.runId)) continue;
+			const status = readStatus(entry.runRecordDir);
+			if (!status || isTerminalAsyncStatus(status.state)) continue;
+			const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : undefined);
+			state.asyncJobs.set(entry.runId, {
+				asyncId: entry.runId,
+				asyncDir: entry.runRecordDir,
+				status: status.state === "running" ? "running" : "queued",
+				displayState: "quiet",
+				mode: entry.mode,
+				parentRunId: entry.parentRunId ?? status.parentRunId,
+				agents,
+				stepsTotal: entry.agentNames?.length ?? status.steps?.length,
+				startedAt: status.startedAt ?? entry.startedAt,
+				updatedAt: status.lastUpdate ?? Date.now(),
+				runnerHeartbeatAt: status.runnerHeartbeatAt,
+				resumedAt: status.resumedAt,
+				resumeCount: status.resumeCount ?? 0,
+				controlConfig: undefined,
+			});
+			added++;
+		}
+		if (added > 0) {
+			ensurePoller();
+			if (ctx?.hasUI) rerenderWidget(ctx);
+		}
+		return added;
+	};
+
+	return { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry };
 }

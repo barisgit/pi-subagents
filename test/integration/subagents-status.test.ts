@@ -716,7 +716,7 @@ describe("SubagentsStatusComponent", () => {
 			assert.match(output, /tool: bash 45\.0s/);
 		});
 
-		it("phase label keeps the lost glyph for stale legacy rows", () => {
+		it("shows just 'lost' (not 'running/lost') for a force-killed run", () => {
 			const output = renderStatus(createRun("phase-lost", "running", {
 				currentTool: undefined,
 				currentToolStartedAt: undefined,
@@ -724,7 +724,10 @@ describe("SubagentsStatusComponent", () => {
 				runnerHeartbeatAt: Date.now() - 30_000,
 			}));
 
-			assert.match(output, /! .*waiter .*running\/lost/);
+			// displayState 'lost' is authoritative over the stale on-disk 'running' state:
+			// render the lost glyph + a bare 'lost' label, never the confusing 'running/lost'.
+			assert.match(output, /! .*waiter .* lost /);
+			assert.doesNotMatch(output, /running\/lost/);
 		});
 
 		it("phase label renders thinking in inline progress", () => {

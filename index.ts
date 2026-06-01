@@ -477,7 +477,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	if (!isChildSession) globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
 	const idleTracker = createIdleTracker(pi);
-	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state, { idleTracker });
+	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry } = createAsyncJobTracker(pi, state, { idleTracker });
 	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
@@ -1109,6 +1109,7 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
 		resetJobs(ctx);
+		rehydrateFromRegistry(ctx);
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
 	};
 

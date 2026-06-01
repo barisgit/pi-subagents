@@ -229,7 +229,11 @@ describe("subagent async widget rendering", () => {
 			stopWidgetAnimation();
 		}
 	});
-	it("phase label suppresses the lost glyph for active-phase jobs", () => {
+	it("lost glyph wins over a frozen active phase (force-killed run)", () => {
+		// Regression: a force-killed run leaves a stale active phase (e.g. 'thinking')
+		// frozen in status.json. The runner heartbeat goes stale so displayState is
+		// 'lost' — that must win over the frozen phase, otherwise a dead run renders
+		// as a live spinner with a ticking phase clock.
 		const lines = buildWidgetLines([
 			{
 				asyncId: "active-phase",
@@ -244,8 +248,9 @@ describe("subagent async widget rendering", () => {
 		], theme, 200);
 		const row = lines.find((line) => line.includes("thinker")) ?? "";
 
-		assert.doesNotMatch(row, /!/);
-		assert.match(row, /thinking 12\.0s/);
+		assert.match(row, /! .*thinker/);
+		assert.match(row, /lost/);
+		assert.doesNotMatch(row, /thinking 12\.0s/);
 	});
 
 	it("phase label keeps the lost glyph for stale unknown-phase jobs", () => {

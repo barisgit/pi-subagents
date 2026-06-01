@@ -332,7 +332,10 @@ function runElapsed(run: LiveRun, now: number): string {
 	// endedAt because the child crashed without writing one, so fall back to lastUpdate.
 	if (run.source === "async") {
 		if (run.run.endedAt) return formatDuration(Math.max(0, run.run.endedAt - legStartedAt));
-		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed") {
+		// A force-killed run keeps state==='running' on disk but goes displayState==='lost'
+		// once its runner heartbeat is stale — freeze the timer on that too, not just on a
+		// terminal state, otherwise a dead run keeps ticking.
+		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.displayState === "lost") {
 			const frozen = run.run.lastUpdate ?? run.run.startedAt;
 			return formatDuration(Math.max(0, frozen - legStartedAt));
 		}
@@ -518,9 +521,11 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// status-writer finalize phase-clear may still carry stale phase fields;
 	// suppress here so the seconds counter doesn't keep ticking after
 	// `complete`/`failed`/`lost`.
-	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "lost";
+	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "lost" || run.run.displayState === "lost";
 	const phase = isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
-	const status = run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
+	// A 'lost' displayState is authoritative over the stale on-disk state: show just
+	// 'lost' rather than the confusing 'running/lost' a force-killed run would produce.
+	const status = run.run.displayState === "lost" ? "lost" : run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
 	const elapsed = runElapsed(run, now);
 	const identityAge = runIdentityAge(run, now);
 	const dateStamp = runEndedStamp(run);
