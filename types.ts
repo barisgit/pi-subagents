@@ -344,7 +344,7 @@ export interface AsyncStatus {
 	mode: "single" | "chain" | "parallel";
 	/** Run-level caller-provided summary; populated for single runs and uniform-label parallel runs. */
 	label?: string;
-	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost";
+	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;
@@ -400,7 +400,7 @@ export interface AsyncJobState {
 	asyncDir: string;
 	// charter nested-subagent-display: widget reads this from status.json for nesting.
 	parentRunId?: string;
-	status: "queued" | "running" | "complete" | "failed" | "paused" | "lost";
+	status: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;

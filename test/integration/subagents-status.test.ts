@@ -5,8 +5,9 @@ import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderSubagentResult } from "../../render.ts";
-import { foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
+import { expandOverlayByRootRunId, foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
 import type { AsyncRunOverlayData, AsyncRunSummary } from "../../async-status.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
 import { type AgentProgress, type SubagentState } from "../../types.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
@@ -193,8 +194,8 @@ describe("SubagentsStatusComponent", () => {
 	});
 
 	it("sorts running before complete and places cursor on the first row by default", () => {
-		const running = createRun("run-running", "running");
-		const complete = createRun("run-done", "complete");
+		const running = createRun("run-running", "running", { startedAt: 2000 });
+		const complete = createRun("run-done", "complete", { startedAt: 1000 });
 		const component = new SubagentsStatusComponent(
 			createTestTui(() => {}),
 			createTestTheme(),
@@ -216,6 +217,84 @@ describe("SubagentsStatusComponent", () => {
 			assert.doesNotMatch(bodyLines[doneIndex]!, /^> /);
 		} finally {
 			component.dispose();
+		}
+	});
+
+	it("shows an interrupted run as a terminal history row", () => {
+		const endedAt = Date.now() - 1000;
+		const interrupted = createRun("run-interrupted", "interrupted", {
+			endedAt,
+			lastUpdate: endedAt,
+			phase: "streaming_text",
+			phaseStartedAt: Date.now() - 30_000,
+			steps: [{ index: 0, agent: "waiter", status: "interrupted" }],
+		});
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [], recent: [interrupted] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			const lines = component.render(180).map(stripBorders);
+			const row = lines.find((line) => line.includes("waiter · interrupted"));
+			assert.ok(row, `interrupted row should render; got:\n${lines.join("\n")}`);
+			assert.match(row, /■ .*waiter · interrupted/);
+			assert.doesNotMatch(row, /thinking|streaming|writing|waiting \d/);
+
+			const d = new Date(endedAt);
+			const stamp = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+			assert.match(row, new RegExp(`\\b${stamp}\\b`));
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("buckets interrupted and skipped expanded child runs into recent not active", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-registry-"));
+		const registryPath = path.join(dir, "runs-index.jsonl");
+		setRegistryPathForTests(registryPath);
+		try {
+			const parent = createRun("parent-run", "running", { asyncDir: path.join(dir, "parent-run") });
+			const interruptedDir = path.join(dir, "child-interrupted");
+			const skippedDir = path.join(dir, "child-skipped");
+			fs.mkdirSync(interruptedDir, { recursive: true });
+			fs.mkdirSync(skippedDir, { recursive: true });
+			const endedAt = Date.now() - 1000;
+			for (const [runId, runDir, state] of [
+				["child-interrupted", interruptedDir, "interrupted"],
+				["child-skipped", skippedDir, "skipped"],
+			] as const) {
+				fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+					runId,
+					parentRunId: "parent-run",
+					mode: "single",
+					state,
+					startedAt: endedAt - 4000,
+					lastUpdate: endedAt,
+					endedAt,
+					cwd: "/proj/here",
+					steps: [{ index: 0, agent: "waiter", status: state }],
+				}), "utf-8");
+			}
+			for (const entry of [
+				{ runId: "parent-run", runRecordDir: parent.asyncDir, mode: "single", source: "async", agentName: "waiter", rootRunId: "parent-run", cwd: "/proj/here", startedAt: parent.startedAt },
+				{ runId: "child-interrupted", runRecordDir: interruptedDir, mode: "single", source: "async", agentName: "waiter", parentRunId: "parent-run", rootRunId: "parent-run", cwd: "/proj/here", startedAt: endedAt - 4000 },
+				{ runId: "child-skipped", runRecordDir: skippedDir, mode: "single", source: "async", agentName: "waiter", parentRunId: "parent-run", rootRunId: "parent-run", cwd: "/proj/here", startedAt: endedAt - 3000 },
+			] as const) {
+				appendRunEntry(entry);
+			}
+
+			const overlay = expandOverlayByRootRunId({ active: [parent], recent: [] }, { sessionCwd: "/proj/here" });
+			assert.deepEqual(overlay.active.map((run) => run.id), ["parent-run"]);
+			assert.deepEqual(new Set(overlay.recent.map((run) => run.id)), new Set(["child-interrupted", "child-skipped"]));
+		} finally {
+			setRegistryPathForTests(null);
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
@@ -438,8 +517,8 @@ describe("SubagentsStatusComponent", () => {
 			makeEventsFile(dir, [
 				{ type: "subagent.step.started", stepIndex: 0, agent: "scout", ts: 1000 },
 			]);
-			const running = createRun("run-running", "running", { asyncDir: dir });
-			const done = createRun("run-done", "complete");
+			const running = createRun("run-running", "running", { asyncDir: dir, startedAt: 2000 });
+			const done = createRun("run-done", "complete", { startedAt: 1000 });
 			const component = new SubagentsStatusComponent(
 				createTestTui(() => {}),
 				createTestTheme(),

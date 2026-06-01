@@ -165,7 +165,7 @@ export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 	};
 }
 
-function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd?: string; sessionId?: string }): AsyncRunOverlayData {
+export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd?: string; sessionId?: string }): AsyncRunOverlayData {
 	const seedIds = new Set([...seed.active, ...seed.recent].map((run) => run.id));
 	if (seedIds.size === 0) return seed;
 
@@ -189,7 +189,7 @@ function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd
 	const all = [...byId.values()];
 	return {
 		active: all.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
-		recent: all.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused"),
+		recent: all.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused" || run.state === "interrupted" || run.state === "skipped"),
 	};
 }
 
@@ -335,7 +335,7 @@ function runElapsed(run: LiveRun, now: number): string {
 		// A force-killed run keeps state==='running' on disk but goes displayState==='lost'
 		// once its runner heartbeat is stale — freeze the timer on that too, not just on a
 		// terminal state, otherwise a dead run keeps ticking.
-		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.displayState === "lost") {
+		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.displayState === "lost") {
 			const frozen = run.run.lastUpdate ?? run.run.startedAt;
 			return formatDuration(Math.max(0, frozen - legStartedAt));
 		}
@@ -350,7 +350,7 @@ function runIdentityAge(run: LiveRun, now: number): string | undefined {
 	// without one) instead of ticking against `now` forever.
 	const isLost = run.run.state === "lost" || run.run.displayState === "lost";
 	const frozenEnd = run.source === "async"
-		? run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || isLost ? run.run.lastUpdate : undefined)
+		? run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || isLost ? run.run.lastUpdate : undefined)
 		: undefined;
 	const end = frozenEnd ?? now;
 	return formatDuration(Math.max(0, end - run.run.startedAt));
@@ -442,6 +442,8 @@ function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: Ac
 		case "paused": return theme.fg("warning", "⏸");
 		case "complete": return theme.fg("success", "✓");
 		case "failed": return theme.fg("error", "✗");
+		case "interrupted": return theme.fg("warning", "■");
+		case "skipped": return theme.fg("dim", "·");
 		case "lost": return theme.fg("error", "!");
 	}
 	return theme.fg("dim", "·");
@@ -533,7 +535,7 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// status-writer finalize phase-clear may still carry stale phase fields;
 	// suppress here so the seconds counter doesn't keep ticking after
 	// `complete`/`failed`/`lost`.
-	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "lost" || run.run.displayState === "lost";
+	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "lost" || run.run.displayState === "lost";
 	const phase = isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
 	// A 'lost' displayState is authoritative over the stale on-disk state: show just
 	// 'lost' rather than the confusing 'running/lost' a force-killed run would produce.

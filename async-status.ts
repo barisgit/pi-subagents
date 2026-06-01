@@ -45,7 +45,7 @@ export interface AsyncRunSummary {
 	// can scope strictly to the current session and its full nested subtree.
 	rootSessionId?: string;
 	label?: string;
-	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost";
+	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;
@@ -219,6 +219,7 @@ export function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
 		case "failed": return 2;
 		case "paused": return 2;
 		case "complete": return 3;
+		default: return 4;
 		}
 	};
 	return [...runs].sort((a, b) => {
@@ -304,7 +305,7 @@ export function listRunsFromRegistryForOverlay(
 		scoped = scoped.filter((run) => !run.cwd || run.cwd === options.sessionCwd);
 	}
 	const recent = scoped
-		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused")
+		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused" || run.state === "interrupted" || run.state === "skipped")
 		.sort((a, b) => b.startedAt - a.startedAt)
 		.slice(0, recentLimit);
 	return {
