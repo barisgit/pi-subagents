@@ -72,6 +72,6 @@ export function compareRunsForDisplay(a: RunDisplaySortProjection, b: RunDisplay
 	if (displayA !== displayB) return displayA - displayB;
 	const activeA = activeDisplayBucket(a);
 	const activeB = activeDisplayBucket(b);
-	if (activeA || activeB) return (a.startedAt ?? 0) - (b.startedAt ?? 0);
+	if (activeA || activeB) return (b.startedAt ?? 0) - (a.startedAt ?? 0);
 	return terminalDisplayKey(b) - terminalDisplayKey(a);
 }

@@ -9,10 +9,10 @@ describe("compareRunsForDisplay", () => {
 		assert.deepEqual([older, revived].sort(compareRunsForDisplay), [revived, older]);
 	});
 
-	it("active bucket orders by startedAt ascending", () => {
+	it("active bucket orders by startedAt descending (newest-started first)", () => {
 		const first = { state: "running", displayState: "quiet" as const, startedAt: 1_000 };
 		const spawnedLater = { state: "running", displayState: "quiet" as const, startedAt: 2_000 };
-		assert.deepEqual([spawnedLater, first].sort(compareRunsForDisplay), [first, spawnedLater]);
+		assert.deepEqual([first, spawnedLater].sort(compareRunsForDisplay), [spawnedLater, first]);
 	});
 
 	it("uses updatedAt as a defined terminal key when endedAt is absent", () => {
