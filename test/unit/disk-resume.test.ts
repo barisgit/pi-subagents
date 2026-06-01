@@ -88,8 +88,9 @@ describe("disk resume", () => {
 		assert.equal(result.isError, undefined, result.content[0]?.text);
 		assert.equal(h.opened, run.sessionFile);
 		assert.equal(h.session.prompts.length, 1);
-		assert.match(h.session.prompts[0] ?? "", /^continue/);
-		assert.match(h.session.prompts[0] ?? "", /submit_result/);
+		// Resume carries the clean continuation message; the finish contract is no longer appended to the
+		// prompt (it lives on the always-present submit_result tool description + the original system prompt).
+		assert.equal(h.session.prompts[0], "continue");
 	});
 
 	it("same thread identity keeps one runId and one registry row", async () => {

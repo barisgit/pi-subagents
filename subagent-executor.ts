@@ -26,7 +26,7 @@ import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, type
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
 import { createActivityTicker, formatControlIntercomMessage, formatControlInterruptReason, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutput, resolveSingleOutputPath } from "./single-output.ts";
-import { createSubmitResultTool, injectSubmitResultInstruction, SUBMIT_RESULT_TOOL_NAME } from "./submit-result.ts";
+import { appendSubmitResultSystemInstruction, createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "./submit-result.ts";
 import { resolveChildSessionFile } from "./session-paths.ts";
 import { StatusWriter } from "./status-writer.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "./async-guidance.ts";
@@ -1286,10 +1286,13 @@ function buildAsyncChildStep(input: {
 		: resolveSkillsWithFallback(skillNames, input.cwd, data.ctx.cwd);
 	const skillInjection = buildSkillInjection(resolvedSkills);
 	const systemPromptBase = data.forkReuse ? "" : agentConfig.systemPrompt?.trim() || "";
-	const systemPrompt = skillInjection ? (systemPromptBase ? `${systemPromptBase}\n\n${skillInjection}` : skillInjection) : systemPromptBase;
+	const systemPromptWithSkills = skillInjection ? (systemPromptBase ? `${systemPromptBase}\n\n${skillInjection}` : skillInjection) : systemPromptBase;
+	// Fork-reuse keeps an empty systemPrompt to preserve the inherited session's prompt; don't clobber it.
+	// Those children still get the finish contract from the always-present submit_result tool description.
+	const systemPrompt = data.forkReuse ? systemPromptWithSkills : appendSubmitResultSystemInstruction(systemPromptWithSkills);
 	const outputPath = resolveSingleOutputPath(input.output, data.ctx.cwd, input.cwd);
 	const cleanTask = input.task;
-	const task = injectSubmitResultInstruction(injectSingleOutputInstruction(cleanTask, outputPath));
+	const task = injectSingleOutputInstruction(cleanTask, outputPath);
 	const sessionPaths = resolveChildSessionFile({
 		parentCwd: data.effectiveCwd,
 		parentSessionFile: data.ctx.sessionManager.getSessionFile() ?? null,
@@ -2179,7 +2182,10 @@ async function runInProcessChildStep(input: {
 		: resolveSkillsWithFallback(skillNames, input.cwd, data.ctx.cwd);
 	const skillInjection = buildSkillInjection(resolvedSkills);
 	const systemPromptBase = data.forkReuse ? "" : agentConfig.systemPrompt?.trim() || "";
-	const systemPrompt = skillInjection ? (systemPromptBase ? `${systemPromptBase}\n\n${skillInjection}` : skillInjection) : systemPromptBase;
+	const systemPromptWithSkills = skillInjection ? (systemPromptBase ? `${systemPromptBase}\n\n${skillInjection}` : skillInjection) : systemPromptBase;
+	// Fork-reuse keeps an empty systemPrompt to preserve the inherited session's prompt; don't clobber it.
+	// Those children still get the finish contract from the always-present submit_result tool description.
+	const systemPrompt = data.forkReuse ? systemPromptWithSkills : appendSubmitResultSystemInstruction(systemPromptWithSkills);
 	const sessionPaths = resolveChildSessionFile({
 		parentCwd: data.effectiveCwd,
 		parentSessionFile: data.ctx.sessionManager.getSessionFile() ?? null,
@@ -2198,7 +2204,7 @@ async function runInProcessChildStep(input: {
 		stepIndex,
 		agentName: agentConfig.name,
 		agentConfig: agentConfig as unknown as ChildAgentStep["agentConfig"],
-		task: injectSubmitResultInstruction(input.task),
+		task: input.task,
 		cwd: input.cwd,
 		model: primaryModel,
 		modelCandidates,

@@ -35,7 +35,7 @@ class FakeSession {
 	dispose() {}
 	abort() { this.resolvePrompt?.(); }
 	prompt(message: string) {
-		this.prompts.push(message.replace(/\n\n---\n\*\*Structured finish:\*\*[\s\S]*$/, ""));
+		this.prompts.push(message);
 		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "resumed", result: "resumed output", artifacts: [] } });
 		this.promptPromise ??= new Promise<void>((resolve) => { this.resolvePrompt = resolve; });
 		return this.promptPromise;

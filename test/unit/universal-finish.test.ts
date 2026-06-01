@@ -54,7 +54,7 @@ function makeStep(root: string, session: FakeAgentSession): ChildAgentStep {
 		stepIndex: 0,
 		agentName: "fixer",
 		agentConfig: { name: "fixer" } as never,
-		task: "Do it\n\n---\n**Structured finish:** call submit_result",
+		task: "Do it",
 		cwd: root,
 		model: { provider: "mock", id: "model" } as never,
 		modelCandidates: [],
@@ -88,15 +88,16 @@ function install(session: FakeAgentSession): void {
 }
 
 describe("universal finish", () => {
-	it("sends the finish instruction and uses the compliant envelope as the child result", async () => {
+	it("sends the task unpolluted and uses the compliant envelope as the child result", async () => {
 		const root = tempDir();
 		const session = new FakeAgentSession();
 		install(session);
 
 		const result = await runChildAgent(makeStep(root, session), makeContext());
 
-		assert.match(session.prompts[0] ?? "", /Structured finish/);
-		assert.match(session.prompts[0] ?? "", /submit_result/);
+		// The finish contract no longer pollutes the task string: it rides on the tool description + system prompt.
+		assert.equal(session.prompts[0], "Do it");
+		assert.doesNotMatch(session.prompts[0] ?? "", /Structured finish/);
 		assert.equal(result.outputText, "structured payload");
 		assert.deepEqual(result.structuredResult, { status: "ok", summary: "structured", result: "structured payload", artifacts: [] });
 	});

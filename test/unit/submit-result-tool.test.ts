@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { createSubmitResultTool, extractSubmitResultEnvelope, hasSubmitResultToolResult, isSubmitResultEnvelope } from "../../submit-result.ts";
+import { appendSubmitResultSystemInstruction, createSubmitResultTool, extractSubmitResultEnvelope, hasSubmitResultToolResult, isSubmitResultEnvelope, SUBMIT_RESULT_SYSTEM_INSTRUCTION } from "../../submit-result.ts";
 
 describe("submit_result tool", () => {
 	it("validates the fixed envelope and terminates", async () => {
@@ -38,5 +38,18 @@ describe("submit_result tool", () => {
 		const compliant = [{ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "done", result: "payload", artifacts: [] } }];
 		assert.equal(hasSubmitResultToolResult(compliant), true);
 		assert.deepEqual(extractSubmitResultEnvelope(compliant), { status: "ok", summary: "done", result: "payload", artifacts: [] });
+	});
+
+	it("carries the finish contract on the tool description and the system-prompt helper, not the task", () => {
+		// Primary carrier: the tool description (always present with the tool) directs a lone final call.
+		const tool = createSubmitResultTool();
+		assert.match(tool.description ?? "", /submit_result/);
+		assert.match(tool.description ?? "", /lone/);
+		assert.match(tool.description ?? "", /never stop with prose only/i);
+
+		// Reinforcement carrier: the system-prompt helper appends the contract, preserving an existing prompt.
+		assert.match(SUBMIT_RESULT_SYSTEM_INSTRUCTION, /submit_result/);
+		assert.equal(appendSubmitResultSystemInstruction(""), SUBMIT_RESULT_SYSTEM_INSTRUCTION);
+		assert.equal(appendSubmitResultSystemInstruction("Fix things."), `Fix things.\n\n${SUBMIT_RESULT_SYSTEM_INSTRUCTION}`);
 	});
 });

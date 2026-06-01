@@ -43,7 +43,7 @@ class FakeAgentSession {
 
 	async prompt(task: string): Promise<void> {
 		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "done", result: this.getLastAssistantText(), artifacts: [] } });
-		await this.promptImpl(task.replace(/\n\n---\n\*\*Structured finish:\*\*[\s\S]*$/, ""), this);
+		await this.promptImpl(task, this);
 	}
 
 	getLastAssistantText(): string {

@@ -26,7 +26,7 @@ export function createSubmitResultTool(resultSchema: TSchema = Type.String()): T
 	return {
 		name: SUBMIT_RESULT_TOOL_NAME,
 		label: "Submit result",
-		description: "Finish the child agent run with a structured result envelope.",
+		description: "Call this as your final, lone tool call to finish the run. Every run MUST end by calling submit_result \u2014 never stop with prose only. Provide { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }.",
 		parameters: createSubmitResultParameters(resultSchema),
 		async execute(_toolCallId: string, params: SubmitResultEnvelope): Promise<AgentToolResult<SubmitResultEnvelope>> {
 			return {
@@ -38,8 +38,14 @@ export function createSubmitResultTool(resultSchema: TSchema = Type.String()): T
 	} as ToolDefinition;
 }
 
-export function injectSubmitResultInstruction(task: string): string {
-	return `${task}\n\n---\n**Structured finish:** When your work is complete, call the ${SUBMIT_RESULT_TOOL_NAME} tool as a lone tool call. Use this envelope exactly: { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }. Do not finish with prose only.`;
+// The finish contract rides primarily on the tool description (always present with the tool) and, as cheap
+// persistent reinforcement, on the child system prompt. We deliberately no longer append it to every task
+// string: that polluted the visible task, was re-appended on resume, and was the heaviest of the carriers.
+// The reactive SUBMIT_RESULT_REPROMPT below still catches a child that finishes in prose without complying.
+export const SUBMIT_RESULT_SYSTEM_INSTRUCTION = `Finish every run by calling the ${SUBMIT_RESULT_TOOL_NAME} tool as a lone, final tool call with { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }. Never stop with prose only.`;
+
+export function appendSubmitResultSystemInstruction(systemPrompt: string): string {
+	return systemPrompt ? `${systemPrompt}\n\n${SUBMIT_RESULT_SYSTEM_INSTRUCTION}` : SUBMIT_RESULT_SYSTEM_INSTRUCTION;
 }
 
 export const SUBMIT_RESULT_REPROMPT = `You did not call ${SUBMIT_RESULT_TOOL_NAME}. You MUST finish now by calling ${SUBMIT_RESULT_TOOL_NAME} as a lone tool call with { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }.`;
