@@ -30,6 +30,16 @@ describe("subagent control attention state", () => {
 		assert.equal(deriveActivityState({ config, startedAt: 0, now: 400 }), "needs_attention");
 	});
 
+	it("suppresses needs-attention while the model is in an engaged phase", () => {
+		for (const phase of ["waiting_model", "thinking", "streaming_text", "retrying"]) {
+			assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000 }), undefined);
+		}
+
+		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, now: 1_000 }), "needs_attention");
+		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "idle", now: 1_000 }), "needs_attention");
+		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "paused", now: 1_000 }), "needs_attention");
+	});
+
 	it("emits only needs-attention transitions", () => {
 		assert.equal(shouldEmitControlEvent(config, undefined, undefined), false);
 		assert.equal(shouldEmitControlEvent(config, undefined, "needs_attention"), true);

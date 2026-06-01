@@ -124,6 +124,7 @@ function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { acti
 			config: DEFAULT_CONTROL_CONFIG,
 			startedAt: status.startedAt,
 			lastActivityAt,
+			phase: status.phase,
 		}),
 	};
 }

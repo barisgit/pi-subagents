@@ -47,6 +47,7 @@ function deriveAsyncJobActivityState(job: AsyncJobState, config: ResolvedControl
 		config,
 		startedAt: job.startedAt ?? now,
 		lastActivityAt: job.lastActivityAt,
+		phase: job.phase,
 		now,
 	});
 }

@@ -2267,6 +2267,7 @@ async function runInProcessChildStep(input: {
 		config: data.controlConfig,
 		getStartedAt: () => startedAt,
 		getLastActivityAt: () => progress.lastActivityAt,
+		getPhase: () => progress.phase,
 		onNeedsAttention: input.onControlEvent,
 	});
 	const emitUpdate = () => {
