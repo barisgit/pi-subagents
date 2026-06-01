@@ -23,6 +23,7 @@ class FakeResourceLoader {
 
 class FakeAgentSession {
 	private listeners: Listener[] = [];
+	messages: unknown[] = [];
 	private readonly promptImpl: (task: string, session: FakeAgentSession) => Promise<void>;
 
 	constructor(promptImpl: (task: string, session: FakeAgentSession) => Promise<void>) {
@@ -41,7 +42,8 @@ class FakeAgentSession {
 	}
 
 	async prompt(task: string): Promise<void> {
-		await this.promptImpl(task, this);
+		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "done", result: this.getLastAssistantText(), artifacts: [] } });
+		await this.promptImpl(task.replace(/\n\n---\n\*\*Structured finish:\*\*[\s\S]*$/, ""), this);
 	}
 
 	getLastAssistantText(): string {

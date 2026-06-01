@@ -26,6 +26,7 @@ import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, type
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
 import { createActivityTicker, formatControlIntercomMessage, formatControlInterruptReason, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutput, resolveSingleOutputPath } from "./single-output.ts";
+import { createSubmitResultTool, injectSubmitResultInstruction, SUBMIT_RESULT_TOOL_NAME } from "./submit-result.ts";
 import { resolveChildSessionFile } from "./session-paths.ts";
 import { StatusWriter } from "./status-writer.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "./async-guidance.ts";
@@ -1288,7 +1289,7 @@ function buildAsyncChildStep(input: {
 	const systemPrompt = skillInjection ? (systemPromptBase ? `${systemPromptBase}\n\n${skillInjection}` : skillInjection) : systemPromptBase;
 	const outputPath = resolveSingleOutputPath(input.output, data.ctx.cwd, input.cwd);
 	const cleanTask = input.task;
-	const task = injectSingleOutputInstruction(cleanTask, outputPath);
+	const task = injectSubmitResultInstruction(injectSingleOutputInstruction(cleanTask, outputPath));
 	const sessionPaths = resolveChildSessionFile({
 		parentCwd: data.effectiveCwd,
 		parentSessionFile: data.ctx.sessionManager.getSessionFile() ?? null,
@@ -2075,7 +2076,7 @@ function resolveModelFromRef(ref: string | undefined, models: Model<any>[], fall
 	return models.find((model) => `${model.provider}/${model.id}` === ref || model.id === ref) ?? fallback ?? models[0];
 }
 
-function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
+export function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
 	// Semantics:
 	//   tools frontmatter absent (undefined)  -> no allowlist => session sees ALL tools
 	//   tools frontmatter explicit list       -> allowlist exactly those names
@@ -2083,11 +2084,14 @@ function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): { active
 	// Globs/negations were already expanded at registration time via
 	// resolveAgentToolPatterns(discoverAgents(...)) in index.ts, so by the time
 	// we reach here agentConfig.tools is either undefined or a concrete name list.
-	const activeToolNames = agentConfig.tools === undefined ? undefined : [...new Set(agentConfig.tools)];
+	const activeToolNames = agentConfig.tools === undefined
+		? undefined
+		: [...new Set([...agentConfig.tools, SUBMIT_RESULT_TOOL_NAME])];
 	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
-	const customTools = pi.getAllTools()
-		.filter((tool) => customToolNames.has(tool.name))
-		.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }) as ToolDefinition);
+	const customTools = [
+		...pi.getAllTools().filter((tool) => customToolNames.has(tool.name)),
+		createSubmitResultTool(),
+	] as ToolDefinition[];
 	return { activeToolNames, customTools };
 }
 
@@ -2194,7 +2198,7 @@ async function runInProcessChildStep(input: {
 		stepIndex,
 		agentName: agentConfig.name,
 		agentConfig: agentConfig as unknown as ChildAgentStep["agentConfig"],
-		task: input.task,
+		task: injectSubmitResultInstruction(input.task),
 		cwd: input.cwd,
 		model: primaryModel,
 		modelCandidates,
@@ -2406,6 +2410,7 @@ function childResultToSingleResult(childResult: ChildAgentResult, input: {
 	result.interrupted = childResult.state === "interrupted" ? true : undefined;
 	result.sessionFile = childResult.sessionFile;
 	result.shareUrl = childResult.shareUrl;
+	result.structuredResult = childResult.structuredResult;
 	let fullOutput = getFinalOutput(result.messages ?? []) || childResult.outputText;
 	if (input.outputPath && result.exitCode === 0) {
 		const resolvedOutput = resolveSingleOutput(input.outputPath, fullOutput, input.outputSnapshot);

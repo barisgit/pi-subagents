@@ -26,6 +26,7 @@ function makeState(cwd: string): SubagentState {
 
 class FakeSession {
 	prompts: string[] = [];
+	messages: unknown[] = [];
 	resolvePrompt: (() => void) | undefined;
 	promptPromise: Promise<void> | undefined;
 	subscribe() { return () => {}; }
@@ -35,6 +36,7 @@ class FakeSession {
 	abort() { this.resolvePrompt?.(); }
 	prompt(message: string) {
 		this.prompts.push(message);
+		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "resumed", result: "resumed output", artifacts: [] } });
 		this.promptPromise ??= new Promise<void>((resolve) => { this.resolvePrompt = resolve; });
 		return this.promptPromise;
 	}
@@ -85,7 +87,9 @@ describe("disk resume", () => {
 		const result = await h.execute({ action: "resume", id: "resume-run", message: "continue", async: false });
 		assert.equal(result.isError, undefined, result.content[0]?.text);
 		assert.equal(h.opened, run.sessionFile);
-		assert.deepEqual(h.session.prompts, ["continue"]);
+		assert.equal(h.session.prompts.length, 1);
+		assert.match(h.session.prompts[0] ?? "", /^continue/);
+		assert.match(h.session.prompts[0] ?? "", /submit_result/);
 	});
 
 	it("same thread identity keeps one runId and one registry row", async () => {

@@ -29,12 +29,16 @@ function state(cwd: string): SubagentState {
 
 class BlockingSession {
 	resolvePrompt: (() => void) | undefined;
+	messages: unknown[] = [];
 	subscribe() { return () => {}; }
 	setActiveToolsByName() {}
 	getLastAssistantText() { return "done after block"; }
 	dispose() {}
 	async abort() { this.resolvePrompt?.(); }
-	async prompt() { await new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
+	async prompt() {
+		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "done", result: "done after block", artifacts: [] } });
+		await new Promise<void>((resolve) => { this.resolvePrompt = resolve; });
+	}
 }
 
 function setup(session: BlockingSession) {

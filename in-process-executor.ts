@@ -24,6 +24,7 @@ import { logger } from "./logger.ts";
 import { pushPendingChildLineage, setChildLineage } from "./lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhase, type RunPhaseState } from "./run-phase.ts";
 import { SUBAGENT_PHASE_CHANGE_EVENT, SUBAGENT_STUCK_EVENT, type ControlConfig, type SubagentLineage, type SubagentPhaseChangePayload, type SubagentStuckPayload } from "./types.ts";
+import { extractSubmitResultEnvelope, fallbackSubmitResultEnvelope, hasSubmitResultToolResult, SUBMIT_RESULT_REPROMPT, type SubmitResultEnvelope } from "./submit-result.ts";
 
 export interface ResolvedAgentConfig {
 	name: string;
@@ -119,6 +120,7 @@ export interface ChildAgentResult {
 	 * Equals the full descendant tree, not just direct turns.
 	 */
 	usage?: ChildUsage;
+	structuredResult?: SubmitResultEnvelope;
 }
 
 export interface ChildAgentHandle {
@@ -512,6 +514,7 @@ async function executeChildAgent(
 	let toolErrorCount = 0;
 	let unsubscribe: (() => void) | undefined;
 	let session: AgentSession | undefined;
+	let structuredResult: SubmitResultEnvelope | undefined;
 	let ticker: PhaseTickerHandle | undefined;
 	const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 	const phaseEvents = createPhaseEventHandler({
@@ -537,6 +540,7 @@ async function executeChildAgent(
 			endedAt,
 			sessionFile: step.sessionFile,
 			usage: { ...usage },
+			...(structuredResult ? { structuredResult } : {}),
 			...(error ? { error } : {}),
 		};
 	};
@@ -618,6 +622,42 @@ async function executeChildAgent(
 
 		if (!outputText.trim()) {
 			outputText = session.getLastAssistantText?.() ?? "";
+		}
+
+		const shouldRequireSubmitResult = step.activeToolNames?.includes("submit_result") === true
+			|| step.customTools.some((tool) => tool.name === "submit_result");
+		for (let reprompt = 0; shouldRequireSubmitResult && reprompt < 2 && !hasSubmitResultToolResult(getSessionMessages(session)); reprompt++) {
+			const repromptPromise = session.prompt(SUBMIT_RESULT_REPROMPT, { expandPromptTemplates: false, source: "extension" });
+			const repromptAborted = await promptOrAbort(repromptPromise, signal);
+			if (repromptAborted) {
+				await session.abort();
+				const result = baseResult("interrupted", {
+					message: `Child agent interrupted: ${abortReason(signal)}`,
+					reason: abortReason(signal),
+				});
+				ctx.onStatusUpdate?.({
+					runId: step.runId,
+					stepIndex: step.stepIndex,
+					state: result.state,
+					endedAt: result.endedAt,
+					outputText: result.outputText,
+				});
+				return result;
+			}
+			await repromptPromise;
+			if (!outputText.trim()) {
+				outputText = session.getLastAssistantText?.() ?? "";
+			}
+		}
+		if (shouldRequireSubmitResult) {
+			structuredResult = extractSubmitResultEnvelope(getSessionMessages(session));
+			if (structuredResult) {
+				outputText = typeof structuredResult.result === "string" ? structuredResult.result : structuredResult.summary;
+			} else {
+				const fallbackText = session.getLastAssistantText?.() || outputText;
+				structuredResult = fallbackSubmitResultEnvelope(fallbackText);
+				outputText = fallbackText;
+			}
 		}
 
 		// Detect provider-level failures that the SDK swallows.
@@ -933,6 +973,13 @@ function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
 		signal.addEventListener("abort", () => abort(signal), { once: true });
 	}
 	return controller.signal;
+}
+
+function getSessionMessages(session: AgentSession): unknown[] {
+	const direct = (session as unknown as { messages?: unknown[] }).messages;
+	if (Array.isArray(direct)) return direct;
+	const stateMessages = (session as unknown as { state?: { messages?: unknown[] } }).state?.messages;
+	return Array.isArray(stateMessages) ? stateMessages : [];
 }
 
 async function promptOrAbort(promptPromise: Promise<void>, signal: AbortSignal): Promise<boolean> {

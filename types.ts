@@ -5,6 +5,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
+import type { SubmitResultEnvelope } from "./submit-result.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RunPhase } from "./run-phase.ts";
 export type { SubagentToolInput, Step, Task } from "./schemas.ts";
@@ -241,6 +242,7 @@ export interface SingleResult {
 	artifactPaths?: ArtifactPaths;
 	truncation?: TruncationResult;
 	finalOutput?: string;
+	structuredResult?: SubmitResultEnvelope;
 	savedOutputPath?: string;
 	outputSaveError?: string;
 	shareUrl?: string;
