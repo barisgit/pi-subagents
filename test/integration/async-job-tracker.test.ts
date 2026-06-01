@@ -221,6 +221,49 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("excludes sync runs from reclaim (they render inline, never in the async widget)", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const registryPath = path.join(asyncRoot, "runs-index.jsonl");
+			setRegistryPathForTests(registryPath);
+			const now = Date.now();
+			const hostSessionId = "host-session-sync";
+			// A still-running sync (foreground) run sharing this session must NOT be pulled
+			// into state.asyncJobs on reload; sync renders inline only (invariant: sync ->
+			// inline tool render, async -> async widget).
+			const dir = path.join(asyncRoot, "run-sync");
+			writeStatus(dir, {
+				runId: "run-sync",
+				mode: "single",
+				state: "running",
+				startedAt: now - 5000,
+				lastUpdate: now - 1000,
+			});
+			appendRunEntry({
+				runId: "run-sync",
+				runRecordDir: dir,
+				mode: "single",
+				source: "sync",
+				agentName: "worker",
+				rootSessionId: hostSessionId,
+				parentSessionId: hostSessionId,
+				cwd: "/repo",
+				startedAt: now - 5000,
+			});
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, { pollIntervalMs: 10 });
+			const count = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
+
+			assert.equal(count, 0);
+			assert.equal(state.asyncJobs.has("run-sync"), false);
+		} finally {
+			setRegistryPathForTests(null);
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	// SKIP: pre-existing integration failure unrelated to subagent-liveness charter; see commit 6a501e7
 	it.skip("removes completed jobs after retention and requests a rerender", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");

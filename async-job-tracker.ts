@@ -340,6 +340,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		let added = 0;
 		for (const entry of readAllEntries()) {
 			if ((entry.rootSessionId ?? entry.parentSessionId) !== hostSessionId) continue;
+			// The async widget renders state.asyncJobs, so only ASYNC runs may enter it.
+			// A non-terminal sync (foreground) run lives in state.foregroundControls and
+			// renders inline; reclaiming it here would leak it into the async widget.
+			if (entry.source !== "async") continue;
 			if (state.asyncJobs.has(entry.runId)) continue;
 			const status = readStatus(entry.runRecordDir);
 			if (!status || isTerminalAsyncStatus(status.state)) continue;
