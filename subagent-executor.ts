@@ -49,6 +49,7 @@ import { getCurrentPi } from "./current-pi.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "./lineage.ts";
 import type { SubagentToolInput, Step, Task } from "./schemas.ts";
 import type { WorkflowGroupHandle } from "./workflow.ts";
+import { writeWorkflowGroupState } from "./workflow-group-state.ts";
 /**
  * Resolve the parent runId for a dispatch happening NOW. The dispatching
  * session's lineage tells us our own runId; that becomes the parent for any
@@ -3684,13 +3685,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					const root = resolveDispatchRootSessionId(ctx);
 					return root ? { rootSessionId: root } : {};
 				})(),
+				kind: "workflow",
 				source: effectiveAsync ? "async" : "sync",
 				mode: "parallel",
 			});
 			const groupRootRunId = rootRunId === provisionalRunId ? group.runId : rootRunId;
 			const sessionRoot = group.runRecordDir;
 			fs.mkdirSync(sessionRoot, { recursive: true });
-			const childResults: Array<{ runId: string; result: SingleResult }> = [];
+			if (effectiveAsync) writeWorkflowGroupState(group.runRecordDir, "running");
+			const childResults: Array<{ runId: string; result: SingleResult; index: number }> = [];
 			const data: ExecutionContextData = {
 				params: {},
 				effectiveCwd,
@@ -3715,7 +3718,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				groupRunId: group.runId,
 				async: effectiveAsync,
 				asyncDir: group.runRecordDir,
-				dispatchChild: async ({ role, task, index }) => {
+				dispatchChild: async ({ role, task, index, phaseIndex, phaseTitle, parallelGroupId }) => {
 					const agentConfig = agents.find((agent) => agent.name === role);
 					let result: SingleResult | undefined;
 					const handle = spawnRun({ agentName: role, task, cwd: effectiveCwd }, {
@@ -3724,6 +3727,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						notifyPolicy: "each",
 						parentSessionFile,
 						sessionDir: path.join(sessionRoot, `run-${index}`),
+						...(phaseIndex !== undefined ? { phaseIndex } : {}),
+						...(phaseTitle ? { phaseTitle } : {}),
+						...(parallelGroupId ? { parallelGroupId } : {}),
 						...(deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) } : {}),
 						...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 						...(() => {
@@ -3816,10 +3822,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					});
 					await awaitRun(handle);
 					if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
-					childResults.push({ runId: handle.runId, result });
+					childResults.push({ runId: handle.runId, result, index });
 					return result;
 				},
-				failWorkflow: async (message) => {
+				failWorkflow: async (message, tags) => {
 					// A raw workflow-level error (e.g. the script throws after a successful
 					// child) leaves the statusless group with only successful child rows, so
 					// dashboard/registry synthesis (computeGroupStatus) would show it complete.
@@ -3837,6 +3843,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						notifyPolicy: "each",
 						parentSessionFile,
 						sessionDir: path.join(sessionRoot, `run-${index}`),
+						...(tags?.phaseIndex !== undefined ? { phaseIndex: tags.phaseIndex } : {}),
+						...(tags?.phaseTitle ? { phaseTitle: tags.phaseTitle } : {}),
 						...(deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) } : {}),
 						...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 						...(() => {
@@ -3850,11 +3858,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						},
 					});
 					await awaitRun(handle);
-					if (result) childResults.push({ runId: handle.runId, result });
+					if (result) childResults.push({ runId: handle.runId, result, index });
 				},
 				finishAsync: (success) => {
 					if (!effectiveAsync) return;
-					const children = childResults.map(({ runId, result: r }, index) => ({
+					writeWorkflowGroupState(group.runRecordDir, success ? "complete" : "failed");
+					const ordered = [...childResults].sort((a, b) => a.index - b.index);
+					const children = ordered.map(({ runId, result: r, index }) => ({
 						id: runId,
 						runId,
 						dispatchRunId: group.runId,
@@ -3875,7 +3885,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						rootRunId: groupRootRunId,
 						notifyPolicy: "each",
 						success,
-						agent: childResults.map(({ result }) => result.agent).join(","),
+						agent: ordered.map(({ result }) => result.agent).join(","),
 						summary: "",
 						state: success ? "complete" : "failed",
 						timestamp: Date.now(),

@@ -353,12 +353,13 @@ function isToolPhase(phase: AgentProgress["phase"]): boolean {
 
 /**
  * Build the live "what's happening right now" line for a running agent.
- * Priority: needs_attention warning → currently-executing tool → thinking timer → starting.
+ * Priority: needs_attention warning → currently-executing tool → thinking timer → coarse child label.
  * Returns { text, tone } so callers can apply the right color.
  */
 function buildLiveCurrentLine(
 	progress: AgentProgress,
 	availableWidth: number,
+	coarseLabel?: string,
 ): { text: string; tone: "warning" | "accent" | "dim" } {
 	const needsAttention = progress.activityState === "needs_attention";
 	if (needsAttention) {
@@ -380,6 +381,7 @@ function buildLiveCurrentLine(
 		const tone: "dim" | "warning" = thinkingMs > thinkingBarMaxMs(progress.thinking) ? "warning" : "dim";
 		return { text: `waiting ${formatDuration(thinkingMs)}`, tone };
 	}
+	if (coarseLabel) return { text: `${coarseLabel} working`, tone: "dim" };
 	if (progress.toolCount === 0) return { text: "starting…", tone: "dim" };
 	return { text: "thinking…", tone: "dim" };
 }
@@ -649,6 +651,7 @@ function addLiveCurrentLines(
 	width: number,
 	indent: string,
 	used: Set<string>,
+	coarseLabel?: string,
 ): void {
 	const rawArgs = (progress as { currentToolRawArgs?: Record<string, unknown> }).currentToolRawArgs;
 	if (
@@ -664,7 +667,7 @@ function addLiveCurrentLines(
 			return;
 		}
 	}
-	const current = buildLiveCurrentLine(progress, width);
+	const current = buildLiveCurrentLine(progress, width, coarseLabel);
 	c.addChild(new Text(truncLine(`${theme.fg("dim", `${indent}└─`)} ${theme.fg(current.tone, current.text)}`, width), 0, 0));
 }
 
@@ -1180,7 +1183,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 		// so the freshest information sits right next to "now".
 		const used = new Set<string>();
 		addCompactRecentToolLines(c, theme, d.runId, r.progress.recentTools, adaptiveSingleHistoryCount(), width, "  ", used);
-		addLiveCurrentLines(c, theme, d.runId, r.progress, width, "  ", used);
+		addLiveCurrentLines(c, theme, d.runId, r.progress, width, "  ", used, d.workflow ? (r.label ?? r.agent) : undefined);
 		return c;
 	}
 
@@ -1261,6 +1264,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : Math.min(totalCount, chainParentOk + (hasRunning ? 1 : 0));
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
+	const modeLabel = d.workflow ? "workflow" : d.mode;
 	const stepInfo = hasRunning ? `${itemLabel} ${currentStep}/${totalCount}` : `${itemLabel} ${chainParentOk}/${totalCount}`;
 	const stats = statJoin(theme, [stepInfo, formatTurnStat(totalTurns), formatProgressStats(theme, totalSummary)]);
 	const glyph = hasRunning
@@ -1290,7 +1294,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		return d.results.every((r) => r.label === first) ? first : undefined;
 	})();
 	const headLabelTail = uniformLabel ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(uniformLabel, 30))}` : "";
-	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", themeBold(theme, d.mode))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`, width), 0, 0));
+	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`, width), 0, 0));
 
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
@@ -1380,7 +1384,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 				// Chronological layout: history (oldest -> newest) on top, current activity at the bottom.
 				const used = new Set<string>();
 				addCompactRecentToolLines(c, theme, d.runId, fullProg.recentTools ?? [], historyN, width, "    ", used);
-				addLiveCurrentLines(c, theme, d.runId, fullProg, width, "    ", used);
+				addLiveCurrentLines(c, theme, d.runId, fullProg, width, "    ", used, d.workflow ? (r.label ?? r.agent) : undefined);
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
 				const activity = compactCurrentActivity(rProg as AgentProgress);
@@ -1619,7 +1623,8 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			? ` | ${totalSummary.toolCount} tools, ${formatTokens(totalSummary.tokens)} tok, ${formatDuration(totalSummary.durationMs)}`
 			: "";
 
-	const modeLabel = d.mode;
+	const modeLabel = d.workflow ? "workflow" : d.mode;
+	const labelTail = d.workflow && d.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(d.label, 30))}` : "";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
 	const totalCount = hasParallelInChain ? d.results.length : (d.totalSteps ?? d.results.length);
@@ -1665,7 +1670,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	const c = new Container();
 	c.addChild(
 		new Text(
-			fit(`${icon} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${stepInfo}${summaryStr}`),
+			fit(`${icon} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${labelTail}${stepInfo}${summaryStr}`),
 			0,
 			0,
 		),

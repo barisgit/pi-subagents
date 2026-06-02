@@ -253,6 +253,8 @@ export interface Details {
 	context?: "fresh" | "fork";
 	/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
 	label?: string;
+	/** Workflow Details keep mode:"parallel" for canonical rendering shape but relabel as workflow in UI. */
+	workflow?: boolean;
 	results: SingleResult[];
 	/**
 	 * Canonical run-level usage aggregate. Sum of `results[].usage` across every

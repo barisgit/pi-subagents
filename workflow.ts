@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -25,16 +27,19 @@ export interface WorkflowDispatchOutcome {
 }
 
 export type WorkflowDispatchResult = SubmitResultEnvelope | WorkflowDispatchOutcome;
-export type WorkflowDispatch = (role: string, task: string) => Promise<WorkflowDispatchResult>;
+export interface WorkflowDispatchTags {
+	parallelGroupId?: string;
+}
+export type WorkflowDispatch = (role: string, task: string, tags?: WorkflowDispatchTags) => Promise<WorkflowDispatchResult>;
 export type WorkflowPhaseEmit = (title: string) => void;
 
 export interface WorkflowGroupHandle {
 	groupRunId: string;
 	async?: boolean;
 	asyncDir?: string;
-	dispatchChild(args: { role: string; task: string; index: number }): Promise<SingleResult>;
+	dispatchChild(args: { role: string; task: string; index: number; phaseIndex?: number; phaseTitle?: string; parallelGroupId?: string }): Promise<SingleResult>;
 	finishAsync?(success: boolean): void;
-	failWorkflow?(message: string): Promise<void>;
+	failWorkflow?(message: string, tags?: { phaseIndex?: number; phaseTitle?: string }): Promise<void>;
 }
 
 export interface WorkflowRuntimeOptions {
@@ -173,8 +178,8 @@ function failureEnvelope(role: string, task: string, outcome: WorkflowDispatchOu
 	};
 }
 
-async function agentGlobal(dispatch: WorkflowDispatch, role: string, task: string): Promise<SubmitResultEnvelope> {
-	const outcome = await dispatch(role, task);
+async function agentGlobal(dispatch: WorkflowDispatch, role: string, task: string, tags?: WorkflowDispatchTags): Promise<SubmitResultEnvelope> {
+	const outcome = await dispatch(role, task, tags);
 	if (isSubmitResultEnvelopeLike(outcome)) return outcome;
 	if (outcome.isError === true || outcome.exitCode !== undefined && outcome.exitCode !== 0 || Boolean(outcome.error) || outcome.interrupted === true) {
 		const envelope = failureEnvelope(role, task, outcome);
@@ -238,8 +243,12 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		return new TrackingPromise<T>((resolve, reject) => { stamped.then(resolve, reject); });
 	};
 
-	const agent = (role: string, task: string) => track(agentGlobal(options.dispatch, role, task));
-	const parallel = <T>(thunks: Array<() => Promise<T>>) => track(parallelGlobal(thunks));
+	const parallelGroupStore = new AsyncLocalStorage<string>();
+	const agent = (role: string, task: string) => {
+		const groupId = parallelGroupStore.getStore();
+		return track(agentGlobal(options.dispatch, role, task, { ...(groupId ? { parallelGroupId: groupId } : {}) }));
+	};
+	const parallel = <T>(thunks: Array<() => Promise<T>>) => track(parallelGroupStore.run(randomUUID(), () => parallelGlobal(thunks)));
 	const phase = (title: string) => {
 		try {
 			options.onPhase?.(title);
@@ -301,7 +310,9 @@ export interface CreateWorkflowToolOptions {
 }
 
 type WorkflowPhaseEmitter = WorkflowPhaseEmit & {
-	childStarted(role: string, task: string, index: number): void;
+	phaseIndex(): number;
+	phaseTitle(): string | undefined;
+	childStarted(role: string, task: string, index: number, meta?: { phaseIndex?: number; parallelGroupId?: string }): void;
 	childSettled(result: SingleResult, index: number): void;
 	// Canonical Details snapshot of the run so far. The success path returns this
 	// as the tool result's `details` so the final widget frame is a real Details
@@ -334,17 +345,38 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 	// and the "k/N" count is wrong. progress[] is derived from results[].progress so
 	// header, body, and denominator stay aligned.
 	const results = new Map<number, SingleResult>();
+	const childPhases = new Map<number, { phaseIndex: number; phaseTitle?: string; parallelGroupId?: string }>();
 	let phaseIndex = 0;
 	let phaseTitle = "";
 	// ONE builder for both the live onUpdate frame and the final snapshot() so the
 	// two can never drift in shape.
 	const buildDetails = (): Details => {
-		const ordered = [...results.entries()].sort(([a], [b]) => a - b).map(([, result]) => result);
+		const orderedEntries = [...results.entries()].sort(([a], [b]) => a - b);
+		const ordered = orderedEntries.map(([, result]) => result);
+		const chainAgents: string[] = [];
+		for (let i = 0; i < orderedEntries.length; i++) {
+			const [index, result] = orderedEntries[i]!;
+			const parallelGroupId = childPhases.get(index)?.parallelGroupId;
+			if (!parallelGroupId) {
+				chainAgents.push(result.agent);
+				continue;
+			}
+			const group = [result.agent];
+			while (i + 1 < orderedEntries.length) {
+				const [nextIndex, nextResult] = orderedEntries[i + 1]!;
+				if (childPhases.get(nextIndex)?.parallelGroupId !== parallelGroupId) break;
+				group.push(nextResult.agent);
+				i++;
+			}
+			chainAgents.push(group.length === 1 ? group[0]! : `[${group.join("+")}]`);
+		}
 		return {
 			mode: "parallel",
+			workflow: true,
 			results: ordered,
 			progress: ordered.map((result) => result.progress).filter((p): p is AgentProgress => p !== undefined),
-			totalSteps: results.size,
+			chainAgents,
+			totalSteps: chainAgents.length || results.size,
 			// Surface the live phase title through the typed run-level label, which the
 			// parallel header renders via uniformLabel. No fake "k/N" denominator: the
 			// total phase count is unknowable until the script finishes.
@@ -359,14 +391,22 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 		phaseTitle = title;
 		emit(title);
 	}) as WorkflowPhaseEmitter;
-	phase.childStarted = (role, task, index) => {
-		results.set(index, { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, progress: makeProgress(role, task, index, "running") });
-		emit(phaseTitle || `${role} running`);
+	phase.phaseIndex = () => phaseIndex;
+	phase.phaseTitle = () => phaseTitle || undefined;
+	phase.childStarted = (role, task, index, meta) => {
+		const childPhaseIndex = meta?.phaseIndex ?? phaseIndex;
+		const childPhaseTitle = phaseTitle || undefined;
+		childPhases.set(index, { phaseIndex: childPhaseIndex, ...(childPhaseTitle ? { phaseTitle: childPhaseTitle } : {}), ...(meta?.parallelGroupId ? { parallelGroupId: meta.parallelGroupId } : {}) });
+		const label = childPhaseTitle ? `Phase ${childPhaseIndex}: ${childPhaseTitle}` : undefined;
+		results.set(index, { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, ...(label ? { label } : {}), progress: makeProgress(role, task, index, "running") });
+		emit(label || `${role} working`);
 	};
 	phase.childSettled = (result, index) => {
 		const status: AgentProgress["status"] = result.exitCode === 0 && !result.interrupted ? "completed" : "failed";
 		const progress: AgentProgress = { ...(result.progress ?? makeProgress(result.agent, result.task, index, status)), status, ...(result.error ? { error: result.error } : {}) };
-		results.set(index, { ...result, progress });
+		const childPhase = childPhases.get(index);
+		const label = childPhase?.phaseTitle ? `Phase ${childPhase.phaseIndex}: ${childPhase.phaseTitle}` : undefined;
+		results.set(index, { ...result, ...(label && !result.label ? { label } : {}), progress });
 		emit(phaseTitle || `${result.agent} ${status}`);
 	};
 	phase.snapshot = buildDetails;
@@ -384,19 +424,31 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 			// Declared outside the try so the catch can record a synthetic failed child
 			// (failWorkflow) for a raw workflow-level error.
 			let group: WorkflowGroupHandle | undefined;
+			let emitter: WorkflowPhaseEmitter | undefined;
 			try {
 				const workflowOnUpdate = onUpdate as ((partialResult: AgentToolResult<Details>) => void) | undefined;
 				const workflowContext = { toolCallId: id, signal: signal as AbortSignal, onUpdate: workflowOnUpdate, ctx, requestedAsync: params.async };
 				group = options.openWorkflowGroup?.(workflowContext);
 				let childIndex = 0;
-				const emitter = createWorkflowPhaseEmitter(id, group?.async ? undefined : workflowOnUpdate);
+				emitter = createWorkflowPhaseEmitter(id, group?.async ? undefined : workflowOnUpdate);
+				const currentPhaseTags = () => ({
+					phaseIndex: emitter!.phaseIndex(),
+					...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
+				});
 				const run = () => runWorkflowScript({
-					dispatch: async (role, task) => {
+					dispatch: async (role, task, tags) => {
 						if (group) {
 							const index = childIndex++;
-							emitter.childStarted(role, task, index);
-							const result = await group.dispatchChild({ role, task, index });
-							emitter.childSettled(result, index);
+							emitter!.childStarted(role, task, index, { phaseIndex: emitter!.phaseIndex(), ...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}) });
+							const result = await group.dispatchChild({
+								role,
+								task,
+								index,
+								phaseIndex: emitter!.phaseIndex(),
+								...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
+								...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
+							});
+							emitter!.childSettled(result, index);
 							return {
 								envelope: result.structuredResult,
 								isError: result.exitCode !== 0 || Boolean(result.error) || result.interrupted === true,
@@ -415,13 +467,13 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 					const asyncGroup = group;
 					void run().then(() => asyncGroup.finishAsync?.(true)).catch(async (error) => {
 						const message = error instanceof Error ? error.message : String(error);
-						await asyncGroup.failWorkflow?.(message);
+						await asyncGroup.failWorkflow?.(message, currentPhaseTags());
 						asyncGroup.finishAsync?.(false);
 					});
 					const asyncDir = asyncGroup.asyncDir ?? "";
 					return {
 						content: [{ type: "text", text: `Workflow running...\nState: running\n${formatAsyncStatusHint(asyncGroup.groupRunId)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-						details: { mode: "parallel", results: [], runId: asyncGroup.groupRunId, asyncId: asyncGroup.groupRunId, asyncDir },
+						details: { mode: "parallel", workflow: true, results: [], chainAgents: [], runId: asyncGroup.groupRunId, asyncId: asyncGroup.groupRunId, asyncDir },
 					};
 				}
 				const value = await run();
@@ -434,7 +486,7 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				await group?.failWorkflow?.(message);
+				await group?.failWorkflow?.(message, emitter ? { phaseIndex: emitter.phaseIndex(), ...(emitter.phaseTitle() ? { phaseTitle: emitter.phaseTitle() } : {}) } : undefined);
 				return {
 					content: [{ type: "text", text: message }],
 					isError: true,

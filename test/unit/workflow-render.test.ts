@@ -5,16 +5,23 @@ import { createWorkflowTool } from "../../workflow.ts";
 import { renderSubagentResult, syncResultAnimation } from "../../render.ts";
 import type { Details, SingleResult } from "../../types.ts";
 
-function result(agent: string, task: string, exitCode = 0): SingleResult {
+function result(agent: string, task: string, exitCode = 0, index = agent === "A" ? 0 : 1, label?: string): SingleResult {
 	return {
 		agent,
 		task,
+		...(label ? { label } : {}),
 		exitCode,
 		messages: [],
 		usage: { input: 0, output: 0 },
 		structuredResult: { status: exitCode === 0 ? "ok" : "failed", summary: task, result: task, artifacts: [] },
-		progress: { index: agent === "A" ? 0 : 1, agent, task, status: exitCode === 0 ? "completed" : "failed", recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0 },
+		progress: { index, agent, task, status: exitCode === 0 ? "completed" : "failed", recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0 },
 	};
+}
+
+function renderText(details: Details, expanded: boolean): string {
+	const theme = { fg: (_t: string, s: string) => s, bg: (_t: string, s: string) => s, bold: (s: string) => s } as never;
+	const widget = renderSubagentResult({ content: [{ type: "text", text: "workflow output" }], details }, { expanded }, theme);
+	return widget.render(160).join("\n");
 }
 
 describe("workflow final result rendering does not throw on non-Details payloads (VAL-INLINE-RENDER)", () => {
@@ -121,10 +128,164 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		assert.ok(aRunningUpdate, "expected A to have a running placeholder in results[] while in-flight");
 		const final = updates.at(-1)?.details;
 		assert.equal(final?.mode, "parallel");
+		assert.equal(final?.workflow, true);
 		assert.equal(final?.progress?.length, 2);
 		assert.deepEqual(final?.progress?.map((progress) => [progress.agent, progress.status]), [["A", "completed"], ["B", "completed"]]);
 		assert.equal(final?.results.length, 2);
 		// results[] and progress[] stay aligned one-per-agent so header/body/denominator agree.
 		assert.deepEqual(final?.results.map((r) => [r.agent, r.progress?.status]), [["A", "completed"], ["B", "completed"]]);
+		assert.deepEqual(final?.chainAgents, ["A", "B"]);
+		assert.equal(final?.totalSteps, 2);
+	});
+
+	it("emits serial lone agents as separate chain steps but brackets true parallel siblings", async () => {
+		const tool = createWorkflowTool({
+			openWorkflowGroup: () => ({
+				groupRunId: "group-1",
+				async dispatchChild({ role, task, index }) {
+					return result(role, task, 0, index);
+				},
+			}),
+		});
+
+		const serial = await tool.execute?.(
+			"wf-serial",
+			{ script: "phase('same phase');\nawait agent('A', 'alpha');\nawait agent('B', 'bravo');" },
+			new AbortController().signal,
+			undefined,
+			{} as never,
+		) as AgentToolResult<Details> | undefined;
+		assert.deepEqual(serial?.details?.chainAgents, ["A", "B"]);
+		assert.equal(serial?.details?.totalSteps, 2);
+
+		const parallel = await tool.execute?.(
+			"wf-parallel",
+			{ script: "phase('same phase');\nawait parallel([() => agent('A', 'alpha'), () => agent('B', 'bravo')]);" },
+			new AbortController().signal,
+			undefined,
+			{} as never,
+		) as AgentToolResult<Details> | undefined;
+		assert.deepEqual(parallel?.details?.chainAgents, ["[A+B]"]);
+		assert.equal(parallel?.details?.totalSteps, 1);
+	});
+
+	it("brackets parallel siblings whose thunks await before calling agent", async () => {
+		const tool = createWorkflowTool({
+			openWorkflowGroup: () => ({
+				groupRunId: "group-1",
+				async dispatchChild({ role, task, index }) {
+					return result(role, task, 0, index);
+				},
+			}),
+		});
+
+		const parallel = await tool.execute?.(
+			"wf-parallel-delayed",
+			{ script: "phase('same phase');\nawait parallel([async () => { await Promise.resolve(); return agent('A', 'alpha'); }, async () => { await Promise.resolve(); return agent('B', 'bravo'); }]);" },
+			new AbortController().signal,
+			undefined,
+			{} as never,
+		) as AgentToolResult<Details> | undefined;
+		assert.deepEqual(parallel?.details?.chainAgents, ["[A+B]"]);
+		assert.equal(parallel?.details?.totalSteps, 1);
+	});
+
+	it("renders non-workflow running children with the original starting and thinking fallbacks", () => {
+		const starting = result("explorer", "inventory", 0, 0);
+		starting.progress = { ...starting.progress!, status: "running", toolCount: 0 };
+		const startingDetails: Details = {
+			mode: "single",
+			results: [starting],
+			progress: [starting.progress],
+		};
+
+		const thinking = result("review", "check", 0, 0);
+		thinking.progress = { ...thinking.progress!, status: "running", toolCount: 1 };
+		const thinkingDetails: Details = {
+			mode: "single",
+			results: [thinking],
+			progress: [thinking.progress],
+		};
+
+		assert.match(renderText(startingDetails, false), /starting…/);
+		assert.doesNotMatch(renderText(startingDetails, false), /explorer working/);
+		assert.match(renderText(thinkingDetails, false), /thinking…/);
+		assert.doesNotMatch(renderText(thinkingDetails, false), /review working/);
+	});
+
+	it("renders workflow running child with phase-aware coarse label instead of starting", () => {
+		const running = result("explorer", "inventory", 0, 0, "Phase 1: inventory");
+		running.progress = { ...running.progress!, status: "running", toolCount: 0 };
+		const details: Details = {
+			mode: "parallel",
+			workflow: true,
+			label: "Phase 1: inventory",
+			results: [running],
+			progress: [running.progress],
+			chainAgents: ["explorer"],
+			totalSteps: 1,
+		};
+
+		const text = renderText(details, false);
+		assert.match(text, /Phase 1: inventory working/);
+		assert.doesNotMatch(text, /starting/);
+	});
+
+	it("renders workflow mode label instead of parallel in compact and expanded", () => {
+		const details: Details = {
+			mode: "parallel",
+			workflow: true,
+			label: "Phase 1: inventory",
+			results: [result("explorer", "inventory", 0, 0)],
+			progress: [result("explorer", "inventory", 0, 0).progress!],
+			chainAgents: ["explorer"],
+			totalSteps: 1,
+		};
+
+		for (const expanded of [false, true]) {
+			const text = renderText(details, expanded);
+			assert.match(text, /workflow/);
+			assert.doesNotMatch(text, /parallel/);
+		}
+	});
+
+	it("emits and renders workflow fan-out/fan-in structure with phase numbering", async () => {
+		const updates: Array<AgentToolResult<Details>> = [];
+		const tool = createWorkflowTool({
+			openWorkflowGroup: () => ({
+				groupRunId: "group-1",
+				async dispatchChild({ role, task, index }) {
+					return result(role, task, 0, index);
+				},
+			}),
+		});
+
+		const executed = await tool.execute?.(
+			"wf",
+			{ script: "phase('inventory');\nawait parallel([() => agent('explorer', 'alpha'), () => agent('explorer', 'bravo')]);\nphase('synthesis');\nawait agent('synth', 'charlie');" },
+			new AbortController().signal,
+			(update) => updates.push(update as AgentToolResult<Details>),
+			{} as never,
+		) as AgentToolResult<Details> | undefined;
+
+		const final = executed?.details;
+		assert.deepEqual(final?.chainAgents, ["[explorer+explorer]", "synth"]);
+		assert.equal(final?.totalSteps, 2);
+		assert.equal(final?.mode, "parallel");
+		assert.equal(final?.workflow, true);
+
+		const expanded = renderText(final!, true);
+		assert.match(expanded, /workflow/);
+		assert.match(expanded, /\[warning explorer ∥ warning explorer\] → warning synth/);
+		assert.match(expanded, /Agent 1\.1∥: explorer/);
+		assert.match(expanded, /Agent 1\.2∥: explorer/);
+		assert.match(expanded, /Agent 2: synth/);
+		assert.match(expanded, /Phase 2: synthesis/);
+
+		const compact = renderText(final!, false);
+		assert.match(compact, /workflow/);
+		assert.match(compact, /Agent 1\.1∥: explorer/);
+		assert.match(compact, /Agent 1\.2∥: explorer/);
+		assert.match(compact, /Agent 2: synth/);
 	});
 });

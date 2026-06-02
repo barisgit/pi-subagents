@@ -24,6 +24,10 @@ function deferred<T = void>() {
 	return { promise, resolve };
 }
 
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function waitForEvent(events: EventEmitter, channel: string, predicate: (payload: any) => boolean = () => true): Promise<any> {
 	return new Promise((resolve) => {
 		const handler = (payload: any) => {
@@ -35,7 +39,7 @@ function waitForEvent(events: EventEmitter, channel: string, predicate: (payload
 	});
 }
 
-function setup(prefix: string, options: { asyncByDefault?: boolean; blockPrompt?: boolean } = {}) {
+function setup(prefix: string, options: { asyncByDefault?: boolean; blockPrompt?: boolean; promptDelayMs?: (task: string) => number } = {}) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	roots.push(root);
 	previousHome = process.env.HOME;
@@ -49,6 +53,8 @@ function setup(prefix: string, options: { asyncByDefault?: boolean; blockPrompt?
 		async prompt(task: string): Promise<void> {
 			promptStarted.resolve();
 			if (options.blockPrompt) await promptGate.promise;
+			const delayMs = options.promptDelayMs?.(task) ?? 0;
+			if (delayMs > 0) await sleep(delayMs);
 			this.messages.push({ role: "toolResult", toolName: "submit_result", isError: false, details: { status: "ok", summary: task, result: task, artifacts: [] } });
 		}
 		getLastAssistantText(): string { return "done"; }
@@ -73,7 +79,7 @@ function setup(prefix: string, options: { asyncByDefault?: boolean; blockPrompt?
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),
 		expandTilde: (value: string) => value,
-		discoverAgents: () => ({ agents: [makeAgent("A", { model: "mock/test-model" }), makeAgent("B", { model: "mock/test-model" })] }),
+		discoverAgents: () => ({ agents: [makeAgent("A", { model: "mock/test-model" }), makeAgent("B", { model: "mock/test-model" }), makeAgent("SLOW", { model: "mock/test-model" }), makeAgent("FAST", { model: "mock/test-model" })] }),
 	} as never);
 	const ctx = { cwd: root, hasUI: false, ui: {}, sessionManager: { getSessionId: () => "workflow-parent", getSessionFile: () => null }, modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] }, model: { provider: "mock" } };
 	const tool = createWorkflowTool({ openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext) });
@@ -142,6 +148,23 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		assert.equal(complete.completed, 1);
 	});
 
+	it("preserves dispatch order in async workflow complete event children", async () => {
+		const { events, tool, ctx } = setup("workflow-async-child-order-", { promptDelayMs: (task) => task === "a" ? 30 : 0 });
+		const completePromise = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT);
+
+		const result = await tool.execute?.("wf", { script: "await parallel([() => agent('SLOW', 'a'), () => agent('FAST', 'b')]);", async: true }, new AbortController().signal, undefined, ctx as never);
+		const groupRunId = (result?.details as any).runId;
+		const complete = await completePromise;
+		assert.equal(complete.runId, groupRunId);
+
+		assert.equal(complete.children.length, 2);
+		assert.equal(complete.children[0].stepIndex, 0, "mutant: first completed child must not be renumbered to dispatch index 0");
+		assert.equal(complete.children[0].agent, "SLOW");
+		assert.equal(complete.children[1].stepIndex, 1);
+		assert.equal(complete.children[1].agent, "FAST");
+		assert.equal(complete.agent, "SLOW,FAST");
+	});
+
 	it("sync path surfaces the raw script value via content text and a real Details snapshot", async () => {
 		const { tool, ctx } = setup("workflow-sync-raw-");
 
@@ -150,6 +173,6 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		// Value lives in content text; details is always a real Details (here the empty
 		// snapshot for a script that dispatched no agents), never the arbitrary value.
 		assert.equal((result?.content[0] as { text?: string }).text, "{\n  \"value\": 42\n}");
-		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", results: [], progress: [], totalSteps: 0 });
+		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", workflow: true, results: [], progress: [], chainAgents: [], totalSteps: 0 });
 	});
 });

@@ -46,6 +46,9 @@ export interface SpawnRunOpts {
 	defaultSessionDir?: string;
 	rootSessionId?: string;
 	parentSessionId?: string;
+	phaseIndex?: number;
+	phaseTitle?: string;
+	parallelGroupId?: string;
 	source?: "sync" | "async";
 	onLifecycle?: RunLifecycleSink;
 }
@@ -68,6 +71,7 @@ export interface OpenGroupOpts {
 	parentSessionFile?: string | null;
 	rootSessionId?: string;
 	parentSessionId?: string;
+	kind?: "workflow";
 	source?: "sync" | "async";
 	mode?: "single" | "chain" | "parallel";
 	label?: string;
@@ -126,6 +130,9 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 		source: opts.source ?? "sync",
 		agentName: step.agentName,
 		...(step.label ? { label: step.label } : {}),
+		...(opts.phaseIndex !== undefined ? { phaseIndex: opts.phaseIndex } : {}),
+		...(opts.phaseTitle ? { phaseTitle: opts.phaseTitle } : {}),
+		...(opts.parallelGroupId ? { parallelGroupId: opts.parallelGroupId } : {}),
 		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
 		rootRunId: opts.rootRunId ?? runId,
 		...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
@@ -182,6 +189,7 @@ export function openGroup(opts: OpenGroupOpts): Layer0GroupHandle {
 		runRecordDir: sessionPaths.runRecordDir,
 		mode: opts.mode ?? "parallel",
 		source: opts.source ?? "sync",
+		...(opts.kind ? { kind: opts.kind } : {}),
 		...(opts.label ? { label: opts.label } : {}),
 		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
 		rootRunId: opts.rootRunId ?? runId,

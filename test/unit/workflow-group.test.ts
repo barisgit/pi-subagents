@@ -5,8 +5,10 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
+import { readSummaryForEntry } from "../../async-status.ts";
+import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
 import { summaryFromRegistryEntry } from "../../subagents-status.ts";
+import { writeWorkflowGroupState } from "../../workflow-group-state.ts";
 import { createWorkflowTool } from "../../workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
 
@@ -64,6 +66,69 @@ afterEach(() => {
 });
 
 describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
+	it("keeps an empty async workflow group running via its statusless lifecycle marker", () => {
+		const { root } = setup("workflow-group-marker-");
+		const runRecordDir = path.join(root, "group-run");
+		const entry = {
+			runId: "workflow-group-empty",
+			runRecordDir,
+			mode: "parallel" as const,
+			source: "async" as const,
+			kind: "workflow" as const,
+			cwd: root,
+			startedAt: Date.now(),
+		};
+		appendRunEntry(entry);
+		const entries = readAllEntries();
+
+		writeWorkflowGroupState(runRecordDir, "running");
+		assert.equal(readSummaryForEntry(entry, entries)?.state, "running", "mutant: async-status must not synthesize an empty running workflow group as complete");
+		assert.equal(summaryFromRegistryEntry(entry, entries).state, "running", "mutant: subagents-status must not synthesize an empty running workflow group as complete");
+
+		writeWorkflowGroupState(runRecordDir, "complete");
+		assert.equal(readSummaryForEntry(entry, entries)?.state, "complete");
+		assert.equal(summaryFromRegistryEntry(entry, entries).state, "complete");
+		assert.equal(fs.existsSync(path.join(runRecordDir, "status.json")), false, "workflow group liveness marker must not write status.json");
+	});
+
+	it("does not let a stale running marker mask a failed workflow child", () => {
+		const { root } = setup("workflow-group-failmask-");
+		const groupDir = path.join(root, "group-run");
+		const childDir = path.join(root, "child-run");
+		fs.mkdirSync(childDir, { recursive: true });
+		const group = {
+			runId: "workflow-group-failmask",
+			runRecordDir: groupDir,
+			mode: "parallel" as const,
+			source: "async" as const,
+			kind: "workflow" as const,
+			cwd: root,
+			startedAt: Date.now(),
+		};
+		const child = {
+			runId: "workflow-child-failed",
+			runRecordDir: childDir,
+			mode: "single" as const,
+			source: "async" as const,
+			agentName: "A",
+			parentRunId: group.runId,
+			cwd: root,
+			startedAt: Date.now(),
+		};
+		appendRunEntry(group);
+		appendRunEntry(child);
+		// Leaf child persisted as failed via its own status.json.
+		fs.writeFileSync(path.join(childDir, "status.json"), JSON.stringify({ runId: child.runId, mode: "single", state: "failed", startedAt: Date.now(), cwd: root, currentStep: 0, steps: [] }));
+		const entries = readAllEntries();
+
+		// Marker is still "running" (orchestrator alive) but a child has FAILED. The
+		// running override must be gated on a computed "complete" and must not mask
+		// the failure in either synthesizer.
+		writeWorkflowGroupState(groupDir, "running");
+		assert.equal(readSummaryForEntry(group, entries)?.state, "failed", "mutant: async-status running override must not mask a failed child");
+		assert.equal(summaryFromRegistryEntry(group, entries).state, "failed", "mutant: subagents-status running override must not mask a failed child");
+	});
+
 	it("opens one statusless group and nests agent children under it", async () => {
 		const { root, executor, ctx } = setup("workflow-group-");
 		const tool = createWorkflowTool({ openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext) });

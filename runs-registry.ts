@@ -21,6 +21,10 @@ export interface RunsRegistryEntry {
 	source: "sync" | "async";
 	agentName?: string;
 	agentNames?: string[];
+	kind?: "workflow";
+	phaseIndex?: number;
+	phaseTitle?: string;
+	parallelGroupId?: string;
 	label?: string;
 	// Immediate dispatcher session (parent subagent for nested runs, user
 	// session for top-level runs).

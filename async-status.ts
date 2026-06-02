@@ -9,6 +9,7 @@ import { deriveRunDisplayState } from "./run-liveness.ts";
 import { readStatus } from "./utils.ts";
 import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
+import { readWorkflowGroupState } from "./workflow-group-state.ts";
 
 export interface AsyncRunStepSummary {
 	index: number;
@@ -45,6 +46,10 @@ export interface AsyncRunSummary {
 	// can scope strictly to the current session and its full nested subtree.
 	rootSessionId?: string;
 	label?: string;
+	workflow?: boolean;
+	phaseIndex?: number;
+	phaseTitle?: string;
+	parallelGroupId?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
@@ -322,20 +327,41 @@ export function listRunsFromRegistryForOverlay(
 // the `subagent({ action: "status" })` wall the user hit.
 const QUEUED_STUB_MAX_AGE_MS = 60_000;
 
-function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries()): AsyncRunSummary | null {
+function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
+	return {
+		...(entry.kind === "workflow" ? { workflow: true } : {}),
+		...(entry.phaseIndex !== undefined ? { phaseIndex: entry.phaseIndex } : {}),
+		...(entry.phaseTitle ? { phaseTitle: entry.phaseTitle } : {}),
+		...(entry.parallelGroupId ? { parallelGroupId: entry.parallelGroupId } : {}),
+	};
+}
+
+export function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries()): AsyncRunSummary | null {
 	const status = readStatus(entry.runRecordDir) as (AsyncStatus & { cwd?: string }) | null;
 	const sessionLineage = {
 		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
 		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
 	};
-	if (status) return { ...statusToSummary(entry.runRecordDir, status), ...sessionLineage };
+	if (status) return { ...statusToSummary(entry.runRecordDir, status), ...sessionLineage, ...registryWorkflowFields(entry) };
 	const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
 	const isGroup = entry.mode === "parallel" && (!entry.agentName && !entry.agentNames || children.length > 0);
 	if (isGroup) {
 		const childSummaries = children
-			.map((child) => readSummaryForEntry(child, entries))
+			.map((child) => {
+				const summary = readSummaryForEntry(child, entries);
+				return summary ? { ...summary, ...registryWorkflowFields(child) } : null;
+			})
 			.filter((child): child is AsyncRunSummary => Boolean(child));
-		const state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
+		let state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
+		// A statusless async workflow group with no children yet (or all children
+		// complete) computes "complete" even while the orchestrator is still running
+		// before/between agent() calls. The running marker corrects ONLY that gap;
+		// it must never mask a child-synthesized "failed" (e.g. failWorkflow's
+		// synthetic failed child), so gate the override on a computed "complete".
+		if (entry.kind === "workflow" && state === "complete") {
+			const lifecycle = readWorkflowGroupState(entry.runRecordDir);
+			if (lifecycle === "running") state = "running";
+		}
 		const childEndedAt = childSummaries
 			.map((child) => child.endedAt)
 			.filter((endedAt): endedAt is number => typeof endedAt === "number");
@@ -351,6 +377,7 @@ function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntr
 			...(entry.label ? { label: entry.label } : {}),
 			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 			...sessionLineage,
+			...registryWorkflowFields(entry),
 			steps: [],
 		};
 	}
@@ -373,6 +400,7 @@ function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntr
 		...(entry.label ? { label: entry.label } : {}),
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 		...sessionLineage,
+		...registryWorkflowFields(entry),
 		steps: agents.map((agent, index) => ({ index, agent, status: "queued" as const })),
 	};
 }
@@ -400,6 +428,7 @@ function isTerminalState(state: string): boolean {
 
 function formatRunHeader(run: AsyncRunSummary, children: AsyncRunSummary[] = []): string {
 	const isParallelGroup = run.mode === "parallel" && children.length > 0;
+	const modeLabel = run.workflow ? "workflow" : run.mode;
 	const stepCount = isParallelGroup ? children.length : run.steps.length || 1;
 	const completedParallelSteps = isParallelGroup
 		? children.filter((child) => isTerminalState(child.state)).length
@@ -410,7 +439,7 @@ function formatRunHeader(run: AsyncRunSummary, children: AsyncRunSummary[] = [])
 	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir);
 	const activity = formatActivityFacts(run);
 	const state = run.displayState ? `${run.state}/${run.displayState}` : run.state;
-	return `${run.id} | ${state}${activity ? ` | ${activity}` : ""} | ${run.mode} | ${stepLabel} | ${cwd}`;
+	return `${run.id} | ${state}${activity ? ` | ${activity}` : ""} | ${modeLabel} | ${stepLabel} | ${cwd}`;
 }
 
 function isGroupRun(run: AsyncRunSummary, children: AsyncRunSummary[]): boolean {
@@ -436,6 +465,42 @@ function formatChildRunLine(run: AsyncRunSummary): string {
 	return parts.filter((part): part is string => Boolean(part)).join(" | ");
 }
 
+function workflowPhaseLabel(run: Pick<AsyncRunSummary, "phaseIndex" | "phaseTitle">): string {
+	if (run.phaseIndex === undefined) return "";
+	const label = `Phase ${run.phaseIndex}`;
+	return run.phaseTitle ? `${label}: ${run.phaseTitle}` : label;
+}
+
+function sortedWorkflowChildren(children: AsyncRunSummary[]): AsyncRunSummary[] {
+	return children
+		.map((child, index) => ({ child, index }))
+		.sort((a, b) => {
+			const phaseA = a.child.phaseIndex ?? Number.MAX_SAFE_INTEGER;
+			const phaseB = b.child.phaseIndex ?? Number.MAX_SAFE_INTEGER;
+			if (phaseA !== phaseB) return phaseA - phaseB;
+			const groupA = a.child.parallelGroupId ?? "";
+			const groupB = b.child.parallelGroupId ?? "";
+			const byGroup = groupA.localeCompare(groupB);
+			return byGroup || a.index - b.index;
+		})
+		.map(({ child }) => child);
+}
+
+function appendWorkflowChildLines(lines: string[], children: AsyncRunSummary[]): void {
+	let lastPhaseKey: number | undefined;
+	for (const child of sortedWorkflowChildren(children)) {
+		if (child.phaseIndex !== lastPhaseKey) {
+			lastPhaseKey = child.phaseIndex;
+			if (!(child.phaseIndex === 0 && !child.phaseTitle)) {
+				const label = workflowPhaseLabel(child);
+				if (label) lines.push(`  ${label}`);
+			}
+		}
+		const prefix = child.parallelGroupId ? `[${child.parallelGroupId}] ` : "";
+		lines.push(`  - ${prefix}${formatChildRunLine(child)}`);
+	}
+}
+
 export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Subagent runs"): string {
 	if (runs.length === 0) return `No ${heading.toLowerCase()}.`;
 
@@ -449,8 +514,10 @@ export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Subagent 
 		childrenByParent.set(run.parentRunId, siblings);
 	}
 	const childIds = new Set<string>();
-	for (const children of childrenByParent.values()) {
-		children.sort((a, b) => b.startedAt - a.startedAt);
+	for (const [parentId, children] of childrenByParent.entries()) {
+		const parent = runs.find((run) => run.id === parentId);
+		const ordered = parent?.workflow ? sortedWorkflowChildren(children) : [...children].sort((a, b) => b.startedAt - a.startedAt);
+		children.splice(0, children.length, ...ordered);
 		for (const child of children) childIds.add(child.id);
 	}
 	for (const run of runs) {
@@ -458,7 +525,8 @@ export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Subagent 
 		const children = childrenByParent.get(run.id) ?? [];
 		lines.push(`- ${formatRunHeader(run, children)}`);
 		if (isGroupRun(run, children)) {
-			for (const child of children) lines.push(`  - ${formatChildRunLine(child)}`);
+			if (run.workflow) appendWorkflowChildLines(lines, children);
+			else for (const child of children) lines.push(`  - ${formatChildRunLine(child)}`);
 		} else {
 			for (const step of run.steps) {
 				lines.push(`  ${formatStepLine(step)}`);

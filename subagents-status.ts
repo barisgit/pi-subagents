@@ -15,6 +15,7 @@ import { type ActivityState, type RunDisplayState, type SubagentState } from "./
 import { listRunsByRootRunIds, readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { readStatus } from "./utils.ts";
 import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
+import { readWorkflowGroupState } from "./workflow-group-state.ts";
 
 const AUTO_REFRESH_MS = 1000;
 const RECENT_LIMIT = 20;
@@ -111,6 +112,15 @@ function entryMatchesOverlayScope(entry: RunsRegistryEntry, scope: { sessionCwd?
 	return true;
 }
 
+function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
+	return {
+		...(entry.kind === "workflow" ? { workflow: true } : {}),
+		...(entry.phaseIndex !== undefined ? { phaseIndex: entry.phaseIndex } : {}),
+		...(entry.phaseTitle ? { phaseTitle: entry.phaseTitle } : {}),
+		...(entry.parallelGroupId ? { parallelGroupId: entry.parallelGroupId } : {}),
+	};
+}
+
 export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntries?: RunsRegistryEntry[]): AsyncRunSummary {
 	const status = readStatus(entry.runRecordDir) as Parameters<typeof statusToSummary>[1] | null;
 	const lineage = {
@@ -123,13 +133,23 @@ export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 			...summary,
 			...(entry.parentRunId && !summary.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 			...lineage,
+			...registryWorkflowFields(entry),
 		};
 	}
 	if (!entry.agentName && !entry.agentNames) {
 		const entries = registryEntries ?? readAllEntries();
 		const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
-		const childSummaries = children.map((child) => summaryFromRegistryEntry(child, entries));
-		const state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
+		const childSummaries = children.map((child) => ({ ...summaryFromRegistryEntry(child, entries), ...registryWorkflowFields(child) }));
+		let state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
+		// A statusless async workflow group with no children yet (or all children
+		// complete) computes "complete" even while the orchestrator is still running
+		// before/between agent() calls. The running marker corrects ONLY that gap;
+		// it must never mask a child-synthesized "failed" (e.g. failWorkflow's
+		// synthetic failed child), so gate the override on a computed "complete".
+		if (entry.kind === "workflow" && state === "complete") {
+			const lifecycle = readWorkflowGroupState(entry.runRecordDir);
+			if (lifecycle === "running") state = "running";
+		}
 		const childEndedAt = childSummaries
 			.map((child) => child.endedAt)
 			.filter((endedAt): endedAt is number => typeof endedAt === "number");
@@ -146,6 +166,7 @@ export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 			...(entry.label ? { label: entry.label } : {}),
 			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 			...lineage,
+			...registryWorkflowFields(entry),
 			steps: [],
 		};
 	}
@@ -161,6 +182,7 @@ export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 		...(entry.label ? { label: entry.label } : {}),
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 		...lineage,
+		...registryWorkflowFields(entry),
 		steps: agents.map((agent, index) => ({ index, agent, status: "queued" as const })),
 	};
 }
@@ -293,6 +315,7 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 		const name = run.run.currentAgent ?? run.run.mode;
 		return tintAgentName(name, run.run.currentAgentColor ?? colorForAgentName(name));
 	}
+	if (run.run.workflow) return tintAgentName("workflow", colorForAgentName("workflow"));
 	const steps = run.run.mode === "parallel"
 		? run.run.steps.filter((s) => s.agent)
 		: run.run.steps;
@@ -316,6 +339,12 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 
 // Multi-step shape badge. 'chain 3/8' for sequential, 'parallel 3/5' for concurrent.
 // Empty for single-step runs to keep the left-pane line compact.
+function workflowPhaseChip(run: LiveRun): string {
+	if (run.source !== "async" || run.run.phaseIndex === undefined) return "";
+	const label = `P${run.run.phaseIndex}`;
+	return run.run.phaseTitle ? `${label} ${run.run.phaseTitle}` : label;
+}
+
 function runShapeBadge(run: LiveRun): string {
 	if (run.source === "sync") return "";
 	const total = run.run.steps.length;
@@ -390,10 +419,25 @@ function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
 			roots.push(run);
 		}
 	}
+	const childrenForDisplay = (parent: LiveRun, children: LiveRun[]): LiveRun[] => {
+		if (parent.source !== "async" || !parent.run.workflow) return children;
+		return children
+			.map((child, index) => ({ child, index }))
+			.sort((a, b) => {
+				const phaseA = a.child.source === "async" ? a.child.run.phaseIndex ?? 0 : 0;
+				const phaseB = b.child.source === "async" ? b.child.run.phaseIndex ?? 0 : 0;
+				if (phaseA !== phaseB) return phaseA - phaseB;
+				const groupA = a.child.source === "async" ? a.child.run.parallelGroupId ?? "" : "";
+				const groupB = b.child.source === "async" ? b.child.run.parallelGroupId ?? "" : "";
+				if (groupA !== groupB) return groupA.localeCompare(groupB);
+				return a.index - b.index;
+			})
+			.map(({ child }) => child);
+	};
 	const out: LiveRun[] = [];
 	const visit = (run: LiveRun) => {
 		out.push(run);
-		for (const child of byParent.get(run.run.id) ?? []) visit(child);
+		for (const child of childrenForDisplay(run, byParent.get(run.run.id) ?? [])) visit(child);
 	};
 	for (const run of roots) visit(run);
 	return out;
@@ -536,7 +580,7 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// suppress here so the seconds counter doesn't keep ticking after
 	// `complete`/`failed`/`lost`.
 	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "lost" || run.run.displayState === "lost";
-	const phase = isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
+	const phase = workflowPhaseChip(run) || (isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool));
 	// A 'lost' displayState is authoritative over the stale on-disk state: show just
 	// 'lost' rather than the confusing 'running/lost' a force-killed run would produce.
 	const status = run.run.displayState === "lost" ? "lost" : run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
@@ -1181,6 +1225,7 @@ function selectedRunTitle(run: LiveRun): string {
 	if (run.source === "sync") {
 		return run.run.currentAgent ?? run.run.mode ?? "(run)";
 	}
+	if (run.run.workflow) return "workflow";
 	const running = run.run.steps?.find((s) => s.status === "running");
 	const step = running ?? run.run.steps?.[0];
 	return step?.agent ?? run.run.mode ?? "(run)";

@@ -30,7 +30,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// The script's arbitrary return value is surfaced via content text, NOT details:
 		// `details` is always a real Details so the renderer can never crash on it.
 		assert.equal((result.content[0] as { text?: string } | undefined)?.text, "{\n  \"value\": 42\n}");
-		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", results: [], progress: [], totalSteps: 0 });
+		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", workflow: true, results: [], progress: [], chainAgents: [], totalSteps: 0 });
 	});
 
 	it("surfaces a throwing script as an error result without crashing the host", async () => {
