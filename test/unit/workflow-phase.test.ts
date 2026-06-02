@@ -15,10 +15,9 @@ describe("workflow phase global (VAL-PHASE)", () => {
 		assert.equal(value, "done");
 		assert.equal(updates.length, 1);
 		assert.equal(updates[0]?.content[0]?.text, "Inventory");
-		assert.equal(updates[0]?.details.mode, "single");
-		assert.equal(updates[0]?.details.progress?.[0]?.agent, "workflow");
-		assert.equal(updates[0]?.details.progress?.[0]?.task, "Inventory");
-		assert.deepEqual(updates[0]?.details.progress?.[0]?.recentOutput, ["Inventory"]);
+		assert.equal(updates[0]?.details.mode, "parallel");
+		assert.deepEqual(updates[0]?.details.progress, []);
+		assert.match(String(updates[0]?.details.label), /^Phase \d+: Inventory/);
 	});
 
 	it("ignores phase emitter errors", async () => {

@@ -13,6 +13,7 @@ import {
 	MAX_WIDGET_JOBS,
 	WIDGET_KEY,
 } from "./types.ts";
+import { logger } from "./logger.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
 import { compareRunsForDisplay } from "./run-liveness.ts";
 import { formatPhase } from "./run-phase.ts";
@@ -168,10 +169,34 @@ export function multiSpinnerFrame(): string {
 	return MULTI_SPINNER[Math.floor(Date.now() / WIDGET_ANIMATION_MS) % MULTI_SPINNER.length]!;
 }
 
+// `details` is not always a real Details. The renderer's structured body is total
+// over real Details but NOT over arbitrary objects, so we (1) cheaply route
+// empty/non-array-results payloads to the text fallback here, and (2) wrap the
+// structured body in a try/catch that also falls back to text (see
+// renderSubagentResult). Together these mean no `details` shape can throw out of
+// the renderer — we no longer mirror the full SingleResult field contract here.
+function hasRenderableResults(d: unknown): d is Details {
+	if (!d || typeof d !== "object") return false;
+	const results = (d as { results?: unknown }).results;
+	return Array.isArray(results) && results.length > 0;
+}
+
 function resultIsRunning(result: AgentToolResult<Details>): boolean {
-	return result.details?.progress?.some((entry) => entry.status === "running")
-		|| result.details?.results.some((entry) => entry.progress?.status === "running")
-		|| false;
+	// `details` may be a non-Details payload (the workflow tool returns the script's
+	// arbitrary value here), so guard EVERY optional array and its elements before
+	// calling .some — values like { progress: "x" } or { results: ["x"] } must not throw.
+	// Fail closed (no animation) on ANY throw, including poison accessors/proxies on
+	// `details` (e.g. `get progress(){throw}`) — a status probe must never crash the TUI.
+	try {
+		const d = result.details;
+		const progressRunning = Array.isArray(d?.progress)
+			&& d.progress.some((entry) => entry !== null && typeof entry === "object" && entry.status === "running");
+		const resultsRunning = Array.isArray(d?.results)
+			&& d.results.some((entry) => entry !== null && typeof entry === "object" && entry.progress?.status === "running");
+		return Boolean(progressRunning || resultsRunning);
+	} catch {
+		return false;
+	}
 }
 
 function stopResultAnimation(context: ResultAnimationContext): void {
@@ -1395,26 +1420,66 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 /**
  * Render a subagent result
  */
+// Format an error message without ever throwing — `error.message` and
+// `String(error)` can THEMSELVES throw (poison getter / toString) when the error
+// originated from an adversarial accessor on `details`.
+function safeErrorMessage(error: unknown): string {
+	try {
+		return error instanceof Error ? error.message : String(error);
+	} catch {
+		return "(unprintable error)";
+	}
+}
+
 export function renderSubagentResult(
 	result: AgentToolResult<Details>,
 	options: { expanded: boolean },
 	theme: Theme,
 ): Component {
-	const d = result.details;
-	if (!d || !d.results.length) {
-		const t = result.content[0];
-		const text = t?.type === "text" ? t.text : "(no output)";
-		const contextPrefix = d?.context === "fork" ? `${theme.fg("warning", "[fork]")} ` : "";
-		const width = getTermWidth() - 4;
-		const lines = text.split("\n");
-		if (lines.length === 1) return new Text(truncLine(`${contextPrefix}${text}`, width), 0, 0);
-		const c = new Container();
-		lines.forEach((line, index) => {
-			c.addChild(new Text(truncLine(`${index === 0 ? contextPrefix : ""}${line}`, width), 0, 0));
-		});
-		return c;
+	// `details` is not always a real Details (the workflow tool can return an
+	// arbitrary script value or undefined here). Make this renderer TOTAL over any
+	// `details` shape — including poison accessors/proxies — via two boundaries:
+	// (1) an inner try around the structured body that falls back to text, and
+	// (2) an OUTER try around the whole dispatch (the hasRenderableResults probe, the
+	// catch logging, and the text fallback's own `d.context` read) with a last-resort
+	// constant. No `details` value can throw out of this renderer or crash the TUI.
+	try {
+		const d = result.details;
+		if (hasRenderableResults(d)) {
+			try {
+				return renderDetailsBody(d, options, theme);
+			} catch (error) {
+				logger.warn("renderSubagentResult: structured render failed, falling back to text", { error: safeErrorMessage(error) });
+			}
+		}
+		return renderSubagentResultText(result, theme);
+	} catch (error) {
+		logger.warn("renderSubagentResult: total fallback after render failure", { error: safeErrorMessage(error) });
+		return new Text("(unrenderable subagent result)", 0, 0);
 	}
+}
 
+// Text fallback for non-Details payloads (or a structured-render failure). Uses
+// the result's content text, which always carries the human-readable output.
+function renderSubagentResultText(result: AgentToolResult<Details>, theme: Theme): Component {
+	const d = result.details;
+	const t = result.content[0];
+	const text = t?.type === "text" ? t.text : "(no output)";
+	const contextPrefix = d?.context === "fork" ? `${theme.fg("warning", "[fork]")} ` : "";
+	const width = getTermWidth() - 4;
+	const lines = text.split("\n");
+	if (lines.length === 1) return new Text(truncLine(`${contextPrefix}${text}`, width), 0, 0);
+	const c = new Container();
+	lines.forEach((line, index) => {
+		c.addChild(new Text(truncLine(`${index === 0 ? contextPrefix : ""}${line}`, width), 0, 0));
+	});
+	return c;
+}
+
+// The structured Details body. Total over real Details; may throw on a
+// malformed/partial Details, which renderSubagentResult catches and falls back
+// to text — so this never needs to defensively validate the SingleResult contract.
+function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Theme): Component {
 	const expanded = options.expanded;
 	const mdTheme = getMarkdownTheme();
 

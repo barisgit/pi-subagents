@@ -14,11 +14,12 @@ async function executeWorkflow(script: string): Promise<WorkflowToolResult> {
 }
 
 describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
-	it("exposes the workflow tool with a strict { script: string } parameter", () => {
+	it("exposes the workflow tool with strict { script: string, async?: boolean } parameters", () => {
 		const tool = createWorkflowTool({ dispatch: async () => ({ status: "ok", summary: "unused", result: "unused" }) });
 
 		assert.equal(tool.name, "workflow");
 		assert.deepEqual(validateToolArguments(tool, { type: "toolCall", id: "good", name: "workflow", arguments: { script: "return 1;" } }), { script: "return 1;" });
+		assert.deepEqual(validateToolArguments(tool, { type: "toolCall", id: "async", name: "workflow", arguments: { script: "return 1;", async: true } }), { script: "return 1;", async: true });
 		assert.throws(() => validateToolArguments(tool, { type: "toolCall", id: "extra", name: "workflow", arguments: { script: "return 1;", extra: true } }), /extra|Unexpected property/);
 	});
 
@@ -26,8 +27,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		const result = await executeWorkflow("const value = await Promise.resolve(42);\nreturn { value };");
 
 		assert.equal(result?.isError, undefined);
-		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { value: 42 });
+		// The script's arbitrary return value is surfaced via content text, NOT details:
+		// `details` is always a real Details so the renderer can never crash on it.
 		assert.equal((result.content[0] as { text?: string } | undefined)?.text, "{\n  \"value\": 42\n}");
+		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", results: [], progress: [], totalSteps: 0 });
 	});
 
 	it("surfaces a throwing script as an error result without crashing the host", async () => {

@@ -31,7 +31,7 @@ import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAni
 import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor } from "./subagent-executor.ts";
 import { ChildAgentRegistry } from "./in-process-executor.ts";
-import { createWorkflowTool, type WorkflowDispatchResult } from "./workflow.ts";
+import { createWorkflowTool } from "./workflow.ts";
 import { createAsyncJobTracker } from "./async-job-tracker.ts";
 import { controlNotificationKey, formatControlNoticeMessage } from "./subagent-control.ts";
 import { registerSlashCommands } from "./slash-commands.ts";
@@ -958,32 +958,13 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 	};
 
 	const workflowTool = createWorkflowTool({
-		async dispatch(role, task, workflowContext): Promise<WorkflowDispatchResult> {
-			const discovery = discoverAgents(workflowContext.ctx.cwd, "both", { config, registeredPersonaDirs: getRegisteredPersonaDirs() });
-			if (!discovery.agents.some((agent) => agent.name === role)) {
-				return {
-					isError: true,
-					exitCode: 1,
-					error: `Unknown agent '${role}'. Available: ${discovery.agents.map((agent) => agent.name).join(", ") || "(none)"}`,
-				};
-			}
-			const result = await executor.execute(
-				`${workflowContext.toolCallId}:${role}`,
-				{ run: [{ agent: role, task }] },
-				workflowContext.signal,
-				workflowContext.onUpdate,
-				workflowContext.ctx,
-			);
-			const first = result.details?.results?.[0];
-			return {
-				envelope: first?.structuredResult,
-				isError: result.isError,
-				exitCode: first?.exitCode,
-				error: first?.error,
-				interrupted: first?.interrupted,
-			};
-		},
+		openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
 	});
+	workflowTool.renderResult = (result, options, theme, context) => {
+		const subagentResult = result as AgentToolResult<Details>;
+		syncResultAnimation(subagentResult, context);
+		return renderSubagentResult(subagentResult, options, theme);
+	};
 
 	pi.registerTool(tool);
 	pi.registerTool(workflowTool);

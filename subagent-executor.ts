@@ -48,6 +48,7 @@ import { logger } from "./logger.ts";
 import { getCurrentPi } from "./current-pi.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "./lineage.ts";
 import type { SubagentToolInput, Step, Task } from "./schemas.ts";
+import type { WorkflowGroupHandle } from "./workflow.ts";
 /**
  * Resolve the parent runId for a dispatch happening NOW. The dispatching
  * session's lineage tells us our own runId; that becomes the parent for any
@@ -2662,8 +2663,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 						cost: result.usage.cost ?? 0,
 						turns: result.usage.turns ?? 0,
 					},
-					};
-				},
+							};
+						},
 			});
 			await awaitRun(handle);
 			if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
@@ -3188,6 +3189,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	) => Promise<AgentToolResult<Details>>;
+	openWorkflowGroup: (args: {
+		toolCallId: string;
+		signal: AbortSignal;
+		onUpdate?: (r: AgentToolResult<Details>) => void;
+		ctx: ExtensionContext;
+		requestedAsync?: boolean;
+	}) => WorkflowGroupHandle;
 } {
 	const executeImpl = async (
 		_id: string,
@@ -3652,5 +3660,234 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	return {
 		execute: (id, params, signal, onUpdate, ctx) => executeImpl(id, params as InternalSubagentParams, signal, onUpdate, ctx, false),
 		executeInternal: (id, params, signal, onUpdate, ctx) => executeImpl(id, params, signal, onUpdate, ctx, true),
+		openWorkflowGroup: ({ signal, onUpdate, ctx, requestedAsync }) => {
+			deps.state.baseCwd = ctx.cwd;
+			deps.state.currentSessionId = ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			const effectiveCwd = ctx.cwd;
+			const agents = deps.discoverAgents(effectiveCwd, "both", { includeInternal: true }).agents;
+			const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
+			const provisionalRunId = randomUUID();
+			const parentRunId = resolveDispatchParentRunId(ctx);
+			const rootRunId = resolveDispatchRootRunId(ctx, provisionalRunId);
+			const effectiveAsync = requestedAsync ?? deps.asyncByDefault;
+			const workflowDetachedAbort = new AbortController();
+			const controlConfig = resolveControlConfig(deps.config.control, undefined);
+			const group = openGroup({
+				cwd: effectiveCwd,
+				...(rootRunId !== provisionalRunId ? { rootRunId } : {}),
+				notifyPolicy: "each",
+				...(parentRunId ? { parentRunId } : {}),
+				...(deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) } : {}),
+				parentSessionFile,
+				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
+				...(() => {
+					const root = resolveDispatchRootSessionId(ctx);
+					return root ? { rootSessionId: root } : {};
+				})(),
+				source: effectiveAsync ? "async" : "sync",
+				mode: "parallel",
+			});
+			const groupRootRunId = rootRunId === provisionalRunId ? group.runId : rootRunId;
+			const sessionRoot = group.runRecordDir;
+			fs.mkdirSync(sessionRoot, { recursive: true });
+			const childResults: Array<{ runId: string; result: SingleResult }> = [];
+			const data: ExecutionContextData = {
+				params: {},
+				effectiveCwd,
+				ctx,
+				signal: effectiveAsync ? workflowDetachedAbort.signal : signal,
+				onUpdate,
+				agents,
+				runId: group.runId,
+				rootRunId: groupRootRunId,
+				shareEnabled: false,
+				sessionRoot,
+				sessionDirForIndex: (idx?: number) => path.join(sessionRoot, `run-${idx ?? 0}`),
+				sessionFileForIndex: (idx?: number) => path.join(sessionRoot, `run-${idx ?? 0}`, "session.jsonl"),
+				artifactConfig: { ...DEFAULT_ARTIFACT_CONFIG, enabled: true },
+				artifactsDir: getArtifactsDir(parentSessionFile),
+				backgroundRequestedWhileClarifying: false,
+				effectiveAsync,
+				controlConfig,
+				intercomBridge: resolveIntercomBridge({ config: deps.config.intercomBridge, context: undefined, orchestratorTarget: undefined }),
+			};
+			return {
+				groupRunId: group.runId,
+				async: effectiveAsync,
+				asyncDir: group.runRecordDir,
+				dispatchChild: async ({ role, task, index }) => {
+					const agentConfig = agents.find((agent) => agent.name === role);
+					let result: SingleResult | undefined;
+					const handle = spawnRun({ agentName: role, task, cwd: effectiveCwd }, {
+						parentRunId: group.runId,
+						rootRunId: groupRootRunId,
+						notifyPolicy: "each",
+						parentSessionFile,
+						sessionDir: path.join(sessionRoot, `run-${index}`),
+						...(deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) } : {}),
+						...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
+						...(() => {
+							const root = resolveDispatchRootSessionId(ctx);
+							return root ? { rootSessionId: root } : {};
+						})(),
+						source: effectiveAsync ? "async" : "sync",
+						runAgent: async (prepared, layer0Ctx) => {
+							// Unknown agent: still resolve through a real child run so the group
+							// has a FAILED child row to synthesize from (otherwise a statusless
+							// group with no child looks complete on the dashboard).
+							if (!agentConfig) {
+								const error = `Unknown agent: ${role}`;
+								result = { agent: role, task, exitCode: 1, messages: [], usage: emptyUsage(), error };
+								return { runId: prepared.runId, stepIndex: 0, state: "failed", exitCode: 1, outputText: error, toolCallCount: 0, toolResultCount: 0, toolErrorCount: 0, durationMs: 0, startedAt: Date.now(), endedAt: Date.now(), sessionFile: prepared.sessionFile, error: { message: error }, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 } };
+							}
+							result = await runInProcessChildStep({
+								data,
+								deps,
+								agentConfig,
+								task,
+								cleanTask: task,
+								stepIndex: index,
+								cwd: effectiveCwd,
+								interruptSignal: layer0Ctx.abortSignal,
+								maxSubagentDepth: resolveChildMaxSubagentDepth(resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth), agentConfig.maxSubagentDepth),
+								mode: "parallel",
+								layer0: { runId: prepared.runId, runRecordDir: prepared.runRecordDir, sessionFile: prepared.sessionFile, rootRunId: groupRootRunId },
+							});
+							return {
+								runId: prepared.runId,
+								stepIndex: 0,
+								state: result.interrupted ? "interrupted" : result.exitCode === 0 ? "complete" : "failed",
+								exitCode: result.exitCode === 0 ? 0 : 1,
+								outputText: getSingleResultOutput(result),
+								toolCallCount: result.progressSummary?.toolCount ?? 0,
+								toolResultCount: 0,
+								toolErrorCount: 0,
+								durationMs: result.progressSummary?.durationMs ?? 0,
+								startedAt: Date.now() - (result.progressSummary?.durationMs ?? 0),
+								endedAt: Date.now(),
+								sessionFile: result.sessionFile ?? prepared.sessionFile,
+								...(result.shareUrl ? { shareUrl: result.shareUrl } : {}),
+								...(result.error ? { error: { message: result.error } } : {}),
+								usage: {
+									input: result.usage.input,
+									output: result.usage.output,
+									cacheRead: result.usage.cacheRead ?? 0,
+									cacheWrite: result.usage.cacheWrite ?? 0,
+									cost: result.usage.cost ?? 0,
+									turns: result.usage.turns ?? 0,
+								},
+							};
+						},
+						onLifecycle: effectiveAsync ? (event) => {
+							if (event.type === "run.started") {
+								safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
+									id: event.runId,
+									runId: event.runId,
+									metadata: undefined,
+									controlConfig,
+									agent: role,
+									task: task.slice(0, 50),
+									cwd: effectiveCwd,
+									asyncDir: event.runRecordDir,
+									parentRunId: group.runId,
+								});
+								return;
+							}
+							const child = event.result;
+							safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
+								id: event.runId,
+								runId: event.runId,
+								parentRunId: group.runId,
+								rootRunId: groupRootRunId,
+								metadata: undefined,
+								notifyPolicy: "each",
+								agent: role,
+								success: child ? child.state === "complete" : false,
+								summary: child?.outputText ?? (event.error ? String(event.error) : ""),
+								exitCode: child?.exitCode,
+								state: child?.state ?? "failed",
+								durationMs: child?.durationMs,
+								sessionFile: child?.sessionFile ?? event.sessionFile,
+								timestamp: event.timestamp,
+								taskIndex: index,
+								asyncDir: event.runRecordDir,
+							});
+						} : undefined,
+					});
+					await awaitRun(handle);
+					if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
+					childResults.push({ runId: handle.runId, result });
+					return result;
+				},
+				failWorkflow: async (message) => {
+					// A raw workflow-level error (e.g. the script throws after a successful
+					// child) leaves the statusless group with only successful child rows, so
+					// dashboard/registry synthesis (computeGroupStatus) would show it complete.
+					// Record a synthetic FAILED child so the group synthesizes as failed,
+					// without ever writing a group status.json (statusless invariant).
+					// Safety net only: if a child already failed (e.g. a WorkflowAgentError
+					// from an awaited agent() failure), the group already synthesizes as
+					// failed — don't add a redundant second failed row.
+					if (childResults.some(({ result: r }) => r.exitCode !== 0 || r.interrupted === true)) return;
+					const index = childResults.length;
+					let result: SingleResult | undefined;
+					const handle = spawnRun({ agentName: "workflow", task: message, cwd: effectiveCwd }, {
+						parentRunId: group.runId,
+						rootRunId: groupRootRunId,
+						notifyPolicy: "each",
+						parentSessionFile,
+						sessionDir: path.join(sessionRoot, `run-${index}`),
+						...(deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) } : {}),
+						...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
+						...(() => {
+							const root = resolveDispatchRootSessionId(ctx);
+							return root ? { rootSessionId: root } : {};
+						})(),
+						source: effectiveAsync ? "async" : "sync",
+						runAgent: async (prepared) => {
+							result = { agent: "workflow", task: message, exitCode: 1, messages: [], usage: emptyUsage(), error: message };
+							return { runId: prepared.runId, stepIndex: 0, state: "failed", exitCode: 1, outputText: message, toolCallCount: 0, toolResultCount: 0, toolErrorCount: 0, durationMs: 0, startedAt: Date.now(), endedAt: Date.now(), sessionFile: prepared.sessionFile, error: { message }, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 } };
+						},
+					});
+					await awaitRun(handle);
+					if (result) childResults.push({ runId: handle.runId, result });
+				},
+				finishAsync: (success) => {
+					if (!effectiveAsync) return;
+					const children = childResults.map(({ runId, result: r }, index) => ({
+						id: runId,
+						runId,
+						dispatchRunId: group.runId,
+						stepIndex: index,
+						agent: r.agent,
+						state: r.interrupted ? "interrupted" : r.exitCode === 0 ? "complete" : "failed",
+						success: r.exitCode === 0 && !r.interrupted,
+						exitCode: r.exitCode,
+						output: getSingleResultOutput(r),
+						summary: getSingleResultOutput(r),
+						durationMs: r.progressSummary?.durationMs,
+						sessionFile: r.sessionFile,
+					}));
+					safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+						id: group.runId,
+						runId: group.runId,
+						...(parentRunId ? { parentRunId } : {}),
+						rootRunId: groupRootRunId,
+						notifyPolicy: "each",
+						success,
+						agent: childResults.map(({ result }) => result.agent).join(","),
+						summary: "",
+						state: success ? "complete" : "failed",
+						timestamp: Date.now(),
+						results: children,
+						children,
+						total: childResults.length,
+						completed: childResults.filter(({ result }) => result.exitCode === 0 && !result.interrupted).length,
+						asyncDir: group.runRecordDir,
+						metadata: undefined,
+					});
+				},
+			};
+		},
 	};
 }
