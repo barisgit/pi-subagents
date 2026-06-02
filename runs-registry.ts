@@ -61,18 +61,27 @@ export function getRegistryPath(): string {
 	return DEFAULT_REGISTRY_PATH;
 }
 
+export function getShardPath(sessionId: string): string {
+	return path.join(path.dirname(getRegistryPath()), "sessions", sessionId + ".jsonl");
+}
+
 export function appendRunEntry(entry: RunsRegistryEntry): void {
 	const filePath = getRegistryPath();
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	fs.appendFileSync(filePath, JSON.stringify(entry) + "\n", "utf8");
+	const shardKey = entry.rootSessionId ?? entry.parentSessionId;
+	if (shardKey) {
+		const shardPath = getShardPath(shardKey);
+		fs.mkdirSync(path.dirname(shardPath), { recursive: true });
+		fs.appendFileSync(shardPath, JSON.stringify(entry) + "\n", "utf8");
+	}
 }
 
 export interface ReadOptions {
 	limit?: number; // most-recent first; default unlimited
 }
 
-export function readAllEntries(opts: ReadOptions = {}): RunsRegistryEntry[] {
-	const filePath = getRegistryPath();
+function parseEntriesFromFile(filePath: string, opts: ReadOptions): RunsRegistryEntry[] {
 	let raw: string;
 	try {
 		raw = fs.readFileSync(filePath, "utf8");
@@ -94,6 +103,14 @@ export function readAllEntries(opts: ReadOptions = {}): RunsRegistryEntry[] {
 	}
 	entries.reverse(); // most-recent first
 	return opts.limit !== undefined ? entries.slice(0, opts.limit) : entries;
+}
+
+export function readAllEntries(opts: ReadOptions = {}): RunsRegistryEntry[] {
+	return parseEntriesFromFile(getRegistryPath(), opts);
+}
+
+export function readShardEntries(sessionId: string, opts: ReadOptions = {}): RunsRegistryEntry[] {
+	return parseEntriesFromFile(getShardPath(sessionId), opts);
 }
 
 export function listRunsByRootRunId(rootRunId: string): RunsRegistryEntry[] {

@@ -3,7 +3,7 @@ import { colorForAgentName } from "./agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryForOverlay, sortRuns, statusToSummary } from "./async-status.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns } from "./async-status.ts";
 import { previewArgs, readRunTranscript } from "./run-transcript.ts";
 import { formatDuration } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
@@ -12,18 +12,16 @@ import { formatPhase, type RunPhase } from "./run-phase.ts";
 import { flatRule, formatScrollInfo, padRight, titledBottomSegment, titledTopSegment } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { type ActivityState, type RunDisplayState, type SubagentState } from "./types.ts";
-import { listRunsByRootRunIds, readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
-import { readStatus } from "./utils.ts";
+import { listRunsByRootRunIds, readAllEntries, readShardEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
 import { readWorkflowGroupState } from "./workflow-group-state.ts";
 
 const AUTO_REFRESH_MS = 1000;
-// Most-recent terminal runs to surface in the overlay. Applied AFTER session
-// scoping (listRunsFromRegistryForOverlay scopes, then slices), so this caps
-// the current session's finished-run history, not a global top-N. Active runs
-// are never capped, and the left list scrolls (j/k/g/G), so a higher value just
-// shows more history; the only cost is ~N status.json reads per 1Hz refresh.
-const RECENT_LIMIT = 200;
+// When no run is live (all rows terminal/lost/idle), nothing needs a per-second
+// label tick and the derived set rarely changes, so the self-scheduling refresh
+// loop backs off to this slower cadence; it restores AUTO_REFRESH_MS the moment
+// a live run appears or the structural signature changes.
+const IDLE_REFRESH_MS = 5000;
 // Hard caps on the split fraction. The pane stretches up to 70% so long agent
 // labels + cwd badges fit on wide terminals; 18% keeps the right pane usable.
 const LEFT_PANE_CAP = 110;
@@ -127,13 +125,15 @@ function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary,
 }
 
 export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntries?: RunsRegistryEntry[]): AsyncRunSummary {
-	const status = readStatus(entry.runRecordDir) as Parameters<typeof statusToSummary>[1] | null;
+	// Shared terminal-summary cache with readSummaryForEntry: terminal leaves are
+	// reused by status.json mtime+size; active leaves are always rebuilt so the
+	// lost-transition keeps firing. See readLeafSummaryCached.
+	const summary = readLeafSummaryCached(entry.runRecordDir);
 	const lineage = {
 		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
 		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
 	};
-	if (status) {
-		const summary = statusToSummary(entry.runRecordDir, status);
+	if (summary) {
 		return {
 			...summary,
 			...(entry.parentRunId && !summary.parentRunId ? { parentRunId: entry.parentRunId } : {}),
@@ -196,8 +196,9 @@ export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { ses
 	const seedIds = new Set([...seed.active, ...seed.recent].map((run) => run.id));
 	if (seedIds.size === 0) return seed;
 
+	const registryEntries = scope.sessionId ? readShardEntries(scope.sessionId) : readAllEntries();
 	const rootRunIds = new Set<string>();
-	for (const entry of readAllEntries()) {
+	for (const entry of registryEntries) {
 		if (!seedIds.has(entry.runId) || !entryMatchesOverlayScope(entry, scope)) continue;
 		rootRunIds.add(entry.rootRunId ?? entry.runId);
 	}
@@ -205,7 +206,9 @@ export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { ses
 
 	const byId = new Map<string, AsyncRunSummary>();
 	for (const run of [...seed.active, ...seed.recent]) byId.set(run.id, run);
-	const entries = listRunsByRootRunIds(rootRunIds);
+	const entries = scope.sessionId
+		? registryEntries.filter((entry) => rootRunIds.has(entry.rootRunId ?? entry.runId))
+		: listRunsByRootRunIds(rootRunIds);
 	for (const entry of entries) {
 		// The scoped seed has already proven this root run belongs to the current
 		// session. Include the whole run tree by rootRunId so descendants with
@@ -360,6 +363,40 @@ function runShapeBadge(run: LiveRun): string {
 	return formatShapeBadge({ mode: run.run.mode, total, current });
 }
 
+// A run shows a live, ticking elapsed/spinner label iff it is NOT terminal and
+// NOT lost — mirrors the freeze logic in runElapsed/runIdentityAge. Terminal
+// and lost rows freeze their labels at data-landing time, so they need no
+// per-tick repaint. Used to decide whether a coarse clock tick must still fire
+// a render (live labels) and whether the refresh interval may back off (no live
+// runs => idle).
+function runHasLiveLabel(run: LiveRun): boolean {
+	if (run.source !== "async") return run.run.state === "running" || run.run.state === "queued";
+	const s = run.run.state;
+	if (s === "complete" || s === "failed" || s === "interrupted" || s === "skipped" || s === "lost" || s === "paused") return false;
+	if (run.run.displayState === "lost") return false;
+	return true;
+}
+
+// Cheap structural signature of the derived run set that EXCLUDES time-relative
+// fields (elapsed/age labels), so an idle tick where only the wall clock moved
+// produces an identical signature and is suppressed. Includes everything that
+// changes the painted rows: identity, order, state, derived liveness, current
+// tool, phase, and step progress. The render-on-diff gate fires a repaint when
+// this changes; the coarse-tick path separately keeps live labels advancing.
+function overlayRunsSignature(runs: LiveRun[], selectedId: string | undefined, errorMessage: string | undefined): string {
+	const parts: string[] = [`sel:${selectedId ?? ""}`, `err:${errorMessage ? 1 : 0}`];
+	for (const run of runs) {
+		if (run.source === "async") {
+			const r = run.run;
+			parts.push(`async:${r.id}:${r.state}:${r.displayState ?? ""}:${r.currentTool ?? ""}:${r.phase ?? ""}:${r.currentStep ?? ""}:${r.steps?.length ?? 0}`);
+		} else {
+			const r = run.run;
+			parts.push(`sync:${r.id}:${r.state}:${r.currentTool ?? ""}:${r.currentIndex ?? ""}`);
+		}
+	}
+	return parts.join("|");
+}
+
 function runElapsed(run: LiveRun, now: number): string {
 	const legStartedAt = run.run.resumedAt ?? run.run.startedAt;
 	// Terminal runs (lost/complete/failed) must not keep ticking. lost runs have no
@@ -369,7 +406,7 @@ function runElapsed(run: LiveRun, now: number): string {
 		// A force-killed run keeps state==='running' on disk but goes displayState==='lost'
 		// once its runner heartbeat is stale — freeze the timer on that too, not just on a
 		// terminal state, otherwise a dead run keeps ticking.
-		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.displayState === "lost") {
+		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || run.run.displayState === "lost") {
 			const frozen = run.run.lastUpdate ?? run.run.startedAt;
 			return formatDuration(Math.max(0, frozen - legStartedAt));
 		}
@@ -384,7 +421,7 @@ function runIdentityAge(run: LiveRun, now: number): string | undefined {
 	// without one) instead of ticking against `now` forever.
 	const isLost = run.run.state === "lost" || run.run.displayState === "lost";
 	const frozenEnd = run.source === "async"
-		? run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || isLost ? run.run.lastUpdate : undefined)
+		? run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || isLost ? run.run.lastUpdate : undefined)
 		: undefined;
 	const end = frozenEnd ?? now;
 	return formatDuration(Math.max(0, end - run.run.startedAt));
@@ -756,7 +793,14 @@ export class SubagentsStatusComponent implements Component {
 	private readonly listRunsForOverlay: (recentLimit?: number) => AsyncRunOverlayData;
 	private readonly listForegroundRuns: () => ForegroundRunSummary[];
 	private readonly leftPaneCap: number;
-	private readonly refreshTimer: NodeJS.Timeout;
+	// Self-scheduling refresh handle (setTimeout, not setInterval) so the cadence
+	// can back off when idle and restore when a live run appears. Reset on dispose.
+	private refreshTimer: NodeJS.Timeout | undefined;
+	private readonly refreshMs: number;
+	// Structural signature of the last derived run set (excludes time-relative
+	// labels). The timer requests a render only when this changes or a live label
+	// must advance — see scheduleRefresh.
+	private lastRunsSignature: string | undefined;
 	private runs: LiveRun[] = [];
 	private selectedId?: string;
 	private leftScroll = 0;
@@ -798,18 +842,37 @@ export class SubagentsStatusComponent implements Component {
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
 		this.sessionCwd = deps.sessionCwd;
 		this.sessionId = deps.sessionId;
-		const refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
+		this.refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.reload();
-		this.refreshTimer = setInterval(() => {
+		// Seed the signature so the first timer tick doesn't spuriously diff against
+		// undefined; the initial paint is driven by the overlay open, not the timer.
+		this.lastRunsSignature = overlayRunsSignature(this.runs, this.selectedId, this.errorMessage);
+		this.scheduleRefresh();
+	}
+
+	// Self-scheduling refresh tick. Reloads the derived run set, then requests a
+	// render ONLY when the structural signature changed OR a live run still needs
+	// its elapsed/spinner label advanced (render-on-diff with a coarse tick for
+	// live labels). When nothing is live and nothing changed, the next tick backs
+	// off to IDLE_REFRESH_MS; any live run or structural change restores the fast
+	// cadence. Tests that inject an explicit refreshMs keep that exact period.
+	private scheduleRefresh(): void {
+		const hasInjectedPeriod = this.refreshMs !== AUTO_REFRESH_MS;
+		this.refreshTimer = setTimeout(() => {
 			this.reload();
-			this.tui.requestRender();
-		}, refreshMs);
+			const signature = overlayRunsSignature(this.runs, this.selectedId, this.errorMessage);
+			const changed = signature !== this.lastRunsSignature;
+			const hasLive = this.runs.some(runHasLiveLabel);
+			this.lastRunsSignature = signature;
+			if (changed || hasLive) this.tui.requestRender();
+			this.scheduleRefresh();
+		}, hasInjectedPeriod || this.runs.some(runHasLiveLabel) ? this.refreshMs : IDLE_REFRESH_MS);
 		this.refreshTimer.unref?.();
 	}
 
 	private reload(): void {
 		try {
-			const overlay = this.listRunsForOverlay(RECENT_LIMIT);
+			const overlay = this.listRunsForOverlay();
 			const sync = this.listForegroundRuns();
 			const syncIds = new Set(sync.map((run) => run.id));
 			// charter nested-subagent-display: prefer in-memory sync rows while disk mirrors exist.
@@ -1216,7 +1279,8 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	dispose(): void {
-		clearInterval(this.refreshTimer);
+		if (this.refreshTimer) clearTimeout(this.refreshTimer);
+		this.refreshTimer = undefined;
 	}
 }
 

@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 describe("dashboard tree rows", () => {
-	it("session-scoped dashboard keeps nested descendants with stale session tags", () => {
+	it("session-scoped dashboard keeps nested descendants from the host session shard", () => {
 		const root = tmpRegistry();
 		appendCompleteRun(root, {
 			runId: "parent-visible",
@@ -89,7 +89,7 @@ describe("dashboard tree rows", () => {
 			parentRunId: "parent-visible",
 			rootRunId: "parent-visible",
 			parentSessionId: "sess-child",
-			rootSessionId: "sess-child",
+			rootSessionId: "sess-host",
 			startedAt: 200,
 		});
 		appendCompleteRun(root, {

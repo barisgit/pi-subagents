@@ -7,7 +7,7 @@ import type { RunPhase } from "./run-phase.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
 import { deriveRunDisplayState } from "./run-liveness.ts";
 import { readStatus } from "./utils.ts";
-import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
+import { readAllEntries, readShardEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
 import { readWorkflowGroupState } from "./workflow-group-state.ts";
 
@@ -266,8 +266,8 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 // Registry-backed reader. Single source of truth for run discovery: enumerates
 // the runs-index.jsonl registry instead of scanning a temp dir. Both sync and
 // async runs appear as equal first-class entries.
-export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"][]; limit?: number } = {}): AsyncRunSummary[] {
-	const entries = readAllEntries();
+export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"][]; limit?: number; entries?: RunsRegistryEntry[] } = {}): AsyncRunSummary[] {
+	const entries = options.entries ?? readAllEntries();
 	const allowedStates = options.states ? new Set(options.states) : undefined;
 	const runs: AsyncRunSummary[] = [];
 	const seen = new Set<string>();
@@ -284,10 +284,14 @@ export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"
 }
 
 export function listRunsFromRegistryForOverlay(
-	recentLimit = 5,
+	// undefined means unlimited (the session-scoped overlay shows the whole
+	// session); callers that still want a top-N pass an explicit number.
+	recentLimit?: number,
 	options: { sessionCwd?: string; sessionId?: string } = {},
 ): AsyncRunOverlayData {
-	const all = listRunsFromRegistry();
+	const all = options.sessionId
+		? listRunsFromRegistry({ entries: readShardEntries(options.sessionId) })
+		: listRunsFromRegistry();
 	// Scope BEFORE the recent-limit slice. Otherwise the top-N most recent
 	// completed runs across every project drown out the current session's
 	// history and the overlay renders "0 total" even though runs-index.jsonl
@@ -309,10 +313,10 @@ export function listRunsFromRegistryForOverlay(
 	} else if (options.sessionCwd) {
 		scoped = scoped.filter((run) => !run.cwd || run.cwd === options.sessionCwd);
 	}
-	const recent = scoped
+	const sortedTerminal = scoped
 		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused" || run.state === "interrupted" || run.state === "skipped")
-		.sort((a, b) => b.startedAt - a.startedAt)
-		.slice(0, recentLimit);
+		.sort((a, b) => b.startedAt - a.startedAt);
+	const recent = recentLimit === undefined ? sortedTerminal : sortedTerminal.slice(0, recentLimit);
 	return {
 		active: scoped.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
 		recent,
@@ -336,13 +340,85 @@ function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary,
 	};
 }
 
+// Per-tick incremental refresh: a terminal run's status.json is immutable
+// (finalize writes the last state, then the writer is disposed and the file's
+// mtime stops changing), so its derived summary can be cached by runRecordDir
+// and reused across reloads without re-reading + re-deriving it every 1Hz tick.
+//
+// HARD CORRECTNESS GUARD: only TERMINAL summaries are cached. An ACTIVE run's
+// displayState is time-relative (deriveRunDisplayState compares Date.now()
+// against the cached runnerHeartbeatAt), so it MUST be rebuilt every tick or a
+// wedged runner whose status.json stopped updating would be frozen as "working"
+// and never cross the 30s hard-dead / 15s stale lost threshold. A wedged run
+// keeps status.state==="running" (displayState==="lost" is derived, not
+// persisted), so it is never in this set and keeps being re-derived until the
+// 10-min reconcile ceiling flips its persisted state.
+const CACHEABLE_TERMINAL_STATES: ReadonlySet<AsyncRunSummary["state"]> = new Set([
+	"complete",
+	"failed",
+	"interrupted",
+	"skipped",
+	"lost",
+	// paused is terminal-ish: it sits in the recent/terminal bucket and its
+	// status.json is not written while paused (immutable mtime). A resume
+	// rewrites status.json, changing mtime+size, which invalidates this entry.
+	"paused",
+]);
+const leafSummaryCache = new Map<string, { mtime: number; size: number; summary: AsyncRunSummary }>();
+const LEAF_SUMMARY_CACHE_CAP = 1000;
+
+// Visible to tests so a fresh fixture starts from an empty cache.
+export function clearLeafSummaryCacheForTests(): void {
+	leafSummaryCache.clear();
+}
+
+// Shared by both dashboard leaf builders (readSummaryForEntry here and
+// summaryFromRegistryEntry in subagents-status.ts). Returns the pure
+// statusToSummary projection (callers spread their own lineage / workflow tags
+// on top); null when there is no readable status.json. Terminal results are
+// cached by status.json mtime+size; active results are always rebuilt.
+export function readLeafSummaryCached(asyncDir: string): AsyncRunSummary | null {
+	const statusPath = path.join(asyncDir, "status.json");
+	let stat: fs.Stats | undefined;
+	try {
+		stat = fs.statSync(statusPath);
+	} catch {
+		// Missing/unreadable status.json: drop any stale cache entry and let the
+		// caller fall back to group synthesis / orphan handling (matches the prior
+		// readStatus===null behavior). An active run whose file vanished is NOT
+		// served from cache here, which is what keeps a wedged run from freezing.
+		leafSummaryCache.delete(statusPath);
+		return null;
+	}
+	const cached = leafSummaryCache.get(statusPath);
+	if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) return cached.summary;
+	const status = readStatus(asyncDir) as (AsyncStatus & { cwd?: string }) | null;
+	if (!status) {
+		leafSummaryCache.delete(statusPath);
+		return null;
+	}
+	const summary = statusToSummary(asyncDir, status);
+	if (CACHEABLE_TERMINAL_STATES.has(summary.state)) {
+		leafSummaryCache.set(statusPath, { mtime: stat.mtimeMs, size: stat.size, summary });
+		if (leafSummaryCache.size > LEAF_SUMMARY_CACHE_CAP) {
+			const firstKey = leafSummaryCache.keys().next().value;
+			if (firstKey) leafSummaryCache.delete(firstKey);
+		}
+	} else {
+		// Never let a prior terminal cache entry shadow a now-active rebuild, and
+		// never insert an active (time-relative) summary.
+		leafSummaryCache.delete(statusPath);
+	}
+	return summary;
+}
+
 export function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries()): AsyncRunSummary | null {
-	const status = readStatus(entry.runRecordDir) as (AsyncStatus & { cwd?: string }) | null;
+	const leaf = readLeafSummaryCached(entry.runRecordDir);
 	const sessionLineage = {
 		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
 		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
 	};
-	if (status) return { ...statusToSummary(entry.runRecordDir, status), ...sessionLineage, ...registryWorkflowFields(entry) };
+	if (leaf) return { ...leaf, ...sessionLineage, ...registryWorkflowFields(entry) };
 	const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
 	const isGroup = entry.mode === "parallel" && (!entry.agentName && !entry.agentNames || children.length > 0);
 	if (isGroup) {
