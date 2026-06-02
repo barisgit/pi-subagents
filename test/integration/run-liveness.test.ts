@@ -70,6 +70,17 @@ describe("deriveRunDisplayState lost requires unknown phase", () => {
 		assert.equal(justUnder, "tool_running", "heartbeat just under hard-dead ceiling must not be lost");
 	});
 
+	it("active-phase-stopped-heartbeat-fails-open-at-hard-dead-ceiling", () => {
+		const result = deriveRunDisplayState({
+			state: "running",
+			phase: "thinking",
+			runnerHeartbeatAt: NOW - RUNNER_HARD_DEAD_MS - 1,
+			now: NOW,
+			hardDeadMs: RUNNER_HARD_DEAD_MS,
+		});
+		assert.equal(result, "lost", "active in-process children must still render lost after heartbeat patches stop");
+	});
+
 	it("legacy-no-phase-still-lost-on-stale: missing phase + 30s old heartbeat → lost", () => {
 		const result = deriveRunDisplayState({
 			state: "running",

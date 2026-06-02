@@ -19,8 +19,13 @@ class FakeResourceLoader {
 }
 
 class FakeAgentSession {
-	subscribe(): () => void { return () => {}; }
+	private listeners: Array<(event: unknown) => void> = [];
+	subscribe(listener: (event: unknown) => void): () => void {
+		this.listeners.push(listener);
+		return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+	}
 	async prompt(): Promise<void> {
+		for (const listener of this.listeners) listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
 		if (promptGate) {
 			promptGate.started++;
 			if (promptGate.started === promptGate.expected) promptGate.resolveAllStarted();
@@ -50,6 +55,18 @@ async function waitForPrompts(deps: any): Promise<void> {
 		promptGate!.allStarted,
 		new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`timed out waiting for prompts; started=${promptGate?.started ?? 0}; controls=${deps.state.foregroundControls.size}; entries=${readAllEntries().length}`)), 1000)),
 	]);
+}
+
+async function waitForStatusPhase(statusPath: string): Promise<Record<string, unknown>> {
+	const deadline = Date.now() + 1000;
+	while (Date.now() < deadline) {
+		if (fs.existsSync(statusPath)) {
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+			if (status.phase === "thinking" && typeof status.runnerHeartbeatAt === "number") return status;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	return fs.existsSync(statusPath) ? JSON.parse(fs.readFileSync(statusPath, "utf8")) : {};
 }
 
 function setupTempHome(prefix: string): string {
@@ -111,12 +128,12 @@ function makeCtx(cwd: string) {
 	};
 }
 
-function execute(deps: any, cwd: string) {
+function execute(deps: any, cwd: string, onUpdate?: (update: { details?: { progress?: Array<{ status?: string }>; results?: unknown[]; totalSteps?: number } }) => void) {
 	return createSubagentExecutor(deps).execute(
 		"id",
 		{ run: [{ agent: "A", task: "alpha" }, { agent: "B", task: "bravo" }] } as never,
 		new AbortController().signal,
-		undefined,
+		onUpdate as never,
 		makeCtx(cwd) as never,
 	);
 }
@@ -155,6 +172,30 @@ describe("sync foreground parallel executor", () => {
 		assert.equal(deps.state.lastForegroundControlId, null);
 	});
 
+	it("foreground parallel emits terminal child progress as each child settles", async () => {
+		const root = setupTempHome("sync-foreground-parallel-final-update-");
+		installFakeRuntime();
+		installPromptGate(2);
+		const deps = makeDeps(root) as any;
+		const updates: Array<{ details?: { progress?: Array<{ status?: string }>; results?: unknown[]; totalSteps?: number } }> = [];
+
+		const running = execute(deps, root, (update) => updates.push(update));
+		await waitForPrompts(deps);
+
+		promptGate!.resolveRelease();
+		await running;
+
+		const settledCounts = updates
+			.map((update) => update.details?.progress?.filter((progress) => progress.status !== "running").length ?? 0)
+			.filter((count) => count > 0);
+		assert.ok(settledCounts.includes(1), "merged update after the first resolved child must show 1/2 settled");
+		assert.ok(settledCounts.includes(2), "merged update after the second resolved child must show 2/2 settled");
+		const final = updates.at(-1)!;
+		assert.equal(final.details?.totalSteps, 2);
+		assert.equal(final.details?.progress?.every((progress) => progress.status !== "running"), true);
+		assert.equal(final.details?.results?.length, 2);
+	});
+
 	it("foreground parallel child runs use prepared layer0 session paths", async () => {
 		const root = setupTempHome("sync-foreground-parallel-layer0-");
 		installFakeRuntime();
@@ -173,6 +214,11 @@ describe("sync foreground parallel executor", () => {
 			children.map((entry) => entry.runId).sort(),
 		);
 		assert.deepEqual(openedSessionFiles.sort(), children.map((entry) => path.join(entry.runRecordDir, "run-0", "session.jsonl")).sort());
+		for (const child of children) {
+			const status = await waitForStatusPhase(path.join(child.runRecordDir, "status.json"));
+			assert.equal(status.phase, "thinking", "in-process foreground child phase patches must bridge to the child status writer");
+			assert.equal(typeof status.runnerHeartbeatAt, "number", "in-process foreground child heartbeat patches must bridge to the child status writer");
+		}
 
 		promptGate!.resolveRelease();
 		const result = await running;

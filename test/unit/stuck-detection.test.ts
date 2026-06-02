@@ -178,10 +178,10 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 		}));
 
 		assert.doesNotThrow(() => t.mock.timers.tick(5_000));
-		assert.equal(patches.length, 1, "heartbeat still emits on the throwing stuck tick");
+		assert.equal(patches.length, 2, "heartbeat and phase still emit on the throwing stuck tick");
 
 		t.mock.timers.tick(5_000);
-		assert.equal(patches.length, 2, "ticker continues after onStuck failure");
+		assert.equal(patches.length, 4, "ticker continues after onStuck failure");
 		ticker.stop();
 	});
 

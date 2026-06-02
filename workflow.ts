@@ -45,6 +45,16 @@ export interface WorkflowGroupHandle {
 export interface WorkflowRuntimeOptions {
 	dispatch: WorkflowDispatch;
 	onPhase?: WorkflowPhaseEmit;
+	// Announced synchronously when parallel(thunks) starts, BEFORE any child
+	// dispatches, carrying the group id + size so the live header denominator can
+	// account for siblings that have not registered into results[] yet.
+	onParallelGroup?: (groupId: string, size: number) => void;
+	// Announced when a parallel(thunks) group settles (all thunks resolved/rejected).
+	// Clears any pending slots a thunk reserved but never spent on an agent() dispatch
+	// (e.g. a raw `async () => 'x'` thunk), so a completed run never shows an inflated
+	// denominator. By settle time every real agent has already registered (a thunk only
+	// resolves after its awaited agent() does), so this only reaps phantom slots.
+	onParallelGroupSettled?: (groupId: string) => void;
 	script: string;
 }
 
@@ -248,7 +258,56 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		const groupId = parallelGroupStore.getStore();
 		return track(agentGlobal(options.dispatch, role, task, { ...(groupId ? { parallelGroupId: groupId } : {}) }));
 	};
-	const parallel = <T>(thunks: Array<() => Promise<T>>) => track(parallelGroupStore.run(randomUUID(), () => parallelGlobal(thunks)));
+	const parallel = <T>(thunks: Array<() => Promise<T>>) => {
+		if (!Array.isArray(thunks)) return track(parallelGlobal(thunks));
+		const groupId = randomUUID();
+		const size = thunks.length;
+		const sized = size > 1;
+		if (sized) options.onParallelGroup?.(groupId, size);
+		// Build the member-promise array with a HOST-OWNED loop (never the script
+		// array's own .map, which a hostile script can poison to throw AFTER the
+		// pending slot is reserved, stranding it). Invoke each thunk EXACTLY once
+		// inside the ALS scope so the groupId propagates into every agent() it
+		// awaits, and normalize each member with Promise.resolve(...) so a custom
+		// thenable is assimilated ONCE here (inside the store) — otherwise sharing
+		// the raw thenable would let Promise.all and Promise.allSettled call its
+		// .then separately (double dispatch, untagged, outside the store). A
+		// synchronous throw (bad thunk, poisoned element access) becomes a rejected
+		// promise so it can never escape before the reaper observer attaches.
+		const memberPromises = parallelGroupStore.run(groupId, () => {
+			const members: Array<Promise<unknown>> = [];
+			for (let index = 0; index < size; index += 1) {
+				try {
+					const thunk = thunks[index];
+					members.push(Promise.resolve(thunk()));
+				} catch (error) {
+					members.push(Promise.reject(error));
+				}
+			}
+			return members;
+		});
+		const work = Promise.all(memberPromises);
+		if (sized) {
+			// Reap any phantom pending slot once the whole group settles. Driven by
+			// allSettled (NOT `work`, which rejects on the FIRST rejection) so a slow
+			// sibling that calls agent() late still registers its childStarted before
+			// we reap — otherwise a failing-fast group could delete a not-yet-registered
+			// sibling's pending slot and render a premature 'agent N-1/N'. Attached as a
+			// fully-total observer so it never floats: allSettled never rejects, the
+			// callback itself can't throw (a throwing onParallelGroupSettled/emit must
+			// not reject the observer chain), and the returned promise is swallowed.
+			// The script still awaits the separate tracked Promise.all below.
+			const clear = () => {
+				try {
+					options.onParallelGroupSettled?.(groupId);
+				} catch {
+					// Reaping is best-effort; a render-side throw must never float.
+				}
+			};
+			void Promise.allSettled(memberPromises).then(clear, clear).catch(() => {});
+		}
+		return track(work);
+	};
 	const phase = (title: string) => {
 		try {
 			options.onPhase?.(title);
@@ -314,6 +373,13 @@ type WorkflowPhaseEmitter = WorkflowPhaseEmit & {
 	phaseTitle(): string | undefined;
 	childStarted(role: string, task: string, index: number, meta?: { phaseIndex?: number; parallelGroupId?: string }): void;
 	childSettled(result: SingleResult, index: number): void;
+	// Declares that `size` agents will be dispatched as the parallel group
+	// `groupId`, so the live header denominator counts them before each has
+	// individually registered into results[].
+	expectParallel(groupId: string, size: number): void;
+	// Drops any remaining pending slots for `groupId` once its parallel group has
+	// fully settled, reaping phantom thunks that never dispatched an agent.
+	parallelGroupSettled(groupId: string): void;
 	// Canonical Details snapshot of the run so far. The success path returns this
 	// as the tool result's `details` so the final widget frame is a real Details
 	// (never the script's arbitrary return value — that flows through content text).
@@ -348,6 +414,15 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 	const childPhases = new Map<number, { phaseIndex: number; phaseTitle?: string; parallelGroupId?: string }>();
 	let phaseIndex = 0;
 	let phaseTitle = "";
+	// Per-group count of agents declared via parallel() that have not yet
+	// registered into results[] (each suspends at its own dispatch before
+	// childStarted fires). A fan-out of N records N up front, then decrements as
+	// each member starts, so the running-frame denominator is (registered +
+	// sum(pending)) and a 2-agent group reads "1/2" from its first frame instead
+	// of "1/1". Keyed by groupId so concurrent groups never cross-decrement and a
+	// size-1 group (never recorded) cannot consume another group's pending slot.
+	const pendingByGroup = new Map<string, number>();
+	const pendingParallelTotal = () => { let n = 0; for (const v of pendingByGroup.values()) n += v; return n; };
 	// ONE builder for both the live onUpdate frame and the final snapshot() so the
 	// two can never drift in shape.
 	const buildDetails = (): Details => {
@@ -377,6 +452,11 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 			progress: ordered.map((result) => result.progress).filter((p): p is AgentProgress => p !== undefined),
 			chainAgents,
 			totalSteps: chainAgents.length || results.size,
+			// Widen the running-frame denominator to include parallel siblings that
+			// have not registered yet. Only meaningful while agents are in flight; once
+			// everything settles, pendingByGroup is empty and the header falls back to
+			// results.length, so a completed run never shows an inflated total.
+			...(pendingParallelTotal() > 0 ? { expectedAgents: ordered.length + pendingParallelTotal() } : {}),
 			// Surface the live phase title through the typed run-level label, which the
 			// parallel header renders via uniformLabel. No fake "k/N" denominator: the
 			// total phase count is unknowable until the script finishes.
@@ -393,7 +473,27 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 	}) as WorkflowPhaseEmitter;
 	phase.phaseIndex = () => phaseIndex;
 	phase.phaseTitle = () => phaseTitle || undefined;
+	phase.expectParallel = (groupId: string, size: number) => {
+		if (size > 1) pendingByGroup.set(groupId, size);
+	};
+	phase.parallelGroupSettled = (groupId: string) => {
+		// Every agent in this group has registered by now; anything still pending is a
+		// phantom thunk (settled without dispatching an agent). Drop it so the completed
+		// frame's denominator falls back to results.length.
+		if (pendingByGroup.delete(groupId)) emit(phaseTitle || "");
+	};
 	phase.childStarted = (role, task, index, meta) => {
+		// This member is about to register into results[]; drop it from its group's
+		// pending count so the denominator (registered + pending) does not
+		// double-count it. Only groups recorded by expectParallel (size > 1) decrement.
+		const gid = meta?.parallelGroupId;
+		if (gid) {
+			const remaining = pendingByGroup.get(gid);
+			if (remaining !== undefined) {
+				if (remaining <= 1) pendingByGroup.delete(gid);
+				else pendingByGroup.set(gid, remaining - 1);
+			}
+		}
 		const childPhaseIndex = meta?.phaseIndex ?? phaseIndex;
 		const childPhaseTitle = phaseTitle || undefined;
 		childPhases.set(index, { phaseIndex: childPhaseIndex, ...(childPhaseTitle ? { phaseTitle: childPhaseTitle } : {}), ...(meta?.parallelGroupId ? { parallelGroupId: meta.parallelGroupId } : {}) });
@@ -461,6 +561,8 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 						return options.dispatch(role, task, workflowContext);
 					},
 					onPhase: emitter,
+					onParallelGroup: (groupId, size) => emitter!.expectParallel(groupId, size),
+					onParallelGroupSettled: (groupId) => emitter!.parallelGroupSettled(groupId),
 					script: params.script,
 				});
 				if (group?.async) {

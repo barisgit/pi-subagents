@@ -1260,12 +1260,24 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		}
 		return done;
 	})();
-	const totalCount = chainParentTotal;
-	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : Math.min(totalCount, chainParentOk + (hasRunning ? 1 : 0));
+	// Fix C: a parallel/workflow header counts real agents (d.results) not chainAgents
+	// bracket entries, so a 2-agent fan-out reads "agent x/2" not "x/1".
+	const settledAgents = d.results.filter((r) => {
+		const status = r.progress?.status;
+		return status !== "running" && status !== "pending";
+	}).length;
+	const headerOk = d.mode === "parallel" ? settledAgents : chainParentOk;
+	// expectedAgents (workflow parallel fan-out) widens the running denominator to
+	// include siblings that have not registered into results[] yet, so a 2-agent
+	// group never flashes "agent 1/1"; it is only set while agents run, so settled
+	// frames fall back to results.length.
+	const parallelTotal = Math.max(d.results.length, d.expectedAgents ?? 0);
+	const totalCount = d.mode === "parallel" ? parallelTotal : chainParentTotal;
+	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : Math.min(totalCount, headerOk + (hasRunning ? 1 : 0));
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
 	const modeLabel = d.workflow ? "workflow" : d.mode;
-	const stepInfo = hasRunning ? `${itemLabel} ${currentStep}/${totalCount}` : `${itemLabel} ${chainParentOk}/${totalCount}`;
+	const stepInfo = hasRunning ? `${itemLabel} ${currentStep}/${totalCount}` : `${itemLabel} ${headerOk}/${totalCount}`;
 	const stats = statJoin(theme, [stepInfo, formatTurnStat(totalTurns), formatProgressStats(theme, totalSummary)]);
 	const glyph = hasRunning
 		? theme.fg("accent", multiSpinnerFrame())
@@ -1627,7 +1639,13 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	const labelTail = d.workflow && d.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(d.label, 30))}` : "";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
-	const totalCount = hasParallelInChain ? d.results.length : (d.totalSteps ?? d.results.length);
+	// expectedAgents widens the denominator for an in-flight workflow fan-out whose
+	// siblings have not registered yet (else a 2-agent group flashes "1/1"); it is
+	// only set while running, so settled frames fall back to the normal totals.
+	const totalCount = Math.max(
+		hasParallelInChain ? d.results.length : (d.totalSteps ?? d.results.length),
+		d.expectedAgents ?? 0,
+	);
 	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : ok + 1;
 	const stepInfo = hasRunning ? ` ${currentStep}/${totalCount}` : ` ${ok}/${totalCount}`;
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";

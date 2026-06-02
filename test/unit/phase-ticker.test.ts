@@ -73,10 +73,12 @@ describe("phase ticker fallback", () => {
 
 		t.mock.timers.tick(5_000);
 
-		assert.equal(patches.length, 1);
-		assert.equal(patches[0]!.phase, "idle");
-		assert.equal(patches[0]!.phaseStartedAt, 0);
+		assert.equal(patches.length, 2);
 		assert.equal(patches[0]!.runnerHeartbeatAt, 5_000);
+		assert.equal(patches[0]!.phase, undefined);
+		assert.equal(patches[1]!.phase, "idle");
+		assert.equal(patches[1]!.phaseStartedAt, 0);
+		assert.equal(patches[1]!.runnerHeartbeatAt, 5_000);
 		ticker.stop();
 	});
 
@@ -89,8 +91,9 @@ describe("phase ticker fallback", () => {
 
 		t.mock.timers.tick(15_000);
 
-		assert.equal(patches.length, 3);
-		assert.equal(patches[2]!.runnerHeartbeatAt, 15_000);
+		assert.equal(patches.length, 6);
+		assert.equal(patches[4]!.runnerHeartbeatAt, 15_000);
+		assert.equal(patches[5]!.runnerHeartbeatAt, 15_000);
 		ticker.stop();
 	});
 
@@ -105,7 +108,28 @@ describe("phase ticker fallback", () => {
 		phaseRef.handle(event({ type: "noop" }), 4_900);
 		t.mock.timers.tick(100);
 
-		assert.equal(patches.length, 0);
+		assert.equal(patches.length, 1);
+		assert.deepEqual(patches[0], { runId: "r1", stepIndex: 0, runnerHeartbeatAt: 5_000 });
+		ticker.stop();
+	});
+
+	it("heartbeat-continues-while-quiet-gate-held-closed", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const { patches, onStatusUpdate } = makeCollector();
+		const phaseRef = makePhaseRef();
+		phaseRef.handle(event({ type: "turn_start" }), 100);
+		phaseRef.handle(event({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }), 200);
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
+
+		for (let tickAt = 5_000; tickAt <= 35_000; tickAt += 5_000) {
+			t.mock.timers.tick(4_900);
+			phaseRef.handle(event({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }), tickAt - 100);
+			t.mock.timers.tick(100);
+		}
+
+		assert.deepEqual(patches.map((patch) => patch.runnerHeartbeatAt), [5_000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000]);
+		assert.equal(patches.every((patch) => patch.phase === undefined), true);
 		ticker.stop();
 	});
 
@@ -117,12 +141,12 @@ describe("phase ticker fallback", () => {
 		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
 
 		t.mock.timers.tick(5_000);
-		assert.equal(patches.length, 1);
+		assert.equal(patches.length, 2);
 
 		ticker.stop();
 		t.mock.timers.tick(10_000);
 
-		assert.equal(patches.length, 1);
+		assert.equal(patches.length, 2);
 	});
 
 	it("abort-path-clears", (t) => {
@@ -133,12 +157,12 @@ describe("phase ticker fallback", () => {
 		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
 
 		t.mock.timers.tick(5_000);
-		assert.equal(patches.length, 1);
+		assert.equal(patches.length, 2);
 
 		ticker.stop();
 		t.mock.timers.tick(15_000);
 
-		assert.equal(patches.length, 1);
+		assert.equal(patches.length, 2);
 	});
 
 	it("model-fallback-retry-clears", (t) => {
@@ -153,11 +177,11 @@ describe("phase ticker fallback", () => {
 		const secondTicker = createPhaseTicker(baseOpts(secondPhaseRef, onStatusUpdate));
 		t.mock.timers.tick(5_000);
 
-		assert.equal(patches.length, 1, "only the second cycle may emit");
+		assert.equal(patches.length, 2, "only the second cycle may emit");
 
 		secondTicker.stop();
 		t.mock.timers.tick(20_000);
-		assert.equal(patches.length, 1, "no interval leaks after both cycles stop");
+		assert.equal(patches.length, 2, "no interval leaks after both cycles stop");
 	});
 
 	it("handler-throw-does-not-crash-ticker", (t) => {
@@ -177,9 +201,10 @@ describe("phase ticker fallback", () => {
 		assert.equal(patches.length, 0);
 
 		t.mock.timers.tick(5_000);
-		assert.equal(calls, 2);
-		assert.equal(patches.length, 1);
+		assert.equal(calls, 3);
+		assert.equal(patches.length, 2);
 		assert.equal(patches[0]!.runnerHeartbeatAt, 10_000);
+		assert.equal(patches[1]!.phase, "idle");
 		ticker.stop();
 	});
 
@@ -194,10 +219,11 @@ describe("phase ticker fallback", () => {
 		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
 		t.mock.timers.tick(5_000);
 
-		assert.equal(patches.length, 1);
-		assert.equal(patches[0]!.phase, "thinking");
-		assert.equal(patches[0]!.phaseStartedAt, 200);
-		assert.equal(patches[0]!.runnerHeartbeatAt, 5_000);
+		assert.equal(patches.length, 2);
+		assert.deepEqual(patches[0], { runId: "r1", stepIndex: 0, runnerHeartbeatAt: 5_000 });
+		assert.equal(patches[1]!.phase, "thinking");
+		assert.equal(patches[1]!.phaseStartedAt, 200);
+		assert.equal(patches[1]!.runnerHeartbeatAt, 5_000);
 		ticker.stop();
 	});
 });

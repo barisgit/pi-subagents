@@ -139,6 +139,39 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.equal(res.out.text, "ok");
 	});
 
+	it("does not float the parallel settle-observer when its onUpdate throws (invariant 3: total observer)", () => {
+		// The phantom-slot reap attaches work.then(clear, clear); clear() calls
+		// onParallelGroupSettled -> emit -> onUpdate. If onUpdate THROWS on that frame,
+		// the promise returned by .then(clear, clear) rejects and floats unless the
+		// observer chain is fully total (try/catch in clear + .catch on the chain).
+		// While a run is live the permanent containment listener would SWALLOW the
+		// float (host survives either way), so host-exit can't discriminate — we assert
+		// directly that NO unhandledRejection event is emitted for the clear frame.
+		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const program = [
+			"const floats = [];",
+			"process.on('unhandledRejection', (r) => { floats.push(String(r && r.message ? r.message : r)); });",
+			"import(process.env.WF_URL).then(async (m) => {",
+			"  const tool = m.createWorkflowTool({ openWorkflowGroup: () => ({ groupRunId: 'g', async dispatchChild({ role, task, index }) { await Promise.resolve(); return { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, structuredResult: { status: 'ok', summary: 's', result: 'r' }, progress: { index, agent: role, status: 'completed', task, recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0, lastActivityAt: Date.now() } }; } }) });",
+			// Mixed group (one real agent + one raw thunk) leaves a phantom slot, so
+			// parallelGroupSettled actually deletes it and emits the CLEAR frame. That clear
+			// frame is the 2nd emit with a single completed result (the 1st is childSettled);
+			// throw only there so the observer's totality is what's under test.
+			"  let seen = 0; const onUpdate = (u) => { const d = u && u.details; const done = d && d.results && d.results.length === 1 && d.results[0] && d.results[0].progress && d.results[0].progress.status === 'completed'; if (done) { seen++; if (seen === 2) throw new Error('clear onUpdate boom'); } };",
+			"  const result = await tool.execute('wf', { script: process.env.WF_SCRIPT }, new AbortController().signal, onUpdate, {});",
+			"  await new Promise((r) => setTimeout(r, 120));",
+			"  process.stdout.write(JSON.stringify({ isError: result.isError === true, floats }));",
+			"}).catch((e) => { process.stderr.write('OUTER:' + String(e)); process.exit(2); });",
+		].join("\n");
+		const res = spawnSync(process.execPath, ["--experimental-strip-types", "-e", program], {
+			encoding: "utf8",
+			env: { ...process.env, WF_URL: workflowUrl, WF_SCRIPT: "phase('mixed');\nawait parallel([() => agent('explorer', 'alpha'), async () => 'raw']);\nreturn 'ok';" },
+		});
+		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
+		const out = res.stdout ? JSON.parse(res.stdout) : { floats: [] };
+		assert.deepEqual(out.floats, [], `settle-observer floated: ${JSON.stringify(out.floats)}`);
+	});
+
 	it("re-signals a genuine non-workflow rejection when no run is live (does not mask host bugs)", () => {
 		// The permanent listener must NOT swallow rejections it cannot attribute to a
 		// live workflow. With no run active and us as sole listener, a real host bug

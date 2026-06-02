@@ -335,6 +335,12 @@ export function createPhaseTicker(
 				}
 			}
 
+			options.onStatusUpdate({
+				runId: options.runId,
+				stepIndex: options.stepIndex,
+				runnerHeartbeatAt: currentNow,
+			});
+
 			if (currentNow - options.getLastEventAt() <= quietMs) return;
 
 			options.onStatusUpdate({

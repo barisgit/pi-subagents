@@ -286,6 +286,16 @@ export interface Details {
 	chainAgents?: string[];      // Agent names in order, e.g., ["scout", "planner"]
 	totalSteps?: number;         // Total steps in chain
 	currentStepIndex?: number;   // 0-indexed current step (for running chains)
+	/**
+	 * Running-frame denominator override for parallel/workflow headers. A workflow
+	 * parallel() group registers its members one at a time (each suspends at its
+	 * own dispatch), so results[] under-counts a fan-out until every sibling has
+	 * started — producing a transient "agent 1/1" for a 2-agent group. The emitter
+	 * sets this to (registered + not-yet-registered group members) while any agent
+	 * is running so the header reads "1/2" from the first frame; it is omitted once
+	 * nothing is running, so the final frame falls back to results.length.
+	 */
+	expectedAgents?: number;
 	/** Internal foreground run id used to resolve nested on-disk child runs for inline live rendering. */
 	runId?: string;
 }

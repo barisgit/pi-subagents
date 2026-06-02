@@ -18,7 +18,12 @@ import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
 import { readWorkflowGroupState } from "./workflow-group-state.ts";
 
 const AUTO_REFRESH_MS = 1000;
-const RECENT_LIMIT = 20;
+// Most-recent terminal runs to surface in the overlay. Applied AFTER session
+// scoping (listRunsFromRegistryForOverlay scopes, then slices), so this caps
+// the current session's finished-run history, not a global top-N. Active runs
+// are never capped, and the left list scrolls (j/k/g/G), so a higher value just
+// shows more history; the only cost is ~N status.json reads per 1Hz refresh.
+const RECENT_LIMIT = 200;
 // Hard caps on the split fraction. The pane stretches up to 70% so long agent
 // labels + cwd badges fit on wide terminals; 18% keeps the right pane usable.
 const LEFT_PANE_CAP = 110;

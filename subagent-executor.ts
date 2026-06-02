@@ -2152,6 +2152,7 @@ async function runInProcessChildStep(input: {
 	mode?: Details["mode"];
 	wrapUpdateDetails?: (update: AgentToolResult<Details>) => AgentToolResult<Details>;
 	layer0?: { runId: string; runRecordDir: string; sessionFile: string; rootRunId: string };
+	onLayer0StatusUpdate?: (patch: StatusPatch) => void;
 }): Promise<SingleResult> {
 	const { data, deps, agentConfig, stepIndex } = input;
 	const availableModels = data.ctx.modelRegistry.getAvailable();
@@ -2384,7 +2385,10 @@ async function runInProcessChildStep(input: {
 				emitUpdate();
 			}
 		},
-			onStatusUpdate: applyStatusPatchToProgress,
+			onStatusUpdate: (patch) => {
+				applyStatusPatchToProgress(patch);
+				input.onLayer0StatusUpdate?.(patch);
+			},
 			registry: deps.childRegistry,
 			pi: deps.pi,
 		});
@@ -2602,6 +2606,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 					skills: effectiveSkills === false ? [] : effectiveSkills,
 					mode: "parallel",
 					layer0: { runId: prepared.runId, runRecordDir: prepared.runRecordDir, sessionFile: prepared.sessionFile, rootRunId: input.rootRunId },
+					onLayer0StatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
 					onUpdate: input.onUpdate || input.foregroundControl
 				? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -2640,6 +2645,20 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 						});
 					}
 				: undefined,
+					});
+					input.liveResults[index] = result;
+					input.liveProgress[index] = result.progress;
+					const mergedResults = input.liveResults.filter((result): result is SingleResult => result !== undefined);
+					const mergedProgress = input.liveProgress.filter((progress): progress is AgentProgress => progress !== undefined);
+					input.onUpdate?.({
+						content: [{ type: "text", text: getSingleResultOutput(result) || "(completed)" }],
+						details: {
+							mode: "parallel",
+							runId: input.runId,
+							results: mergedResults,
+							progress: mergedProgress,
+							totalSteps: input.tasks.length,
+						},
 					});
 					return {
 					runId: prepared.runId,
@@ -3758,6 +3777,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								maxSubagentDepth: resolveChildMaxSubagentDepth(resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth), agentConfig.maxSubagentDepth),
 								mode: "parallel",
 								layer0: { runId: prepared.runId, runRecordDir: prepared.runRecordDir, sessionFile: prepared.sessionFile, rootRunId: groupRootRunId },
+								onLayer0StatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
 							});
 							return {
 								runId: prepared.runId,

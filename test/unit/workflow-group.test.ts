@@ -19,8 +19,13 @@ let previousHome: string | undefined;
 class FakeResourceLoader { async reload(): Promise<void> {} }
 class FakeSession {
 	messages: unknown[] = [];
-	subscribe(): () => void { return () => {}; }
+	private listeners: Array<(event: unknown) => void> = [];
+	subscribe(listener: (event: unknown) => void): () => void {
+		this.listeners.push(listener);
+		return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+	}
 	async prompt(task: string): Promise<void> {
+		for (const listener of this.listeners) listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
 		this.messages.push({ role: "toolResult", toolName: "submit_result", isError: false, details: { status: "ok", summary: task, result: task, artifacts: [] } });
 	}
 	getLastAssistantText(): string { return "done"; }
@@ -144,10 +149,14 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		assert.equal(children.length, 2);
 		assert.deepEqual(children.map((entry) => entry.agentName).sort(), ["A", "B"]);
 		assert.equal(children.every((entry) => entry.mode === "single" && entry.source === "sync"), true);
+		for (const child of children) {
+			assert.equal(fs.existsSync(path.join(child.runRecordDir, "status.json")), true, "workflow children must persist their own status.json");
+		}
 
 		const summary = summaryFromRegistryEntry(group, entries);
 		assert.equal(summary.mode, "parallel");
 		assert.equal(summary.state, "complete");
+		assert.equal(readSummaryForEntry(group, entries)?.state, "complete");
 		fs.writeFileSync(path.join(group.runRecordDir, "status.json"), JSON.stringify({ runId: group.runId, mode: "parallel", state: "running", startedAt: Date.now(), cwd: root, currentStep: 0, steps: [] }));
 		assert.equal(summaryFromRegistryEntry(group, entries).state, "running", "mutant: group status.json reclassifies the row instead of synthesizing from children");
 	});

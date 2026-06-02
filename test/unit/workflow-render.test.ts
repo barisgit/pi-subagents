@@ -249,6 +249,34 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		}
 	});
 
+	it("counts workflow parallel fan-out agents in the compact header", () => {
+		const runningA = result("A", "alpha", 0, 0);
+		runningA.progress = { ...runningA.progress!, status: "running" };
+		const runningB = result("B", "bravo", 0, 1);
+		runningB.progress = { ...runningB.progress!, status: "running" };
+		const runningDetails: Details = {
+			mode: "parallel",
+			workflow: true,
+			label: "Phase 1: inventory",
+			chainAgents: ["[A+B]"],
+			totalSteps: 1,
+			results: [runningA, runningB],
+			progress: [runningA.progress, runningB.progress],
+		};
+
+		assert.match(renderText(runningDetails, false), /agent 1\/2/);
+
+		const settledA = result("A", "alpha", 0, 0);
+		const settledB = result("B", "bravo", 0, 1);
+		const settledDetails: Details = {
+			...runningDetails,
+			results: [settledA, settledB],
+			progress: [settledA.progress!, settledB.progress!],
+		};
+
+		assert.match(renderText(settledDetails, false), /agent 2\/2/);
+	});
+
 	it("emits and renders workflow fan-out/fan-in structure with phase numbering", async () => {
 		const updates: Array<AgentToolResult<Details>> = [];
 		const tool = createWorkflowTool({
@@ -287,5 +315,116 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		assert.match(compact, /Agent 1\.1∥: explorer/);
 		assert.match(compact, /Agent 1\.2∥: explorer/);
 		assert.match(compact, /Agent 2: synth/);
+	});
+
+	it("never renders 'agent 1/1' for a 2-agent parallel fan-out (header counts the whole group from the first frame)", async () => {
+		const updates: Array<AgentToolResult<Details>> = [];
+		const tool = createWorkflowTool({
+			openWorkflowGroup: () => ({
+				groupRunId: "group-1",
+				async dispatchChild({ role, task, index }) {
+					// Yield so both fan-out members are in flight before either settles,
+					// mirroring real parallel() dispatch staggering.
+					await Promise.resolve();
+					return result(role, task, 0, index);
+				},
+			}),
+		});
+
+		await tool.execute?.(
+			"wf",
+			{ script: "phase('inventory');\nawait parallel([() => agent('explorer', 'alpha'), () => agent('explorer', 'bravo')]);" },
+			new AbortController().signal,
+			(update) => updates.push(update as AgentToolResult<Details>),
+			{} as never,
+		);
+
+		// The reviewer's repro: every emitted live frame for a 2-agent fan-out must
+		// read "agent x/2", never "agent 1/1".
+		const compactFrames = updates.map((u) => renderText(u.details!, false));
+		for (const frame of compactFrames) {
+			assert.doesNotMatch(frame, /agent 1\/1\b/, `unexpected 'agent 1/1' frame:\n${frame}`);
+		}
+		// And at least one running frame proves the widened denominator is live.
+		assert.ok(
+			compactFrames.some((f) => /agent 1\/2/.test(f)),
+			"expected a running frame showing 'agent 1/2'",
+		);
+		// Whenever only one sibling has registered into results[], expectedAgents must
+		// compensate to 2; once both register, results.length suffices and the field is
+		// omitted (and must never inflate the denominator after settling).
+		for (const u of updates) {
+			const d = u.details!;
+			if ((d.results?.length ?? 0) === 1 && d.progress?.some((p) => p.status === "running")) {
+				assert.equal(d.expectedAgents, 2, "single-registered running frame must widen to expectedAgents:2");
+			}
+		}
+		// Final settled frame must not carry a stale widened denominator.
+		assert.equal(updates.at(-1)?.details?.expectedAgents, undefined, "settled frame must omit expectedAgents");
+	});
+
+	it("reaps phantom pending slots when a parallel thunk settles without dispatching an agent", async () => {
+		const updates: Array<AgentToolResult<Details>> = [];
+		const tool = createWorkflowTool({
+			openWorkflowGroup: () => ({
+				groupRunId: "group-1",
+				async dispatchChild({ role, task, index }) {
+					await Promise.resolve();
+					return result(role, task, 0, index);
+				},
+			}),
+		});
+
+		// Reviewer repro: a 2-thunk parallel group where only ONE thunk dispatches an
+		// agent; the other resolves a raw value. expectParallel reserves 2 slots, but
+		// only one childStarted ever fires, so without group-settle cleanup the phantom
+		// slot leaves the completed frame stuck at 'agent 1/2'.
+		await tool.execute?.(
+			"wf",
+			{ script: "phase('mixed');\nawait parallel([() => agent('explorer', 'alpha'), async () => 'raw']);" },
+			new AbortController().signal,
+			(update) => updates.push(update as AgentToolResult<Details>),
+			{} as never,
+		);
+
+		const final = updates.at(-1)?.details;
+		// The phantom slot must be reaped: the completed frame has one real agent and
+		// no widened denominator.
+		assert.equal(final?.expectedAgents, undefined, "settled mixed-thunk frame must omit expectedAgents");
+		assert.equal(final?.results?.length, 1, "only one thunk dispatched an agent");
+		assert.doesNotMatch(renderText(final!, false), /agent 1\/2/, "completed frame must not show an inflated 'agent 1/2'");
+	});
+
+	it("reaps the phantom slot when a parallel thunk throws synchronously", async () => {
+		const updates: Array<AgentToolResult<Details>> = [];
+		const tool = createWorkflowTool({
+			openWorkflowGroup: () => ({
+				groupRunId: "group-1",
+				async dispatchChild({ role, task, index }) {
+					await Promise.resolve();
+					return result(role, task, 0, index);
+				},
+			}),
+		});
+
+		// Reviewer repro: a 2-thunk parallel group reserves 2 slots, but one thunk
+		// throws SYNCHRONOUSLY (not a rejected promise). The sync throw must be turned
+		// into a rejected member promise so allSettled still observes the group and
+		// reaps the phantom slot; otherwise the completed frame stays at 'agent 1/2'.
+		await tool.execute?.(
+			"wf",
+			{
+				script:
+					"phase('sync throw');\ntry { await parallel([() => agent('explorer', 'alpha'), () => { throw new Error('sync boom'); }]); } catch {}\nreturn 'ok';",
+			},
+			new AbortController().signal,
+			(update) => updates.push(update as AgentToolResult<Details>),
+			{} as never,
+		);
+
+		const final = updates.at(-1)?.details;
+		assert.equal(final?.expectedAgents, undefined, "settled sync-throw frame must omit expectedAgents");
+		assert.equal(final?.results?.length, 1, "only one thunk dispatched an agent");
+		assert.doesNotMatch(renderText(final!, false), /agent 1\/2/, "completed frame must not show an inflated 'agent 1/2'");
 	});
 });
