@@ -188,6 +188,53 @@ describe("dashboard tree rows", () => {
 			assert.notEqual(unrelatedIndex, -1);
 			assert.doesNotMatch(rows[unrelatedIndex]!, /└─/);
 			assert.match(rows.join("\n"), /4 agents: oracle, qa, review, fixer/);
+			// The parallel group is a CONTAINER, not an agent: its row must not be
+			// tallied in the header when its 4 leaf children are present as their own
+			// rows. 20 unrelated singles + 4 children = 24 agents (NOT 25 with the group).
+			assert.match(rows.join("\n"), /Subagent runs · 24 total/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("PageDown/PageUp move the left-pane selection by a viewport page", () => {
+		const root = tmpRegistry();
+		// More runs than one viewport page so a page jump is observable.
+		for (let i = 0; i < 60; i++) {
+			appendCompleteRun(root, {
+				runId: `run-${String(i).padStart(2, "0")}`,
+				agentName: "fixer",
+				label: `run ${String(i).padStart(2, "0")}`,
+				rootRunId: `run-${String(i).padStart(2, "0")}`,
+				startedAt: 1000 - i, // descending so run-00 sorts first (newest)
+			});
+		}
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{ refreshMs: 1000, sessionCwd: root },
+		);
+		try {
+			// Establish lastLeftListHeight via a first render; selection starts at top.
+			component.render(180);
+			const counterIndex = (): number => {
+				// The selection counter "N/60" lives in the bottom border (├─ N/60 ─┤).
+				const m = component.render(180).join("\n").match(/(\d+)\/60/);
+				return m ? Number(m[1]) : -1;
+			};
+			const start = counterIndex();
+			assert.equal(start, 1, "selection should start at row 1");
+
+			// One PageDown must advance by a full page (>1), not a single row.
+			component.handleInput("\x1b[6~"); // PgDn (CSI 6~)
+			const afterPgDn = counterIndex();
+			assert.ok(afterPgDn > start + 1, `PageDown should jump a page, got ${start} -> ${afterPgDn}`);
+
+			// PageUp returns toward the top by the same page size.
+			component.handleInput("\x1b[5~"); // PgUp (CSI 5~)
+			const afterPgUp = counterIndex();
+			assert.equal(afterPgUp, start, `PageUp should return to the top, got ${afterPgUp}`);
 		} finally {
 			component.dispose();
 		}

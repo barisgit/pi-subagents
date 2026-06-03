@@ -182,7 +182,7 @@ describe("SubagentsStatusComponent", () => {
 				// Charter-style legend lives in a dedicated left-pane section above the
 				// bottom border; per-pane footers carry only counters now.
 				assert.match(output, /j\/k\s+move\/scroll/);
-				assert.match(output, /PgUp\/PgDn\s+page right/);
+				assert.match(output, /PgUp\/PgDn\s+page list \/ scroll/);
 				assert.match(output, /a\s+all sessions/);
 				assert.match(output, /q \/ esc\s+close/);
 			} finally {
@@ -694,6 +694,9 @@ describe("SubagentsStatusComponent", () => {
 				// The right pane is sticky-to-bottom by design (tail-style transcript), so
 				// the initial scroll offset is at the bottom, not the top.
 				component.render(120);
+				// PgUp/PgDn are focus-aware: they page the left list by default and only
+				// scroll the right transcript when the right pane is focused. Tab over.
+				component.handleInput("\t");
 				const bottom = component.getRightPaneScrollTop();
 				assert.ok(bottom > 0, `right pane should start sticky-at-bottom, got ${bottom}`);
 

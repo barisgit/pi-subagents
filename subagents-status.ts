@@ -38,8 +38,8 @@ const LEGEND_ENTRIES: ReadonlyArray<readonly [string, string]> = [
 	["tab",       "switch pane"],
 	["j/k",       "move/scroll"],
 	["g / G",     "top / bottom"],
-	["PgUp/PgDn", "page right"],
-	["u / d",     "half page up / down"],
+	["PgUp/PgDn", "page list / scroll"],
+	["u / d",     "page up / down"],
 	["[ / ]",     "resize split"],
 	["a",         "all sessions"],
 	["enter",     "open session"],
@@ -921,6 +921,22 @@ export class SubagentsStatusComponent implements Component {
 		return index >= 0 ? this.runs[index] : undefined;
 	}
 
+	/** Count of actual agent runs for the header label. A parallel/workflow GROUP
+	 * is a container, not an agent: when its leaf children are present as their own
+	 * rows, the container row itself must not be tallied (otherwise a 2-agent
+	 * parallel fan-out reads as "3 total"). A real agent that happens to have spawned
+	 * sub-agents (mode "single" with children) is still a genuine agent and counts. */
+	private countAgentRows(): number {
+		return this.runs.reduce((sum, run) => sum + (this.isGroupContainerRow(run) ? 0 : 1), 0);
+	}
+
+	private isGroupContainerRow(run: LiveRun): boolean {
+		if (run.source !== "async") return false;
+		const hasChildRows = this.runs.some((other) => other.run.parentRunId === run.run.id);
+		if (!hasChildRows) return false;
+		return run.run.workflow === true || run.run.mode === "parallel";
+	}
+
 	private ensureSelectionVisible(): void {
 		const index = this.selectedIndex();
 		if (index < 0) return;
@@ -948,6 +964,15 @@ export class SubagentsStatusComponent implements Component {
 		this.selectedId = runKey(this.runs[index]!);
 		this.ensureSelectionVisible();
 		this.tui.requestRender();
+	}
+
+	/** Move the left-pane selection by a viewport page (PageUp/PageDown, and u/d
+	 * when the left pane is focused). Page size is the list height captured at the
+	 * last render so it matches what the user actually sees. */
+	private pageSelection(direction: 1 | -1): void {
+		if (this.runs.length === 0) return;
+		const page = Math.max(1, this.lastLeftListHeight || computeBodyHeight(this.tui));
+		this.moveSelection(direction * page);
 	}
 
 	private getRightScrollState(): ScrollState {
@@ -1062,19 +1087,23 @@ export class SubagentsStatusComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, "pageDown")) {
-			this.scrollRightByPage(1);
+			if (this.focus === "right") this.scrollRightByPage(1);
+			else this.pageSelection(1);
 			return;
 		}
 		if (matchesKey(data, "pageUp")) {
-			this.scrollRightByPage(-1);
+			if (this.focus === "right") this.scrollRightByPage(-1);
+			else this.pageSelection(-1);
 			return;
 		}
 		if (matchesKey(data, "d") || matchesKey(data, "space")) {
-			this.scrollRight(Math.max(1, Math.floor(this.lastRightHeight / 2)));
+			if (this.focus === "right") this.scrollRight(Math.max(1, Math.floor(this.lastRightHeight / 2)));
+			else this.pageSelection(1);
 			return;
 		}
 		if (matchesKey(data, "u") || matchesKey(data, "shift+space")) {
-			this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
+			if (this.focus === "right") this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
+			else this.pageSelection(-1);
 			return;
 		}
 		if (matchesKey(data, "a")) {
@@ -1136,7 +1165,7 @@ export class SubagentsStatusComponent implements Component {
 	private topBorder(leftWidth: number, rightWidth: number): string {
 		const scoped = Boolean(this.sessionId || this.sessionCwd);
 		const scopeMarker = this.showAllSessions || !scoped ? " · [all sessions]" : "";
-		const leftLabel = `Subagent runs · ${this.runs.length} total${scopeMarker}`;
+		const leftLabel = `Subagent runs · ${this.countAgentRows()} total${scopeMarker}`;
 		const leftFocused = this.focus === "left";
 		const leftSegment = titledTopSegment(this.theme, {
 			width: leftWidth,
