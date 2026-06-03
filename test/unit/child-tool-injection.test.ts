@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { resolveChildTools } from "../../subagent-executor.ts";
 
-function makeAgentConfig(tools?: string[]) {
+function makeAgentConfig(tools?: string[], extra?: Record<string, unknown>) {
 	return {
 		name: "fixer",
 		description: "Fix things",
@@ -13,6 +13,7 @@ function makeAgentConfig(tools?: string[]) {
 		systemPrompt: "Fix things.",
 		source: "builtin",
 		filePath: "fixer.md",
+		...extra,
 	} as never;
 }
 
@@ -27,5 +28,21 @@ describe("child tool injection", () => {
 		assert.equal(typeof submit?.execute, "function", "submit_result is executable, not a metadata stub");
 		const result = await submit?.execute?.("manual", { status: "ok", summary: "done", result: "payload" }, new AbortController().signal, () => {}, {} as never);
 		assert.equal(result?.terminate, true);
+	});
+
+	it("strips delegation tools (subagent + workflow) when canDelegate is false", () => {
+		const { activeToolNames } = resolveChildTools(
+			makeAgentConfig(["read", "bash", "subagent", "workflow"], { canDelegate: false }),
+			{ getAllTools: () => [] } as never,
+		);
+		assert.deepEqual(activeToolNames, ["read", "bash", "submit_result"]);
+	});
+
+	it("keeps delegation tools when canDelegate is not false", () => {
+		const { activeToolNames } = resolveChildTools(
+			makeAgentConfig(["read", "subagent", "workflow"], { canDelegate: true }),
+			{ getAllTools: () => [] } as never,
+		);
+		assert.deepEqual(activeToolNames, ["read", "subagent", "workflow", "submit_result"]);
 	});
 });

@@ -2089,9 +2089,17 @@ export function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): {
 	// Globs/negations were already expanded at registration time via
 	// resolveAgentToolPatterns(discoverAgents(...)) in index.ts, so by the time
 	// we reach here agentConfig.tools is either undefined or a concrete name list.
-	const activeToolNames = agentConfig.tools === undefined
+	const expanded = agentConfig.tools === undefined
 		? undefined
 		: [...new Set([...agentConfig.tools, SUBMIT_RESULT_TOOL_NAME])];
+	// A non-delegating agent must never reach a delegation tool, even if its allowlist
+	// (e.g. `*`) expanded to include one. `workflow` spawns child agents exactly like
+	// `subagent`, so both are stripped whenever canDelegate is explicitly false. This is
+	// the process-independent gate for in-process children (the env-based
+	// checkNestedDelegationGuard only covers separate-process dispatch).
+	const activeToolNames = agentConfig.canDelegate === false && expanded !== undefined
+		? expanded.filter((name) => name !== "subagent" && name !== "workflow")
+		: expanded;
 	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
 	const customTools = [
 		...pi.getAllTools().filter((tool) => customToolNames.has(tool.name)),
