@@ -413,8 +413,6 @@ function formatLiveHistoryEntry(entry: AgentProgress["recentTools"][number], ava
 		: `← ${entry.tool}${durationSuffix}`;
 }
 
-const MAX_INLINE_NESTING_DEPTH = 4;
-
 function isTerminalInlineState(state: AsyncRunSummary["state"]): boolean {
 	return state === "complete" || state === "failed" || state === "paused" || state === "lost";
 }
@@ -482,8 +480,14 @@ function argBoolean(args: Record<string, unknown> | undefined, key: string): boo
 }
 
 function childMatchesArgs(child: AsyncRunSummary, args: Record<string, unknown> | undefined): boolean {
-	const agent = argString(args, "agent");
-	const label = argString(args, "label");
+	// The subagent tool's real args are { run: [{ agent, task, label? }] }, so agent/label
+	// live under run[0], not at the top level. Accept either shape (top-level is used by
+	// some synthetic callers/tests; run[0] is the on-disk dispatch shape).
+	const firstRun = Array.isArray((args as { run?: unknown })?.run)
+		? ((args as { run: Array<Record<string, unknown>> }).run[0])
+		: undefined;
+	const agent = argString(args, "agent") ?? argString(firstRun, "agent");
+	const label = argString(args, "label") ?? argString(firstRun, "label");
 	if (agent && !child.steps.some((step) => step.agent === agent)) return false;
 	if (label && child.label && child.label !== label) return false;
 	return true;
@@ -552,16 +556,6 @@ function countCollapsedNested(runId: string): { nested: number; tools: number } 
 	return { nested, tools };
 }
 
-function formatInlineTool(event: Extract<TranscriptLine, { kind: "tool" }>, maxWidth?: number): string {
-	const duration = event.durationMs !== undefined ? `  ${formatDuration(event.durationMs)}` : "";
-	const prefix = `${event.toolName}: `;
-	const argsBudget = maxWidth === undefined
-		? undefined
-		: Math.max(1, maxWidth - visibleWidth(prefix) - visibleWidth(duration));
-	const args = event.rawArgs ? previewArgs(event.rawArgs, argsBudget) : event.argsPreview;
-	return args ? `${event.toolName}: ${args}${duration}` : `${event.toolName}${duration}`;
-}
-
 export function renderInlineAsyncToolLine(parentRunId: string, args: Record<string, unknown> | undefined, used = new Set<string>()): string | undefined {
 	const child = findInlineChildRun(parentRunId, args, used);
 	if (!child) return undefined;
@@ -602,38 +596,39 @@ export function countInlineChildTally(parentRunId: string, tools: Array<{ tool: 
 	return { sync, async };
 }
 
-export function renderNestedChild(runId: string, depth = 1, args?: Record<string, unknown>, used = new Set<string>(), maxWidth?: number): string[] {
+/**
+ * Render ONE async-widget-style summary line for a single nested child run.
+ *
+ * The inline widget is a glance; the dashboard is the tree. We deliberately render
+ * at most one level of nesting inline: the dispatched agent (level 0) keeps its full
+ * card, but each subagent it spawns (level 1) collapses to a single rolled-up line —
+ * for running and terminal children alike. Sub-subagents (level 2+) are never expanded
+ * inline; their tools fold into this line's `inlineMeta` tool count and a `↳ K nested`
+ * hint points at the dashboard. This is structurally bounded (header + own tools +
+ * one line per direct child) with no depth×breadth compounding.
+ *
+ * Mirrors the async widget's run line: a kind tag (subagent | parallel | workflow),
+ * the agent/label, rolled-up tools/tokens/duration, and — while running — what the
+ * child is doing now (the phase chip).
+ */
+export function renderNestedChild(runId: string, depth = 1, args?: Record<string, unknown>, used = new Set<string>()): string[] {
 	const data = readInlineRun(runId);
 	if (!data) return [];
 	const { summary, events } = data;
 	used.add(runId);
-	if (depth >= MAX_INLINE_NESTING_DEPTH) {
-		const collapsed = countCollapsedNested(runId);
-		return collapsed.nested > 0 ? [`${inlinePrefix(depth)} … ${collapsed.nested} more nested · ${collapsed.tools} tools`] : [];
-	}
 	const label = inlineRunLabel(summary, args);
+	const glyph = inlineStateGlyph(summary.state);
+	const kind = summary.workflow ? "workflow" : summary.mode === "parallel" ? "parallel" : "subagent";
+	const meta = inlineMeta(summary, events);
+	const nested = countCollapsedNested(runId);
+	const nestedHint = nested.nested > 0 ? ` · ↳ ${nested.nested} nested` : "";
 	if (isTerminalInlineState(summary.state)) {
-		return [`${inlinePrefix(depth)} ${inlineStateGlyph(summary.state)} subagent: ${label} · ${inlineMeta(summary, events)}`];
+		return [`${inlinePrefix(depth)} ${glyph} ${kind}: ${label} · ${meta}${nestedHint}`];
 	}
-	const lines = [`${inlinePrefix(depth)} ${inlineStateGlyph(summary.state)} subagent: ${inlineRunAgent(summary, args)} · ${label} · ${inlineMeta(summary, events)}`];
-	for (const event of events) {
-		if (event.kind !== "tool") continue;
-		if (event.toolName === "subagent") {
-			if (argBoolean(event.rawArgs, "async")) {
-				const asyncLine = renderInlineAsyncToolLine(summary.id, event.rawArgs, used);
-				if (asyncLine) lines.push(`${"  ".repeat(depth)}${asyncLine.slice(3)}`);
-				else lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event, maxWidth === undefined ? undefined : maxWidth - visibleWidth(inlinePrefix(depth + 1)) - 1)}`);
-				continue;
-			}
-			const child = findInlineChildRun(summary.id, event.rawArgs, used);
-			if (child) {
-				lines.push(...renderNestedChild(child.id, depth + 1, event.rawArgs, used, maxWidth));
-				continue;
-			}
-		}
-		lines.push(`${inlinePrefix(depth + 1)} ${formatInlineTool(event, maxWidth === undefined ? undefined : maxWidth - visibleWidth(inlinePrefix(depth + 1)) - 1)}`);
-	}
-	return lines;
+	// Running: show the agent and what it's doing now (phase chip), like the async widget.
+	const phase = formatPhase(summary.phase, summary.phaseStartedAt, Date.now(), summary.currentTool);
+	const phasePart = phase ? ` · ${phase}` : "";
+	return [`${inlinePrefix(depth)} ${glyph} ${kind}: ${inlineRunAgent(summary, args)} · ${label} · ${meta}${phasePart}${nestedHint}`];
 }
 
 /**
@@ -1395,8 +1390,13 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			if (fullProg) {
 				// Chronological layout: history (oldest -> newest) on top, current activity at the bottom.
 				const used = new Set<string>();
-				addCompactRecentToolLines(c, theme, d.runId, fullProg.recentTools ?? [], historyN, width, "    ", used);
-				addLiveCurrentLines(c, theme, d.runId, fullProg, width, "    ", used, d.workflow ? (r.label ?? r.agent) : undefined);
+				// The row's recentTools belong to the ROW's own run, not the orchestrator (d.runId).
+				// Resolve this row's child runId under the orchestrator so nested subagent expansion
+				// uses the correct parent — otherwise findInlineChildRun re-finds the first sibling
+				// under d.runId and renders this same row a second time (double-fixer bug).
+				const rowRunId = findInlineChildRun(d.runId ?? "", { agent: r.agent, ...(r.label ? { label: r.label } : {}) }, new Set<string>())?.id ?? d.runId;
+				addCompactRecentToolLines(c, theme, rowRunId, fullProg.recentTools ?? [], historyN, width, "    ", used);
+				addLiveCurrentLines(c, theme, rowRunId, fullProg, width, "    ", used, d.workflow ? (r.label ?? r.agent) : undefined);
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
 				const activity = compactCurrentActivity(rProg as AgentProgress);

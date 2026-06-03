@@ -714,7 +714,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 				if (!isAsync) {
 					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
 					if (child) {
-						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed, width)) {
+						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
 							step.lines.push(theme.fg("dim", truncateToWidth(line, width)));
 						}
 						continue;

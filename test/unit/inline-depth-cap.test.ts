@@ -7,8 +7,9 @@ const ids = ["inline-d1", "inline-d2", "inline-d3", "inline-d4", "inline-d5", "i
 
 afterEach(() => ids.forEach(rmRun));
 
-describe("inline depth cap", () => {
-	it("summarizes descendants beyond root plus three levels", () => {
+describe("inline nested rollup", () => {
+	it("renders the direct child as one line and rolls the whole subtree into a nested hint", () => {
+		// Build a deep chain a1 -> a2 -> ... -> a6, each spawning the next.
 		for (let i = 0; i < ids.length; i++) {
 			writeRun(ids[i]!, { parentRunId: i === 0 ? undefined : ids[i - 1], agent: `a${i + 1}`, label: `l${i + 1}`, events: [
 				tool("read", { path: `/tmp/${i}` }),
@@ -16,12 +17,12 @@ describe("inline depth cap", () => {
 			] });
 		}
 		const lines = renderNestedChild(ids[0]!, 1);
-		const text = lines.join("\n");
-		assert.match(text, /subagent: a1 · l1/);
-		assert.match(text, /subagent: a2 · l2/);
-		assert.match(text, /subagent: a3 · l3/);
-		assert.match(text, /└─ … 2 more nested · 3 tools/);
-		assert.doesNotMatch(text, /subagent: a5/);
-		assert.doesNotMatch(text, /subagent: a6/);
+		// Inline renders at most one level: the direct child (a1) is a single line,
+		// and the entire deeper subtree (a2..a6) folds into a `↳ N nested` hint.
+		assert.equal(lines.length, 1, `expected one line, got ${lines.length}:\n${lines.join("\n")}`);
+		assert.match(lines[0]!, /subagent: a1 · l1/);
+		assert.match(lines[0]!, /↳ 5 nested/);
+		// No deeper level is expanded inline.
+		assert.doesNotMatch(lines[0]!, /subagent: a2|subagent: a3|subagent: a5|subagent: a6/);
 	});
 });
