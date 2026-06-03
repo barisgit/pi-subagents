@@ -39,7 +39,7 @@ const LEGEND_ENTRIES: ReadonlyArray<readonly [string, string]> = [
 	["j/k",       "move/scroll"],
 	["g / G",     "top / bottom"],
 	["PgUp/PgDn", "page list / scroll"],
-	["u / d",     "page up / down"],
+	["u / d",     "half-page up / down"],
 	["[ / ]",     "resize split"],
 	["a",         "all sessions"],
 	["enter",     "open session"],
@@ -969,10 +969,11 @@ export class SubagentsStatusComponent implements Component {
 	/** Move the left-pane selection by a viewport page (PageUp/PageDown, and u/d
 	 * when the left pane is focused). Page size is the list height captured at the
 	 * last render so it matches what the user actually sees. */
-	private pageSelection(direction: 1 | -1): void {
+	private pageSelection(direction: 1 | -1, fraction = 1): void {
 		if (this.runs.length === 0) return;
-		const page = Math.max(1, this.lastLeftListHeight || computeBodyHeight(this.tui));
-		this.moveSelection(direction * page);
+		const page = this.lastLeftListHeight || computeBodyHeight(this.tui);
+		const step = Math.max(1, Math.floor(page * fraction));
+		this.moveSelection(direction * step);
 	}
 
 	private getRightScrollState(): ScrollState {
@@ -1098,12 +1099,12 @@ export class SubagentsStatusComponent implements Component {
 		}
 		if (matchesKey(data, "d") || matchesKey(data, "space")) {
 			if (this.focus === "right") this.scrollRight(Math.max(1, Math.floor(this.lastRightHeight / 2)));
-			else this.pageSelection(1);
+			else this.pageSelection(1, 0.5);
 			return;
 		}
 		if (matchesKey(data, "u") || matchesKey(data, "shift+space")) {
 			if (this.focus === "right") this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
-			else this.pageSelection(-1);
+			else this.pageSelection(-1, 0.5);
 			return;
 		}
 		if (matchesKey(data, "a")) {
