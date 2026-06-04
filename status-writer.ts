@@ -240,6 +240,15 @@ export class StatusWriter {
 			if (patch.phase !== undefined) step.live.phase = patch.phase;
 			if (patch.phaseStartedAt !== undefined) step.live.phaseStartedAt = patch.phaseStartedAt;
 		}
+		// Persist live token usage so nested-child readers (which can only see the
+		// on-disk status.json, not the runner's in-memory progress) show running
+		// token counts instead of ~0 until finalize. Only step.tokens is set; the
+		// run total is derived by summing steps when status.totalTokens is absent
+		// (inlineTokenCount fallback), so a single live step never clobbers a
+		// multi-step aggregate. finalize() later writes the authoritative total.
+		if (patch.tokens && patch.tokens.total > 0) {
+			step.tokens = { ...patch.tokens };
+		}
 	}
 
 	private stepFor(stepIndex: number): StatusStep {

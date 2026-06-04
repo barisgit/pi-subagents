@@ -146,6 +146,7 @@ export interface StatusPatch {
 	phaseStartedAt?: number;
 	runnerHeartbeatAt?: number;
 	toolName?: string;
+	tokens?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number };
 }
 
 type StatusPatchBody = Omit<StatusPatch, "runId" | "stepIndex">;

@@ -2387,6 +2387,11 @@ async function runInProcessChildStep(input: {
 						usage.cost = (usage.cost ?? 0) + (u.cost?.total || 0);
 						progress.tokens = totalUsageTokens(usage);
 						progress.tokenSamples?.push({ ts: now, tokens: progress.tokens });
+						// Persist live token usage to this child's status.json so nested-child
+						// readers (which only see the on-disk status, not in-memory progress)
+						// show running token counts instead of ~0 until finalize.
+						const liveTokens = tokenUsageFromUsage(usage);
+						if (liveTokens) input.onLayer0StatusUpdate?.({ runId: childRunId, stepIndex, tokens: liveTokens });
 					}
 					appendProgressOutput(progress, extractTextFromContent(message.content));
 				}

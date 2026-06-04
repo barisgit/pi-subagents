@@ -174,6 +174,28 @@ describe("StatusWriter", () => {
 		assert.deepEqual(step.tokens, { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, total: 260_000 });
 	});
 
+	it("persists live token usage on a running (pre-finalize) patch so nested readers see non-zero tokens", async () => {
+		const { statusToSummary } = await import("../../async-status.ts");
+		const dir = tempDir("pi-status-writer-live-tokens-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 10 });
+		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "explorer", status: "running" }] });
+
+		// A running child emits live token usage before it finalizes.
+		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", tokens: { input: 740_000, output: 3_000, total: 743_000 } });
+		await delay(30);
+
+		const status = readStatus(dir);
+		assert.equal(status.state, "running");
+		const step = (status.steps as Array<Record<string, unknown>>)[0]!;
+		assert.deepEqual(step.tokens, { input: 740_000, output: 3_000, total: 743_000 });
+		// status.totalTokens stays absent on a live step; the reader derives the run
+		// total by summing steps, so the nested-line token count is non-zero.
+		assert.equal(status.totalTokens, undefined);
+		const summary = statusToSummary(dir, status as unknown as AsyncStatus);
+		const derived = summary.totalTokens?.total ?? summary.steps.reduce((s, st) => s + (st.tokens?.total ?? 0), 0);
+		assert.equal(derived, 743_000);
+	});
+
 	it("writes interrupted as a terminal state", async () => {
 		const dir = tempDir("pi-status-writer-interrupted-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 50 });
