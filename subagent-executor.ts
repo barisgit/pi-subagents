@@ -238,6 +238,63 @@ interface ExecutionContextData {
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
 	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
 }
+type ForegroundControl = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
+
+/**
+ * Copy a runner progress snapshot onto the in-memory foreground control. This
+ * field-copy is identical at all three foreground dispatch sites (resume,
+ * parallel-inline, single); only `agent` and `index` diverge per site so the
+ * caller resolves them. Background runs never reach this (they have no
+ * in-memory control -- the owned-progress vs poll-disk fork).
+ */
+export function applyForegroundProgress(
+	control: ForegroundControl,
+	agent: string,
+	index: number,
+	firstProgress: AgentProgress | undefined,
+	finalOutput: string | undefined,
+): void {
+	control.currentAgent = agent;
+	control.currentAgentColor = firstProgress?.color;
+	control.currentIndex = index;
+	control.currentActivityState = firstProgress?.activityState;
+	control.lastActivityAt = firstProgress?.lastActivityAt;
+	control.currentTool = firstProgress?.currentTool;
+	control.currentToolStartedAt = firstProgress?.currentToolStartedAt;
+	control.phase = firstProgress?.phase;
+	control.phaseStartedAt = firstProgress?.phaseStartedAt;
+	control.lastToolEndAt = firstProgress?.lastToolEndAt;
+	control.recentTools = firstProgress?.recentTools;
+	control.recentOutput = firstProgress?.recentOutput;
+	control.finalOutput = finalOutput;
+	control.updatedAt = Date.now();
+}
+
+/**
+ * Mirror a runner progress snapshot into the sync status.json run-level fields.
+ * Shared by the single + resume foreground sites; the `steps` array stays
+ * caller-built (resume echoes siblings and finalizes only the resumed step;
+ * single builds a 1-element array) -- an essential fork. The parallel site does
+ * NOT use this: a parallel child persists via StatusWriter.enqueue.
+ */
+function mirrorForegroundProgressToStatus(
+	runId: string,
+	firstProgress: AgentProgress | undefined,
+	currentStep: number,
+	steps: unknown,
+	runRecordDir: string | undefined,
+): void {
+	writeSyncRunStatusUpdate(runId, {
+		currentStep,
+		lastActivityAt: firstProgress?.lastActivityAt,
+		currentTool: firstProgress?.currentTool,
+		currentToolStartedAt: firstProgress?.currentToolStartedAt,
+		phase: firstProgress?.phase,
+		phaseStartedAt: firstProgress?.phaseStartedAt,
+		steps: steps as never,
+	}, {}, runRecordDir);
+}
+
 function getForegroundControl(state: SubagentState, runId: string | undefined) {
 	if (runId) return state.foregroundControls.get(runId);
 	if (state.lastForegroundControlId) {
@@ -753,20 +810,13 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		const onControlEvent = createForegroundControlNotifier(resumeData, deps);
 		const forwardUpdate = (update: AgentToolResult<Details>) => {
 			const firstProgress = update.details?.progress?.[0];
-			foregroundControl.currentAgent = target.agentName;
-			foregroundControl.currentAgentColor = firstProgress?.color;
-			foregroundControl.currentIndex = firstProgress?.index ?? step.stepIndex;
-			foregroundControl.currentActivityState = firstProgress?.activityState;
-			foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
-			foregroundControl.currentTool = firstProgress?.currentTool;
-			foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
-			foregroundControl.phase = firstProgress?.phase;
-			foregroundControl.phaseStartedAt = firstProgress?.phaseStartedAt;
-			foregroundControl.lastToolEndAt = firstProgress?.lastToolEndAt;
-			foregroundControl.recentTools = firstProgress?.recentTools;
-			foregroundControl.recentOutput = firstProgress?.recentOutput;
-			foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
-			foregroundControl.updatedAt = Date.now();
+			applyForegroundProgress(
+				foregroundControl,
+				target.agentName,
+				firstProgress?.index ?? step.stepIndex,
+				firstProgress,
+				update.details?.results?.[0]?.finalOutput,
+			);
 			const resumeLiveTokens = tokenUsageFromTotal(firstProgress?.tokens);
 			const statusStepPatch = target.status.steps?.map((_, index) => index === step.stepIndex
 				? {
@@ -787,15 +837,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 					currentToolStartedAt: firstProgress?.currentToolStartedAt,
 					...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
 				}];
-			writeSyncRunStatusUpdate(target.runId, {
-				currentStep: firstProgress?.index ?? step.stepIndex,
-				lastActivityAt: firstProgress?.lastActivityAt,
-				currentTool: firstProgress?.currentTool,
-				currentToolStartedAt: firstProgress?.currentToolStartedAt,
-				phase: firstProgress?.phase,
-				phaseStartedAt: firstProgress?.phaseStartedAt,
-				steps: statusStepPatch as never,
-			}, {}, target.runRecordDir);
+			mirrorForegroundProgressToStatus(target.runId, firstProgress, firstProgress?.index ?? step.stepIndex, statusStepPatch, target.runRecordDir);
 			data.onUpdate?.(update);
 		};
 		const eventPayload = {
@@ -2628,21 +2670,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 						const stepResults = progressUpdate.details?.results || [];
 						const stepProgress = progressUpdate.details?.progress || [];
 						if (input.foregroundControl && stepProgress.length > 0) {
-							const current = stepProgress[0];
-							input.foregroundControl.currentAgent = task.agent;
-							input.foregroundControl.currentAgentColor = current?.color;
-							input.foregroundControl.currentIndex = index;
-							input.foregroundControl.currentActivityState = current?.activityState;
-							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
-							input.foregroundControl.currentTool = current?.currentTool;
-							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
-							input.foregroundControl.phase = current?.phase;
-							input.foregroundControl.phaseStartedAt = current?.phaseStartedAt;
-							input.foregroundControl.lastToolEndAt = current?.lastToolEndAt;
-							input.foregroundControl.recentTools = current?.recentTools;
-							input.foregroundControl.recentOutput = current?.recentOutput;
-							input.foregroundControl.finalOutput = stepResults[0]?.finalOutput;
-							input.foregroundControl.updatedAt = Date.now();
+							applyForegroundProgress(input.foregroundControl, task.agent, index, stepProgress[0], stepResults[0]?.finalOutput);
 						}
 						if (stepResults.length > 0) input.liveResults[index] = stepResults[0];
 						if (stepProgress.length > 0) input.liveProgress[index] = stepProgress[0];
@@ -3056,38 +3084,23 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		? (update: AgentToolResult<Details>) => {
 			if (foregroundControl) {
 				const firstProgress = update.details?.progress?.[0];
-				foregroundControl.currentAgent = params.agent;
-				foregroundControl.currentAgentColor = firstProgress?.color;
-				foregroundControl.currentIndex = firstProgress?.index ?? 0;
-				foregroundControl.currentActivityState = firstProgress?.activityState;
-				foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
-				foregroundControl.currentTool = firstProgress?.currentTool;
-				foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
-				foregroundControl.phase = firstProgress?.phase;
-				foregroundControl.phaseStartedAt = firstProgress?.phaseStartedAt;
-				foregroundControl.lastToolEndAt = firstProgress?.lastToolEndAt;
-				foregroundControl.recentTools = firstProgress?.recentTools;
-				foregroundControl.recentOutput = firstProgress?.recentOutput;
-				foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
-				foregroundControl.updatedAt = Date.now();
+				applyForegroundProgress(
+					foregroundControl,
+					params.agent!,
+					firstProgress?.index ?? 0,
+					firstProgress,
+					update.details?.results?.[0]?.finalOutput,
+				);
 				const liveStepTokens = tokenUsageFromTotal(firstProgress?.tokens);
-				writeSyncRunStatusUpdate(runId, {
-					currentStep: firstProgress?.index ?? 0,
+				mirrorForegroundProgressToStatus(runId, firstProgress, firstProgress?.index ?? 0, [{
+					agent: firstProgress?.agent ?? params.agent!,
+					status: firstProgress?.status ?? "running",
+					startedAt: firstProgress?.lastActivityAt,
 					lastActivityAt: firstProgress?.lastActivityAt,
 					currentTool: firstProgress?.currentTool,
 					currentToolStartedAt: firstProgress?.currentToolStartedAt,
-					phase: firstProgress?.phase,
-					phaseStartedAt: firstProgress?.phaseStartedAt,
-					steps: [{
-						agent: firstProgress?.agent ?? params.agent!,
-						status: firstProgress?.status ?? "running",
-						startedAt: firstProgress?.lastActivityAt,
-						lastActivityAt: firstProgress?.lastActivityAt,
-						currentTool: firstProgress?.currentTool,
-						currentToolStartedAt: firstProgress?.currentToolStartedAt,
-						...(liveStepTokens ? { tokens: liveStepTokens } : {}),
-					}],
-				}, {}, sessionRoot);
+					...(liveStepTokens ? { tokens: liveStepTokens } : {}),
+				}], sessionRoot);
 			}
 			onUpdate?.(update);
 		}
