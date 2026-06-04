@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { compactForegroundDetails, computeDetailsTotalUsage } from "../../utils.ts";
-import { tokenUsageFromUsage, totalUsageTokens } from "../../usage-totals.ts";
+import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../../usage-totals.ts";
 import type { Details, SingleResult } from "../../types.ts";
 
 describe("computeDetailsTotalUsage", () => {
@@ -41,6 +41,18 @@ describe("usage token totals", () => {
 			cacheWrite: 4_000,
 			total: 260_000,
 		});
+	});
+});
+
+describe("tokenUsageFromTotal", () => {
+	it("builds a total-only TokenUsage the renderer can read", () => {
+		const out = tokenUsageFromTotal(745_098);
+		assert.deepEqual(out, { input: 0, output: 0, total: 745_098 });
+	});
+
+	it("returns undefined for zero or missing totals so no stale step.tokens is written", () => {
+		assert.equal(tokenUsageFromTotal(0), undefined);
+		assert.equal(tokenUsageFromTotal(undefined), undefined);
 	});
 });
 

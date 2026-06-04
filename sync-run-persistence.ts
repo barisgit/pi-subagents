@@ -167,6 +167,8 @@ export function writeSyncRunStatusEnd(runId: string, end: {
 		activityState: undefined,
 		currentTool: undefined,
 		currentToolStartedAt: undefined,
+		phase: "idle",
+		phaseStartedAt: endedAt,
 		endedAt,
 		lastUpdate: endedAt,
 		runnerHeartbeatAt: endedAt,

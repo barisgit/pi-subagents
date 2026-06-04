@@ -26,6 +26,16 @@ export function totalUsageTokens(usage: UsageTokenFields | undefined): number {
 		+ tokenField(usage.cacheWrite);
 }
 
+/**
+ * Build a persisted TokenUsage from a pre-summed display total (AgentProgress.tokens).
+ * The foreground sync path only carries the rolled-up number on live progress, not the
+ * per-bucket breakdown; the renderer reads only `.total`, so input/output stay 0 here.
+ */
+export function tokenUsageFromTotal(total: number | undefined): TokenUsage | undefined {
+	const value = tokenField(total);
+	return value > 0 ? { input: 0, output: 0, total: value } : undefined;
+}
+
 /** Build the persisted TokenUsage shape from a richer Usage aggregate. */
 export function tokenUsageFromUsage(usage: UsageTokenFields | undefined): TokenUsage | undefined {
 	const input = tokenField(usage?.input);

@@ -164,6 +164,45 @@ describe("sync run persistence", () => {
 		}
 	});
 
+	it("clears the live phase chip on terminal end", () => {
+		// A nested sync child that ended mid-`finishing` (submit_result streaming) must not
+		// keep advertising the phase after it completes, or the dashboard row reads
+		// `finishing 19.9s` on a done run. writeSyncRunStatusEnd now mirrors StatusWriter.finalize
+		// and resets phase to 'idle'.
+		const runId = `sync-persist-phaseclear-${process.pid}-${Date.now()}`;
+		const dir = ensureSyncRunDir(runId);
+		try {
+			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "worker" }] });
+			writeSyncRunStatusUpdate(runId, { phase: "finishing", phaseStartedAt: 1000 }, { flush: true });
+			assert.equal(readStatus(runId).phase, "finishing");
+			writeSyncRunStatusEnd(runId, { state: "complete" });
+			assert.equal(readStatus(runId).phase, "idle");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("persists live step tokens during the run (pre-finalize)", () => {
+		// The nested-child line / dashboard read step.tokens from the on-disk status.json.
+		// forwardSingleUpdate now threads the live token aggregate into writeSyncRunStatusUpdate
+		// so a still-running sync child shows real tokens, not ~0.
+		const runId = `sync-persist-livetok-${process.pid}-${Date.now()}`;
+		const dir = ensureSyncRunDir(runId);
+		try {
+			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "explorer" }] });
+			writeSyncRunStatusUpdate(runId, {
+				steps: [{ status: "running", tokens: { input: 500, output: 243, total: 743 } }],
+			}, { flush: true });
+			const status = readStatus(runId);
+			assert.equal(status.state, "running");
+			assert.equal(status.steps[0].tokens.total, 743);
+			// totalTokens stays absent on a live step patch; the reader sums steps.
+			assert.equal(status.totalTokens, undefined);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("defaults end state to complete", () => {
 		const runId = `sync-persist-default-${process.pid}-${Date.now()}`;
 		const dir = ensureSyncRunDir(runId);

@@ -625,7 +625,18 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	const phase = workflowPhaseChip(run) || (isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool));
 	// A 'lost' displayState is authoritative over the stale on-disk state: show just
 	// 'lost' rather than the confusing 'running/lost' a force-killed run would produce.
-	const status = run.run.displayState === "lost" ? "lost" : run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
+	// When an active phase chip is present (`finishing`, `writing`, `tool: bash`), it
+	// already conveys what the runner is doing; the `working`/`quiet` displayState
+	// discriminant then only adds noise and can contradict it (a run mid-`finishing`
+	// whose heartbeat aged past the quiet threshold would read `finishing · running/quiet`).
+	// Suppress the discriminant in that case; keep bare `state/displayState` when there's
+	// no phase chip (there displayState is the only live-activity signal), and keep `lost`
+	// authoritative always.
+	const status = run.run.displayState === "lost"
+		? "lost"
+		: phase && run.run.displayState
+			? run.run.state
+			: run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
 	const elapsed = runElapsed(run, now);
 	const identityAge = runIdentityAge(run, now);
 	const dateStamp = runEndedStamp(run);

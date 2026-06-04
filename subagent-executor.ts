@@ -32,7 +32,7 @@ import { StatusWriter } from "./status-writer.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "./async-guidance.ts";
 import { formatRunHandle } from "./run-shape.ts";
 import { compactForegroundDetails, extractTextFromContent, getFinalOutput, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "./utils.ts";
-import { tokenUsageFromUsage, totalUsageTokens } from "./usage-totals.ts";
+import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "./usage-totals.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
 import {
@@ -767,6 +767,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 			foregroundControl.recentOutput = firstProgress?.recentOutput;
 			foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
 			foregroundControl.updatedAt = Date.now();
+			const resumeLiveTokens = tokenUsageFromTotal(firstProgress?.tokens);
 			const statusStepPatch = target.status.steps?.map((_, index) => index === step.stepIndex
 				? {
 					agent: firstProgress?.agent ?? target.agentName,
@@ -775,6 +776,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 					lastActivityAt: firstProgress?.lastActivityAt,
 					currentTool: firstProgress?.currentTool,
 					currentToolStartedAt: firstProgress?.currentToolStartedAt,
+					...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
 				}
 				: {}) ?? [{
 					agent: firstProgress?.agent ?? target.agentName,
@@ -783,6 +785,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 					lastActivityAt: firstProgress?.lastActivityAt,
 					currentTool: firstProgress?.currentTool,
 					currentToolStartedAt: firstProgress?.currentToolStartedAt,
+					...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
 				}];
 			writeSyncRunStatusUpdate(target.runId, {
 				currentStep: firstProgress?.index ?? step.stepIndex,
@@ -3067,6 +3070,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				foregroundControl.recentOutput = firstProgress?.recentOutput;
 				foregroundControl.finalOutput = update.details?.results?.[0]?.finalOutput;
 				foregroundControl.updatedAt = Date.now();
+				const liveStepTokens = tokenUsageFromTotal(firstProgress?.tokens);
 				writeSyncRunStatusUpdate(runId, {
 					currentStep: firstProgress?.index ?? 0,
 					lastActivityAt: firstProgress?.lastActivityAt,
@@ -3081,6 +3085,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 						lastActivityAt: firstProgress?.lastActivityAt,
 						currentTool: firstProgress?.currentTool,
 						currentToolStartedAt: firstProgress?.currentToolStartedAt,
+						...(liveStepTokens ? { tokens: liveStepTokens } : {}),
 					}],
 				}, {}, sessionRoot);
 			}
