@@ -706,6 +706,30 @@ function addCompactRecentToolLines(
 }
 
 /**
+ * Render a running child's inline activity in chronological order: tool history
+ * (oldest -> newest) on top, current live activity at the bottom (freshest next to "now").
+ * Shared by renderSingleCompact and renderMultiCompact. The CALLER resolves the runId —
+ * for a parallel row that must be the per-row child runId (findInlineChildRun), NOT the
+ * orchestrator's d.runId, or a sibling row is re-rendered as its own nested child
+ * (the double-fixer bug). A single `used` set spans both helpers so a child expanded in the
+ * history is not expanded again as the live line.
+ */
+function renderChildActivity(
+	c: Container,
+	theme: Theme,
+	runId: string | undefined,
+	progress: AgentProgress,
+	historyCount: number,
+	width: number,
+	indent: string,
+	coarseLabel?: string,
+): void {
+	const used = new Set<string>();
+	addCompactRecentToolLines(c, theme, runId, progress.recentTools ?? [], historyCount, width, indent, used);
+	addLiveCurrentLines(c, theme, runId, progress, width, indent, used, coarseLabel);
+}
+
+/**
  * Choose how many history lines to render per agent given how many are running concurrently.
  * 1 running: 2 lines. 2-4 running: 2 lines. 5-8 running: 1 line. 9+: 0 lines (header-only).
  */
@@ -1176,9 +1200,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	if (isRunning && r.progress) {
 		// Chronological layout: history (oldest -> newest) on top, current activity at the bottom
 		// so the freshest information sits right next to "now".
-		const used = new Set<string>();
-		addCompactRecentToolLines(c, theme, d.runId, r.progress.recentTools, adaptiveSingleHistoryCount(), width, "  ", used);
-		addLiveCurrentLines(c, theme, d.runId, r.progress, width, "  ", used, d.workflow ? (r.label ?? r.agent) : undefined);
+		renderChildActivity(c, theme, d.runId, r.progress, adaptiveSingleHistoryCount(), width, "  ", d.workflow ? (r.label ?? r.agent) : undefined);
 		return c;
 	}
 
@@ -1389,14 +1411,12 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			const fullProg = r.progress ?? (progressFromArray && "recentTools" in progressFromArray ? progressFromArray as AgentProgress : undefined);
 			if (fullProg) {
 				// Chronological layout: history (oldest -> newest) on top, current activity at the bottom.
-				const used = new Set<string>();
 				// The row's recentTools belong to the ROW's own run, not the orchestrator (d.runId).
 				// Resolve this row's child runId under the orchestrator so nested subagent expansion
 				// uses the correct parent — otherwise findInlineChildRun re-finds the first sibling
 				// under d.runId and renders this same row a second time (double-fixer bug).
 				const rowRunId = findInlineChildRun(d.runId ?? "", { agent: r.agent, ...(r.label ? { label: r.label } : {}) }, new Set<string>())?.id ?? d.runId;
-				addCompactRecentToolLines(c, theme, rowRunId, fullProg.recentTools ?? [], historyN, width, "    ", used);
-				addLiveCurrentLines(c, theme, rowRunId, fullProg, width, "    ", used, d.workflow ? (r.label ?? r.agent) : undefined);
+				renderChildActivity(c, theme, rowRunId, fullProg, historyN, width, "    ", d.workflow ? (r.label ?? r.agent) : undefined);
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
 				const activity = compactCurrentActivity(rProg as AgentProgress);
