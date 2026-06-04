@@ -10,7 +10,7 @@ The schema is intentionally strict and rejects unknown fields. Fix the call rath
 | `tasks-rejected` | `tasks` array was sent. | Rename to `run` and ensure each item is a `Task`. |
 | `dropped-field-rejected` | An unsupported field such as `model`, `cwd`, `metadata`, or `control` was sent. | Remove the field; move policy to agent config or text into `task`/`message`. |
 | `crud-action-rejected` | `action:"create"`, `"update"`, `"delete"`, or `"get"` was sent. | Create/edit/delete/read agent files directly; use only `list`, `status`, `interrupt`, `resume`. |
-| `fork-non-main-rejected` | `context:"fork"` tried to switch to another role/persona. | Use `context:"fresh"` for cross-role delegation. |
+| `fork-cross-agent-rejected` | `context:"fork"` tried to switch to another role/persona. | Use `context:"fresh"` for cross-role delegation. |
 | `fork-unpersisted-session-rejected` | Fork requested before the parent session had a persisted session file. | Persist the parent session or use `fresh`. |
 | `summarized-context-rejected` | Reserved future `context:"summarized"` was sent. | Use `fresh` or same-role `fork`. |
 | `parallel-step-without-chain-rejected` | A nested `Task[]` appeared in `run` without `chain:true`. | Set `chain:true` or flatten the tasks into top-level parallel `run` items. |

@@ -4,27 +4,22 @@
 
 ## Fresh context
 
-`context:"fresh"` starts a clean child session with the selected persona's system prompt and the concrete task you provide. Use it for role changes: explorer, qa, review, oracle, or any specialist that should not inherit the parent's full transcript.
+`context:"fresh"` starts a clean child session with the selected persona's system prompt and the concrete task you provide. Use it whenever the requested child should not inherit the parent's full transcript.
 
 ```ts
 subagent({
-  run: [{ agent: "explorer", task: "Read only: find the payment tests.", context: "fresh" }]
+  run: [{ agent: "<configured-agent>", task: "Read only: find the payment tests.", context: "fresh" }]
 })
 ```
 
 ## Fork context
 
-`context:"fork"` is same-agent self-branching. It creates a branched child from the current persisted parent session and is useful for alternate implementation attempts, second-pass checks, or same-agent scratch work. It is not a filtered review context and must not be used to switch personas. Any agent can fork itself (`main→main`, `fixer→fixer`, `explorer→explorer`, etc.); cross-agent delegation uses `context:"fresh"`.
+`context:"fork"` is same-agent self-branching. It creates a branched child from the current persisted parent session and is useful for alternate implementation attempts, second-pass checks, or same-agent scratch work. It is not a filtered review context and must not be used to switch personas. Forks keep the same configured agent identity (`<current-agent>→<current-agent>`); cross-agent delegation uses `context:"fresh"`.
 
 ```ts
-// main self-fork
+// same-agent self-fork
 subagent({
-  run: [{ agent: "main", task: "Explore an alternate minimal patch in a branch.", context: "fork" }]
-})
-
-// fixer self-fork from inside a fixer run
-subagent({
-  run: [{ agent: "fixer", task: "Second-pass: re-check the edge case in the patch.", context: "fork" }]
+  run: [{ agent: "<current-agent>", task: "Explore an alternate minimal patch in a branch.", context: "fork" }]
 })
 ```
 

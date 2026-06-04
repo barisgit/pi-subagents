@@ -42,7 +42,7 @@ export function createSubmitResultTool(resultSchema: TSchema = Type.String()): T
 // persistent reinforcement, on the child system prompt. We deliberately no longer append it to every task
 // string: that polluted the visible task, was re-appended on resume, and was the heaviest of the carriers.
 // The reactive SUBMIT_RESULT_REPROMPT below still catches a child that finishes in prose without complying.
-export const SUBMIT_RESULT_SYSTEM_INSTRUCTION = `Finish every run by calling the ${SUBMIT_RESULT_TOOL_NAME} tool as a lone, final tool call with { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }. Never stop with prose only.`;
+export const SUBMIT_RESULT_SYSTEM_INSTRUCTION = `Finish every run by calling the ${SUBMIT_RESULT_TOOL_NAME} tool as a lone, final tool call with { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }. Never stop with prose only. If you are waiting on an async/background run result, do not wait on it by default with sleep/status loops; Pi will send a completion or needs-attention message and trigger a new turn. Continue independent work or stop if blocked on that result. Use status/sleep checks only when immediate inspection is genuinely necessary.`;
 
 export function appendSubmitResultSystemInstruction(systemPrompt: string): string {
 	return systemPrompt ? `${systemPrompt}\n\n${SUBMIT_RESULT_SYSTEM_INSTRUCTION}` : SUBMIT_RESULT_SYSTEM_INSTRUCTION;

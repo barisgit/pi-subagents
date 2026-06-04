@@ -1,79 +1,60 @@
 ---
 name: subagent
-description: Delegate a bounded task to a named specialist agent, run several in parallel or chained pipelines, fork same-role branches, and inspect/resume async runs. Use whenever you would otherwise do read-only recon, implementation, review, or QA inline and a specialist or background run is a better fit.
+description: Use for delegating bounded repo work to configured subagents, parallel/chain runs, same-role forks, async jobs, and run management.
 ---
 
 # Subagent
 
-## Why delegate
+Delegate to control context, latency, and perspective. The tool schema is already in the live tool definition; this skill only decides **when** to delegate and which deeper reference to open.
 
-Inline execution burns the main context with recon, blocks on slow work, and runs everything from a single perspective. Delegating gives you four levers:
+## Inline or delegate
 
-- **Specialist context** — a fresh-context child reads only what its task needs, returning a dense answer instead of polluting the parent thread.
-- **Parallelism** — independent recon, implementation, review, and QA branches run concurrently.
-- **Async backgrounding** — long tasks (suites, builds, multi-file refactors) run while the parent keeps coordinating.
-- **Same-role forking** — branch the current session to explore an alternate path without losing history.
+Stay inline for a single-file read, one obvious edit, a direct factual answer, or final synthesis.
 
-## When to use
+Delegate when work needs any of these:
 
-- Read-only recon across many files or repos.
-- A bounded implementation patch a specialist agent (e.g. `fixer`) can own end-to-end.
-- An opinionated review or runtime QA pass after a change.
-- Any task long enough that you want the parent free to keep working.
+- **Context isolation** — read-only recon, cross-file tracing, or implementation that would pollute the parent thread.
+- **A delegated lane** — a configured child can own a bounded outcome better than the parent thread.
+- **Parallel perspective** — independent branches can run at once.
+- **Background time** — tests, builds, research, or reviews can continue with `async:true`.
+- **Same-role branching** — use `context:"fork"` only for self-forks, not role changes.
 
-Stay inline only for single-file reads, a single obvious edit, a direct factual answer, or final synthesis of returned child output.
+## Pick the shape
 
-## Dispatch shape
+- Use one `run` task for a bounded handoff.
+- Put multiple top-level `run` tasks in parallel when they do not depend on each other.
+- Set `chain:true` only when later steps need earlier output; use `{previous}` in later task text.
+- Set `batch:true` when several children should return one rollup notification.
+- Use `action:"list"` if agent names/chains are uncertain; use status/interrupt/resume only for live run management.
+
+## Canonical examples
 
 ```ts
 subagent({
-  run?: Array<Task | Task[]>, // Task[] only as a parallel sub-step in chain:true
-  chain?: boolean,            // sequential, threads {previous} between steps
-  async?: boolean,            // return immediately with an id
-  batch?: boolean,            // collapse multi-task completions into one rollup
-  concurrency?: number,       // cap parallel starts
-  worktree?: boolean,         // top-level isolated git worktree mode for parallel runs
-  message?: string,           // shared dispatch framing, or next turn for resume
-  action?: "list" | "status" | "interrupt" | "resume",
-  id?: string,                // target run; optional for status/interrupt, required for resume
+  run: [{ agent: "<configured-agent>", task: "Read-only: locate the payment tests and summarize coverage gaps." }]
 })
 
-type Task = {
-  agent: string,
-  task: string,
-  label?: string,
-  context?: "fresh" | "fork", // default "fresh"; "fork" is same-agent self-branching only
-  output?: string | boolean,
-}
+subagent({
+  chain: true,
+  run: [
+    { agent: "<configured-agent>", task: "Trace the failing flow and name exact files." },
+    { agent: "<configured-agent>", task: "Patch only the files justified here: {previous}" },
+    [
+      { agent: "<configured-agent>", task: "Review the patch for regressions: {previous}" },
+      { agent: "<configured-agent>", task: "Run the relevant checks and report evidence: {previous}" }
+    ]
+  ],
+  batch: true
+})
 ```
-
-## Examples
-
-```ts
-// single
-subagent({ run:[{ agent:"fixer", task:"Patch the bug" }] })
-
-// parallel with rollup notification
-subagent({ run:[{ agent:"explorer", task:"Find tests" },{ agent:"qa", task:"Run checks" }], batch:true })
-
-// chain with a parallel review+QA sub-step
-subagent({ chain:true, run:[{ agent:"explorer", task:"Trace flow" },{ agent:"fixer", task:"Patch using {previous}" },[{ agent:"review", task:"Review {previous}" },{ agent:"qa", task:"Verify {previous}" }]] })
-```
-
-## Run management
-
-- `subagent({ action:"list" })` — list available agents/chains. Run this when persona names or enabled status are uncertain.
-- `subagent({ action:"status", id? })` — inspect active/recent runs.
-- `subagent({ action:"interrupt", id? })` — ask a drifting live run to stop; without `id`, targets the newest running run.
-- `subagent({ action:"resume", id, message })` — send the next turn to a live async run awaiting input; paused/interrupted runs are terminal.
 
 ## Load on demand
 
-Open a reference only when its trigger fires — keep this file in working memory and pull specifics as needed:
+Open exactly the reference that matches the decision you are making:
 
-- `references/dispatch-patterns.md` — when **choosing a shape** (single vs parallel vs chain vs swarm-style).
-- `references/chain-semantics.md` — before using **`{previous}` substitution** or a **nested `Task[]` parallel sub-step**.
-- `references/context-fork.md` — before setting **`context:"fork"`**; confirms the same-agent rule and rejection cases.
-- `references/resume.md` — before using **`action:"resume"`**; required fields and terminal-run rejections.
-- `references/batch-notifications.md` — before setting **`batch:true`**; rollup payload shape and notification semantics.
-- `references/error-modes.md` — when the validator **rejects a call**; rejection table with remediations.
+- `references/dispatch-patterns.md` — choosing single, parallel, chain, async, worktree, or swarm-style dispatch.
+- `references/chain-semantics.md` — using `{previous}` or nested parallel sub-steps inside `chain:true`.
+- `references/context-fork.md` — before setting `context:"fork"`; confirms same-agent-only branching.
+- `references/resume.md` — resuming or messaging a live async run.
+- `references/batch-notifications.md` — setting `batch:true` and interpreting rollup payloads.
+- `references/error-modes.md` — validator rejection, drift, timeout, or missing-agent remediation.

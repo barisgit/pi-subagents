@@ -49,6 +49,8 @@ describe("submit_result tool", () => {
 
 		// Reinforcement carrier: the system-prompt helper appends the contract, preserving an existing prompt.
 		assert.match(SUBMIT_RESULT_SYSTEM_INSTRUCTION, /submit_result/);
+		assert.match(SUBMIT_RESULT_SYSTEM_INSTRUCTION, /Pi will send a completion or needs-attention message and trigger a new turn/);
+		assert.match(SUBMIT_RESULT_SYSTEM_INSTRUCTION, /Use status\/sleep checks only when immediate inspection is genuinely necessary/);
 		assert.equal(appendSubmitResultSystemInstruction(""), SUBMIT_RESULT_SYSTEM_INSTRUCTION);
 		assert.equal(appendSubmitResultSystemInstruction("Fix things."), `Fix things.\n\n${SUBMIT_RESULT_SYSTEM_INSTRUCTION}`);
 	});

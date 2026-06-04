@@ -8,7 +8,7 @@ Use a single task for one bounded handoff. Keep the task outcome concrete and in
 
 ```ts
 subagent({
-  run: [{ agent: "fixer", task: "Patch the failing parser test without touching src/network." }]
+  run: [{ agent: "<configured-agent>", task: "Patch the failing parser test without touching src/network." }]
 })
 ```
 
@@ -19,8 +19,8 @@ Use top-level parallel tasks for independent branches. Add `batch:true` when you
 ```ts
 subagent({
   run: [
-    { agent: "explorer", task: "Find auth tests and summarize exact paths." },
-    { agent: "qa", task: "Run the auth unit tests and report failures." }
+    { agent: "<configured-agent>", task: "Find auth tests and summarize exact paths." },
+    { agent: "<configured-agent>", task: "Run the auth unit tests and report failures." }
   ],
   batch: true,
   concurrency: 2
@@ -35,8 +35,8 @@ Use `chain:true` for dependent phases. Later task text can include `{previous}` 
 subagent({
   chain: true,
   run: [
-    { agent: "explorer", task: "Trace login state ownership." },
-    { agent: "fixer", task: "Implement the smallest fix using: {previous}" }
+    { agent: "<configured-agent>", task: "Trace login state ownership." },
+    { agent: "<configured-agent>", task: "Implement the smallest fix using: {previous}" }
   ]
 })
 ```
@@ -49,9 +49,9 @@ For a shared framing across several specialists, put the framing in `message` an
 subagent({
   message: "Evaluate the plan from this angle: {task}",
   run: [
-    { agent: "oracle", task: "correctness risks" },
-    { agent: "oracle", task: "maintainability risks" },
-    { agent: "oracle", task: "verification gaps" }
+    { agent: "<configured-agent>", task: "correctness risks" },
+    { agent: "<configured-agent>", task: "maintainability risks" },
+    { agent: "<configured-agent>", task: "verification gaps" }
   ],
   batch: true
 })

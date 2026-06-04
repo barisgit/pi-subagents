@@ -33,7 +33,8 @@ describe("run status guidance", () => {
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			assert.match(text, /Progress: 3\/5 tasks complete/);
 			assert.doesNotMatch(text, /Step: 1\/5/);
-			assert.match(text, /Polling is not required; do not poll unless you need an immediate update\./);
+			assert.match(text, /Pi will send a completion or needs-attention message and trigger a new turn/);
+			assert.match(text, /Use status\/sleep checks only when immediate inspection is genuinely necessary/);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 			setRegistryPathForTests(null);

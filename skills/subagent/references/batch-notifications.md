@@ -9,21 +9,21 @@ Without `batch:true`, each child run can emit its own completion, failure, or pa
 ```ts
 subagent({
   run: [
-    { agent: "qa", task: "Run API tests." },
-    { agent: "qa", task: "Run UI tests." }
+    { agent: "<configured-agent>", task: "Run API tests." },
+    { agent: "<configured-agent>", task: "Run UI tests." }
   ]
 })
 ```
 
 ## Rollup notification
 
-With `batch:true`, the parent receives one rollup after the batch completes. Use it for parallel recon, review swarms, or noisy QA splits where the parent only needs a combined signal.
+With `batch:true`, the parent receives one rollup after the batch completes. Use it for parallel recon, review swarms, or noisy validation splits where the parent only needs a combined signal.
 
 ```ts
 subagent({
   run: [
-    { agent: "explorer", task: "Find schema callers." },
-    { agent: "explorer", task: "Find docs that mention the retry policy." }
+    { agent: "<configured-agent>", task: "Find schema callers." },
+    { agent: "<configured-agent>", task: "Find docs that mention the retry policy." }
   ],
   batch: true
 })

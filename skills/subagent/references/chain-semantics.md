@@ -10,9 +10,9 @@ Use `{previous}` in a chained task when that step needs the prior result. The fi
 subagent({
   chain: true,
   run: [
-    { agent: "explorer", task: "Map the relevant files." },
-    { agent: "fixer", task: "Patch only the files justified here: {previous}" },
-    { agent: "review", task: "Review the patch and context: {previous}" }
+    { agent: "<configured-agent>", task: "Map the relevant files." },
+    { agent: "<configured-agent>", task: "Patch only the files justified here: {previous}" },
+    { agent: "<configured-agent>", task: "Review the patch and context: {previous}" }
   ]
 })
 ```
@@ -25,12 +25,12 @@ Inside `chain:true`, a `Task[]` element in `run` is a parallel sub-step. All tas
 subagent({
   chain: true,
   run: [
-    { agent: "fixer", task: "Implement the change." },
+    { agent: "<configured-agent>", task: "Implement the change." },
     [
-      { agent: "review", task: "Review this change: {previous}" },
-      { agent: "qa", task: "Verify this change: {previous}" }
+      { agent: "<configured-agent>", task: "Review this change: {previous}" },
+      { agent: "<configured-agent>", task: "Verify this change: {previous}" }
     ],
-    { agent: "fixer", task: "Address any blocking findings: {previous}" }
+    { agent: "<configured-agent>", task: "Address any blocking findings: {previous}" }
   ]
 })
 ```
