@@ -535,7 +535,7 @@ function inlineDuration(summary: AsyncRunSummary): number {
 function inlineMeta(summary: AsyncRunSummary, events: TranscriptLine[]): string {
 	const tools = inlineToolCount(events);
 	const tokens = inlineTokenCount(summary);
-	return `${tools} tools · ~${formatTokens(tokens)} tok · ${formatDuration(inlineDuration(summary))}`;
+	return `${tools} tools · ${formatTokens(tokens)} tok · ${formatDuration(inlineDuration(summary))}`;
 }
 
 function inlinePrefix(depth: number): string {

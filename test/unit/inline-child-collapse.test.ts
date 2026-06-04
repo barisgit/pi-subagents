@@ -17,7 +17,7 @@ describe("inline child collapse", () => {
 		it(`collapses ${state} child to one summary line`, () => {
 			const id = `inline-collapse-${state}`;
 			writeRun(id, { state, agent: "fixer", label: `${state} work`, startedAt: 1_000, endedAt: 2_500, tokens: 2048, events: [tool("read", { path: "/a" }), tool("bash", { command: "echo hi" }, 1200)] });
-			assert.deepEqual(renderNestedChild(id, 1), [`└─ ${glyph} subagent: ${state} work · 2 tools · ~2.0k tok · 1.5s`]);
+			assert.deepEqual(renderNestedChild(id, 1), [`└─ ${glyph} subagent: ${state} work · 2 tools · 2.0k tok · 1.5s`]);
 		});
 	}
 });
