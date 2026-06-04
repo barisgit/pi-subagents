@@ -214,6 +214,42 @@ describe("StatusWriter", () => {
 		assert.equal(status.error, "Child agent interrupted: session-reload");
 		assert.equal((status.steps as Array<Record<string, unknown>>)[0]!.status, "interrupted");
 	});
+
+	it("finalize applies the shared terminal scalar convention (phase idle, phaseStartedAt cleared, version stamped, heartbeat at endedAt)", async () => {
+		// Guards the shared finalizeRunScalars convention from the async-writer
+		// side (the sync writeSyncRunStatusEnd side is guarded by
+		// sync-run-persistence.test.ts). A run with a live phase + current tool
+		// must finalize to phase:'idle' with phaseStartedAt/currentTool cleared,
+		// version:1 stamped, and runnerHeartbeatAt frozen at endedAt — so a
+		// long-finished run never advertises `streaming Xs` / `tool: read Xs`.
+		const dir = tempDir("pi-status-writer-finalize-convention-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 10 });
+		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "fixer", status: "running" }] });
+		writer.enqueue({
+			runId: "run-1",
+			stepIndex: 0,
+			state: "running",
+			phase: "streaming_text",
+			phaseStartedAt: 5000,
+			activity: { state: "tool_running", toolName: "read", updatedAt: 5000 },
+		});
+		await delay(20);
+		const live = readStatus(dir);
+		assert.equal(live.phase, "streaming_text");
+		assert.equal(live.currentTool, "read");
+
+		await writer.finalize(result({ endedAt: 9000 }));
+		const status = readStatus(dir);
+		assert.equal(status.state, "complete");
+		assert.equal(status.endedAt, 9000);
+		assert.equal(status.phase, "idle");
+		assert.equal(status.phaseStartedAt, undefined);
+		assert.equal(status.currentTool, undefined);
+		assert.equal(status.currentToolStartedAt, undefined);
+		assert.equal(status.activityState, undefined);
+		assert.equal(status.version, 1);
+		assert.equal(status.runnerHeartbeatAt, 9000);
+	});
 });
 
 describe("phase", () => {

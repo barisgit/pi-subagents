@@ -144,24 +144,24 @@ export class StatusWriter {
 			outputText: result.outputText,
 		});
 		if (this.status) {
-			this.status.state = result.state;
-			this.status.endedAt = result.endedAt;
-			this.status.lastUpdate = result.endedAt;
-			this.status.outputText = result.outputText;
-			// Clear phase on terminal write so dashboards stop computing
-			// `streaming Xs` / `tool: bash Xs` for runs that finished long ago
-			// (formatPhase treats idle/undefined as the empty string).
-			this.status.phase = "idle";
-			this.status.phaseStartedAt = undefined;
-			this.status.currentTool = undefined;
-			this.status.currentToolStartedAt = undefined;
-			if (result.error?.message) this.status.error = result.error.message;
 			// Prefer caller-provided aggregate (chain/parallel sum across all
 			// steps); fall back to single-step result.usage.
 			const aggregate = options?.totalUsage ?? result.usage;
+			// Shared run-level terminal convention (state/endedAt/lastUpdate/
+			// runnerHeartbeatAt/phase:'idle'/phaseStartedAt:undefined/cleared
+			// currentTool/activityState/version/totalTokens) so the async and
+			// sync writers finalize byte-consistently. Clearing phase stops
+			// dashboards computing `streaming Xs` on a long-finished run
+			// (formatPhase treats idle/undefined as the empty string).
+			finalizeRunScalars(this.status, {
+				state: result.state,
+				endedAt: result.endedAt,
+				...(aggregate ? { totalTokens: tokenUsageFromUsage(aggregate) } : {}),
+			});
+			this.status.outputText = result.outputText;
+			if (result.error?.message) this.status.error = result.error.message;
 			if (aggregate) {
 				this.status.totalUsage = { ...aggregate };
-				this.status.totalTokens = tokenUsageFromUsage(aggregate);
 			}
 			const step = this.stepFor(result.stepIndex);
 			step.status = result.state;
@@ -279,7 +279,7 @@ export class StatusWriter {
 	}
 }
 
-let writeJsonImpl = writeJson;
+let writeJsonImpl = writeStatusJson;
 
 export function __setStatusWriterWriteJsonForTest(fn: (filePath: string, payload: object) => void): () => void {
 	const previous = writeJsonImpl;
@@ -289,7 +289,49 @@ export function __setStatusWriterWriteJsonForTest(fn: (filePath: string, payload
 	};
 }
 
-function writeJson(filePath: string, payload: object): void {
+/**
+ * Mutable run-status fields shared by both writers' terminal-finalize path.
+ * Structurally satisfied by both StatusPayload (async StatusWriter) and
+ * AsyncStatus (sync free functions), so {@link finalizeRunScalars} can drive
+ * one terminal convention for both.
+ */
+export interface TerminalScalarTarget {
+	state: string;
+	endedAt?: number;
+	lastUpdate?: number;
+	runnerHeartbeatAt?: number;
+	phase?: RunPhase;
+	phaseStartedAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
+	activityState?: string;
+	version?: number;
+	totalTokens?: TokenUsage;
+}
+
+/**
+ * Apply the one terminal run-level convention shared by the async StatusWriter
+ * and the sync writeSyncRunStatusEnd path: set the terminal state/timestamps,
+ * bump runnerHeartbeatAt to endedAt, clear the live phase to 'idle' (with
+ * phaseStartedAt undefined so formatPhase yields the empty string), clear the
+ * current tool + activity, stamp the schema version, and persist the run total
+ * token usage when provided. Mutates the target in place.
+ */
+export function finalizeRunScalars(target: TerminalScalarTarget, args: { state: string; endedAt: number; totalTokens?: TokenUsage }): void {
+	target.state = args.state;
+	target.endedAt = args.endedAt;
+	target.lastUpdate = args.endedAt;
+	target.runnerHeartbeatAt = args.endedAt;
+	target.phase = "idle";
+	target.phaseStartedAt = undefined;
+	target.currentTool = undefined;
+	target.currentToolStartedAt = undefined;
+	target.activityState = undefined;
+	target.version = STATUS_JSON_VERSION;
+	if (args.totalTokens) target.totalTokens = args.totalTokens;
+}
+
+export function writeStatusJson(filePath: string, payload: object): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const tempPath = path.join(
 		path.dirname(filePath),

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RunPhase } from "./run-phase.ts";
 import { RUNS_DIR, type AsyncStatus, type TokenUsage } from "./types.ts";
+import { finalizeRunScalars, writeStatusJson } from "./status-writer.ts";
 
 const MIN_UPDATE_INTERVAL_MS = 250;
 const lastWriteByRun = new Map<string, number>();
@@ -43,14 +44,17 @@ function runRecordStatusPath(runRecordDir: string): string {
 }
 
 function writeStatus(runId: string, status: AsyncStatus, runRecordDir?: string): void {
+	// Shared atomic temp+rename writer (status-writer.ts). Kills the previous
+	// non-atomic writeFileSync torn-read window and keeps the terminal file
+	// byte-stable for the leafSummaryCache mtime+size identity. The legacy
+	// RUNS_DIR/<runId> path is still written here (not dropped); the optional
+	// runRecordDir mirror is written when distinct.
 	const legacyPath = statusPath(runId);
-	const serialized = JSON.stringify(status, null, 2);
-	fs.writeFileSync(legacyPath, serialized, "utf-8");
+	writeStatusJson(legacyPath, status);
 	if (runRecordDir) {
 		const mirrorPath = runRecordStatusPath(runRecordDir);
 		if (path.resolve(mirrorPath) !== path.resolve(legacyPath)) {
-			fs.mkdirSync(path.dirname(mirrorPath), { recursive: true });
-			fs.writeFileSync(mirrorPath, serialized, "utf-8");
+			writeStatusJson(mirrorPath, status);
 		}
 	}
 	lastWriteByRun.set(runId, Date.now());
@@ -161,19 +165,19 @@ export function writeSyncRunStatusEnd(runId: string, end: {
 			durationMs: patch.durationMs ?? (startedAt ? endedAt - startedAt : undefined),
 		};
 	});
-	writeStatus(runId, {
+	// Apply the shared terminal convention (state/endedAt/lastUpdate/
+	// runnerHeartbeatAt/phase:'idle'/phaseStartedAt:undefined/cleared
+	// currentTool+activityState/version:1/totalTokens) so the sync path
+	// finalizes byte-consistently with the async StatusWriter.
+	const finalStatus: AsyncStatus = {
 		...current,
-		state: end.state ?? "complete",
-		activityState: undefined,
-		currentTool: undefined,
-		currentToolStartedAt: undefined,
-		phase: "idle",
-		phaseStartedAt: endedAt,
-		endedAt,
-		lastUpdate: endedAt,
-		runnerHeartbeatAt: endedAt,
 		steps,
-		...(end.totalTokens ? { totalTokens: end.totalTokens } : {}),
 		...(end.sessionFile ? { sessionFile: end.sessionFile } : {}),
-	}, runRecordDir);
+	};
+	finalizeRunScalars(finalStatus, {
+		state: end.state ?? "complete",
+		endedAt,
+		...(end.totalTokens ? { totalTokens: end.totalTokens } : {}),
+	});
+	writeStatus(runId, finalStatus, runRecordDir);
 }
