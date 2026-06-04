@@ -244,7 +244,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						runnerHeartbeatAt: job.runnerHeartbeatAt,
 					});
 				} catch (error) {
-					console.error(`Failed to read async status for '${job.asyncDir}':`, error);
+					logger.error("Failed to read async status", error instanceof Error ? error : undefined, {
+						asyncDir: job.asyncDir,
+						error: error instanceof Error ? undefined : String(error),
+					});
 					job.status = "failed";
 					job.displayState = undefined;
 					job.updatedAt = Date.now();

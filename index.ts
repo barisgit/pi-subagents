@@ -83,7 +83,10 @@ function loadConfig(): ExtensionConfig {
 			return JSON.parse(fs.readFileSync(configPath, "utf-8")) as ExtensionConfig;
 		}
 	} catch (error) {
-		console.error(`Failed to load subagent config from '${configPath}':`, error);
+		logger.error("Failed to load subagent config", error instanceof Error ? error : undefined, {
+			configPath,
+			error: error instanceof Error ? undefined : String(error),
+		});
 	}
 	return {};
 }
@@ -145,7 +148,7 @@ function getLatestCustomStateName(ctx: ExtensionContext, ...customTypes: string[
 
 function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info"): void {
 	if (ctx.hasUI) ctx.ui.notify(message, level);
-	else if (level !== "info") console.warn(message);
+	else if (level !== "info") logger.warn(message, { level });
 }
 
 function rebuildSlashResultContainer(

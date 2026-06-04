@@ -383,7 +383,7 @@ process.stdout.write(JSON.stringify({ syntheticPaths: [".env.local"] }));
 import * as fs from "node:fs";
 const payload = JSON.parse(fs.readFileSync(0, "utf-8"));
 if (payload.index === 1) {
-	console.error("intentional failure");
+	process.stderr.write("intentional failure\n");
 	process.exit(1);
 }
 process.stdout.write(JSON.stringify({ syntheticPaths: [] }));

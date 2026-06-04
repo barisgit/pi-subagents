@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "./agents.ts";
+import { logger } from "./logger.ts";
 import type { ExtensionConfig, IntercomBridgeConfig, IntercomBridgeMode } from "./types.ts";
 
 const DEFAULT_INTERCOM_EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "pi-intercom");
@@ -74,7 +75,10 @@ function intercomEnabled(configPath: string): boolean {
 		const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8")) as { enabled?: unknown };
 		return parsed.enabled !== false;
 	} catch (error) {
-		console.warn(`Failed to parse intercom config at '${configPath}'. Assuming enabled.`, error);
+		logger.warn("Failed to parse intercom config. Assuming enabled.", {
+			configPath,
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return true;
 	}
 }
@@ -107,7 +111,10 @@ function resolveInstructionTemplate(instructionFile: string, settingsDir: string
 	try {
 		return fs.readFileSync(resolvedPath, "utf-8");
 	} catch (error) {
-		console.warn(`Failed to read intercom bridge instructionFile at '${resolvedPath}'. Using default instructions.`, error);
+		logger.warn("Failed to read intercom bridge instructionFile. Using default instructions.", {
+			resolvedPath,
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return DEFAULT_INTERCOM_BRIDGE_TEMPLATE;
 	}
 }

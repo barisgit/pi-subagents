@@ -105,8 +105,6 @@ describe("resolveIntercomBridge", () => {
 		const configPath = path.join(tempDir, "config.json");
 		fs.mkdirSync(extensionDir, { recursive: true });
 		fs.writeFileSync(configPath, "{ enabled: nope }");
-		const originalWarn = console.warn;
-		console.warn = () => {};
 		try {
 			const bridge = resolveIntercomBridge({
 				config: { mode: "always" },
@@ -117,7 +115,6 @@ describe("resolveIntercomBridge", () => {
 			});
 			assert.equal(bridge.active, true);
 		} finally {
-			console.warn = originalWarn;
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
 	});

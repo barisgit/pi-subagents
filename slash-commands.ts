@@ -6,6 +6,7 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { discoverAgents, discoverAgentsAll } from "./agents.ts";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
 import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-status.ts";
+import { logger } from "./logger.ts";
 import { discoverAvailableSkills } from "./skills.ts";
 import type { SubagentToolInput as SubagentParamsLike } from "./schemas.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
@@ -254,7 +255,9 @@ function persistSlashSessionSnapshot(ctx: ExtensionContext): void {
 		sessionManager._rewriteFile();
 		sessionManager.flushed = true;
 	} catch (error) {
-		console.error("Failed to persist slash session snapshot for export:", error);
+		logger.error("Failed to persist slash session snapshot for export", error instanceof Error ? error : undefined, {
+			error: error instanceof Error ? undefined : String(error),
+		});
 	}
 }
 
