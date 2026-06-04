@@ -412,6 +412,53 @@ export function readLeafSummaryCached(asyncDir: string): AsyncRunSummary | null 
 	return summary;
 }
 
+// Shared group-synthesis seam for both dashboard builders (readSummaryForEntry
+// here and summaryFromRegistryEntry in subagents-status.ts). Given the group
+// entry and its already-decorated child summaries, computes the group state
+// (with the workflow running-override gated on a computed "complete"), the
+// max-child endedAt, and the synthesized group object. The `extras` knob adds
+// the overlay-only fields B carries (currentStep:0 always, lastUpdate alongside
+// endedAt); A omits them. A mutant inside this body must shift BOTH builders.
+export function buildGroupSummary(
+	entry: RunsRegistryEntry,
+	childSummaries: AsyncRunSummary[],
+	options: { extras?: boolean } = {},
+): AsyncRunSummary {
+	let state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
+	// A statusless async workflow group with no children yet (or all children
+	// complete) computes "complete" even while the orchestrator is still running
+	// before/between agent() calls. The running marker corrects ONLY that gap;
+	// it must never mask a child-synthesized "failed" (e.g. failWorkflow's
+	// synthetic failed child), so gate the override on a computed "complete".
+	if (entry.kind === "workflow" && state === "complete") {
+		const lifecycle = readWorkflowGroupState(entry.runRecordDir);
+		if (lifecycle === "running") state = "running";
+	}
+	const childEndedAt = childSummaries
+		.map((child) => child.endedAt)
+		.filter((endedAt): endedAt is number => typeof endedAt === "number");
+	const endedAt = state === "running" || childEndedAt.length === 0 ? undefined : Math.max(...childEndedAt);
+	const sessionLineage = {
+		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
+		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
+	};
+	return {
+		id: entry.runId,
+		asyncDir: entry.runRecordDir,
+		mode: entry.mode,
+		state,
+		startedAt: entry.startedAt,
+		...(options.extras ? { currentStep: 0 } : {}),
+		...(endedAt !== undefined ? (options.extras ? { endedAt, lastUpdate: endedAt } : { endedAt }) : {}),
+		cwd: entry.cwd,
+		...(entry.label ? { label: entry.label } : {}),
+		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+		...sessionLineage,
+		...registryWorkflowFields(entry),
+		steps: [],
+	};
+}
+
 export function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries()): AsyncRunSummary | null {
 	const leaf = readLeafSummaryCached(entry.runRecordDir);
 	const sessionLineage = {
@@ -428,34 +475,7 @@ export function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegis
 				return summary ? { ...summary, ...registryWorkflowFields(child) } : null;
 			})
 			.filter((child): child is AsyncRunSummary => Boolean(child));
-		let state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
-		// A statusless async workflow group with no children yet (or all children
-		// complete) computes "complete" even while the orchestrator is still running
-		// before/between agent() calls. The running marker corrects ONLY that gap;
-		// it must never mask a child-synthesized "failed" (e.g. failWorkflow's
-		// synthetic failed child), so gate the override on a computed "complete".
-		if (entry.kind === "workflow" && state === "complete") {
-			const lifecycle = readWorkflowGroupState(entry.runRecordDir);
-			if (lifecycle === "running") state = "running";
-		}
-		const childEndedAt = childSummaries
-			.map((child) => child.endedAt)
-			.filter((endedAt): endedAt is number => typeof endedAt === "number");
-		const endedAt = state === "running" || childEndedAt.length === 0 ? undefined : Math.max(...childEndedAt);
-		return {
-			id: entry.runId,
-			asyncDir: entry.runRecordDir,
-			mode: entry.mode,
-			state,
-			startedAt: entry.startedAt,
-			...(endedAt !== undefined ? { endedAt } : {}),
-			cwd: entry.cwd,
-			...(entry.label ? { label: entry.label } : {}),
-			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-			...sessionLineage,
-			...registryWorkflowFields(entry),
-			steps: [],
-		};
+		return buildGroupSummary(entry, childSummaries);
 	}
 	// No status.json on disk. Either (a) the run was dispatched within the last
 	// few seconds and the writer hasn't flushed yet — keep the stub so the

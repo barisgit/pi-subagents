@@ -3,7 +3,7 @@ import { colorForAgentName } from "./agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns } from "./async-status.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns } from "./async-status.ts";
 import { previewArgs, readRunTranscript } from "./run-transcript.ts";
 import { formatDuration } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
@@ -13,8 +13,6 @@ import { flatRule, formatScrollInfo, padRight, titledBottomSegment, titledTopSeg
 import { describeAgentLabel, formatShapeBadge } from "./run-shape.ts";
 import { type ActivityState, type RunDisplayState, type SubagentState } from "./types.ts";
 import { listRunsByRootRunIds, readAllEntries, readShardEntries, type RunsRegistryEntry } from "./runs-registry.ts";
-import { computeGroupStatus, type Layer0ChildStatus } from "./layer0-runs.ts";
-import { readWorkflowGroupState } from "./workflow-group-state.ts";
 
 const AUTO_REFRESH_MS = 1000;
 // When no run is live (all rows terminal/lost/idle), nothing needs a per-second
@@ -145,35 +143,9 @@ export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 		const entries = registryEntries ?? readAllEntries();
 		const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
 		const childSummaries = children.map((child) => ({ ...summaryFromRegistryEntry(child, entries), ...registryWorkflowFields(child) }));
-		let state = computeGroupStatus(childSummaries.map((child) => child.state as Layer0ChildStatus));
-		// A statusless async workflow group with no children yet (or all children
-		// complete) computes "complete" even while the orchestrator is still running
-		// before/between agent() calls. The running marker corrects ONLY that gap;
-		// it must never mask a child-synthesized "failed" (e.g. failWorkflow's
-		// synthetic failed child), so gate the override on a computed "complete".
-		if (entry.kind === "workflow" && state === "complete") {
-			const lifecycle = readWorkflowGroupState(entry.runRecordDir);
-			if (lifecycle === "running") state = "running";
-		}
-		const childEndedAt = childSummaries
-			.map((child) => child.endedAt)
-			.filter((endedAt): endedAt is number => typeof endedAt === "number");
-		const endedAt = state === "running" || childEndedAt.length === 0 ? undefined : Math.max(...childEndedAt);
-		return {
-			id: entry.runId,
-			asyncDir: entry.runRecordDir,
-			mode: entry.mode,
-			state,
-			startedAt: entry.startedAt,
-			...(endedAt !== undefined ? { endedAt, lastUpdate: endedAt } : {}),
-			cwd: entry.cwd,
-			currentStep: 0,
-			...(entry.label ? { label: entry.label } : {}),
-			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-			...lineage,
-			...registryWorkflowFields(entry),
-			steps: [],
-		};
+		// Shared group-synthesis seam (state + workflow override + endedAt + group
+		// object). The overlay carries currentStep:0 + lastUpdate, so pass extras.
+		return buildGroupSummary(entry, childSummaries, { extras: true });
 	}
 	const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : []);
 	return {
