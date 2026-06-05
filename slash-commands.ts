@@ -535,11 +535,27 @@ export function registerSlashCommands(
 	const openSubagentsStatus = async (ctx: ExtensionContext) => {
 		const sessionCwd = (ctx as { cwd?: string }).cwd ?? state.baseCwd;
 		const sessionId = ctx.sessionManager?.getSessionId?.() ?? state.currentSessionId ?? undefined;
+		// Branch-aware membership: collect the top-level run ids anchored on the
+		// CURRENT message-tree branch. Re-read on every reload so a /tree revert
+		// (which moves the leaf) immediately hides abandoned-branch runs.
+		const getBranchAnchorRunIds = (): Set<string> => {
+			const ids = new Set<string>();
+			const branch = ctx.sessionManager?.getBranch?.();
+			if (!branch) return ids;
+			for (const entry of branch) {
+				if (!entry || typeof entry !== "object") continue;
+				const candidate = entry as { type?: string; customType?: string; data?: { runId?: unknown } };
+				if (candidate.type !== "custom" || candidate.customType !== "subagent_run") continue;
+				if (typeof candidate.data?.runId === "string") ids.add(candidate.data.runId);
+			}
+			return ids;
+		};
 		await ctx.ui.custom<void>(
 			(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
 				listForegroundRuns: () => foregroundRunsFromState(state),
 				sessionCwd,
 				...(sessionId ? { sessionId } : {}),
+				getBranchAnchorRunIds,
 			}),
 			{ overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
 		);

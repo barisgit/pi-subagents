@@ -102,6 +102,11 @@ interface StatusOverlayDeps {
 	// session's tree (matches rootSessionId/parentSessionId on registry entries).
 	// Falls back to cwd scoping when absent.
 	sessionId?: string;
+	// Branch-aware membership: returns the set of top-level run ids anchored on
+	// the CURRENT message-tree branch (via session getBranch()). Re-read each
+	// reload so a /tree revert immediately hides abandoned-branch runs. When
+	// absent, the overlay falls back to plain session-tree scoping.
+	getBranchAnchorRunIds?: () => Set<string>;
 }
 
 function entryMatchesOverlayScope(entry: RunsRegistryEntry, scope: { sessionCwd?: string; sessionId?: string }): boolean {
@@ -220,8 +225,13 @@ export function runMatchesSession(
 	return runCwd === sessionCwd;
 }
 
-function filterRunsToSessionTree(runs: LiveRun[], scope: { sessionId?: string; sessionCwd?: string }): LiveRun[] {
+function filterRunsToSessionTree(
+	runs: LiveRun[],
+	scope: { sessionId?: string; sessionCwd?: string },
+	anchorRunIds?: Set<string>,
+): LiveRun[] {
 	if (!scope.sessionId && !scope.sessionCwd) return runs;
+	const present = new Set(runs.map((run) => run.run.id));
 	const byParent = new Map<string, LiveRun[]>();
 	for (const run of runs) {
 		const parentRunId = parentRunIdOf(run);
@@ -231,6 +241,15 @@ function filterRunsToSessionTree(runs: LiveRun[], scope: { sessionId?: string; s
 		byParent.set(parentRunId, siblings);
 	}
 
+	// A forest-root is a top-level row in the overlay tree: no parentRunId, or a
+	// parent that is not itself present in the filtered set. Branch-aware
+	// membership is decided ONLY at forest-roots; descendants of an included
+	// root always flow in (a nested child is never independently anchored).
+	const isForestRoot = (run: LiveRun): boolean => {
+		const parentRunId = parentRunIdOf(run);
+		return !parentRunId || !present.has(parentRunId);
+	};
+
 	const included = new Set<string>();
 	const includeWithDescendants = (run: LiveRun): void => {
 		if (included.has(run.run.id)) return;
@@ -238,7 +257,14 @@ function filterRunsToSessionTree(runs: LiveRun[], scope: { sessionId?: string; s
 		for (const child of byParent.get(run.run.id) ?? []) includeWithDescendants(child);
 	};
 	for (const run of runs) {
-		if (runMatchesSession(run, scope)) includeWithDescendants(run);
+		if (!isForestRoot(run)) continue;
+		if (!runMatchesSession(run, scope)) continue;
+		// Tree-aware membership: when an anchor set is supplied, a top-level run is
+		// a member only if its branch anchor is on the CURRENT message-tree branch
+		// (a /tree revert drops abandoned-branch anchors). When no anchor set is
+		// supplied (tests, or before anchors exist), fall back to session match.
+		if (anchorRunIds && !anchorRunIds.has(run.run.id)) continue;
+		includeWithDescendants(run);
 	}
 	return runs.filter((run) => included.has(run.run.id));
 }
@@ -797,6 +823,7 @@ export class SubagentsStatusComponent implements Component {
 	private errorMessage?: string;
 	private sessionCwd: string | undefined;
 	private sessionId: string | undefined;
+	private readonly getBranchAnchorRunIds: (() => Set<string>) | undefined;
 	private showAllSessions = false;
 	// Charter-style focus: `tab` toggles which pane receives j/k/g/G/PgUp/PgDn.
 	// Left = move selection; right = scroll transcript.
@@ -825,6 +852,7 @@ export class SubagentsStatusComponent implements Component {
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
 		this.sessionCwd = deps.sessionCwd;
 		this.sessionId = deps.sessionId;
+		this.getBranchAnchorRunIds = deps.getBranchAnchorRunIds;
 		this.refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.reload();
 		// Seed the signature so the first timer tick doesn't spuriously diff against
@@ -862,7 +890,8 @@ export class SubagentsStatusComponent implements Component {
 			const combined = [...overlay.active, ...overlay.recent].filter((run) => !syncIds.has(run.id));
 			this.runs = sortLiveRuns(sync, combined);
 			if (!this.showAllSessions && (this.sessionId || this.sessionCwd)) {
-				this.runs = filterRunsToSessionTree(this.runs, { sessionId: this.sessionId, sessionCwd: this.sessionCwd });
+				const anchorRunIds = this.getBranchAnchorRunIds?.();
+				this.runs = filterRunsToSessionTree(this.runs, { sessionId: this.sessionId, sessionCwd: this.sessionCwd }, anchorRunIds);
 			}
 			this.errorMessage = undefined;
 		} catch (error) {
