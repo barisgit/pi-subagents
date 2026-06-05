@@ -30,7 +30,7 @@ import { appendSubmitResultSystemInstruction, createSubmitResultTool, SUBMIT_RES
 import { resolveChildSessionFile } from "./session-paths.ts";
 import { StatusWriter } from "./status-writer.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "./async-guidance.ts";
-import { formatRunHandle } from "./run-shape.ts";
+import { formatRunHandle, type RunMode } from "./run-shape.ts";
 import { compactForegroundDetails, extractTextFromContent, getFinalOutput, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "./utils.ts";
 import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "./usage-totals.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
@@ -79,6 +79,34 @@ export function resolveDispatchRootSessionId(
 	fallbackSessionId?: string,
 ): string | undefined {
 	return resolveRootSessionIdForSession(ctx.sessionManager?.getSessionId?.() ?? fallbackSessionId);
+}
+
+/**
+ * Append an invisible branch anchor to the HOST session tree for a TOP-LEVEL
+ * dispatch. The overlay reads these via getBranch() to scope its top-level rows
+ * to the current /tree branch (a revert moves the leaf, dropping abandoned
+ * anchors). NESTED dispatches (parentRunId defined) are never anchored — the
+ * shard already expands them under their parent. The runId passed MUST equal
+ * the runId that appears as the overlay's top-level row for this dispatch (for
+ * parallel/workflow that is the openGroup CONTAINER runId, not an inner run).
+ * appendEntry is display:false + non-LLM; the try/catch guards a disposed pi
+ * during session replacement (mirrors safeEmit).
+ */
+export function emitRunAnchor(
+	pi: ExtensionAPI,
+	anchor: { runId: string; rootRunId: string; mode: RunMode; source: "sync" | "async"; parentRunId: string | undefined },
+): void {
+	if (anchor.parentRunId !== undefined) return;
+	try {
+		pi.appendEntry("subagent_run", {
+			runId: anchor.runId,
+			rootRunId: anchor.rootRunId,
+			mode: anchor.mode,
+			source: anchor.source,
+		});
+	} catch {
+		// disposed pi during session replacement — drop the anchor rather than crash
+	}
 }
 
 /**
@@ -1562,6 +1590,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		});
 		const groupRunId = group.runId;
 		const groupRootRunId = rootRunId === runId ? groupRunId : rootRunId;
+		emitRunAnchor(deps.pi, { runId: groupRunId, rootRunId: groupRootRunId, mode: "parallel", source: "async", parentRunId });
 		const asyncDetachedAbort = new AbortController();
 		const childRuns = steps.map((item, originalStepIndex) => {
 			const handle = spawnRun({
@@ -1742,6 +1771,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		cwd: effectiveCwd,
 		startedAt,
 	});
+	emitRunAnchor(deps.pi, { runId, rootRunId, mode, source: "async", parentRunId });
 	statusWriter.initialize({
 		mode,
 		state: "queued",
@@ -3540,6 +3570,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			rootRunId = rootRunId === runId ? foregroundGroup.runId : rootRunId;
 			runId = foregroundGroup.runId;
 		}
+		if (!effectiveAsync) {
+			emitRunAnchor(deps.pi, { runId, rootRunId, mode: foregroundMode, source: "sync", parentRunId });
+		}
 
 	let sessionRoot: string;
 	if (foregroundGroup) {
@@ -3740,6 +3773,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				mode: "parallel",
 			});
 			const groupRootRunId = rootRunId === provisionalRunId ? group.runId : rootRunId;
+			emitRunAnchor(deps.pi, { runId: group.runId, rootRunId: groupRootRunId, mode: "parallel", source: effectiveAsync ? "async" : "sync", parentRunId });
 			const sessionRoot = group.runRecordDir;
 			fs.mkdirSync(sessionRoot, { recursive: true });
 			if (effectiveAsync) writeWorkflowGroupState(group.runRecordDir, "running");
