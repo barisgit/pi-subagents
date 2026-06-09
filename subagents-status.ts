@@ -41,7 +41,7 @@ const LEGEND_ENTRIES: ReadonlyArray<readonly [string, string]> = [
 	["u / d",     "half-page up / down"],
 	["[ / ]",     "resize split"],
 	["a",         "all sessions"],
-	["enter",     "open session"],
+	["enter",     "collapse group"],
 	["q / esc",   "close"],
 ];
 // Only the two titled chrome rows (top border + bottom border) consume vertical
@@ -348,7 +348,10 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 // Empty for single-step runs to keep the left-pane line compact.
 function workflowPhaseChip(run: LiveRun): string {
 	if (run.source !== "async" || run.run.phaseIndex === undefined) return "";
-	const label = `P${run.run.phaseIndex}`;
+	// ∥ marks a child that ran inside a parallel() fan-out, so parallel-vs-
+	// sequential shape is readable in the left list, not just the right pane.
+	const marker = run.run.parallelGroupId ? "∥ " : "";
+	const label = `${marker}P${run.run.phaseIndex}`;
 	return run.run.phaseTitle ? `${label} ${run.run.phaseTitle}` : label;
 }
 
@@ -605,15 +608,34 @@ function runEndedStamp(run: LiveRun): string {
 	return `${mo}-${dd} ${hh}:${mm}`;
 }
 
-export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number, depth = 0, showCwd = false): string {
+/** Extra rendering context for a group-container row (parallel group, workflow
+ * group): collapse marker, child progress, current phase synthesized from the
+ * children, and the collapsed-state inline agent summary. */
+export interface ContainerRowInfo {
+	collapsed: boolean;
+	done: number;
+	total: number;
+	phaseChip?: string;
+	agentsSummary?: string;
+}
+
+export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number, depth = 0, showCwd = false, containerInfo?: ContainerRowInfo, pendingDelivery = false): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
 	// charter nested-subagent-display: indent between cursor and glyph keeps cursor aligned.
 	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
-	// Agentless group rows have no step glyph of their own; keep the hollow group
-	// marker while the adjacent status text carries the derived terminal state.
-	const glyph = run.source === "async" && run.run.state === "complete" && run.run.steps.length === 0
-		? theme.fg("dim", "○")
-		: statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
+	// Container rows (workflow/parallel groups with visible children) carry a
+	// collapse marker instead of a state glyph — the status text + child progress
+	// already convey state. A child that finished while its group is still open
+	// renders an accent ✓ (done, result not yet delivered to the parent turn)
+	// instead of terminal green. Agentless group rows without child rows keep the
+	// hollow group marker.
+	const glyph = containerInfo
+		? theme.fg(run.run.state === "running" ? "accent" : "dim", containerInfo.collapsed ? "▸" : "▾")
+		: pendingDelivery
+			? theme.fg("accent", "✓")
+			: run.source === "async" && run.run.state === "complete" && run.run.steps.length === 0
+				? theme.fg("dim", "○")
+				: statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
 	const agent = runAgentLabel(run, theme);
 	// Terminal runs must not advertise a live phase chip (`streaming Xs`,
 	// `tool: bash Xs`). Older status.json files written before the
@@ -621,7 +643,7 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// suppress here so the seconds counter doesn't keep ticking after
 	// `complete`/`failed`/`lost`.
 	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "lost" || run.run.displayState === "lost";
-	const phase = workflowPhaseChip(run) || (isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool));
+	const phase = containerInfo?.phaseChip || workflowPhaseChip(run) || (isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool));
 	// A 'lost' displayState is authoritative over the stale on-disk state: show just
 	// 'lost' rather than the confusing 'running/lost' a force-killed run would produce.
 	// When an active phase chip is present (`finishing`, `writing`, `tool: bash`), it
@@ -639,7 +661,9 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	const elapsed = runElapsed(run, now);
 	const identityAge = runIdentityAge(run, now);
 	const dateStamp = runEndedStamp(run);
-	const badge = runShapeBadge(run);
+	// Containers have empty steps[] (state synthesized from children), so the
+	// shape badge is computed from the children instead: `2/3` done/total.
+	const badge = containerInfo ? `${containerInfo.done}/${containerInfo.total}` : runShapeBadge(run);
 	const badgePart = badge ? ` · ${theme.fg("dim", badge)}` : "";
 	const resumePart = (run.run.resumeCount ?? 0) > 0 ? ` · ${theme.fg("dim", `resumed ${run.run.resumeCount}×`)}` : "";
 	// Don't pre-truncate the label here — the final `truncateToWidth(text, width)`
@@ -647,6 +671,10 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// `tally-v4-showcase ... ...` style double-ellipsis noise.
 	const labelPart = run.run.label
 		? ` · ${theme.fg("muted", run.run.label)}`
+		: "";
+	// Collapsed containers summarize their hidden children inline.
+	const collapsedPart = containerInfo?.collapsed && containerInfo.agentsSummary
+		? ` · ${theme.fg("dim", `(${containerInfo.agentsSummary})`)}`
 		: "";
 	const phasePart = phase ? ` · ${theme.fg("dim", phase)}` : "";
 	const cwdBadge = runCwdBadge(run, showCwd);
@@ -661,7 +689,7 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	const tail = dateStamp
 		? (resumed ? ` · ${elapsed}${identityPart} · ${theme.fg("dim", dateStamp)}` : ` · ${theme.fg("dim", dateStamp)}`)
 		: ` · ${elapsed}${identityPart}`;
-	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${resumePart}${labelPart}${cwdPart}${tail}`;
+	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${resumePart}${labelPart}${collapsedPart}${cwdPart}${tail}`;
 	// Hard-clip with no ellipsis — the row already ends at the pane border, so an
 	// ellipsis adds zero information and steals 1–3 columns of label space.
 	return truncateToWidth(text, width, "");
@@ -878,6 +906,10 @@ export class SubagentsStatusComponent implements Component {
 	// must advance — see scheduleRefresh.
 	private lastRunsSignature: string | undefined;
 	private runs: LiveRun[] = [];
+	// Container rows (workflow/parallel groups) the user collapsed; descendants
+	// of these are hidden from the visible list. Keyed by run id (not runKey:
+	// only async containers are collapsible).
+	private collapsedIds = new Set<string>();
 	private selectedId?: string;
 	private leftScroll = 0;
 	private rightScroll = new Map<string, ScrollState>();
@@ -975,29 +1007,59 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private reconcileSelection(): void {
-		if (this.runs.length === 0) {
+		const visible = this.visibleRuns();
+		if (visible.length === 0) {
 			this.selectedId = undefined;
 			this.leftScroll = 0;
 			return;
 		}
 		const stillHere = this.selectedId !== undefined
-			&& this.runs.some((run) => runKey(run) === this.selectedId);
+			&& visible.some((run) => runKey(run) === this.selectedId);
 		if (!stillHere) {
-			this.selectedId = runKey(this.runs[0]!);
+			this.selectedId = runKey(visible[0]!);
 		}
 		this.ensureSelectionVisible();
 	}
 
+	/** Rows whose ancestor container is collapsed are hidden from the list. */
+	private visibleRuns(): LiveRun[] {
+		if (this.collapsedIds.size === 0) return this.runs;
+		const byId = new Map(this.runs.map((run) => [run.run.id, run]));
+		const hidden = (run: LiveRun): boolean => {
+			let parentId = run.run.parentRunId;
+			let hops = 0;
+			while (parentId && hops < 6) {
+				if (this.collapsedIds.has(parentId)) return true;
+				parentId = byId.get(parentId)?.run.parentRunId;
+				hops += 1;
+			}
+			return false;
+		};
+		return this.runs.filter((run) => !hidden(run));
+	}
+
+	/** Toggle collapse on the selected container row (enter). No-op on leaf rows. */
+	private toggleCollapse(): void {
+		const run = this.selectedRun();
+		if (!run || !this.isGroupContainerRow(run)) return;
+		const id = run.run.id;
+		if (this.collapsedIds.has(id)) this.collapsedIds.delete(id);
+		else this.collapsedIds.add(id);
+		this.ensureSelectionVisible();
+		this.tui.requestRender();
+	}
+
 	private selectedIndex(): number {
-		if (this.runs.length === 0) return -1;
+		const visible = this.visibleRuns();
+		if (visible.length === 0) return -1;
 		const id = this.selectedId;
-		const index = id !== undefined ? this.runs.findIndex((run) => runKey(run) === id) : -1;
+		const index = id !== undefined ? visible.findIndex((run) => runKey(run) === id) : -1;
 		return index === -1 ? 0 : index;
 	}
 
 	private selectedRun(): LiveRun | undefined {
 		const index = this.selectedIndex();
-		return index >= 0 ? this.runs[index] : undefined;
+		return index >= 0 ? this.visibleRuns()[index] : undefined;
 	}
 
 	/** Count of actual agent runs for the header label. A parallel/workflow GROUP
@@ -1016,6 +1078,60 @@ export class SubagentsStatusComponent implements Component {
 		return run.run.workflow === true || run.run.mode === "parallel";
 	}
 
+	/** Synthesize the container-row enrichment (collapse marker, done/total child
+	 * progress, current phase, collapsed agent summary) from the children. */
+	private containerRowInfo(run: LiveRun): ContainerRowInfo | undefined {
+		if (!this.isGroupContainerRow(run)) return undefined;
+		const children = this.runs.filter((other) => other.run.parentRunId === run.run.id);
+		const done = children.filter((child) => {
+			const s = child.run.state;
+			return s === "complete" || s === "failed" || s === "interrupted" || s === "skipped";
+		}).length;
+		// Current phase = the highest phase any child has reached (workflow only).
+		let phaseChip: string | undefined;
+		if (run.source === "async" && run.run.workflow === true) {
+			let best: { index: number; title?: string } | undefined;
+			for (const child of children) {
+				if (child.source !== "async" || child.run.phaseIndex === undefined) continue;
+				if (!best || child.run.phaseIndex > best.index) {
+					best = { index: child.run.phaseIndex, ...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}) };
+				}
+			}
+			if (best && run.run.state === "running") {
+				phaseChip = best.title ? `Phase ${best.index}: ${best.title}` : `Phase ${best.index}`;
+			}
+		}
+		const collapsed = this.collapsedIds.has(run.run.id);
+		let agentsSummary: string | undefined;
+		if (collapsed) {
+			const agents = children.map((child) => child.source === "sync"
+				? child.run.currentAgent ?? child.run.mode
+				: child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode);
+			const unique = Array.from(new Set(agents.filter(Boolean)));
+			agentsSummary = `${children.length} ${children.length === 1 ? "agent" : "agents"}${unique.length > 0 ? `: ${unique.join(", ")}` : ""}`;
+		}
+		return {
+			collapsed,
+			done,
+			total: children.length,
+			...(phaseChip !== undefined ? { phaseChip } : {}),
+			...(agentsSummary !== undefined ? { agentsSummary } : {}),
+		};
+	}
+
+	/** A parallel-group child that finished while its group is still open has a
+	 * result not yet delivered to the parent turn (rollup batching). Workflow
+	 * children are excluded: the script consumes results as they complete. */
+	private isPendingDelivery(run: LiveRun): boolean {
+		if (run.run.state !== "complete" || !run.run.parentRunId) return false;
+		const parent = this.runs.find((other) => other.run.id === run.run.parentRunId);
+		if (!parent || parent.source !== "async") return false;
+		if (parent.run.workflow === true) return false;
+		if (parent.run.mode !== "parallel") return false;
+		const s = parent.run.state;
+		return s === "running" || s === "queued";
+	}
+
 	private ensureSelectionVisible(): void {
 		const index = this.selectedIndex();
 		if (index < 0) return;
@@ -1029,18 +1145,20 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private moveSelection(delta: number): void {
-		if (this.runs.length === 0) return;
+		const visible = this.visibleRuns();
+		if (visible.length === 0) return;
 		const current = this.selectedIndex();
-		const next = Math.max(0, Math.min(this.runs.length - 1, current + delta));
-		this.selectedId = runKey(this.runs[next]!);
+		const next = Math.max(0, Math.min(visible.length - 1, current + delta));
+		this.selectedId = runKey(visible[next]!);
 		this.ensureSelectionVisible();
 		this.tui.requestRender();
 	}
 
 	private jumpSelection(toEnd: boolean): void {
-		if (this.runs.length === 0) return;
-		const index = toEnd ? this.runs.length - 1 : 0;
-		this.selectedId = runKey(this.runs[index]!);
+		const visible = this.visibleRuns();
+		if (visible.length === 0) return;
+		const index = toEnd ? visible.length - 1 : 0;
+		this.selectedId = runKey(visible[index]!);
 		this.ensureSelectionVisible();
 		this.tui.requestRender();
 	}
@@ -1098,10 +1216,7 @@ export class SubagentsStatusComponent implements Component {
 		this.scrollRight(direction * page);
 	}
 
-	private openSessionFile(): void {
-		// Opening an editor would require spawning a subprocess; keep the dashboard
-		// read-only now that subagent execution is fully in-process.
-	}
+
 
 	handleInput(data: string): void {
 		// matchesKey handles both legacy (raw char) and Kitty CSI-u sequences.
@@ -1193,7 +1308,7 @@ export class SubagentsStatusComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, "return") || matchesKey(data, "o")) {
-			this.openSessionFile();
+			this.toggleCollapse();
 		}
 	}
 
@@ -1284,8 +1399,9 @@ export class SubagentsStatusComponent implements Component {
 		// Charter-style: bottom-border carries only counter + a focused-pane key
 		// summary. The shared key reference lives in the legend section above this
 		// border, so we avoid duplicating `j/k`, `tab`, etc. here.
-		const leftHint = this.runs.length > 0
-			? `${this.selectedIndex() + 1}/${this.runs.length}${this.showAllSessions ? "  [all sessions]" : ""}`
+		const visibleCount = this.visibleRuns().length;
+		const leftHint = visibleCount > 0
+			? `${this.selectedIndex() + 1}/${visibleCount}${this.showAllSessions ? "  [all sessions]" : ""}`
 			: "(no runs)";
 		const maxTop = Math.max(0, rightTotal - this.lastRightHeight);
 		const rightHint = maxTop > 0 ? `${rightTop}/${maxTop}` : "";
@@ -1309,14 +1425,16 @@ export class SubagentsStatusComponent implements Component {
 		const now = Date.now();
 		const showCwd = this.showAllSessions || !(this.sessionId || this.sessionCwd);
 		const leftListLines: string[] = [];
-		if (this.runs.length === 0) {
+		const visible = this.visibleRuns();
+		if (visible.length === 0) {
 			leftListLines.push(this.theme.fg("dim", "No subagent runs"));
 		} else {
-			const depthMap = buildDepthMap(this.runs);
-			for (let i = 0; i < this.runs.length; i++) {
-				const run = this.runs[i]!;
+			const depthMap = buildDepthMap(visible);
+			for (let i = 0; i < visible.length; i++) {
+				const run = visible[i]!;
 				const isSelected = runKey(run) === this.selectedId;
-				leftListLines.push(buildLeftLine(this.theme, run, isSelected, now, leftWidth, depthMap.get(run.run.id) ?? 0, showCwd));
+				const containerInfo = this.containerRowInfo(run);
+				leftListLines.push(buildLeftLine(this.theme, run, isSelected, now, leftWidth, depthMap.get(run.run.id) ?? 0, showCwd, containerInfo, this.isPendingDelivery(run)));
 			}
 		}
 

@@ -176,7 +176,7 @@ describe("dashboard tree rows", () => {
 			for (let i = 0; i < groupIndex - 1; i++) component.handleInput("j");
 
 			const rows = component.render(180).map(stripBorders);
-			const selectedGroupIndex = rows.findIndex((line) => /○ parallel .*parallel group/.test(line));
+			const selectedGroupIndex = rows.findIndex((line) => /▾ parallel .*parallel group/.test(line));
 			assert.notEqual(selectedGroupIndex, -1);
 			const visibleAgents = [...agents].reverse();
 			const childIndexes = visibleAgents.map((agent) => rows.findIndex((line) => line.includes(`child ${agent}`)));

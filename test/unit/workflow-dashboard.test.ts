@@ -225,16 +225,18 @@ describe("workflow dashboard reader overlays", () => {
 		try {
 			const text = component.render(180).map(stripBorders).join("\n");
 			assert.match(text, /─ workflow .*\[complete\]/);
-			assert.match(text, /○ workflow · complete/);
+			// Container row: collapse marker + done/total child progress.
+			assert.match(text, /▾ workflow · complete · 3\/3/);
 			assert.doesNotMatch(text, /─ parallel .*\[complete\]/);
-			assert.doesNotMatch(text, /○ parallel · complete/);
-			const phase1Index = text.indexOf("explorer\x1B[39m · P1 inspect · complete");
+			assert.doesNotMatch(text, /▾ parallel · complete/);
+			// Parallel fan-out children carry the ∥ marker; sequential ones don't.
+			const phase1Index = text.indexOf("explorer\x1B[39m · ∥ P1 inspect · complete");
 			const phase2Index = text.indexOf("fixer\x1B[39m · P2 patch · complete");
 			assert.ok(phase1Index !== -1, "expected phase-1 child in status output");
 			assert.ok(phase2Index !== -1, "expected phase-2 child in status output");
 			assert.ok(phase1Index < phase2Index, "workflow children render phase 1 before phase 2");
-			assert.match(text, /explorer\x1B\[39m · P1 inspect · complete/);
-			assert.match(text, /review\x1B\[39m · P1 inspect · complete/);
+			assert.match(text, /explorer\x1B\[39m · ∥ P1 inspect · complete/);
+			assert.match(text, /review\x1B\[39m · ∥ P1 inspect · complete/);
 			assert.match(text, /fixer\x1B\[39m · P2 patch · complete/);
 		} finally {
 			component.dispose();
