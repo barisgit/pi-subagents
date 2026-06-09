@@ -158,6 +158,7 @@ function makeHarness(cwd: string) {
 	const { bus, inner } = createBus();
 	const pi = {
 		events: bus,
+		on: () => {},
 		getSessionName: () => undefined,
 		setSessionName: () => {},
 		getAllTools: () => [],

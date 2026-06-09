@@ -27,6 +27,7 @@ function createPi() {
 	const sent: Array<{ message: unknown; options: unknown }> = [];
 	const pi = {
 		events: bus,
+		on() {},
 		sendMessage(message: unknown, options: unknown) {
 			sent.push({ message, options });
 		},

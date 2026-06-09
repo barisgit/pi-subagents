@@ -240,6 +240,22 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		}
 	};
 
+	// Interrupt-drop safety net. When the host agent is streaming, sendMessage
+	// queues the notification on the agent's steering queue; a user interrupt
+	// clears that queue (clearAllQueues) and the notification is permanently
+	// dropped. Track sends made while streaming as unconfirmed, confirm them
+	// when their custom message is consumed (message_end), and on an aborted
+	// agent_end resend the survivors as deliverAs:'nextTurn' so they arrive
+	// with the user's next prompt instead of vanishing.
+	let agentStreaming = false;
+	interface UnconfirmedSend {
+		idLabel: string;
+		content: string;
+		details?: SubagentNotifyDetails | SubagentBatchNotifyDetails;
+	}
+	const unconfirmedSends: UnconfirmedSend[] = [];
+	const UNCONFIRMED_CAP = 20;
+
 	const sendNotification = (idLabel: string, content: string, details?: SubagentNotifyDetails | SubagentBatchNotifyDetails) => {
 		// Cannot use the captured `pi` from registration time: the activate that
 		// registered this handler may have been replaced by ctx.reload()/fork()/
@@ -257,6 +273,10 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 				},
 				{ triggerTurn: true },
 			);
+			if (agentStreaming) {
+				unconfirmedSends.push({ idLabel, content, details });
+				if (unconfirmedSends.length > UNCONFIRMED_CAP) unconfirmedSends.splice(0, unconfirmedSends.length - UNCONFIRMED_CAP);
+			}
 			logger.info("notify.handleComplete: sendMessage returned", { id: idLabel });
 		} catch (err) {
 			logger.error("notify.handleComplete: sendMessage threw", err instanceof Error ? err : new Error(String(err)), { id: idLabel });
@@ -400,6 +420,43 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	// Child sessions subscribe on their own ephemeral bus and let their bus
 	// disposal clean up the listener; they must not write the host's slot.
 	logger.info("registerSubagentNotify: subscribing to async-complete", { isChildSession });
+	// Lifecycle listeners for the interrupt-drop safety net. pi.on handlers are
+	// bound to this activation's ExtensionRunner and die with it on reload, so
+	// no manual teardown slot is needed (unlike the pi.events bus below).
+	pi.on("agent_start", () => {
+		agentStreaming = true;
+	});
+	pi.on("message_end", (event) => {
+		const message = (event as { message?: { role?: string; customType?: string; content?: unknown } }).message;
+		if (!message || message.role !== "custom" || message.customType !== "subagent-notify") return;
+		const index = unconfirmedSends.findIndex((entry) => entry.content === message.content);
+		if (index >= 0) unconfirmedSends.splice(index, 1);
+	});
+	pi.on("agent_end", (event) => {
+		agentStreaming = false;
+		const messages = (event as { messages?: Array<{ stopReason?: string }> }).messages;
+		const aborted = Array.isArray(messages) && messages.some((message) => message?.stopReason === "aborted");
+		// Non-aborted ends keep unconfirmed entries: their steered messages are
+		// still queued and get consumed at the start of the next prompt.
+		if (!aborted || unconfirmedSends.length === 0) return;
+		const resend = unconfirmedSends.splice(0, unconfirmedSends.length);
+		for (const entry of resend) {
+			try {
+				logger.info("notify: resending interrupt-dropped notification as nextTurn", { id: entry.idLabel });
+				getCurrentPi().sendMessage(
+					{
+						customType: "subagent-notify",
+						content: entry.content,
+						display: true,
+						...(entry.details ? { details: entry.details } : {}),
+					},
+					{ deliverAs: "nextTurn" },
+				);
+			} catch (err) {
+				logger.error("notify: nextTurn resend threw", err instanceof Error ? err : new Error(String(err)), { id: entry.idLabel });
+			}
+		}
+	});
 	const unsubscribeComplete = pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete);
 	const unsubscribeRunComplete = pi.events.on(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, handleRunComplete);
 	const unsubscribe = () => {

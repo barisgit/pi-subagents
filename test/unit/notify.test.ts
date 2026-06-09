@@ -35,11 +35,20 @@ function createBus() {
 function createPi() {
 	const { bus, inner } = createBus();
 	const sent: Array<{ message: unknown; options: unknown }> = [];
+	const lifecycle = new Map<string, Array<(event: unknown) => void>>();
 	const pi = {
 		events: bus,
+		on(event: string, handler: (event: unknown) => void) {
+			const handlers = lifecycle.get(event) ?? [];
+			handlers.push(handler);
+			lifecycle.set(event, handlers);
+		},
 		sendMessage(message: unknown, options: unknown) {
 			sent.push({ message, options });
 		},
+	};
+	const fire = (event: string, data: unknown) => {
+		for (const handler of lifecycle.get(event) ?? []) handler(data);
 	};
 
 	// notify.ts resolves the active pi via getCurrentPi() at emit time (so a
@@ -48,7 +57,7 @@ function createPi() {
 	setCurrentPi(pi as never);
 	registerSubagentNotify(pi as never);
 
-	return { events: inner, bus, sent };
+	return { events: inner, bus, sent, fire };
 }
 
 const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
@@ -151,6 +160,7 @@ describe("registerSubagentNotify", () => {
 		const { bus: childBus } = createBus();
 		const childPi = {
 			events: childBus,
+			on() {},
 			sendMessage() {
 				// Child pi: must NEVER be called for host-bus events.
 				throw new Error("child pi.sendMessage must not be invoked for host events");
@@ -193,6 +203,7 @@ describe("registerSubagentNotify", () => {
 		const childSent: Array<{ message: unknown; options: unknown }> = [];
 		const childPi = {
 			events: childBus,
+			on() {},
 			sendMessage(message: unknown, options: unknown) {
 				childSent.push({ message, options });
 			},
@@ -427,5 +438,102 @@ describe("registerSubagentNotify", () => {
 		const content = (sent[0].message as { content?: string }).content ?? "";
 		assert.ok(content.includes("**workflow**"), `workflow notification should name the workflow entity, got: ${content}`);
 		assert.ok(content.includes('{ "verified": true }'), "notification must carry the script's return value");
+	});
+
+	it("resends a notification dropped by an interrupt as a nextTurn message", () => {
+		const { events, sent, fire } = createPi();
+
+		// Host agent is streaming: sendMessage queues onto the steering queue.
+		fire("agent_start", { type: "agent_start" });
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "interrupted-drop-1",
+			agent: "explorer",
+			success: true,
+			summary: "Recon done",
+			exitCode: 0,
+			timestamp: 2000,
+		});
+		assert.equal(sent.length, 1, "notification sent (queued as steer while streaming)");
+
+		// User interrupts: the steering queue is cleared and the agent ends with
+		// an aborted message; the steered notification never reached message_end.
+		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
+
+		assert.equal(sent.length, 2, "dropped notification must be resent after the aborted agent_end");
+		assert.deepEqual(sent[1].options, { deliverAs: "nextTurn" }, "resend must survive idle/interrupt via nextTurn");
+		assert.equal(
+			(sent[1].message as { content?: string }).content,
+			(sent[0].message as { content?: string }).content,
+			"resend carries the same content",
+		);
+
+		// A second aborted end must not resend again (entries were drained).
+		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
+		assert.equal(sent.length, 2, "no duplicate resend");
+	});
+
+	it("does not resend when the steered notification was consumed before agent_end", () => {
+		const { events, sent, fire } = createPi();
+
+		fire("agent_start", { type: "agent_start" });
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "consumed-1",
+			agent: "qa",
+			success: true,
+			summary: "Checks passed",
+			exitCode: 0,
+			timestamp: 3000,
+		});
+		assert.equal(sent.length, 1);
+
+		// The agent loop consumed the steered message at a turn boundary: it is
+		// confirmed delivered via message_end before any interrupt.
+		fire("message_end", {
+			type: "message_end",
+			message: { role: "custom", customType: "subagent-notify", content: (sent[0].message as { content?: string }).content },
+		});
+		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
+
+		assert.equal(sent.length, 1, "consumed notification must not be resent");
+	});
+
+	it("does not resend after a clean (non-aborted) agent_end", () => {
+		const { events, sent, fire } = createPi();
+
+		fire("agent_start", { type: "agent_start" });
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "clean-end-1",
+			agent: "fixer",
+			success: true,
+			summary: "Patch applied",
+			exitCode: 0,
+			timestamp: 4000,
+		});
+		assert.equal(sent.length, 1);
+
+		// Clean end: the steered message stays queued for the next prompt; the
+		// safety net must not duplicate it.
+		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "stop" }] });
+		assert.equal(sent.length, 1, "clean end must not trigger a resend");
+	});
+
+	it("does not track sends made while the agent is idle", () => {
+		const { events, sent, fire } = createPi();
+
+		// No agent_start: idle sends run a turn immediately (triggerTurn) and
+		// cannot be interrupt-dropped, so an aborted end later must not resend.
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "idle-send-1",
+			agent: "explorer",
+			success: true,
+			summary: "Done while idle",
+			exitCode: 0,
+			timestamp: 5000,
+		});
+		assert.equal(sent.length, 1);
+
+		fire("agent_start", { type: "agent_start" });
+		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
+		assert.equal(sent.length, 1, "idle-time sends are not interrupt-droppable and must not resend");
 	});
 });

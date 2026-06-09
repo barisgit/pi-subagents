@@ -11,7 +11,7 @@ function createPi() {
 	const inner = new EventEmitter();
 	const bus = { on: (channel: string, handler: (data: unknown) => void) => { inner.on(channel, handler); return () => inner.off(channel, handler); }, emit: (channel: string, data: unknown) => inner.emit(channel, data) };
 	const sent: Array<{ message: any; options: unknown }> = [];
-	const pi = { events: bus, sendMessage: (message: unknown, options: unknown) => sent.push({ message, options }) };
+	const pi = { events: bus, on: () => {}, sendMessage: (message: unknown, options: unknown) => sent.push({ message, options }) };
 	setCurrentPi(pi as never);
 	registerSubagentNotify(pi as never);
 	return { events: inner, sent };
