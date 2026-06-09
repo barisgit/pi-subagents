@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ASYNC_NO_POLL_GUIDANCE } from "./async-guidance.ts";
-import { formatAsyncRunList, listRunsFromRegistry } from "./async-status.ts";
-import { readAllEntries } from "./runs-registry.ts";
+import { formatAsyncRunList, listRunsFromRegistry, readSummaryForEntry } from "./async-status.ts";
+import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { type Details } from "./types.ts";
 import { readStatus } from "./utils.ts";
 
@@ -83,14 +83,17 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 
 	let asyncDir: string | null = null;
 	let resolvedId = params.id ?? params.runId;
+	let registryMatch: RunsRegistryEntry | undefined;
+	let registryEntries: RunsRegistryEntry[] | undefined;
 
 	if (params.dir) {
 		asyncDir = path.resolve(params.dir);
 	} else if (resolvedId) {
-		const match = readAllEntries().find((entry) => entry.runId.startsWith(resolvedId!));
-		if (match) {
-			asyncDir = match.runRecordDir;
-			resolvedId = match.runId;
+		registryEntries = readAllEntries();
+		registryMatch = registryEntries.find((entry) => entry.runId.startsWith(resolvedId!));
+		if (registryMatch) {
+			asyncDir = registryMatch.runRecordDir;
+			resolvedId = registryMatch.runId;
 		}
 	}
 
@@ -146,6 +149,32 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 			if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
 			if (status.state === "running" || status.state === "queued" || status.state === "lost") lines.push("", ASYNC_NO_POLL_GUIDANCE);
 
+			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
+		}
+	}
+
+	// Group containers (parallel groups, workflows) have no status.json of their
+	// own; their state is synthesized from children. Fall back to the registry
+	// summary so `status id=<group>` works instead of "Status file not found."
+	if (registryMatch && registryEntries) {
+		const summary = readSummaryForEntry(registryMatch, registryEntries);
+		if (summary) {
+			const children = registryEntries.filter((entry) => entry.parentRunId === registryMatch!.runId);
+			const lines = [
+				`Run: ${summary.id}`,
+				`State: ${summary.state}`,
+				`Mode: ${summary.mode}${registryMatch.kind === "workflow" ? " (workflow)" : ""}`,
+				summary.label ? `Label: ${summary.label}` : undefined,
+				`Started: ${new Date(summary.startedAt).toISOString()}`,
+				summary.endedAt !== undefined ? `Ended: ${new Date(summary.endedAt).toISOString()}` : undefined,
+				`Dir: ${asyncDir ?? registryMatch.runRecordDir}`,
+			].filter((line): line is string => Boolean(line));
+			for (const child of children) {
+				const childSummary = readSummaryForEntry(child, registryEntries);
+				const agent = child.agentName ?? child.agentNames?.join("+") ?? "(group)";
+				lines.push(`Child: ${child.runId.slice(0, 8)} | ${agent} | ${childSummary?.state ?? "unknown"}${child.label ? ` | ${child.label}` : ""}`);
+			}
+			if (summary.state === "running" || summary.state === "queued" || summary.state === "lost") lines.push("", ASYNC_NO_POLL_GUIDANCE);
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
 		}
 	}
