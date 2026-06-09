@@ -517,8 +517,26 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 	return {
 		name: "workflow",
 		label: "Workflow",
-		promptSnippet: "Run a small JS workflow with agent, parallel, and phase globals",
-		description: "Run agent-authored JavaScript in a node:vm sandbox. Globals: agent(role, task) -> Promise<envelope> (rejects if the child fails), parallel(thunks) -> Promise<results[]>, phase(title). Always await every agent()/parallel() call (or run them through parallel()); a failed agent surfaces only when its promise is awaited. Avoid raw Promise.reject/Promise.all on agent work — use parallel() so failures are reported.",
+		promptSnippet: "Orchestrate subagents with JS control flow: branch on results, retry, loop, fan out",
+		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Use whenever the NEXT step depends on a previous step's result: branch on a child's structured output, retry/fallback on failure, loop until a condition holds (e.g. review until approved), decide fan-out width at runtime, or pass data between steps. Prefer this over multiple subagent calls when any decision sits between dispatches; use plain subagent for a single task or a fixed independent batch.
+
+The script runs in a sandbox with three globals:
+- agent(role, task) -> Promise<{status: "ok"|"blocked"|"failed", summary, result, artifacts?}> — dispatch one subagent (same roles as the subagent tool) and get its structured envelope. Rejects if the child fails, so failures propagate unless you catch them.
+- parallel(thunks) -> Promise<results[]> — run agent calls concurrently: parallel([() => agent("explorer", "..."), () => agent("qa", "...")]).
+- phase(title) — label the current stage for live status displays.
+
+Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background.
+
+Example (fix, then review-loop until approved, max 2 rounds):
+const fix = await agent("fixer", "Fix the flaky test in foo.test.ts");
+for (let round = 0; round < 2; round++) {
+  const review = await agent("review", "Review the fix: " + fix.summary);
+  if (review.result?.approved !== false) return { fix, review };
+  await agent("fixer", "Address review findings: " + review.summary);
+}
+return "escalate: review did not approve after 2 rounds";
+
+Rules: always await every agent()/parallel() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.`,
 		parameters: WorkflowParams,
 		async execute(id, params, signal, onUpdate, ctx) {
 			// Declared outside the try so the catch can record a synthetic failed child

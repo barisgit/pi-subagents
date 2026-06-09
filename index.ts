@@ -886,7 +886,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage runs",
-		description: `Delegate a bounded task to a named specialist agent, run several in parallel, build sequential chains, fork same-role branches, or inspect/resume background runs. Use when a specialist or background run beats doing the work inline.
+		description: `Delegate a bounded task to a named specialist agent, run several in parallel, fork same-role branches, or inspect/resume background runs. Use when a specialist or background run beats doing the work inline. For multi-step orchestration where a later step depends on an earlier step's RESULT (branch, retry, loop, runtime fan-out), use the workflow tool instead of chains.
 
 Shape: run: Step[] dispatches work. Step is a Task; inside chain:true a Step may be Task[] for a parallel sub-step.
 
@@ -903,7 +903,7 @@ Examples:
 { run:[{ agent:"fixer", task:"Patch the bug" }] }
 // parallel
 { run:[{ agent:"explorer", task:"Find relevant tests" },{ agent:"qa", task:"Run the checks" }], batch:true }
-// chain with parallel review+QA sub-step
+// chain with parallel review+QA sub-step (fixed pipeline only; if a step must INSPECT a result, use the workflow tool)
 { chain:true, run:[{ agent:"explorer", task:"Trace the flow" },{ agent:"fixer", task:"Patch using {previous}" },[{ agent:"review", task:"Review {previous}" },{ agent:"qa", task:"Verify {previous}" }]] }
 
 Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only executable/non-disabled agents. Use action:"status" (id optional; lists all when omitted) / action:"interrupt" (id optional; newest running run when omitted) / action:"resume" id message.

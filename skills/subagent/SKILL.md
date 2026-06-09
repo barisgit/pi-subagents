@@ -1,6 +1,6 @@
 ---
 name: subagent
-description: Use for delegating bounded repo work to configured subagents, parallel/chain runs, same-role forks, async jobs, and run management.
+description: Use for delegating bounded repo work to configured subagents, parallel/chain runs, workflow scripts with control flow, same-role forks, async jobs, and run management.
 ---
 
 # Subagent
@@ -23,9 +23,28 @@ Delegate when work needs any of these:
 
 - Use one `run` task for a bounded handoff.
 - Put multiple top-level `run` tasks in parallel when they do not depend on each other.
-- Set `chain:true` only when later steps need earlier output; use `{previous}` in later task text.
+- Set `chain:true` only for a FIXED pipeline where later steps need earlier output as text; use `{previous}` in later task text.
+- Use the `workflow` tool instead of a chain when any DECISION sits between dispatches: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps.
 - Set `batch:true` when several children should return one rollup notification.
 - Use `action:"list"` if agent names/chains are uncertain; use status/interrupt/resume only for live run management.
+
+## Workflow: orchestration with control flow
+
+`workflow({ script })` runs JavaScript in a sandbox with `agent(role, task)` (returns the child's structured envelope `{status, summary, result, artifacts?}`, rejects on failure), `parallel(thunks)`, and `phase(title)`. Top-level await works; the script's return value is the workflow result. `async:true` backgrounds the whole workflow. Await every `agent()`/`parallel()` call; use `parallel()` for concurrency (not raw `Promise.all`) so failures are attributed; the sandbox has no I/O — subagents do the real work.
+
+```ts
+workflow({ script: `
+phase("fix");
+const fix = await agent("fixer", "Fix the flaky retry test in net/backoff.test.ts");
+phase("review loop");
+for (let round = 0; round < 2; round++) {
+  const review = await agent("review", "Review this fix for regressions: " + fix.summary);
+  if (review.status === "ok" && review.result?.approved !== false) return { fix, review };
+  await agent("fixer", "Address the review findings: " + review.summary);
+}
+return "escalate: not approved after 2 rounds";
+` })
+```
 
 ## Canonical examples
 
