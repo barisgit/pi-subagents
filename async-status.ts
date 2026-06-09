@@ -564,7 +564,16 @@ function formatChildRunLine(run: AsyncRunSummary): string {
 export function workflowPhaseLabel(run: Pick<AsyncRunSummary, "phaseIndex" | "phaseTitle">): string {
 	if (run.phaseIndex === undefined) return "";
 	const label = `Phase ${run.phaseIndex}`;
-	return run.phaseTitle ? `${label}: ${run.phaseTitle}` : label;
+	const title = dedupePhaseTitle(run.phaseTitle);
+	return title ? `${label}: ${title}` : label;
+}
+
+// Scripts often name phases "Phase 1: recon"; phase labels already render the
+// index, so strip a leading "Phase N" from the title to avoid "Phase 1: Phase 1: recon".
+export function dedupePhaseTitle(title: string | undefined): string | undefined {
+	if (!title) return title;
+	const stripped = title.replace(/^phase\s*\d+\s*[:·-]?\s*/i, "");
+	return stripped.length > 0 ? stripped : title;
 }
 
 export function sortedWorkflowChildren(children: AsyncRunSummary[]): AsyncRunSummary[] {

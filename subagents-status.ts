@@ -3,7 +3,7 @@ import { colorForAgentName } from "./agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns, sortedWorkflowChildren, workflowPhaseLabel } from "./async-status.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns, sortedWorkflowChildren, workflowPhaseLabel } from "./async-status.ts";
 import { readWorkflowScript } from "./workflow-group-state.ts";
 import { previewArgs, readRunTranscript } from "./run-transcript.ts";
 import { formatDuration, formatTokens } from "./formatters.ts";
@@ -352,7 +352,8 @@ function workflowPhaseChip(run: LiveRun): string {
 	// sequential shape is readable in the left list, not just the right pane.
 	const marker = run.run.parallelGroupId ? "∥ " : "";
 	const label = `${marker}P${run.run.phaseIndex}`;
-	return run.run.phaseTitle ? `${label} ${run.run.phaseTitle}` : label;
+	const title = dedupePhaseTitle(run.run.phaseTitle);
+	return title ? `${label} ${title}` : label;
 }
 
 function runShapeBadge(run: LiveRun): string {
@@ -1098,7 +1099,8 @@ export class SubagentsStatusComponent implements Component {
 				}
 			}
 			if (best && run.run.state === "running") {
-				phaseChip = best.title ? `Phase ${best.index}: ${best.title}` : `Phase ${best.index}`;
+				const title = dedupePhaseTitle(best.title);
+				phaseChip = title ? `Phase ${best.index}: ${title}` : `Phase ${best.index}`;
 			}
 		}
 		const collapsed = this.collapsedIds.has(run.run.id);

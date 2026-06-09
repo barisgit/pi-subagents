@@ -176,6 +176,26 @@ describe("dashboard collapse and container rows", () => {
 		}
 	});
 
+	it("phase chips dedupe a 'Phase N:' prefix already present in the script's phase title", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf-3", mode: "parallel", workflow: true, rootRunId: "wf-3", startedAt: 1000 });
+		seedRun(root, { runId: "wf3-a", agentName: "explorer", parentRunId: "wf-3", rootRunId: "wf-3", phaseIndex: 1, phaseTitle: "Phase 1: recon", parallelGroupId: "pg", startedAt: 1100 });
+		seedRun(root, { runId: "wf3-b", agentName: "qa", parentRunId: "wf-3", rootRunId: "wf-3", phaseIndex: 2, phaseTitle: "Phase 2: verify", state: "running", startedAt: 1200 });
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const text = component.render(180).map(stripBorders).join("\n");
+			// Container chip: "Phase 2: verify", not "Phase 2: Phase 2: verify".
+			assert.match(text, /▾ workflow · Phase 2: verify · running/);
+			assert.doesNotMatch(text, /Phase 2: Phase 2/);
+			// Child chip: "∥ P1 recon", not "∥ P1 Phase 1: recon".
+			assert.match(text, /∥ P1 recon/);
+			assert.doesNotMatch(text, /P1 Phase 1/);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("workflow children are never pending-delivery (script consumes results live)", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf-2", mode: "parallel", workflow: true, rootRunId: "wf-2", startedAt: 1000 });
