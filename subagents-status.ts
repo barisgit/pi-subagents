@@ -3,9 +3,10 @@ import { colorForAgentName } from "./agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns } from "./async-status.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns, sortedWorkflowChildren, workflowPhaseLabel } from "./async-status.ts";
+import { readWorkflowScript } from "./workflow-group-state.ts";
 import { previewArgs, readRunTranscript } from "./run-transcript.ts";
-import { formatDuration } from "./formatters.ts";
+import { formatDuration, formatTokens } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
 import { compareRunsForDisplay, deriveRunDisplayState } from "./run-liveness.ts";
 import { formatPhase, type RunPhase } from "./run-phase.ts";
@@ -679,8 +680,74 @@ function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs:
 	return [theme.fg("dim", truncateToWidth(`${children.length} ${agentWord}${suffix}`, width))];
 }
 
+// Cap the script section so a huge orchestration script can't drown the step
+// outline below it; the outline is the part that changes while a workflow runs.
+const WORKFLOW_SCRIPT_MAX_LINES = 24;
+
+function childTokenTotal(child: AsyncRunSummary): number {
+	if (child.totalTokens) return child.totalTokens.total;
+	return child.steps.reduce((sum, step) => sum + (step.tokens?.total ?? 0), 0);
+}
+
+// Workflow groups get a purpose-built right pane: the SCRIPT that produced the
+// orchestration (the workflow's whole identity) followed by a phase-grouped
+// step outline synthesized from the child runs. The generic transcript pane is
+// useless for groups (the container has no session of its own).
+export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, width: number, runs: LiveRun[]): string[] {
+	const out: string[] = [];
+	const script = run.asyncDir ? readWorkflowScript(run.asyncDir) : undefined;
+	if (script) {
+		out.push(theme.fg("accent", truncateToWidth("─── Script ───", width)));
+		const scriptLines = script.replace(/\t/g, "  ").split("\n");
+		// Trim leading/trailing blank lines but keep interior structure verbatim:
+		// code must not be word-wrap reflowed.
+		while (scriptLines.length > 0 && scriptLines[0]?.trim() === "") scriptLines.shift();
+		while (scriptLines.length > 0 && scriptLines[scriptLines.length - 1]?.trim() === "") scriptLines.pop();
+		const shown = scriptLines.slice(0, WORKFLOW_SCRIPT_MAX_LINES);
+		for (const line of shown) out.push(theme.fg("muted", truncateToWidth(line, width)));
+		if (scriptLines.length > shown.length) {
+			out.push(theme.fg("dim", truncateToWidth(`… (+${scriptLines.length - shown.length} more lines)`, width)));
+		}
+	}
+	const children = runs
+		.filter((candidate): candidate is LiveRun & { source: "async" } => candidate.source === "async" && candidate.run.parentRunId === run.id)
+		.map((candidate) => candidate.run);
+	if (children.length > 0) {
+		if (out.length > 0) out.push("");
+		out.push(theme.fg("accent", truncateToWidth("─── Steps ───", width)));
+		let lastPhaseKey: number | undefined;
+		let shownPhaseHeader = false;
+		for (const child of sortedWorkflowChildren(children)) {
+			if (child.phaseIndex !== lastPhaseKey || !shownPhaseHeader) {
+				lastPhaseKey = child.phaseIndex;
+				shownPhaseHeader = true;
+				const label = child.phaseIndex === undefined && !child.phaseTitle ? "" : workflowPhaseLabel(child);
+				if (label) out.push(theme.fg("muted", truncateToWidth(label, width)));
+			}
+			const agent = child.steps.find((step) => step.agent)?.agent ?? child.mode;
+			const glyph = statusGlyph(theme, child.state, child.activityState, child.displayState);
+			// parallelGroupId is a raw UUID; render a compact marker instead of the id.
+			const parallelTag = child.parallelGroupId ? theme.fg("dim", "∥ ") : "";
+			const stats: string[] = [child.state];
+			const end = child.endedAt ?? Date.now();
+			stats.push(formatDuration(Math.max(0, end - child.startedAt)));
+			const tokens = childTokenTotal(child);
+			if (tokens > 0) stats.push(`${formatTokens(tokens)} tok`);
+			if (child.state === "running" && child.currentTool) stats.push(`→ ${child.currentTool}`);
+			const labelPart = child.label ? ` — ${child.label}` : "";
+			const line = `  ${glyph} ${parallelTag}${tintAgentName(agent, colorForAgentName(agent))} · ${stats.join(" · ")}${labelPart}`;
+			out.push(truncateToWidth(line, width));
+		}
+	}
+	return out;
+}
+
 export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
+	if (run.source === "async" && run.run.workflow) {
+		const workflowLines = buildWorkflowRightLines(theme, run.run, width, runs);
+		if (workflowLines.length > 0) return workflowLines;
+	}
 	const childSummary = buildChildSummaryLines(theme, run, width, runs);
 	const asyncDir = run.run.asyncDir;
 	if (!asyncDir) return childSummary.length > 0 ? childSummary : [theme.fg("dim", "(no events yet)")];

@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatAsyncRunList, readSummaryForEntry } from "../../async-status.ts";
-import { SubagentsStatusComponent, summaryFromRegistryEntry } from "../../subagents-status.ts";
+import { buildRightLines, buildWorkflowRightLines, SubagentsStatusComponent, summaryFromRegistryEntry, type LiveRun } from "../../subagents-status.ts";
+import { writeWorkflowScript } from "../../workflow-group-state.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
@@ -278,5 +279,69 @@ describe("workflow dashboard reader overlays", () => {
 		} finally {
 			component.dispose();
 		}
+	});
+
+	it("workflow right pane shows the script and a phase-grouped step outline", () => {
+		const { group, entries } = setupWorkflowRegistry();
+		writeWorkflowScript(group.runRecordDir, 'const a = await agent("explorer", "inspect");\nreturn a.summary;');
+
+		const groupSummary = summaryFromRegistryEntry(group, entries);
+		const runs: LiveRun[] = entries.map((entry) => ({ source: "async", run: summaryFromRegistryEntry(entry, entries) }));
+		const theme = createTestTheme();
+		const lines = buildWorkflowRightLines(theme, groupSummary, 120, runs).join("\n");
+
+		assert.match(lines, /─ Script ─/);
+		assert.match(lines, /const a = await agent\("explorer", "inspect"\);/);
+		assert.match(lines, /return a\.summary;/);
+		assert.match(lines, /─ Steps ─/);
+		// Phase headers appear once per phase, children grouped beneath.
+		assert.match(lines, /Phase 1: inspect/);
+		assert.match(lines, /Phase 2: patch/);
+		const scriptIdx = lines.indexOf("─ Script ─");
+		const stepsIdx = lines.indexOf("─ Steps ─");
+		assert.ok(scriptIdx !== -1 && stepsIdx !== -1 && scriptIdx < stepsIdx, "script section renders before steps");
+		const p1 = lines.indexOf("Phase 1: inspect");
+		const p2 = lines.indexOf("Phase 2: patch");
+		assert.ok(p1 < p2, "phases render in order");
+		// Children render with agent + state under their phase.
+		assert.match(lines, /explorer/);
+		assert.match(lines, /fixer/);
+		assert.match(lines, /complete/);
+		// Parallel children carry the compact parallel marker; the solo phase-2 child does not.
+		assert.match(lines, /∥ .*explorer/);
+		assert.doesNotMatch(lines, /∥ .*fixer/);
+	});
+
+	it("buildRightLines routes a workflow group to the workflow pane", () => {
+		const { group, entries } = setupWorkflowRegistry();
+		writeWorkflowScript(group.runRecordDir, 'await agent("explorer", "x");');
+		const groupSummary = summaryFromRegistryEntry(group, entries);
+		const runs: LiveRun[] = entries.map((entry) => ({ source: "async", run: summaryFromRegistryEntry(entry, entries) }));
+		const lines = buildRightLines(createTestTheme(), { source: "async", run: groupSummary }, 120, runs).join("\n");
+		assert.match(lines, /─ Script ─/, "mutant: buildRightLines must route workflow groups to the workflow pane");
+		assert.match(lines, /─ Steps ─/);
+	});
+
+	it("workflow right pane caps a long script and counts the overflow", () => {
+		const { group, entries } = setupWorkflowRegistry();
+		const longScript = Array.from({ length: 40 }, (_, i) => `phase("step ${i}");`).join("\n");
+		writeWorkflowScript(group.runRecordDir, longScript);
+
+		const groupSummary = summaryFromRegistryEntry(group, entries);
+		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, []).join("\n");
+		assert.match(lines, /phase\("step 0"\);/);
+		assert.match(lines, /phase\("step 23"\);/);
+		assert.doesNotMatch(lines, /phase\("step 24"\);/);
+		assert.match(lines, /\(\+16 more lines\)/);
+	});
+
+	it("workflow group with no script still outlines steps (no transcript fallback noise)", () => {
+		const { group, entries } = setupWorkflowRegistry();
+		const groupSummary = summaryFromRegistryEntry(group, entries);
+		const runs: LiveRun[] = entries.map((entry) => ({ source: "async", run: summaryFromRegistryEntry(entry, entries) }));
+		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, runs).join("\n");
+		assert.doesNotMatch(lines, /─ Script ─/);
+		assert.match(lines, /─ Steps ─/);
+		assert.match(lines, /Phase 1: inspect/);
 	});
 });

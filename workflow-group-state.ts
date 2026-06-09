@@ -18,6 +18,26 @@ export function writeWorkflowGroupState(runRecordDir: string, state: WorkflowGro
 	} catch { /* liveness marker is best-effort; must never break the run */ }
 }
 
+// The script that produced a workflow group, persisted so the dashboard can
+// show WHAT the orchestration does (not just its children). Separate file from
+// the lifecycle marker so state flips never clobber it. Best-effort like the
+// lifecycle marker: never throw into a run.
+const WORKFLOW_SCRIPT_FILE = "workflow-script.json";
+
+export function writeWorkflowScript(runRecordDir: string, script: string): void {
+	try {
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		fs.writeFileSync(path.join(runRecordDir, WORKFLOW_SCRIPT_FILE), JSON.stringify({ script }), "utf8");
+	} catch { /* best-effort; must never break the run */ }
+}
+
+export function readWorkflowScript(runRecordDir: string): string | undefined {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(path.join(runRecordDir, WORKFLOW_SCRIPT_FILE), "utf8")) as { script?: string };
+		return typeof parsed.script === "string" && parsed.script.trim() !== "" ? parsed.script : undefined;
+	} catch { return undefined; }
+}
+
 export function readWorkflowGroupState(runRecordDir: string): WorkflowGroupLifecycle | undefined {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE), "utf8")) as { state?: WorkflowGroupLifecycle };

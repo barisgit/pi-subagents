@@ -10,6 +10,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { Type } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "./async-guidance.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { writeWorkflowScript } from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "./submit-result.ts";
 import type { AgentProgress, Details, SingleResult } from "./types.ts";
 
@@ -547,6 +548,9 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 				const workflowOnUpdate = onUpdate as ((partialResult: AgentToolResult<Details>) => void) | undefined;
 				const workflowContext = { toolCallId: id, signal: signal as AbortSignal, onUpdate: workflowOnUpdate, ctx, requestedAsync: params.async };
 				group = options.openWorkflowGroup?.(workflowContext);
+				// Persist the script next to the group record so status surfaces can show
+				// WHAT this workflow does, not just its children.
+				if (group?.asyncDir) writeWorkflowScript(group.asyncDir, params.script);
 				let childIndex = 0;
 				emitter = createWorkflowPhaseEmitter(id, group?.async ? undefined : workflowOnUpdate);
 				const currentPhaseTags = () => ({

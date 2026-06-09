@@ -8,7 +8,7 @@ import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in
 import { readSummaryForEntry } from "../../async-status.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
 import { summaryFromRegistryEntry } from "../../subagents-status.ts";
-import { writeWorkflowGroupState } from "../../workflow-group-state.ts";
+import { readWorkflowScript, writeWorkflowGroupState } from "../../workflow-group-state.ts";
 import { createWorkflowTool } from "../../workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
 
@@ -145,6 +145,11 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		assert.equal(groups.length, 1);
 		const group = groups[0]!;
 		assert.equal(fs.existsSync(path.join(group.runRecordDir, "status.json")), false, "workflow group must stay statusless");
+		assert.equal(
+			readWorkflowScript(group.runRecordDir),
+			"await parallel([() => agent('A', 'alpha'), () => agent('B', 'bravo')]);",
+			"the producing script must be persisted on the group record",
+		);
 		const children = entries.filter((entry) => entry.parentRunId === group.runId);
 		assert.equal(children.length, 2);
 		assert.deepEqual(children.map((entry) => entry.agentName).sort(), ["A", "B"]);

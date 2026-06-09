@@ -561,13 +561,13 @@ function formatChildRunLine(run: AsyncRunSummary): string {
 	return parts.filter((part): part is string => Boolean(part)).join(" | ");
 }
 
-function workflowPhaseLabel(run: Pick<AsyncRunSummary, "phaseIndex" | "phaseTitle">): string {
+export function workflowPhaseLabel(run: Pick<AsyncRunSummary, "phaseIndex" | "phaseTitle">): string {
 	if (run.phaseIndex === undefined) return "";
 	const label = `Phase ${run.phaseIndex}`;
 	return run.phaseTitle ? `${label}: ${run.phaseTitle}` : label;
 }
 
-function sortedWorkflowChildren(children: AsyncRunSummary[]): AsyncRunSummary[] {
+export function sortedWorkflowChildren(children: AsyncRunSummary[]): AsyncRunSummary[] {
 	return children
 		.map((child, index) => ({ child, index }))
 		.sort((a, b) => {
