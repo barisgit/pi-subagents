@@ -81,6 +81,7 @@ interface SubagentResult {
 	children?: ChainStepResult[];
 	batch?: boolean;
 	batchId?: string;
+	kind?: string;
 	notifyPolicy?: NotifyPolicy;
 	total?: number;
 	completed?: number;
@@ -293,6 +294,19 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		if (groupRunId) groupedRuns.delete(groupRunId);
 
 		if (policy === "silent") return;
+
+		// A workflow is ONE entity: exactly one notification carrying the script's
+		// return value as the summary. Its children are emitted silent and must
+		// never fan out through the back-compat children+each path below.
+		if (result.kind === "workflow") {
+			const key = buildCompletionKey(result, "notify");
+			if (markSeenWithTtl(seen, key, now, ttlMs)) {
+				logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
+				return;
+			}
+			sendNotification(idLabel, singleNotificationContent(result));
+			return;
+		}
 
 		if (accumulated && accumulated.length > 0) {
 			if (policy === "rollup") {

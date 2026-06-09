@@ -3885,13 +3885,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								return;
 							}
 							const child = event.result;
+							// Workflow children never notify individually: the workflow is ONE
+							// entity and sends exactly one completion (with the script's return
+							// value) from finishAsync. The event still fires for non-notify
+							// consumers (widget liveness, tests).
 							safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
 								id: event.runId,
 								runId: event.runId,
 								parentRunId: group.runId,
 								rootRunId: groupRootRunId,
 								metadata: undefined,
-								notifyPolicy: "each",
+								notifyPolicy: "silent",
 								agent: role,
 								success: child ? child.state === "complete" : false,
 								summary: child?.outputText ?? (event.error ? String(event.error) : ""),
@@ -3945,7 +3949,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					await awaitRun(handle);
 					if (result) childResults.push({ runId: handle.runId, result, index });
 				},
-				finishAsync: (success) => {
+				finishAsync: (success, summary) => {
 					if (!effectiveAsync) return;
 					writeWorkflowGroupState(group.runRecordDir, success ? "complete" : "failed");
 					const ordered = [...childResults].sort((a, b) => a.index - b.index);
@@ -3969,9 +3973,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						...(parentRunId ? { parentRunId } : {}),
 						rootRunId: groupRootRunId,
 						notifyPolicy: "each",
+						kind: "workflow",
 						success,
-						agent: ordered.map(({ result }) => result.agent).join(","),
-						summary: "",
+						agent: "workflow",
+						agents: ordered.map(({ result }) => result.agent).join(","),
+						summary: summary ?? "",
 						state: success ? "complete" : "failed",
 						timestamp: Date.now(),
 						results: children,

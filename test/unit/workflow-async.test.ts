@@ -140,6 +140,8 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		assert.equal(started.agent, "A");
 		assert.equal(runComplete.parentRunId, groupRunId);
 		assert.equal(runComplete.runId, started.runId);
+		assert.equal(runComplete.notifyPolicy, "silent", "mutant: workflow children must not notify individually");
+		assert.equal(complete.kind, "workflow", "mutant: group COMPLETE must self-identify as a workflow");
 		assert.equal(complete.id, groupRunId, "mutant: group COMPLETE id must be the group runId, not a child runId");
 		assert.notEqual(complete.id, started.runId, "mutant guard: child runId differs from group runId");
 		assert.equal(complete.runId, groupRunId);
@@ -162,7 +164,8 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		assert.equal(complete.children[0].agent, "SLOW");
 		assert.equal(complete.children[1].stepIndex, 1);
 		assert.equal(complete.children[1].agent, "FAST");
-		assert.equal(complete.agent, "SLOW,FAST");
+		assert.equal(complete.agent, "workflow");
+		assert.equal(complete.agents, "SLOW,FAST");
 	});
 
 	it("sync path surfaces the raw script value via content text and a real Details snapshot", async () => {

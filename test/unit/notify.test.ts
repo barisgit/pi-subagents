@@ -339,4 +339,50 @@ describe("registerSubagentNotify", () => {
 		});
 		assert.equal(silent.sent.length, 0);
 	});
+
+	it("a workflow sends exactly one notification carrying the script's return value", () => {
+		const { events, sent } = createPi();
+
+		// Workflow children complete silent: no individual notifications.
+		for (const child of ["wfn-a", "wfn-b"]) {
+			events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
+				id: child,
+				runId: child,
+				parentRunId: "wfn-group",
+				rootRunId: "wfn-group",
+				notifyPolicy: "silent",
+				agent: "explorer",
+				success: true,
+				state: "complete",
+				summary: "child detail",
+				timestamp: Date.now(),
+			});
+		}
+		assert.equal(sent.length, 0, "workflow children must not notify individually");
+
+		// The group completion identifies itself as a workflow and carries the
+		// script's return value as the summary; children[] must NOT fan out.
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "wfn-group",
+			runId: "wfn-group",
+			rootRunId: "wfn-group",
+			notifyPolicy: "each",
+			kind: "workflow",
+			agent: "workflow",
+			agents: "explorer,explorer",
+			success: true,
+			state: "complete",
+			summary: '{ "verified": true }',
+			children: [
+				{ id: "wfn-a", agent: "explorer", success: true, summary: "child detail", timestamp: Date.now() },
+				{ id: "wfn-b", agent: "explorer", success: true, summary: "child detail", timestamp: Date.now() },
+			],
+			timestamp: Date.now(),
+		});
+
+		assert.equal(sent.length, 1, "a workflow completion is exactly one notification");
+		const content = (sent[0].message as { content?: string }).content ?? "";
+		assert.ok(content.includes("**workflow**"), `workflow notification should name the workflow entity, got: ${content}`);
+		assert.ok(content.includes('{ "verified": true }'), "notification must carry the script's return value");
+	});
 });

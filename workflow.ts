@@ -39,7 +39,7 @@ export interface WorkflowGroupHandle {
 	async?: boolean;
 	asyncDir?: string;
 	dispatchChild(args: { role: string; task: string; index: number; phaseIndex?: number; phaseTitle?: string; parallelGroupId?: string }): Promise<SingleResult>;
-	finishAsync?(success: boolean): void;
+	finishAsync?(success: boolean, summary?: string): void;
 	failWorkflow?(message: string, tags?: { phaseIndex?: number; phaseTitle?: string }): Promise<void>;
 }
 
@@ -589,10 +589,10 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 				});
 				if (group?.async) {
 					const asyncGroup = group;
-					void run().then(() => asyncGroup.finishAsync?.(true)).catch(async (error) => {
+					void run().then((value) => asyncGroup.finishAsync?.(true, value === undefined ? "" : stringifyWorkflowValue(value))).catch(async (error) => {
 						const message = error instanceof Error ? error.message : String(error);
 						await asyncGroup.failWorkflow?.(message, currentPhaseTags());
-						asyncGroup.finishAsync?.(false);
+						asyncGroup.finishAsync?.(false, message);
 					});
 					const asyncDir = asyncGroup.asyncDir ?? "";
 					return {
