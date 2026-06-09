@@ -56,6 +56,7 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	SLASH_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_NOTIFY_DELIVERED_EVENT,
 	SUBAGENT_EXPOSE_API_EVENT,
 	SUBAGENT_LINEAGE_EVENT,
 	SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT,
@@ -481,7 +482,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	if (!isChildSession) globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
 	const idleTracker = createIdleTracker(pi);
-	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry } = createAsyncJobTracker(pi, state, { idleTracker });
+	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered } = createAsyncJobTracker(pi, state, { idleTracker });
 	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
@@ -1092,6 +1093,7 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 	const eventUnsubscribes = [
 		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
+		pi.events.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, handleDelivered),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleRegisterPersonaDir(payload as RegisterPersonaDirPayload)),
 		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleUnregisterPersonaDir(payload as UnregisterPersonaDirPayload)),

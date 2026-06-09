@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify from "../../notify.ts";
 import { setCurrentPi } from "../../current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from "../../types.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_NOTIFY_DELIVERED_EVENT } from "../../types.ts";
 
 /**
  * Build a pi.events stand-in whose `on()` returns an unsubscribe function
@@ -240,6 +240,49 @@ describe("registerSubagentNotify", () => {
 			},
 			options: { triggerTurn: true },
 		});
+	});
+
+	it("emits a delivered event covering the group and every rollup child", () => {
+		const rollup = createPi();
+		const delivered: string[][] = [];
+		rollup.bus.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, (data) => {
+			delivered.push(((data as { runIds?: string[] })?.runIds ?? []).slice());
+		});
+		for (const childRunId of ["d0000000-0000-4000-8000-00000000000a", "d0000000-0000-4000-8000-00000000000b"]) {
+			rollup.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
+				id: childRunId,
+				runId: childRunId,
+				parentRunId: "group-delivered",
+				rootRunId: "group-delivered",
+				notifyPolicy: "rollup",
+				agent: "A",
+				success: true,
+				state: "complete",
+				summary: "child done",
+				timestamp: Date.now(),
+			});
+		}
+		// Children buffered; nothing delivered yet.
+		assert.equal(delivered.length, 0);
+
+		rollup.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "group-delivered",
+			runId: "group-delivered",
+			rootRunId: "group-delivered",
+			notifyPolicy: "rollup",
+			agent: "A,A",
+			success: true,
+			state: "complete",
+			summary: "group done",
+			timestamp: Date.now(),
+		});
+
+		assert.equal(rollup.sent.length, 1);
+		assert.equal(delivered.length, 1);
+		assert.deepEqual(
+			[...delivered[0]!].sort(),
+			["d0000000-0000-4000-8000-00000000000a", "d0000000-0000-4000-8000-00000000000b", "group-delivered"].sort(),
+		);
 	});
 
 	it("batch rollup aggregates time-separated per-run completions by notifyPolicy", () => {

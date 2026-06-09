@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "./completion-dedupe.ts";
 import { getCurrentPi } from "./current-pi.ts";
 import { logger } from "./logger.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from "./types.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_NOTIFY_DELIVERED_EVENT } from "./types.ts";
 
 interface ChainStepResult {
 	agent: string;
@@ -227,6 +227,19 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	const ttlMs = 10 * 60 * 1000;
 	const groupedRuns = new Map<string, SubagentResult[]>();
 
+	// Tell the widget which runs a notification covered (or would have covered,
+	// for deduped/silent results) so it can retire their rows. Resolve the
+	// current pi at call time for the same reload-safety reason as below.
+	const emitDelivered = (runIds: Array<string | undefined>) => {
+		const ids = runIds.filter((id): id is string => typeof id === "string" && id.length > 0);
+		if (ids.length === 0) return;
+		try {
+			getCurrentPi().events.emit(SUBAGENT_NOTIFY_DELIVERED_EVENT, { runIds: ids });
+		} catch (err) {
+			logger.warn("notify.emitDelivered: threw", { err: err instanceof Error ? err.message : String(err) });
+		}
+	};
+
 	const sendNotification = (idLabel: string, content: string, details?: SubagentNotifyDetails | SubagentBatchNotifyDetails) => {
 		// Cannot use the captured `pi` from registration time: the activate that
 		// registered this handler may have been replaced by ctx.reload()/fork()/
@@ -254,9 +267,11 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		const key = buildCompletionKey(result, "notify");
 		if (markSeenWithTtl(seen, key, now, ttlMs)) {
 			logger.info("notify.handleComplete: DEDUPED", { id: result.id ?? "<null>", key });
+			emitDelivered([result.runId ?? result.id ?? undefined]);
 			return;
 		}
 		sendNotification(result.id ?? "<null>", singleNotificationContent(result));
+		emitDelivered([result.runId ?? result.id ?? undefined]);
 	};
 
 	const notifyChildren = (result: SubagentResult, children: ChainStepResult[], now: number) => {
@@ -271,7 +286,10 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		const parentRunId = result.parentRunId;
 		if (!parentRunId) return;
 		const policy = notifyPolicyFor(result);
-		if (policy === "silent") return;
+		if (policy === "silent") {
+			emitDelivered([result.runId ?? result.id ?? undefined]);
+			return;
+		}
 		const now = Date.now();
 		if (policy === "each") {
 			sendOnce(result, now);
@@ -292,8 +310,16 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		const groupRunId = result.runId ?? result.id ?? undefined;
 		const accumulated = groupRunId ? groupedRuns.get(groupRunId) : undefined;
 		if (groupRunId) groupedRuns.delete(groupRunId);
+		const coveredRunIds = [
+			groupRunId,
+			...(accumulated ?? []).map((child) => child.runId ?? child.id ?? undefined),
+			...(Array.isArray(result.children) ? result.children.map((child) => child.runId ?? child.id ?? undefined) : []),
+		];
 
-		if (policy === "silent") return;
+		if (policy === "silent") {
+			emitDelivered(coveredRunIds);
+			return;
+		}
 
 		// A workflow is ONE entity: exactly one notification carrying the script's
 		// return value as the summary. Its children are emitted silent and must
@@ -302,9 +328,11 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 			const key = buildCompletionKey(result, "notify");
 			if (markSeenWithTtl(seen, key, now, ttlMs)) {
 				logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
+				emitDelivered(coveredRunIds);
 				return;
 			}
 			sendNotification(idLabel, singleNotificationContent(result));
+			emitDelivered(coveredRunIds);
 			return;
 		}
 
@@ -333,10 +361,12 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 				const key = buildCompletionKey(rollup, "notify");
 				if (markSeenWithTtl(seen, key, now, ttlMs)) {
 					logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
+					emitDelivered(coveredRunIds);
 					return;
 				}
 				sendNotification(idLabel, batchNotificationContent(rollup, rollupChildren), batchNotificationDetails(rollup, rollupChildren));
 			}
+			emitDelivered(coveredRunIds);
 			return;
 		}
 
@@ -345,12 +375,14 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		// time-separated per-run events were accumulated for this group.
 		if (children && policy === "each") {
 			notifyChildren(result, children, now);
+			emitDelivered([groupRunId]);
 			return;
 		}
 
 		const key = buildCompletionKey(result, "notify");
 		if (markSeenWithTtl(seen, key, now, ttlMs)) {
 			logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
+			emitDelivered(coveredRunIds);
 			return;
 		}
 
@@ -359,6 +391,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 			? batchNotificationContent(result, rollupChildren)
 			: singleNotificationContent(result);
 		sendNotification(idLabel, content, rollupChildren ? batchNotificationDetails(result, rollupChildren) : undefined);
+		emitDelivered(coveredRunIds);
 	};
 
 	// Subscribe on this session's pi.events bus. The subscription is re-attached

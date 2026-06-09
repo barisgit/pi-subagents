@@ -93,11 +93,16 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	handleComplete: (data: unknown) => void;
 	resetJobs: (ctx?: ExtensionContext) => void;
 	rehydrateFromRegistry: (ctx?: ExtensionContext) => number;
+	handleDelivered: (data: unknown) => void;
 } {
 	const completionRetentionMs = options.completionRetentionMs ?? 10000;
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
 	const idleTracker = options.idleTracker;
 	const lastActivityStateByRunId = new Map<string, ActivityState | undefined>();
+	// Runs whose completion notification already reached the host turn. Guards
+	// the delivered-before-complete listener-order race: notify may emit the
+	// delivered event before this tracker's own complete handler runs.
+	const deliveredRunIds = new Set<string>();
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		renderWidget(ctx, jobs);
 		// TODO(sdk-0.75-shape): ExtensionUIContext no longer exposes requestRender;
@@ -110,6 +115,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			state.cleanupTimers.delete(asyncId);
 			state.asyncJobs.delete(asyncId);
 			lastActivityStateByRunId.delete(asyncId);
+			deliveredRunIds.delete(asyncId);
 			if (state.lastUiContext) {
 				rerenderWidget(state.lastUiContext);
 			}
@@ -225,7 +231,18 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 							job.lastToolEndAt = undefined;
 						}
 						if (isTerminalAsyncStatus(job.status)) {
-							if (previousStatus !== job.status) scheduleCleanup(job.asyncId);
+							if (previousStatus !== job.status) {
+								// complete/failed runs notify the host; keep the row (pending
+								// delivery) until notify confirms the notification landed. An
+								// interrupted/skipped run never notifies - retire it as before.
+								const notifies = job.status === "complete" || job.status === "failed";
+								if (notifies && !deliveredRunIds.has(job.asyncId)) {
+									job.pendingDelivery = true;
+								} else {
+									job.pendingDelivery = false;
+									scheduleCleanup(job.asyncId);
+								}
+							}
 							continue;
 						}
 						continue;
@@ -315,11 +332,39 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			if (result.asyncDir) job.asyncDir = result.asyncDir;
 		}
 		lastActivityStateByRunId.delete(asyncId);
+		if (job && !deliveredRunIds.has(asyncId)) {
+			// Hold the row until notify confirms the completion notification
+			// actually reached the host turn (rollups can hold children open for
+			// a while; interrupts can drop delivery entirely).
+			job.pendingDelivery = true;
+		} else {
+			if (job) job.pendingDelivery = false;
+			scheduleCleanup(asyncId);
+		}
 		if (state.lastUiContext) {
 			rerenderWidget(state.lastUiContext);
 		}
 		idleTracker?.onAsyncFinished(asyncId);
-		scheduleCleanup(asyncId);
+	};
+
+	const handleDelivered = (data: unknown) => {
+		const info = data as { runIds?: unknown };
+		const runIds = Array.isArray(info?.runIds) ? info.runIds.filter((id): id is string => typeof id === "string") : [];
+		if (runIds.length === 0) return;
+		let changed = false;
+		for (const runId of runIds) {
+			deliveredRunIds.add(runId);
+			const job = state.asyncJobs.get(runId);
+			if (!job) continue;
+			if (job.pendingDelivery) {
+				job.pendingDelivery = false;
+				changed = true;
+			}
+			if (isTerminalAsyncStatus(job.status)) scheduleCleanup(runId);
+		}
+		if (changed && state.lastUiContext) {
+			rerenderWidget(state.lastUiContext);
+		}
 	};
 
 	const resetJobs = (ctx?: ExtensionContext) => {
@@ -329,6 +374,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
 		lastActivityStateByRunId.clear();
+		deliveredRunIds.clear();
 		state.foregroundControls?.clear();
 		state.lastForegroundControlId = null;
 		if (ctx?.hasUI) {
@@ -376,5 +422,5 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		return added;
 	};
 
-	return { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry };
+	return { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered };
 }

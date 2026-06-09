@@ -413,6 +413,10 @@ export interface AsyncJobState {
 	// charter nested-subagent-display: widget reads this from status.json for nesting.
 	parentRunId?: string;
 	status: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
+	// Terminal but its completion notification has not reached the host turn
+	// yet (rollup still open, or delivery raced/never fired). Widget keeps the
+	// row and renders an accent glyph until the delivered event arrives.
+	pendingDelivery?: boolean;
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;
@@ -557,6 +561,10 @@ export const SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT = "subagent:register-pers
 export const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
 export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
 export const SUBAGENT_ASYNC_RUN_COMPLETE_EVENT = "subagent:async-run-complete";
+// Emitted by notify.ts when a completion notification has actually been
+// delivered to the host turn (or was deduped as already delivered). Carries
+// every runId the notification covered so the widget can retire those rows.
+export const SUBAGENT_NOTIFY_DELIVERED_EVENT = "subagent:notify-delivered";
 export const SUBAGENT_SPAWN_STARTED_EVENT = "subagent:spawn_started";
 export const SUBAGENT_COMPLETED_EVENT = "subagent:completed";
 export const SUBAGENT_FAILED_EVENT = "subagent:failed";

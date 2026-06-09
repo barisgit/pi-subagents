@@ -15,6 +15,7 @@ interface AsyncJobTrackerModule {
 		handleStarted(data: unknown): void;
 		handleComplete(data: unknown): void;
 		rehydrateFromRegistry(ctx?: unknown): number;
+		handleDelivered(data: unknown): void;
 	};
 }
 
@@ -260,6 +261,64 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(state.asyncJobs.has("run-sync"), false);
 		} finally {
 			setRegistryPathForTests(null);
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("holds a completed job as pending delivery until notify confirms, then retires it", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, {
+				completionRetentionMs: 5,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-1", asyncDir: path.join(asyncRoot, "run-1"), agent: "worker" });
+			tracker.handleComplete({ id: "run-1", success: true });
+
+			const job = state.asyncJobs.get("run-1") as { status: string; pendingDelivery?: boolean } | undefined;
+			assert.ok(job, "job should still exist after completion");
+			assert.equal(job?.status, "complete");
+			assert.equal(job?.pendingDelivery, true);
+
+			// Well past the retention window: the row must survive while undelivered.
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(state.asyncJobs.has("run-1"), true, "undelivered job must not be cleaned up");
+
+			tracker.handleDelivered({ runIds: ["run-1"] });
+			assert.equal((state.asyncJobs.get("run-1") as { pendingDelivery?: boolean } | undefined)?.pendingDelivery, false);
+
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(state.asyncJobs.has("run-1"), false, "delivered job should retire after retention");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("retires immediately when delivery arrived before the completion event", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, {
+				completionRetentionMs: 5,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-1", asyncDir: path.join(asyncRoot, "run-1"), agent: "worker" });
+			// notify's delivered event can race ahead of the tracker's own complete
+			// handler (listener registration order is not guaranteed).
+			tracker.handleDelivered({ runIds: ["run-1"] });
+			tracker.handleComplete({ id: "run-1", success: true });
+
+			const job = state.asyncJobs.get("run-1") as { pendingDelivery?: boolean } | undefined;
+			assert.equal(job?.pendingDelivery ?? false, false);
+
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(state.asyncJobs.has("run-1"), false, "delivered job should retire after retention");
+		} finally {
 			removeTempDir(asyncRoot);
 		}
 	});

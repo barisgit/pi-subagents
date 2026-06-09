@@ -920,6 +920,10 @@ function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
 	if (job.status === "queued") return theme.fg("dim", "·");
 	if (job.status === "paused") return theme.fg("warning", "⏸");
 	if (job.status === "failed") return theme.fg("error", "×");
+	// Finished but the completion notification has not reached the host turn
+	// yet (rollup still open, or delivery raced an interrupt). Accent, not
+	// success, mirrors the dashboard's delivery-pending glyph.
+	if (job.pendingDelivery) return theme.fg("accent", "✓");
 	return theme.fg("success", "✓");
 }
 
