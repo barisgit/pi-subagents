@@ -826,6 +826,22 @@ Status commands:
 | `subagent({ action: "status" })` | List active async runs |
 | `subagent({ action: "status", id })` | Inspect a foreground or async run by id or prefix |
 
+## Workflow Tool
+
+The `workflow` tool orchestrates subagents with real JavaScript control flow. Use it whenever the next step depends on a previous step's result: branch on a child's structured output, retry or fall back on failure, loop until a condition holds (e.g. review until approved), or decide fan-out width at runtime. For a single task or a fixed independent batch, use the plain `subagent` tool.
+
+The script runs in a sandbox with three globals: `agent(role, task)` dispatches one subagent (same roles as the `subagent` tool) and resolves to its structured envelope `{status, summary, result, artifacts?}`, rejecting if the child fails; `parallel(thunks)` runs agent calls concurrently; `phase(title)` labels the current stage for live status displays. Top-level `await` is supported, the script's return value becomes the workflow result, and `async: true` runs the whole workflow in the background.
+
+```typescript
+workflow({ script: `
+  const fix = await agent("fixer", "Fix the flaky test in foo.test.ts");
+  const review = await agent("review", "Review the fix: " + fix.summary);
+  return { fix, review };
+` })
+```
+
+Rules: always `await` every `agent()`/`parallel()` call — a failed agent surfaces only when its promise is awaited. Use `parallel()` instead of raw `Promise.all`/`Promise.reject` on agent work so failures are attributed. The sandbox has no `setTimeout`/`fetch`/`fs`; subagents do the real work.
+
 ## Worktree Isolation
 
 When multiple agents run in parallel against the same repo, they can clobber each other's file changes. Pass `worktree: true` to give each parallel agent its own git worktree branched from HEAD.
