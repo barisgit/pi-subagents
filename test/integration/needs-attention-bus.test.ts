@@ -10,11 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { after, afterEach, describe, it } from "node:test";
-import { createAsyncJobTracker } from "../../async-job-tracker.ts";
+import { createAsyncJobTracker } from "../../src/surfaces/async-job-tracker.ts";
 import {
 	createActivityTicker,
 	DEFAULT_CONTROL_CONFIG,
-} from "../../subagent-control.ts";
+} from "../../src/dispatch/subagent-control.ts";
 import {
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
@@ -23,7 +23,7 @@ import {
 	type ResolvedControlConfig,
 	type SubagentNeedsAttentionPayload,
 	type SubagentState,
-} from "../../types.ts";
+} from "../../src/protocol/types.ts";
 
 let testsRun = 0;
 afterEach(() => { testsRun++; });

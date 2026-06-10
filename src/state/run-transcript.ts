@@ -1,0 +1,266 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { AsyncStatus } from "../protocol/types.ts";
+
+export type TranscriptLine =
+	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string; label?: string }
+	| { kind: "tool"; stepIndex: number; toolName: string; argsPreview: string; rawArgs?: Record<string, unknown>; durationMs?: number; ts: number }
+	| { kind: "step-end"; stepIndex: number; agent: string; ts: number; durationMs?: number; tokens?: number; status?: string }
+	| { kind: "final-text"; stepIndex: number; agent: string; text: string };
+
+interface CacheFileStat {
+	filePath: string;
+	mtimeMs: number;
+	size: number;
+}
+
+interface CacheEntry {
+	files: CacheFileStat[];
+	lines: TranscriptLine[];
+}
+
+const cache = new Map<string, CacheEntry>();
+const ARGS_PREVIEW_MAX = 60;
+
+export function previewArgs(args: unknown, maxLength = ARGS_PREVIEW_MAX): string {
+	if (args === undefined || args === null) return "";
+	let json: string;
+	try {
+		json = JSON.stringify(args);
+	} catch {
+		return "";
+	}
+	if (!json) return "";
+	const limit = Math.max(1, maxLength);
+	if (json.length <= limit) return json;
+	return `${json.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function readJsonFile<T>(filePath: string): T | undefined {
+	try {
+		return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+	} catch {
+		return undefined;
+	}
+}
+
+function fileStat(filePath: string): CacheFileStat | undefined {
+	try {
+		const stat = fs.statSync(filePath);
+		return { filePath, mtimeMs: stat.mtimeMs, size: stat.size };
+	} catch {
+		return undefined;
+	}
+}
+
+function sameFileStats(a: CacheFileStat[], b: CacheFileStat[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		const left = a[i]!;
+		const right = b[i]!;
+		if (left.filePath !== right.filePath || left.mtimeMs !== right.mtimeMs || left.size !== right.size) return false;
+	}
+	return true;
+}
+
+function discoverSessionFiles(runRecordDir: string, status?: AsyncStatus): Array<{ stepIndex: number; filePath: string }> {
+	// 1. Prefer explicit per-step sessionFile recorded in status.json. This is the
+	//    only correct path when fork-reuse runs share the parent's session file
+	//    (which lives outside <runRecordDir>/run-N/).
+	const fromStatus: Array<{ stepIndex: number; filePath: string }> = [];
+	const stepSlots = status?.steps;
+	if (Array.isArray(stepSlots)) {
+		for (let i = 0; i < stepSlots.length; i++) {
+			const raw = stepSlots[i]?.sessionFile;
+			if (typeof raw === "string" && raw && fs.existsSync(raw)) {
+				fromStatus.push({ stepIndex: i, filePath: raw });
+			}
+		}
+	}
+	if (fromStatus.length > 0) return fromStatus.sort((a, b) => a.stepIndex - b.stepIndex);
+
+	// 2. Fall back to scanning <runRecordDir>/run-N/session.jsonl for older runs
+	//    written before the sessionFile field was added to status.json.
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(runRecordDir);
+	} catch {
+		return [];
+	}
+	return entries
+		.map((entry) => {
+			const match = /^run-(\d+)$/.exec(entry);
+			if (!match) return undefined;
+			const stepIndex = Number(match[1]);
+			if (!Number.isInteger(stepIndex) || stepIndex < 0) return undefined;
+			const filePath = path.join(runRecordDir, entry, "session.jsonl");
+			return fs.existsSync(filePath) ? { stepIndex, filePath } : undefined;
+		})
+		.filter((entry): entry is { stepIndex: number; filePath: string } => Boolean(entry))
+		.sort((a, b) => a.stepIndex - b.stepIndex);
+}
+
+function timestampMs(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value !== "string") return undefined;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function recordTimestamp(record: Record<string, unknown>): number {
+	return timestampMs(record.timestamp) ?? 0;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function rawArgsFrom(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function textFromToolResultContent(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (!Array.isArray(value)) return "";
+	const texts: string[] = [];
+	for (const part of value) {
+		const record = objectRecord(part);
+		if (!record) continue;
+		const text = record.text;
+		if (typeof text === "string") texts.push(text);
+	}
+	return texts.join("");
+}
+
+function stepInfo(status: AsyncStatus | undefined, stepIndex: number): NonNullable<AsyncStatus["steps"]>[number] | undefined {
+	return status?.steps?.[stepIndex];
+}
+
+function isTerminalStepStatus(status: string | undefined): boolean {
+	return status === "complete" || status === "completed" || status === "failed" || status === "skipped" || status === "paused" || status === "lost";
+}
+
+function parseSessionFile(input: { filePath: string; stepIndex: number; status?: AsyncStatus }): TranscriptLine[] {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(input.filePath, "utf-8");
+	} catch {
+		return [];
+	}
+	const out: TranscriptLine[] = [];
+	const toolStartIndex = new Map<string, number>();
+	let finalText = "";
+	let firstMessageTs: number | undefined;
+	// First user-role message's plain text is the initial prompt the subagent received.
+	// Captured once and threaded onto step-start so the right pane can render it.
+	let initialPrompt: string | undefined;
+
+	for (const line of raw.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let record: Record<string, unknown>;
+		try {
+			record = JSON.parse(trimmed) as Record<string, unknown>;
+		} catch {
+			continue;
+		}
+		if (record.type !== "message") continue;
+		const ts = recordTimestamp(record);
+		firstMessageTs ??= ts;
+		const message = objectRecord(record.message);
+		if (!message) continue;
+		const role = message.role;
+		const content = Array.isArray(message.content) ? message.content : [];
+		if (role === "assistant") {
+			let latestText = "";
+			for (const part of content) {
+				const item = objectRecord(part);
+				if (!item) continue;
+				const type = item.type;
+				if (type === "text") {
+					const text = item.text;
+					if (typeof text === "string" && text.trim()) latestText = text;
+					continue;
+				}
+				if (type === "tool_use" || type === "toolUse" || type === "toolCall") {
+					const id = typeof item.id === "string" ? item.id : typeof item.toolCallId === "string" ? item.toolCallId : "";
+					const toolName = typeof item.name === "string" ? item.name : "";
+					if (!toolName) continue;
+					const rawArgs = rawArgsFrom(item.input) ?? rawArgsFrom(item.arguments);
+					const entry: TranscriptLine = { kind: "tool", stepIndex: input.stepIndex, toolName, argsPreview: previewArgs(rawArgs), ...(rawArgs ? { rawArgs } : {}), ts };
+					out.push(entry);
+					if (id) toolStartIndex.set(id, out.length - 1);
+				}
+			}
+			if (latestText) finalText = latestText;
+			continue;
+		}
+		if (role === "user") {
+			if (initialPrompt === undefined) {
+				const texts: string[] = [];
+				for (const part of content) {
+					const item = objectRecord(part);
+					if (!item) continue;
+					if (item.type === "text" && typeof item.text === "string" && item.text.trim()) texts.push(item.text);
+				}
+				if (texts.length > 0) initialPrompt = texts.join("\n\n").trim();
+			}
+			for (const part of content) {
+				const item = objectRecord(part);
+				if (!item) continue;
+				const type = item.type;
+				if (type !== "tool_result" && type !== "toolResult") continue;
+				const id = typeof item.tool_use_id === "string"
+					? item.tool_use_id
+					: typeof item.toolUseId === "string"
+						? item.toolUseId
+						: typeof item.toolCallId === "string"
+							? item.toolCallId
+							: typeof item.id === "string" ? item.id : "";
+				if (!id) continue;
+				void textFromToolResultContent(item.content);
+				const idx = toolStartIndex.get(id);
+				if (idx === undefined) continue;
+				const start = out[idx];
+				if (start?.kind === "tool") start.durationMs = Math.max(0, ts - start.ts);
+				toolStartIndex.delete(id);
+			}
+		}
+	}
+
+	const step = stepInfo(input.status, input.stepIndex);
+	const agent = step?.agent ?? "";
+	const startTs = step?.startedAt ?? (input.stepIndex === 0 ? input.status?.startedAt : undefined) ?? firstMessageTs ?? 0;
+	const endTs = step?.endedAt ?? (input.stepIndex === 0 ? input.status?.endedAt : undefined) ?? input.status?.lastUpdate ?? Date.now();
+	const tokens = step?.tokens?.total ?? (input.stepIndex === 0 ? input.status?.totalTokens?.total : undefined);
+	const status = step?.status ?? input.status?.state;
+	const lines: TranscriptLine[] = [
+		{ kind: "step-start", stepIndex: input.stepIndex, agent, ts: startTs, ...(step?.label ? { label: step.label } : input.stepIndex === 0 && input.status?.label ? { label: input.status.label } : {}), ...(initialPrompt ? { task: initialPrompt } : {}) },
+		...out,
+	];
+	if (isTerminalStepStatus(status)) {
+		lines.push({ kind: "step-end", stepIndex: input.stepIndex, agent, ts: endTs, ...(step?.durationMs !== undefined ? { durationMs: step.durationMs } : startTs ? { durationMs: Math.max(0, endTs - startTs) } : {}), ...(tokens !== undefined ? { tokens } : {}), ...(status ? { status } : {}) });
+	}
+	if (finalText) lines.push({ kind: "final-text", stepIndex: input.stepIndex, agent, text: finalText });
+	return lines;
+}
+
+export function readRunTranscript(runRecordDir: string): TranscriptLine[] {
+	const statusPath = path.join(runRecordDir, "status.json");
+	// Read status FIRST so discovery can use it to find session files that live
+	// outside <runRecordDir>/run-N/ (e.g. fork-reuse sharing the parent's file).
+	const status = readJsonFile<AsyncStatus>(statusPath);
+	const sessionFiles = discoverSessionFiles(runRecordDir, status);
+	const stats = [fileStat(statusPath), ...sessionFiles.map((session) => fileStat(session.filePath))]
+		.filter((stat): stat is CacheFileStat => Boolean(stat));
+	if (sessionFiles.length === 0) {
+		cache.delete(runRecordDir);
+		return [];
+	}
+	const cached = cache.get(runRecordDir);
+	if (cached && sameFileStats(cached.files, stats)) return cached.lines;
+
+	const lines = sessionFiles.flatMap((session) => parseSessionFile({ ...session, status }));
+	cache.set(runRecordDir, { files: stats, lines });
+	return lines;
+}

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { CHILD_SESSION_FLAG_KEY, isInsideChildSession } from "../../types.ts";
-import type { SubagentLineage } from "../../lineage.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { CHILD_SESSION_FLAG_KEY, isInsideChildSession } from "../../src/protocol/types.ts";
+import type { SubagentLineage } from "../../src/state/lineage.ts";
 
 const globalStore = globalThis as Record<string, unknown>;
 const LINEAGE_STORE_KEY = "__piSubagentLineageBySession";

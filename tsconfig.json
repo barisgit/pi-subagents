@@ -10,6 +10,6 @@
 		"allowImportingTsExtensions": true,
 		"esModuleInterop": true
 	},
-	"include": ["*.ts", "test/**/*.ts", "test/**/*.d.ts", "test/**/*.d.mts"],
+	"include": ["*.ts", "src/**/*.ts", "test/**/*.ts", "test/**/*.d.ts", "test/**/*.d.mts"],
 	"exclude": ["node_modules", "dist"]
 }

@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { buildBuiltinOverrideConfig, discoverAgents, discoverAgentsAll } from "../../agents.ts";
-import { handleList } from "../../agent-management.ts";
+import { buildBuiltinOverrideConfig, discoverAgents, discoverAgentsAll } from "../../src/shared/agents.ts";
+import { handleList } from "../../src/surfaces/agent-management.ts";
 
 let tempHome = "";
 let tempProject = "";

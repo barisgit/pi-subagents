@@ -8,7 +8,7 @@ interface SessionTokensModule {
 	parseSessionTokens(sessionDir: string): { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number } | null;
 }
 
-const tokensMod = await tryImport<SessionTokensModule>("./session-tokens.ts");
+const tokensMod = await tryImport<SessionTokensModule>("./src/state/session-tokens.ts");
 const available = !!tokensMod;
 
 describe("session tokens", { skip: !available ? "pi packages not available" : undefined }, () => {

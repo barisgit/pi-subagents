@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { createAsyncJobTracker } from "../../async-job-tracker.ts";
-import { buildWidgetLines, stopWidgetAnimation } from "../../render.ts";
+import { createAsyncJobTracker } from "../../src/surfaces/async-job-tracker.ts";
+import { buildWidgetLines, stopWidgetAnimation } from "../../src/surfaces/render.ts";
 
 const tmpRoots: string[] = [];
 

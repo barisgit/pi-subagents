@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { formatAsyncRunList, readSummaryForEntry } from "../../async-status.ts";
-import { buildRightLines, buildWorkflowRightLines, SubagentsStatusComponent, summaryFromRegistryEntry, type LiveRun } from "../../subagents-status.ts";
-import { writeWorkflowScript } from "../../workflow-group-state.ts";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { formatAsyncRunList, readSummaryForEntry } from "../../src/state/async-status.ts";
+import { buildRightLines, buildWorkflowRightLines, SubagentsStatusComponent, summaryFromRegistryEntry, type LiveRun } from "../../src/surfaces/subagents-status.ts";
+import { writeWorkflowScript } from "../../src/workflow/workflow-group-state.ts";
+import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];

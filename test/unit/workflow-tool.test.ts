@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { createWorkflowTool } from "../../workflow.ts";
+import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 
 const ctx = {} as never;
 type WorkflowToolResult = AgentToolResult<unknown> & { isError?: boolean };
@@ -46,7 +46,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 	// shows the real behavior — without containment the child exits non-zero (host
 	// crash), with it the child exits 0 and the tool reports isError.
 	function runWorkflowInSubprocess(script: string, dispatchBody: string): { status: number | null; stderr: string; out: { isError: boolean; text: string } } {
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
 			`  const tool = m.createWorkflowTool({ dispatch: ${dispatchBody} });`,
@@ -147,7 +147,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// While a run is live the permanent containment listener would SWALLOW the
 		// float (host survives either way), so host-exit can't discriminate — we assert
 		// directly that NO unhandledRejection event is emitted for the clear frame.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"const floats = [];",
 			"process.on('unhandledRejection', (r) => { floats.push(String(r && r.message ? r.message : r)); });",
@@ -176,7 +176,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// The permanent listener must NOT swallow rejections it cannot attribute to a
 		// live workflow. With no run active and us as sole listener, a real host bug
 		// must still crash as Node intends.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
 			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
@@ -198,7 +198,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// must still recognize a SECOND (cache-busted) instance's floated agent error
 		// — otherwise the stale listener re-signals it as a host bug and crashes. The
 		// fix shares the live-run set + run-token key via the globalThis registry.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"const base = process.env.WF_URL;",
 			"const m1 = await import(base + '?first');",
@@ -222,7 +222,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// brand a rejection as ours only when its token VALUE is one the runtime
 		// actually issued (registry WeakSet) — not on mere key presence — otherwise a
 		// foreign host bug carrying the symbol would be silently swallowed.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
 			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
@@ -277,7 +277,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 	// genuinely unhandled, which node:test's own listener would attribute to this
 	// test in-process.
 	function runConcurrentWorkflows(bScript: string): { status: number | null; stderr: string; out: { aStatus: string; aValue: string; bStatus: string; bReason: string } } {
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
 			"  const delay = (ms) => new Promise((r) => setTimeout(r, ms));",

@@ -4,7 +4,7 @@ import {
 	buildModelCandidates,
 	isRetryableModelFailure,
 	resolveModelCandidate,
-} from "../../model-fallback.ts";
+} from "../../src/dispatch/model-fallback.ts";
 
 describe("model fallback helpers", () => {
 	const availableModels = [

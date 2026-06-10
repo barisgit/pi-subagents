@@ -11,8 +11,8 @@ import {
 	createPhaseEventHandler,
 	type PhaseEventHandlerOptions,
 	type StatusPatch,
-} from "../../in-process-executor.ts";
-import { SUBAGENT_PHASE_CHANGE_EVENT, type SubagentPhaseChangePayload } from "../../types.ts";
+} from "../../src/dispatch/in-process-executor.ts";
+import { SUBAGENT_PHASE_CHANGE_EVENT, type SubagentPhaseChangePayload } from "../../src/protocol/types.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;

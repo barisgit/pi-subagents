@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { clearLeafSummaryCacheForTests, readLeafSummaryCached } from "../../async-status.ts";
+import { clearLeafSummaryCacheForTests, readLeafSummaryCached } from "../../src/state/async-status.ts";
 
 // VAL-TERMINAL-CACHE: the overlay's per-tick leaf builder caches IMMUTABLE
 // terminal summaries (so a 1Hz reload reuses them instead of re-deriving every

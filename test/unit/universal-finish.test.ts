@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest, runChildAgent, type ChildAgentContext, type ChildAgentStep } from "../../in-process-executor.ts";
-import { createSubmitResultTool } from "../../submit-result.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest, runChildAgent, type ChildAgentContext, type ChildAgentStep } from "../../src/dispatch/in-process-executor.ts";
+import { createSubmitResultTool } from "../../src/protocol/submit-result.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];

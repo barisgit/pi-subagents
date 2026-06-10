@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { StepSchema, SubagentParams, TaskSchema } from "../../schemas.ts";
+import { StepSchema, SubagentParams, TaskSchema } from "../../src/protocol/schemas.ts";
 
 type JsonSchemaNode = Record<string, unknown>;
 

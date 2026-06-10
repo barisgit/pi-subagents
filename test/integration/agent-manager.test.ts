@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { AgentManagerComponent, type ManagerResult } from "../../agent-manager.ts";
-import { discoverAgentsAll } from "../../agents.ts";
+import { AgentManagerComponent, type ManagerResult } from "../../src/surfaces/agent-manager.ts";
+import { discoverAgentsAll } from "../../src/shared/agents.ts";
 
 const tempDirs: string[] = [];
 

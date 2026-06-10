@@ -6,7 +6,7 @@ import {
 	TEMP_ARTIFACTS_DIR,
 	BASE_TEMP_DIR,
 	resolveTempScopeId,
-} from "../../types.ts";
+} from "../../src/protocol/types.ts";
 
 describe("resolveTempScopeId", () => {
 	it("prefers uid when available", () => {

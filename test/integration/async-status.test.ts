@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { formatAsyncRunList, listAsyncRuns, type AsyncRunOverlayData } from "../../async-status.ts";
+import { formatAsyncRunList, listAsyncRuns, type AsyncRunOverlayData } from "../../src/state/async-status.ts";
 
 function createAsyncDir(root: string, id: string, status: Record<string, unknown>): string {
 	const dir = path.join(root, id);

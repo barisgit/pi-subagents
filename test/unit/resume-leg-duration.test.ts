@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { buildWidgetLines, stopWidgetAnimation } from "../../render.ts";
-import { buildLeftLine, type LiveRun } from "../../subagents-status.ts";
+import { buildWidgetLines, stopWidgetAnimation } from "../../src/surfaces/render.ts";
+import { buildLeftLine, type LiveRun } from "../../src/surfaces/subagents-status.ts";
 
 const theme = {
 	fg: (_name: string, text: string) => text,

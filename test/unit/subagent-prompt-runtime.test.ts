@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import registerSubagentPromptRuntime, { SUBAGENT_INTERCOM_SESSION_NAME_ENV, rewriteSubagentPrompt, stripInheritedSkills, stripProjectContext } from "../../subagent-prompt-runtime.ts";
+import registerSubagentPromptRuntime, { SUBAGENT_INTERCOM_SESSION_NAME_ENV, rewriteSubagentPrompt, stripInheritedSkills, stripProjectContext } from "../../src/dispatch/subagent-prompt-runtime.ts";
 
 const envSnapshot = {
 	PI_SUBAGENT_INHERIT_PROJECT_CONTEXT: process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT,

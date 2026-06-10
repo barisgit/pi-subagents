@@ -21,7 +21,7 @@ type RenderSubagentResult = (
 ) => { render(width: number): string[] };
 
 let renderSubagentResult: RenderSubagentResult | undefined;
-({ renderSubagentResult } = await import("../../render.ts") as unknown as {
+({ renderSubagentResult } = await import("../../src/surfaces/render.ts") as unknown as {
 	renderSubagentResult?: RenderSubagentResult;
 });
 

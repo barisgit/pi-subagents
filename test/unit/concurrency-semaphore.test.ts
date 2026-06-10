@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConcurrencySemaphore, type ConcurrencyPermit } from "../../concurrency-semaphore.ts";
+import { ConcurrencySemaphore, type ConcurrencyPermit } from "../../src/dispatch/concurrency-semaphore.ts";
 
 interface Deferred<T = void> {
 	promise: Promise<T>;

@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { compactForegroundDetails, computeDetailsTotalUsage } from "../../utils.ts";
-import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../../usage-totals.ts";
-import type { Details, SingleResult } from "../../types.ts";
+import { compactForegroundDetails, computeDetailsTotalUsage } from "../../src/shared/utils.ts";
+import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../../src/state/usage-totals.ts";
+import type { Details, SingleResult } from "../../src/protocol/types.ts";
 
 describe("computeDetailsTotalUsage", () => {
 	it("returns zeroed totals for empty results", () => {

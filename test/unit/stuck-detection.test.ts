@@ -11,9 +11,9 @@ import {
 	createPhaseTicker,
 	type PhaseTickerOptions,
 	type StatusPatch,
-} from "../../in-process-executor.ts";
-import type { RunPhaseState } from "../../run-phase.ts";
-import { SUBAGENT_STUCK_EVENT, type SubagentStuckPayload } from "../../types.ts";
+} from "../../src/dispatch/in-process-executor.ts";
+import type { RunPhaseState } from "../../src/state/run-phase.ts";
+import { SUBAGENT_STUCK_EVENT, type SubagentStuckPayload } from "../../src/protocol/types.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;

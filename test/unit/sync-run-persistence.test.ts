@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { __setSyncRunStatusUpdateObserverForTest, ensureSyncRunDir, writeSyncRunStatusEnd, writeSyncRunStatusStart, writeSyncRunStatusUpdate } from "../../sync-run-persistence.ts";
-import { SUBAGENT_CONTROL_EVENT, SUBAGENT_NEEDS_ATTENTION_EVENT } from "../../types.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { __setSyncRunStatusUpdateObserverForTest, ensureSyncRunDir, writeSyncRunStatusEnd, writeSyncRunStatusStart, writeSyncRunStatusUpdate } from "../../src/state/sync-run-persistence.ts";
+import { SUBAGENT_CONTROL_EVENT, SUBAGENT_NEEDS_ATTENTION_EVENT } from "../../src/protocol/types.ts";
 
 const restoreFns: Array<() => void> = [];
 let testsRun = 0;

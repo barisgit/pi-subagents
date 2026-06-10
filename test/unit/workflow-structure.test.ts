@@ -26,10 +26,10 @@ const urlFor = (relative) => {
 };
 
 const moduleUrl = (relative) => pathToFileURL(path.join(repoRoot, relative)).href;
-const { createSubagentExecutor } = await import(moduleUrl("subagent-executor.ts"));
-const { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } = await import(moduleUrl("in-process-executor.ts"));
-const { readAllEntries, setRegistryPathForTests } = await import(moduleUrl("runs-registry.ts"));
-const { createWorkflowTool } = await import(urlFor("workflow.ts"));
+const { createSubagentExecutor } = await import(moduleUrl("src/dispatch/subagent-executor.ts"));
+const { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } = await import(moduleUrl("src/dispatch/in-process-executor.ts"));
+const { readAllEntries, setRegistryPathForTests } = await import(moduleUrl("src/state/runs-registry.ts"));
+const { createWorkflowTool } = await import(urlFor("src/workflow/workflow.ts"));
 const { makeAgent } = await import(moduleUrl("test/support/helpers.ts"));
 
 class FakeResourceLoader { async reload() {} }

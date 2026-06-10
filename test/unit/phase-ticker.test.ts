@@ -13,7 +13,7 @@ import {
 	createPhaseTicker,
 	type PhaseTickerOptions,
 	type StatusPatch,
-} from "../../in-process-executor.ts";
+} from "../../src/dispatch/in-process-executor.ts";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 function makeCollector(): { patches: StatusPatch[]; onStatusUpdate: (p: StatusPatch) => void } {

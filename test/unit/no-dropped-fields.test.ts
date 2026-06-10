@@ -82,7 +82,7 @@ function extractFunction(source: string, name: string): string {
 }
 
 function canonicalExecutorPrelude(): string {
-	const source = fs.readFileSync(path.join(projectRoot, "subagent-executor.ts"), "utf-8");
+	const source = fs.readFileSync(path.join(projectRoot, "src", "dispatch", "subagent-executor.ts"), "utf-8");
 	const start = source.indexOf("export function createSubagentExecutor");
 	assert.notEqual(start, -1, "expected createSubagentExecutor");
 	const end = source.indexOf("\n\t\tconst requestCwd", start);
@@ -92,8 +92,8 @@ function canonicalExecutorPrelude(): string {
 
 describe("no dropped fields", () => {
 	it("no-dropped-fields", () => {
-		const srcRoot = path.join(projectRoot, "src");
-		const files = sourceFiles(srcRoot);
+		const files = sourceFiles(projectRoot)
+			.filter((file) => path.dirname(file) === projectRoot && file.endsWith(".ts") && file !== path.join(projectRoot, "index.ts"));
 		const failures: string[] = [];
 
 		for (const file of files) {
@@ -118,8 +118,8 @@ describe("no dropped fields", () => {
 	});
 
 	it("crud-verb-absence", () => {
-		const schemas = fs.readFileSync(path.join(projectRoot, "schemas.ts"), "utf-8");
-		const management = fs.readFileSync(path.join(projectRoot, "agent-management.ts"), "utf-8");
+		const schemas = fs.readFileSync(path.join(projectRoot, "src", "protocol", "schemas.ts"), "utf-8");
+		const management = fs.readFileSync(path.join(projectRoot, "src", "surfaces", "agent-management.ts"), "utf-8");
 		const dispatchHandler = extractFunction(management, "handleManagementAction");
 
 		for (const verb of droppedCrudVerbs) {
@@ -129,7 +129,7 @@ describe("no dropped fields", () => {
 	});
 
 	it("no-aliases-or-shims", () => {
-		const schemas = uncommentedLines(fs.readFileSync(path.join(projectRoot, "schemas.ts"), "utf-8")).join("\n");
+		const schemas = uncommentedLines(fs.readFileSync(path.join(projectRoot, "src", "protocol", "schemas.ts"), "utf-8")).join("\n");
 		const prelude = uncommentedLines(canonicalExecutorPrelude()).join("\n");
 
 		for (const name of droppedFields) {

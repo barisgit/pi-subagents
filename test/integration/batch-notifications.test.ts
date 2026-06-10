@@ -1,11 +1,11 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import registerSubagentNotify from "../../notify.ts";
-import { setCurrentPi } from "../../current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../types.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import registerSubagentNotify from "../../src/surfaces/notify.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
 
 type Listener = (event: Record<string, unknown>) => void;

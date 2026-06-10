@@ -4,9 +4,23 @@ import { join } from "node:path";
 
 const root = process.cwd();
 const forbidden = /\b(charter|mission|goal)s?\b/i;
-const sourceFiles = readdirSync(root)
-	.filter((name) => name.endsWith(".ts"))
-	.sort();
+
+function listSourceFiles(dir) {
+	const entries = readdirSync(join(root, dir), { withFileTypes: true });
+	const files = [];
+	for (const entry of entries) {
+		const name = `${dir}/${entry.name}`;
+		if (entry.isDirectory()) files.push(...listSourceFiles(name));
+		else if (entry.name.endsWith(".ts")) files.push(name);
+	}
+	return files;
+}
+
+const sourceFiles = [
+	...readdirSync(root)
+		.filter((name) => name.endsWith(".ts")),
+	...listSourceFiles("src"),
+].sort();
 
 function stripComments(line, inBlockComment) {
 	let output = "";

@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { SubagentsStatusComponent } from "../../subagents-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];

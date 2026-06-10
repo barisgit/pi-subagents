@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
-import registerSubagentNotify from "../../notify.ts";
-import { setCurrentPi } from "../../current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_NOTIFY_DELIVERED_EVENT } from "../../types.ts";
+import registerSubagentNotify from "../../src/surfaces/notify.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_NOTIFY_DELIVERED_EVENT } from "../../src/protocol/types.ts";
 
 /**
  * Build a pi.events stand-in whose `on()` returns an unsubscribe function

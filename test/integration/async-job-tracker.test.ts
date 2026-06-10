@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
-import { writeWorkflowGroupState } from "../../workflow-group-state.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
 
 interface AsyncJobTrackerModule {
 	createAsyncJobTracker(
@@ -20,7 +20,7 @@ interface AsyncJobTrackerModule {
 	};
 }
 
-const trackerMod = await tryImport<AsyncJobTrackerModule>("./async-job-tracker.ts");
+const trackerMod = await tryImport<AsyncJobTrackerModule>("./src/surfaces/async-job-tracker.ts");
 const available = !!trackerMod;
 
 function createState() {

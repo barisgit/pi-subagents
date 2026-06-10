@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { resolveChildTools } from "../../subagent-executor.ts";
+import { resolveChildTools } from "../../src/dispatch/subagent-executor.ts";
 
 function makeAgentConfig(tools?: string[], extra?: Record<string, unknown>) {
 	return {

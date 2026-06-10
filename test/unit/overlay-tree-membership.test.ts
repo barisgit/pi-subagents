@@ -4,8 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { SubagentsStatusComponent } from "../../subagents-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 // Production provider logic (mirrors slash-commands.ts openSubagentsStatus):
 // collect the run ids anchored by 'subagent_run' custom entries on the CURRENT

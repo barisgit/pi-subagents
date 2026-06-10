@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { renderNestedChild } from "../../render.ts";
+import { renderNestedChild } from "../../src/surfaces/render.ts";
 import { rmRun, tool, writeRun } from "./inline-nested-helpers.ts";
 
 const ids = ["inline-d1", "inline-d2", "inline-d3", "inline-d4", "inline-d5", "inline-d6"];

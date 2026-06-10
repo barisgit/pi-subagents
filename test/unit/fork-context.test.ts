@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createForkContextResolver, resolveSubagentContext } from "../../fork-context.ts";
+import { createForkContextResolver, resolveSubagentContext } from "../../src/dispatch/fork-context.ts";
 
 function manager(overrides: Record<string, unknown>) {
 	return overrides as unknown as Parameters<typeof createForkContextResolver>[0];

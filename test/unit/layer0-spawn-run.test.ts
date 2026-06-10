@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { spawnRun, awaitRun, type Layer0PreparedRunStep, type Layer0RunAgent } from "../../layer0-runs.ts";
-import { readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
-import type { ChildAgentResult } from "../../in-process-executor.ts";
+import { spawnRun, awaitRun, type Layer0PreparedRunStep, type Layer0RunAgent } from "../../src/dispatch/layer0-runs.ts";
+import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 
 const tmpRoots: string[] = [];
 let previousHome: string | undefined;

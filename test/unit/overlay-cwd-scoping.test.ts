@@ -10,8 +10,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { listRunsFromRegistryForOverlay } from "../../async-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { listRunsFromRegistryForOverlay } from "../../src/state/async-status.ts";
+import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 

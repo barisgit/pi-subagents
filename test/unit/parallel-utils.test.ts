@@ -9,7 +9,7 @@ import {
 	type RunnerSubagentStep,
 	type ParallelStepGroup,
 	type RunnerStep,
-} from "../../parallel-utils.ts";
+} from "../../src/dispatch/parallel-utils.ts";
 
 describe("isParallelGroup", () => {
 	it("returns true for a parallel step group", () => {

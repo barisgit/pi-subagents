@@ -4,8 +4,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { readRunTranscript } from "../../run-transcript.ts";
-import type { AsyncStatus } from "../../types.ts";
+import { readRunTranscript } from "../../src/state/run-transcript.ts";
+import type { AsyncStatus } from "../../src/protocol/types.ts";
 
 function makeRunDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), `run-transcript-${randomUUID()}-`));

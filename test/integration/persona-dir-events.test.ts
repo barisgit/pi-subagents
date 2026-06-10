@@ -11,7 +11,7 @@ import {
 	SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT,
 	type PersonaDirErrorPayload,
 	type SubagentExposedAPI,
-} from "../../types.ts";
+} from "../../src/protocol/types.ts";
 import { createTempDir, removeTempDir } from "../support/helpers.ts";
 
 function createPiHarness() {

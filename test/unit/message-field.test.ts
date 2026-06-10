@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { SubagentParams } from "../../schemas.ts";
-import { createSubagentExecutor, validateSubagentToolInput } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
+import { SubagentParams } from "../../src/protocol/schemas.ts";
+import { createSubagentExecutor, validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { createTempDir, events, makeAgent, removeTempDir } from "../support/helpers.ts";
 
 type Listener = (event: Record<string, unknown>) => void;

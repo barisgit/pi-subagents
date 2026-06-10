@@ -19,27 +19,27 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { type AgentConfig, type RegisteredPersonaDir, discoverAgents, loadInternalPersonaDir } from "./agents.ts";
-import { setCurrentPi } from "./current-pi.ts";
-import { claimPendingChildLineage, setHostLineage } from "./lineage.ts";
-import { createIdleTracker } from "./idle-tracker.ts";
-import { logger } from "./logger.ts";
-import { resolveAgentToolPatterns, resolveToolPatterns } from "./resolve-tool-patterns.ts";
-import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
-import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./render.ts";
-import { SubagentParams } from "./schemas.ts";
-import { createSubagentExecutor } from "./subagent-executor.ts";
-import { ChildAgentRegistry } from "./in-process-executor.ts";
-import { createWorkflowTool } from "./workflow.ts";
-import { createAsyncJobTracker } from "./async-job-tracker.ts";
-import { controlNotificationKey, formatControlNoticeMessage } from "./subagent-control.ts";
-import { registerSlashCommands } from "./slash-commands.ts";
-import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge.ts";
-import { registerSlashSubagentBridge } from "./slash-bridge.ts";
-import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.ts";
-import { inspectSubagentStatus } from "./run-status.ts";
-import registerSubagentNotify, { type SubagentBatchNotifyDetails, type SubagentNotifyDetails } from "./notify.ts";
-import { formatDuration, shortenPath } from "./formatters.ts";
+import { type AgentConfig, type RegisteredPersonaDir, discoverAgents, loadInternalPersonaDir } from "./src/shared/agents.ts";
+import { setCurrentPi } from "./src/shared/current-pi.ts";
+import { claimPendingChildLineage, setHostLineage } from "./src/state/lineage.ts";
+import { createIdleTracker } from "./src/surfaces/idle-tracker.ts";
+import { logger } from "./src/shared/logger.ts";
+import { resolveAgentToolPatterns, resolveToolPatterns } from "./src/dispatch/resolve-tool-patterns.ts";
+import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./src/shared/artifacts.ts";
+import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./src/surfaces/render.ts";
+import { SubagentParams } from "./src/protocol/schemas.ts";
+import { createSubagentExecutor } from "./src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry } from "./src/dispatch/in-process-executor.ts";
+import { createWorkflowTool } from "./src/workflow/workflow.ts";
+import { createAsyncJobTracker } from "./src/surfaces/async-job-tracker.ts";
+import { controlNotificationKey, formatControlNoticeMessage } from "./src/dispatch/subagent-control.ts";
+import { registerSlashCommands } from "./src/surfaces/slash-commands.ts";
+import { registerPromptTemplateDelegationBridge } from "./src/dispatch/prompt-template-bridge.ts";
+import { registerSlashSubagentBridge } from "./src/surfaces/slash-bridge.ts";
+import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./src/state/slash-live-state.ts";
+import { inspectSubagentStatus } from "./src/state/run-status.ts";
+import registerSubagentNotify, { type SubagentBatchNotifyDetails, type SubagentNotifyDetails } from "./src/surfaces/notify.ts";
+import { formatDuration, shortenPath } from "./src/surfaces/formatters.ts";
 import {
 	type ControlEvent,
 	type Details,
@@ -64,8 +64,8 @@ import {
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	WIDGET_KEY,
-} from "./types.ts";
-import { configureXmlStripping } from "./utils.ts";
+} from "./src/protocol/types.ts";
+import { configureXmlStripping } from "./src/shared/utils.ts";
 
 const SUBAGENT_CONFIG_PRIMARY = path.join(os.homedir(), ".pi", "agent", "subagent.json");
 const SUBAGENT_CONFIG_LEGACY = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { renderNestedChild, renderSubagentResult } from "../../render.ts";
+import { renderNestedChild, renderSubagentResult } from "../../src/surfaces/render.ts";
 import { rmRun, tool, writeRun } from "./inline-nested-helpers.ts";
 
 const ids = [

@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { readSummaryForEntry } from "../../async-status.ts";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
-import { summaryFromRegistryEntry } from "../../subagents-status.ts";
-import { writeWorkflowGroupState } from "../../workflow-group-state.ts";
+import { readSummaryForEntry } from "../../src/state/async-status.ts";
+import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { summaryFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
 
 // VAL-GROUP-SUMMARY: readSummaryForEntry (async-status) and summaryFromRegistryEntry
 // (subagents-status) share one group-synthesis seam (buildGroupSummary). This test pins

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { SubagentParams, TaskSchema } from "../../schemas.ts";
-import { validateSubagentToolInput } from "../../subagent-executor.ts";
+import { SubagentParams, TaskSchema } from "../../src/protocol/schemas.ts";
+import { validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
 
 type SchemaError = { params?: Record<string, unknown>; message?: string };
 

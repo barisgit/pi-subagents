@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
-import registerSubagentNotify from "../../notify.ts";
-import { evictCompletionDedupeForRunId } from "../../completion-dedupe.ts";
-import { computeGroupStatus } from "../../layer0-runs.ts";
-import { setCurrentPi } from "../../current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from "../../types.ts";
+import registerSubagentNotify from "../../src/surfaces/notify.ts";
+import { evictCompletionDedupeForRunId } from "../../src/state/completion-dedupe.ts";
+import { computeGroupStatus } from "../../src/dispatch/layer0-runs.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from "../../src/protocol/types.ts";
 
 function createPi() {
 	const inner = new EventEmitter();

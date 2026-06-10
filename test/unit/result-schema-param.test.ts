@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { createSubmitResultTool } from "../../submit-result.ts";
+import { createSubmitResultTool } from "../../src/protocol/submit-result.ts";
 
 describe("submit_result result schema seam", () => {
 	it("defaults result to string", () => {

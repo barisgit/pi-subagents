@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { SubagentParams } from "../../schemas.ts";
+import { SubagentParams } from "../../src/protocol/schemas.ts";
 
 const root = path.resolve(import.meta.dirname, "../..");
 
@@ -37,6 +37,6 @@ describe("chain eviction", () => {
 	});
 
 	it("removes previous-result substitution from executor source", () => {
-		assert.doesNotMatch(read("subagent-executor.ts"), /\{previous\}/);
+		assert.doesNotMatch(read("src/dispatch/subagent-executor.ts"), /\{previous\}/);
 	});
 });

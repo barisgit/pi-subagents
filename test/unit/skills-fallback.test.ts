@@ -9,7 +9,7 @@ import {
 	discoverAvailableSkills,
 	resolveSkills,
 	resolveSkillsWithFallback,
-} from "../../skills.ts";
+} from "../../src/shared/skills.ts";
 
 let tempDir = "";
 
@@ -41,9 +41,9 @@ function makePackageSkill(packageRoot: string, name: string, body: string, packa
 
 async function importSkillsFresh() {
 	const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-	const modulePath = path.resolve(projectRoot, "skills.ts");
+	const modulePath = path.resolve(projectRoot, "src", "shared", "skills.ts");
 	const bust = `${Date.now()}-${Math.random()}`;
-	return await import(`${pathToFileURL(modulePath).href}?bust=${bust}`) as typeof import("../../skills.ts");
+	return await import(`${pathToFileURL(modulePath).href}?bust=${bust}`) as typeof import("../../src/shared/skills.ts");
 }
 
 describe("skills filesystem fallback", () => {

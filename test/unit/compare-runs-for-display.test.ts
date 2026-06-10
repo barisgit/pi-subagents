@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { compareRunsForDisplay } from "../../run-liveness.ts";
+import { compareRunsForDisplay } from "../../src/state/run-liveness.ts";
 
 describe("compareRunsForDisplay", () => {
 	it("terminal bucket orders by coalesced endedAt descending", () => {

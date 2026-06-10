@@ -22,7 +22,7 @@ describe("chain docs eviction", () => {
 			["README.md", read("README.md")],
 			["skills/subagent/SKILL.md", read("skills/subagent/SKILL.md")],
 			["subagent description", toolDescription(read("index.ts"), "description: `Delegate a bounded task", "parameters: SubagentParams")],
-			["workflow description", toolDescription(read("workflow.ts"), "description: `Orchestrate multiple subagents", "parameters: WorkflowParams")],
+			["workflow description", toolDescription(read("src/workflow/workflow.ts"), "description: `Orchestrate multiple subagents", "parameters: WorkflowParams")],
 		] as const;
 
 		for (const [name, text] of samples) {

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { formatAsyncRunList, type AsyncRunSummary } from "../../async-status.ts";
-import { inspectSubagentStatus } from "../../run-status.ts";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry } from "../../in-process-executor.ts";
+import { formatAsyncRunList, type AsyncRunSummary } from "../../src/state/async-status.ts";
+import { inspectSubagentStatus } from "../../src/state/run-status.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry } from "../../src/dispatch/in-process-executor.ts";
 import { makeAgent } from "../support/helpers.ts";
-import type { Details, SubagentState } from "../../types.ts";
+import type { Details, SubagentState } from "../../src/protocol/types.ts";
 
 function state(cwd: string): SubagentState {
 	return { baseCwd: cwd, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null, poller: null };

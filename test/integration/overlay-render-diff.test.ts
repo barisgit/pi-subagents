@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
-import type { AsyncRunOverlayData, AsyncRunSummary } from "../../async-status.ts";
+import { type ForegroundRunSummary, SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import type { AsyncRunOverlayData, AsyncRunSummary } from "../../src/state/async-status.ts";
 
 // VAL-RENDER-ON-DIFF: the overlay's auto-refresh tick repaints only when the
 // derived run set changed (cheap structural signature) OR a live run still needs

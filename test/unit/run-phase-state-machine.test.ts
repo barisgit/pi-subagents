@@ -6,7 +6,7 @@ import {
 	initialRunPhaseState,
 	setPaused,
 	type RunPhaseState,
-} from "../../run-phase.ts";
+} from "../../src/state/run-phase.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;

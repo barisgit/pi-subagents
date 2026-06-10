@@ -12,7 +12,7 @@ import {
 	resolveControlConfig,
 	shouldEmitControlEvent,
 	shouldNotifyControlEvent,
-} from "../../subagent-control.ts";
+} from "../../src/dispatch/subagent-control.ts";
 
 const config = resolveControlConfig(undefined, {
 	needsAttentionAfterMs: 300,

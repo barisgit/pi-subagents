@@ -11,7 +11,7 @@ import {
 	findWorktreeTaskCwdConflict,
 	formatWorktreeDiffSummary,
 	type WorktreeSetup,
-} from "../../worktree.ts";
+} from "../../src/dispatch/worktree.ts";
 
 function git(cwd: string, args: string[]): string {
 	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });

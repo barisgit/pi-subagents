@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import type { AgentConfig } from "../../agents.ts";
+import type { AgentConfig } from "../../src/shared/agents.ts";
 import {
 	applyIntercomBridgeToAgent,
 	resolveIntercomBridge,
@@ -11,7 +11,7 @@ import {
 	resolveSubagentIntercomTarget,
 	resolveIntercomBridgeMode,
 	type IntercomBridgeState,
-} from "../../intercom-bridge.ts";
+} from "../../src/dispatch/intercom-bridge.ts";
 
 function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
 	return {

@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { inspectSubagentStatus } from "../../run-status.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
+import { inspectSubagentStatus } from "../../src/state/run-status.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 
 describe("run status guidance", () => {
 	it("tells callers not to poll running async runs", () => {

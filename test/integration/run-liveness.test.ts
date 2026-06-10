@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { RUNNER_HARD_DEAD_MS, RUNNER_HEARTBEAT_STALE_MS, deriveRunDisplayState } from "../../run-liveness.ts";
+import { RUNNER_HARD_DEAD_MS, RUNNER_HEARTBEAT_STALE_MS, deriveRunDisplayState } from "../../src/state/run-liveness.ts";
 
 const THIRTY_SECONDS = RUNNER_HEARTBEAT_STALE_MS + 15_000;
 const FIVE_SECONDS = 5_000;

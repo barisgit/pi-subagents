@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { runWorkflowScript } from "../../workflow.ts";
+import { runWorkflowScript } from "../../src/workflow/workflow.ts";
 
 const delays: Record<string, number> = { first: 60, second: 10, third: 30 };
 

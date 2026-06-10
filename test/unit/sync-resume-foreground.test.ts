@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
-import { setCurrentPi } from "../../current-pi.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
-import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../types.ts";
+import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../src/protocol/types.ts";
 
 let tempDir: string | undefined;
 let restoreDeps: (() => void) | undefined;

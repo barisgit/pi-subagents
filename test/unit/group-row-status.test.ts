@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { formatDuration } from "../../formatters.ts";
-import { summaryFromRegistryEntry } from "../../subagents-status.ts";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { formatDuration } from "../../src/surfaces/formatters.ts";
+import { summaryFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 

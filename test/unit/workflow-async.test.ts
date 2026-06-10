@@ -4,12 +4,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { setCurrentPi } from "../../current-pi.ts";
-import { setRegistryPathForTests } from "../../runs-registry.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../types.ts";
-import { createWorkflowTool } from "../../workflow.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/protocol/types.ts";
+import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
 
 const roots: string[] = [];

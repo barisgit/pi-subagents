@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createWorkflowPhaseEmitter, runWorkflowScript } from "../../workflow.ts";
-import type { Details } from "../../types.ts";
+import { createWorkflowPhaseEmitter, runWorkflowScript } from "../../src/workflow/workflow.ts";
+import type { Details } from "../../src/protocol/types.ts";
 
 describe("workflow phase global (VAL-PHASE)", () => {
 	it("emits a progress line through onUpdate without changing the script return value", async () => {

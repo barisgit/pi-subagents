@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { countLiveInlineAsyncChildren } from "../../render.ts";
+import { countLiveInlineAsyncChildren } from "../../src/surfaces/render.ts";
 import { rmRun, writeRun } from "./inline-nested-helpers.ts";
 
 const ids = ["inline-tally-parent", "inline-tally-a", "inline-tally-b", "inline-tally-sync"];

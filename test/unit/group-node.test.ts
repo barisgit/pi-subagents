@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { computeGroupStatus, openGroup } from "../../layer0-runs.ts";
-import { readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
+import { computeGroupStatus, openGroup } from "../../src/dispatch/layer0-runs.ts";
+import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 let previousHome: string | undefined;

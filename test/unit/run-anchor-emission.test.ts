@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { createSubagentExecutor, emitRunAnchor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
-import { createWorkflowTool } from "../../workflow.ts";
+import { createSubagentExecutor, emitRunAnchor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
 
 const tmpRoots: string[] = [];

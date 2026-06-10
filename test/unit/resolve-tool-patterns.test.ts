@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { AgentConfig } from "../../agents.ts";
-import { resolveAgentToolPatterns, resolveToolPatterns } from "../../resolve-tool-patterns.ts";
+import type { AgentConfig } from "../../src/shared/agents.ts";
+import { resolveAgentToolPatterns, resolveToolPatterns } from "../../src/dispatch/resolve-tool-patterns.ts";
 
 const AVAILABLE = [
 	"read",

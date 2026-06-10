@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { statusToSummary } from "../../async-status.ts";
-import { StatusWriter } from "../../status-writer.ts";
-import { writeSyncRunStatusUpdate } from "../../sync-run-persistence.ts";
-import { RUNS_DIR, type AsyncStatus } from "../../types.ts";
+import { statusToSummary } from "../../src/state/async-status.ts";
+import { StatusWriter } from "../../src/state/status-writer.ts";
+import { writeSyncRunStatusUpdate } from "../../src/state/sync-run-persistence.ts";
+import { RUNS_DIR, type AsyncStatus } from "../../src/protocol/types.ts";
 
 function createTempDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

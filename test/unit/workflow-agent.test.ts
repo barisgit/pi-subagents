@@ -3,10 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { setRegistryPathForTests } from "../../runs-registry.ts";
-import { runWorkflowScript, WorkflowAgentError } from "../../workflow.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { runWorkflowScript, WorkflowAgentError } from "../../src/workflow/workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
 
 describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {

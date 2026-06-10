@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { loadWorkflowRecipe, type WorkflowSearchRoot } from "../../workflow.ts";
+import { loadWorkflowRecipe, type WorkflowSearchRoot } from "../../src/workflow/workflow.ts";
 
 const fixtureRoot = path.join(process.cwd(), "test", "fixtures", "workflows");
 const searchRoots: WorkflowSearchRoot[] = [

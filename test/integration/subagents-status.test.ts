@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderSubagentResult } from "../../render.ts";
-import { expandOverlayByRootRunId, foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../subagents-status.ts";
-import type { AsyncRunOverlayData, AsyncRunSummary } from "../../async-status.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
-import { type AgentProgress, type SubagentState } from "../../types.ts";
+import { renderSubagentResult } from "../../src/surfaces/render.ts";
+import { expandOverlayByRootRunId, foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import type { AsyncRunOverlayData, AsyncRunSummary } from "../../src/state/async-status.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { type AgentProgress, type SubagentState } from "../../src/protocol/types.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];

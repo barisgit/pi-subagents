@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import registerSubagentExtension from "../../index.ts";
-import { SUBAGENT_EXPOSE_API_EVENT, type SubagentExposedAPI } from "../../types.ts";
+import { SUBAGENT_EXPOSE_API_EVENT, type SubagentExposedAPI } from "../../src/protocol/types.ts";
 import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
 

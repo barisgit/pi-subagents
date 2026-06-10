@@ -28,6 +28,7 @@
   "files": [
     "*.ts",
     "!*.test.ts",
+    "src/**/*.ts",
     "*.mjs",
     "agents/",
     "skills/**/*",

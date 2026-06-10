@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { readStatus } from "../../utils.ts";
+import { readStatus } from "../../src/shared/utils.ts";
 
 function createRunDir(status: Record<string, unknown>): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-read-status-reconcile-"));

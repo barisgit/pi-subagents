@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { statusToSummary } from "../../async-status.ts";
-import { foregroundRunsFromState } from "../../subagents-status.ts";
-import { getSubagentIdentityEnv, type AsyncStatus, type SubagentState } from "../../types.ts";
+import { statusToSummary } from "../../src/state/async-status.ts";
+import { foregroundRunsFromState } from "../../src/surfaces/subagents-status.ts";
+import { getSubagentIdentityEnv, type AsyncStatus, type SubagentState } from "../../src/protocol/types.ts";
 
 describe("parent run id plumbing", () => {
 	it("copies parentRunId from AsyncStatus to AsyncRunSummary", () => {

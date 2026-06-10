@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { StatusWriter, __setStatusWriterWriteJsonForTest } from "../../status-writer.ts";
-import type { ChildAgentResult } from "../../in-process-executor.ts";
-import type { AsyncJobState, AsyncStatus, SubagentState } from "../../types.ts";
+import { StatusWriter, __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
+import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
+import type { AsyncJobState, AsyncStatus, SubagentState } from "../../src/protocol/types.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -175,7 +175,7 @@ describe("StatusWriter", () => {
 	});
 
 	it("persists live token usage on a running (pre-finalize) patch so nested readers see non-zero tokens", async () => {
-		const { statusToSummary } = await import("../../async-status.ts");
+		const { statusToSummary } = await import("../../src/state/async-status.ts");
 		const dir = tempDir("pi-status-writer-live-tokens-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 10 });
 		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "explorer", status: "running" }] });
@@ -271,7 +271,7 @@ describe("phase", () => {
 	});
 
 	it("live-block-carries-phase", async () => {
-		const { statusToSummary } = await import("../../async-status.ts");
+		const { statusToSummary } = await import("../../src/state/async-status.ts");
 		const dir = tempDir("pi-status-phase-live-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 20 });
 		writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
@@ -323,8 +323,8 @@ describe("phase", () => {
 	});
 
 	it("backward-compat-reader", async () => {
-		const { statusToSummary } = await import("../../async-status.ts");
-		const { createAsyncJobTracker } = await import("../../async-job-tracker.ts");
+		const { statusToSummary } = await import("../../src/state/async-status.ts");
+		const { createAsyncJobTracker } = await import("../../src/surfaces/async-job-tracker.ts");
 
 		const legacyDir = tempDir("pi-status-phase-legacy-");
 		const legacyStatus: AsyncStatus = {
@@ -348,7 +348,7 @@ describe("phase", () => {
 
 		const rawStatus = JSON.parse(
 			(await import("node:fs")).readFileSync((await import("node:path")).join(dir, "status.json"), "utf-8")
-		) as import("../../types.ts").AsyncStatus;
+		) as import("../../src/protocol/types.ts").AsyncStatus;
 
 		const summary = statusToSummary(dir, rawStatus);
 		assert.equal(summary.phase, "tool_running");

@@ -4,7 +4,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
 	createPhaseEventHandler,
 	type StatusPatch,
-} from "../../in-process-executor.ts";
+} from "../../src/dispatch/in-process-executor.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;

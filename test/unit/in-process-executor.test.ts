@@ -11,7 +11,7 @@ import {
 	type ChildAgentContext,
 	type ChildAgentHandle,
 	type ChildAgentStep,
-} from "../../in-process-executor.ts";
+} from "../../src/dispatch/in-process-executor.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];

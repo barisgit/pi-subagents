@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { SubagentParams } from "../../schemas.ts";
-import { createSubagentExecutor, validateSubagentToolInput } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, type ChildAgentHandle } from "../../in-process-executor.ts";
+import { SubagentParams } from "../../src/protocol/schemas.ts";
+import { createSubagentExecutor, validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, type ChildAgentHandle } from "../../src/dispatch/in-process-executor.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
-import type { SubagentState } from "../../types.ts";
+import type { SubagentState } from "../../src/protocol/types.ts";
 
 interface ExecutorResult {
 	isError?: boolean;

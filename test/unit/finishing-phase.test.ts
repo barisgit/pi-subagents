@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { advanceRunPhase, formatPhase, initialRunPhaseState } from "../../run-phase.ts";
+import { advanceRunPhase, formatPhase, initialRunPhaseState } from "../../src/state/run-phase.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;
