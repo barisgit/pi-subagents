@@ -978,6 +978,7 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	if (job.kind === "workflow") {
 		// Group row: children-derived progress instead of a shape badge.
 		if ((job.stepsTotal ?? 0) > 0) parts.push(`${job.currentStep ?? 0}/${job.stepsTotal}`);
+		if (job.pendingDelivery) parts.push(theme.fg("accent", "delivering…"));
 		if (job.startedAt) {
 			const isLive = job.status === "running" || job.status === "queued";
 			const endTs = isLive ? Date.now() : (job.updatedAt ?? Date.now());
@@ -1006,6 +1007,9 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	else if (job.displayState === "needs_attention") parts.push(theme.fg("warning", "needs attention"));
 	else if (job.displayState === "quiet") parts.push("quiet");
 	if (job.totalTokens?.total) parts.push(formatTokenStat(job.totalTokens.total));
+	// 'done, result not yet delivered to the host turn' was invisible when the
+	// only cue was the accent-vs-success checkmark tint; say it outright.
+	if (job.pendingDelivery) parts.push(theme.fg("accent", "delivering…"));
 	if ((job.resumeCount ?? 0) > 0) parts.push(`↻${job.resumeCount}`);
 	if (job.startedAt) {
 		// A 'lost' run is dead: freeze elapsed at its last known update instead of
