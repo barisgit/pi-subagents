@@ -417,6 +417,9 @@ export interface AsyncJobState {
 	// yet (rollup still open, or delivery raced/never fired). Widget keeps the
 	// row and renders an accent glyph until the delivered event arrives.
 	pendingDelivery?: boolean;
+	// Workflow groups render as ONE widget row; their children are tracked for
+	// aggregation (progress, liveness) but hidden from the widget list.
+	kind?: "workflow";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;

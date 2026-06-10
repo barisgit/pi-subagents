@@ -934,6 +934,15 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 	// job.agentColors/job.agentColor are not populated by the async start event or
 	// status.json, so fall back to the name -> color map (same source the dashboard
 	// uses) — otherwise every async agent name renders uncolored in the widget.
+	if (job.kind === "workflow") {
+		// The workflow is ONE entity: one tinted name, with the current phase
+		// (mirrored into job.label by the tracker) as its label.
+		let base = tintAgentName(themeBold(theme, "workflow"), colorForAgentName("workflow"));
+		if (job.label) {
+			base += ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(job.label, 30))}`;
+		}
+		return base;
+	}
 	const agents = job.agents ?? [];
 	const fallbackName = job.currentAgent ?? job.agents?.[0] ?? "agent";
 	const desc = describeAgentLabel({
@@ -966,6 +975,16 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 
 function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	const parts: string[] = [];
+	if (job.kind === "workflow") {
+		// Group row: children-derived progress instead of a shape badge.
+		if ((job.stepsTotal ?? 0) > 0) parts.push(`${job.currentStep ?? 0}/${job.stepsTotal}`);
+		if (job.startedAt) {
+			const isLive = job.status === "running" || job.status === "queued";
+			const endTs = isLive ? Date.now() : (job.updatedAt ?? Date.now());
+			parts.push(formatDuration(Math.max(0, endTs - job.startedAt)));
+		}
+		return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
+	}
 	const stepsTotal = job.stepsTotal ?? job.agents?.length ?? 1;
 	const completedParallelSteps = job.stepStatuses?.filter((status) => status === "complete" || status === "failed" || status === "skipped").length;
 	// Label distinguishes chain (sequential multi-step) from parallel (concurrent children).
@@ -1043,6 +1062,12 @@ function widgetDepths(jobs: AsyncJobState[]): Map<string, number> {
 }
 
 export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = getTermWidth()): string[] {
+	// The workflow is ONE entity in the widget: its children are tracked for
+	// aggregation but never rendered as rows (the dashboard shows the tree).
+	const workflowIds = new Set(jobs.filter((job) => job.kind === "workflow").map((job) => job.asyncId));
+	if (workflowIds.size > 0) {
+		jobs = jobs.filter((job) => !(job.parentRunId && workflowIds.has(job.parentRunId)));
+	}
 	if (jobs.length === 0) return [];
 
 	// Single ordering rule: needs_attention pinned to the very top, then strictly by

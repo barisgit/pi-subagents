@@ -292,4 +292,33 @@ describe("subagent async widget rendering", () => {
 		assert.match(row, /lost/);
 	});
 
+	it("renders a workflow as one row and hides its children", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "wf-group", asyncDir: "/tmp/wf", status: "running", kind: "workflow", agents: ["workflow"], label: "Phase 2: verify", currentStep: 1, stepsTotal: 3, startedAt: Date.now() - 5000 },
+			{ asyncId: "wf-child-a", asyncDir: "/tmp/wf/a", status: "running", parentRunId: "wf-group", agents: ["explorer"], currentAgent: "explorer" },
+			{ asyncId: "wf-child-b", asyncDir: "/tmp/wf/b", status: "complete", parentRunId: "wf-group", agents: ["qa"], currentAgent: "qa" },
+			{ asyncId: "other-1", asyncDir: "/tmp/o", status: "running", agents: ["fixer"], currentAgent: "fixer" },
+		], theme, 200);
+		const body = lines.join("\n");
+
+		assert.match(body, /workflow/, "workflow group row renders");
+		assert.match(body, /Phase 2: verify/, "group row carries the current phase label");
+		assert.match(body, /1\/3/, "group row carries children-derived progress");
+		assert.doesNotMatch(body, /explorer/, "workflow children must not render as widget rows");
+		assert.doesNotMatch(body, /\bqa\b/, "workflow children must not render as widget rows");
+		assert.match(body, /fixer/, "non-workflow jobs render normally");
+		// header + workflow row + fixer row + trailing blank.
+		assert.equal(lines.length, 4, "exactly one row for the workflow, one for the plain job");
+	});
+
+	it("keeps children of non-workflow parents visible", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "par-group", asyncDir: "/tmp/p", status: "running", mode: "parallel", agents: ["explorer", "qa"] },
+			{ asyncId: "par-child", asyncDir: "/tmp/p/c", status: "running", parentRunId: "par-group", agents: ["explorer"], currentAgent: "explorer" },
+		], theme, 200);
+		const body = lines.join("\n");
+
+		assert.match(body, /explorer/, "plain parallel children stay visible");
+	});
+
 });

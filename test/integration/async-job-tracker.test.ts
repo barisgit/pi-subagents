@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
+import { writeWorkflowGroupState } from "../../workflow-group-state.ts";
 
 interface AsyncJobTrackerModule {
 	createAsyncJobTracker(
@@ -292,6 +293,45 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 
 			await new Promise((resolve) => setTimeout(resolve, 40));
 			assert.equal(state.asyncJobs.has("run-1"), false, "delivered job should retire after retention");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("synthesizes the workflow group row from children instead of marking it lost", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, { pollIntervalMs: 10 });
+			tracker.resetJobs(ui.ctx as never);
+
+			const groupDir = path.join(asyncRoot, "wf-group");
+			writeWorkflowGroupState(groupDir, "running");
+			tracker.handleStarted({ id: "wf-group", asyncDir: groupDir, agent: "workflow", kind: "workflow" });
+			const childDir = path.join(asyncRoot, "wf-child");
+			// The phase label travels via the child's status.json (the poller
+			// mirrors status.label onto the job; handleStarted has no label field).
+			writeStatus(childDir, { state: "running", agent: "explorer", label: "Phase 1: recon", parentRunId: "wf-group", runnerHeartbeatAt: Date.now(), lastUpdate: Date.now(), startedAt: Date.now() });
+			tracker.handleStarted({ id: "wf-child", asyncDir: childDir, agent: "explorer", parentRunId: "wf-group" });
+
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			const group = state.asyncJobs.get("wf-group") as { status: string; kind?: string; stepsTotal?: number; currentStep?: number; label?: string; displayState?: string } | undefined;
+			assert.ok(group, "group job should exist");
+			assert.equal(group?.kind, "workflow");
+			assert.equal(group?.status, "running", "statusless group must not be marked lost while children run");
+			assert.equal(group?.stepsTotal, 1);
+			assert.equal(group?.currentStep, 0, "no terminal children yet");
+			assert.equal(group?.label, "Phase 1: recon", "group label mirrors the active child's phase label");
+
+			// Workflow finishes: lifecycle flips, group goes pending-delivery.
+			writeStatus(childDir, { state: "complete", agent: "explorer", parentRunId: "wf-group", lastUpdate: Date.now() });
+			writeWorkflowGroupState(groupDir, "complete");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			const finished = state.asyncJobs.get("wf-group") as { status: string; pendingDelivery?: boolean } | undefined;
+			assert.equal(finished?.status, "complete");
+			assert.equal(finished?.pendingDelivery, true, "group must wait for its one notification to deliver");
 		} finally {
 			removeTempDir(asyncRoot);
 		}

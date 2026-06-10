@@ -124,12 +124,19 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 
 	it("emits per-child async started and complete events under the workflow group", async () => {
 		const { events, tool, ctx, promptGate } = setup("workflow-async-events-", { blockPrompt: true });
-		const startedPromise = waitForEvent(events, SUBAGENT_ASYNC_STARTED_EVENT);
+		// The group emits its own STARTED first (the widget's single workflow
+		// row); the child STARTED carries parentRunId.
+		const groupStartedPromise = waitForEvent(events, SUBAGENT_ASYNC_STARTED_EVENT, (payload) => payload.kind === "workflow");
+		const startedPromise = waitForEvent(events, SUBAGENT_ASYNC_STARTED_EVENT, (payload) => payload.kind !== "workflow");
 		const runCompletePromise = waitForEvent(events, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT);
 
 		const result = await tool.execute?.("wf", { script: "await agent('A', 'alpha');", async: true }, new AbortController().signal, undefined, ctx as never);
 		const groupRunId = (result?.details as any).runId;
 		const completePromise = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT, (payload) => payload.runId === groupRunId);
+		const groupStarted = await groupStartedPromise;
+		assert.equal(groupStarted.id, groupRunId, "group STARTED must carry the group runId");
+		assert.equal(groupStarted.agent, "workflow");
+		assert.equal(groupStarted.parentRunId, undefined, "group row is a root row");
 		const started = await startedPromise;
 		promptGate.resolve();
 		const runComplete = await runCompletePromise;

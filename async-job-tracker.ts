@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { renderWidget } from "./render.ts";
-import { deriveRunDisplayState } from "./run-liveness.ts";
+import { deriveRunDisplayState, displayStatePriority } from "./run-liveness.ts";
 import {
 	DEFAULT_CONTROL_CONFIG,
 	buildControlEvent,
@@ -23,6 +23,7 @@ import {
 import type { IdleTracker } from "./idle-tracker.ts";
 import { readStatus } from "./utils.ts";
 import { readAllEntries } from "./runs-registry.ts";
+import { readWorkflowGroupState } from "./workflow-group-state.ts";
 import { logger } from "./logger.ts";
 
 interface AsyncJobTrackerOptions {
@@ -158,6 +159,51 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				try {
 					const previousStatus = job.status;
 					const previousStatusWasTerminal = isTerminalAsyncStatus(previousStatus);
+					// Workflow groups are statusless containers (no status.json): without
+					// this branch the generic fallback below would see a never-updating
+					// heartbeat and mark the group 'lost' while its children run fine.
+					// Synthesize the row from the lifecycle marker + child jobs instead.
+					if (job.kind === "workflow") {
+						if (previousStatusWasTerminal) continue;
+						const lifecycle = readWorkflowGroupState(job.asyncDir);
+						const children = [...state.asyncJobs.values()].filter((child) => child.parentRunId === job.asyncId);
+						if (lifecycle === "complete" || lifecycle === "failed") {
+							job.status = lifecycle;
+							job.displayState = undefined;
+							job.updatedAt = Date.now();
+							// A workflow notifies once on finish; keep the row until the
+							// delivered event confirms that notification reached the host.
+							if (!deliveredRunIds.has(job.asyncId)) {
+								job.pendingDelivery = true;
+							} else {
+								job.pendingDelivery = false;
+								scheduleCleanup(job.asyncId);
+							}
+							continue;
+						}
+						job.status = "running";
+						const done = children.filter((child) => isTerminalAsyncStatus(child.status)).length;
+						job.currentStep = done;
+						job.stepsTotal = Math.max(job.stepsTotal ?? 0, children.length);
+						// Surface the current phase: the most recently started non-terminal
+						// child carries a 'Phase N: title' label from the workflow dispatcher.
+						const active = children.filter((child) => !isTerminalAsyncStatus(child.status));
+						const latest = (active.length > 0 ? active : children).reduce<AsyncJobState | undefined>(
+							(best, child) => ((child.startedAt ?? 0) >= (best?.startedAt ?? 0) ? child : best),
+							undefined,
+						);
+						if (latest?.label) job.label = latest.label;
+						for (const child of children) {
+							job.updatedAt = Math.max(job.updatedAt ?? 0, child.updatedAt ?? 0);
+							job.runnerHeartbeatAt = Math.max(job.runnerHeartbeatAt ?? 0, child.runnerHeartbeatAt ?? 0);
+						}
+						// Liveliest child wins the group's display state.
+						job.displayState = children.reduce<AsyncJobState["displayState"]>(
+							(best, child) => (displayStatePriority(child.displayState) < displayStatePriority(best) ? child.displayState : best),
+							undefined,
+						);
+						continue;
+					}
 					const status = readStatus(job.asyncDir);
 					if (status) {
 						const currentStepRecord = status.steps?.[status.currentStep ?? 0];
@@ -283,6 +329,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			agent?: string;
 			chain?: string[];
 			parentRunId?: string;
+			kind?: string;
 			controlConfig?: ResolvedControlConfig;
 		};
 		logger.info("handleStarted: FIRED", { id: info.id, agent: info.agent, hasUi: !!state.lastUiContext });
@@ -303,6 +350,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			status: "queued",
 			displayState: "quiet",
 			mode,
+			kind: info.kind === "workflow" ? "workflow" : undefined,
 			parentRunId: info.parentRunId,
 			agents,
 			stepsTotal: agents?.length,
@@ -394,6 +442,26 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			// renders inline; reclaiming it here would leak it into the async widget.
 			if (entry.source !== "async") continue;
 			if (state.asyncJobs.has(entry.runId)) continue;
+			// Workflow groups are statusless; their liveness comes from the
+			// lifecycle marker. Reclaim still-running groups so the widget keeps
+			// its single workflow row across a host reload.
+			if (entry.kind === "workflow") {
+				if (readWorkflowGroupState(entry.runRecordDir) !== "running") continue;
+				state.asyncJobs.set(entry.runId, {
+					asyncId: entry.runId,
+					asyncDir: entry.runRecordDir,
+					status: "running",
+					displayState: "quiet",
+					kind: "workflow",
+					agents: ["workflow"],
+					startedAt: entry.startedAt,
+					updatedAt: Date.now(),
+					resumeCount: 0,
+					controlConfig: undefined,
+				});
+				added++;
+				continue;
+			}
 			const status = readStatus(entry.runRecordDir);
 			if (!status || isTerminalAsyncStatus(status.state)) continue;
 			const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : undefined);

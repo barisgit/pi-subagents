@@ -3776,7 +3776,22 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			emitRunAnchor(deps.pi, { runId: group.runId, rootRunId: groupRootRunId, mode: "parallel", source: effectiveAsync ? "async" : "sync", parentRunId });
 			const sessionRoot = group.runRecordDir;
 			fs.mkdirSync(sessionRoot, { recursive: true });
-			if (effectiveAsync) writeWorkflowGroupState(group.runRecordDir, "running");
+			if (effectiveAsync) {
+				writeWorkflowGroupState(group.runRecordDir, "running");
+				// The workflow is ONE entity: give the widget a group row up front.
+				// Children also emit STARTED (below) so the tracker can aggregate
+				// phase/progress, but the widget renders only this row.
+				safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
+					id: group.runId,
+					runId: group.runId,
+					metadata: undefined,
+					controlConfig,
+					kind: "workflow",
+					agent: "workflow",
+					cwd: effectiveCwd,
+					asyncDir: group.runRecordDir,
+				});
+			}
 			const childResults: Array<{ runId: string; result: SingleResult; index: number }> = [];
 			const data: ExecutionContextData = {
 				params: {},
