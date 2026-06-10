@@ -311,7 +311,7 @@ describe("subagent async widget rendering", () => {
 		assert.equal(lines.length, 4, "exactly one row for the workflow, one for the plain job");
 	});
 
-	it("keeps children of non-workflow parents visible", () => {
+	it("keeps children of non-workflow parents visible and hides the container", () => {
 		const lines = buildWidgetLines([
 			{ asyncId: "par-group", asyncDir: "/tmp/p", status: "running", mode: "parallel", agents: ["explorer", "qa"] },
 			{ asyncId: "par-child", asyncDir: "/tmp/p/c", status: "running", parentRunId: "par-group", agents: ["explorer"], currentAgent: "explorer" },
@@ -319,6 +319,9 @@ describe("subagent async widget rendering", () => {
 		const body = lines.join("\n");
 
 		assert.match(body, /explorer/, "plain parallel children stay visible");
+		assert.doesNotMatch(body, /qa/, "plain parallel container is hidden");
+		const childLine = lines.find((line) => line.includes("explorer")) ?? "";
+		assert.doesNotMatch(childLine, /  [├└]─/, "child renders at top-level widget depth");
 	});
 
 });

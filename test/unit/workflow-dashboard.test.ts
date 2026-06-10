@@ -213,7 +213,7 @@ describe("workflow dashboard reader overlays", () => {
 		assert.ok(phase2ChildIndex > phase2Index);
 	});
 
-	it("subagents-status renders workflow groups and child phase chips without relabeling them parallel", () => {
+	it("subagents-status renders workflow groups with phase rows without relabeling them parallel", () => {
 		const { entries } = setupWorkflowRegistry();
 		const component = new SubagentsStatusComponent(
 			createTestTui(() => {}),
@@ -229,15 +229,23 @@ describe("workflow dashboard reader overlays", () => {
 			assert.match(text, /▾ workflow · complete · 3\/3/);
 			assert.doesNotMatch(text, /─ parallel .*\[complete\]/);
 			assert.doesNotMatch(text, /▾ parallel · complete/);
-			// Parallel fan-out children carry the ∥ marker; sequential ones don't.
-			const phase1Index = text.indexOf("explorer\x1B[39m · ∥ P1 inspect · complete");
-			const phase2Index = text.indexOf("fixer\x1B[39m · P2 patch · complete");
+			// Phase labels are tree rows; children no longer carry P1/P2 chips.
+			const phase1RowIndex = text.indexOf("Phase 1: inspect · 2/2");
+			const phase2RowIndex = text.indexOf("Phase 2: patch · 1/1");
+			const phase1Index = text.indexOf("explorer\x1B[39m · complete");
+			const phase2Index = text.indexOf("fixer\x1B[39m · complete");
+			assert.ok(phase1RowIndex !== -1, "expected phase-1 row in status output");
+			assert.ok(phase2RowIndex !== -1, "expected phase-2 row in status output");
 			assert.ok(phase1Index !== -1, "expected phase-1 child in status output");
 			assert.ok(phase2Index !== -1, "expected phase-2 child in status output");
-			assert.ok(phase1Index < phase2Index, "workflow children render phase 1 before phase 2");
-			assert.match(text, /explorer\x1B\[39m · ∥ P1 inspect · complete/);
-			assert.match(text, /review\x1B\[39m · ∥ P1 inspect · complete/);
-			assert.match(text, /fixer\x1B\[39m · P2 patch · complete/);
+			assert.ok(phase1RowIndex < phase1Index, "phase-1 children render below phase row");
+			assert.ok(phase1Index < phase2RowIndex, "phase 2 renders after phase 1 children");
+			assert.ok(phase2RowIndex < phase2Index, "phase-2 child renders below phase row");
+			assert.match(text, /explorer\x1B\[39m · complete/);
+			assert.match(text, /review\x1B\[39m · complete/);
+			assert.match(text, /fixer\x1B\[39m · complete/);
+			assert.doesNotMatch(text, /P1 inspect/);
+			assert.doesNotMatch(text, /P2 patch/);
 		} finally {
 			component.dispose();
 		}

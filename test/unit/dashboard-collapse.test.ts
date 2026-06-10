@@ -42,6 +42,10 @@ function stripBorders(line: string): string {
 	return line.replace(/^│/, "").replace(/│$/, "").trim();
 }
 
+function leftOnly(lines: string[]): string[] {
+	return lines.map((line) => line.split("│")[0] ?? line);
+}
+
 interface SeedRun {
 	runId: string;
 	agentName?: string;
@@ -102,37 +106,39 @@ afterEach(() => {
 });
 
 describe("dashboard collapse and container rows", () => {
-	it("enter collapses the selected container: children hide, inline agent summary appears", () => {
+	it("enter collapses a workflow container: phase rows and children hide", () => {
 		const root = tmpRegistry();
-		seedRun(root, { runId: "group-1", mode: "parallel", label: "batch", rootRunId: "group-1", startedAt: 1000 });
-		seedRun(root, { runId: "child-a", agentName: "explorer", parentRunId: "group-1", rootRunId: "group-1", startedAt: 1100 });
-		seedRun(root, { runId: "child-b", agentName: "qa", parentRunId: "group-1", rootRunId: "group-1", startedAt: 1200 });
+		seedRun(root, { runId: "wf-1", mode: "parallel", workflow: true, label: "wf", rootRunId: "wf-1", startedAt: 1000 });
+		seedRun(root, { runId: "child-a", agentName: "explorer", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 1, phaseTitle: "recon", startedAt: 1100 });
+		seedRun(root, { runId: "child-b", agentName: "qa", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 2, phaseTitle: "verify", startedAt: 1200 });
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
-			const expanded = component.render(180).map(stripBorders).join("\n");
-			assert.match(expanded, /▾ parallel · complete · 2\/2/);
-			assert.match(expanded, /└─✓ .*explorer/);
-			assert.match(expanded, /└─✓ .*qa/);
+			const expanded = leftOnly(component.render(180).map(stripBorders)).join("\n");
+			assert.match(expanded, /▾ workflow · complete · 2\/2/);
+			assert.match(expanded, /▾ Phase 1: recon · 1\/1/);
+			assert.match(expanded, /✓ .*explorer/);
+			assert.match(expanded, /▾ Phase 2: verify · 1\/1/);
+			assert.match(expanded, /✓ .*qa/);
 
-			// Selection starts on the newest row; move to the container row first.
-			const rows = component.render(180).map(stripBorders);
-			const groupRow = rows.findIndex((line) => /▾ parallel/.test(line));
+			// Selection starts on the workflow container row.
+			const rows = leftOnly(component.render(180).map(stripBorders));
+			const groupRow = rows.findIndex((line) => /▾ workflow/.test(line));
 			const selectedRow = rows.findIndex((line) => line.startsWith(">"));
 			for (let i = 0; i < Math.abs(groupRow - selectedRow); i++) {
 				component.handleInput(groupRow > selectedRow ? "j" : "k");
 			}
 			component.handleInput("\r");
 
-			const collapsed = component.render(180).map(stripBorders).join("\n");
-			assert.match(collapsed, /▸ parallel · complete · 2\/2/);
-			assert.match(collapsed, /\(2 agents: qa, explorer\)/);
-			assert.doesNotMatch(collapsed, /└─/);
+			const collapsed = leftOnly(component.render(180).map(stripBorders)).join("\n");
+			assert.match(collapsed, /▸ workflow · complete · 2\/2/);
+			assert.doesNotMatch(collapsed, /Phase 1: recon/);
+			assert.doesNotMatch(collapsed, /✓ .*explorer/);
 
 			component.handleInput("\r");
-			const reexpanded = component.render(180).map(stripBorders).join("\n");
-			assert.match(reexpanded, /▾ parallel · complete · 2\/2/);
-			assert.match(reexpanded, /└─✓ .*explorer/);
+			const reexpanded = leftOnly(component.render(180).map(stripBorders)).join("\n");
+			assert.match(reexpanded, /▾ workflow · complete · 2\/2/);
+			assert.match(reexpanded, /▾ Phase 1: recon · 1\/1/);
 		} finally {
 			component.dispose();
 		}
@@ -165,18 +171,16 @@ describe("dashboard collapse and container rows", () => {
 			const lines = component.render(220);
 			// The finished child is done but its result has not been delivered to
 			// the parent turn yet (rollup batching): accent ✓, not success ✓.
-			// Assert on the left child row (└─) so the right-pane steps outline
-			// (always success-toned) cannot mask the left-row glyph.
-			const childRow = lines.find((line) => line.includes("└─") && line.includes("explorer"));
-			assert.ok(childRow, "expected a └─ explorer child row");
-			assert.match(childRow, /└─<\/dim><accent>✓<\/accent>/);
-			assert.doesNotMatch(childRow, /└─<\/dim><success>✓<\/success>/);
+			const childRow = lines.find((line) => line.includes("explorer"));
+			assert.ok(childRow, "expected a flat explorer child row");
+			assert.match(childRow, /<accent>✓<\/accent> <dim>∥ <\/dim>/);
+			assert.doesNotMatch(childRow, /<success>✓<\/success> <dim>∥ <\/dim>/);
 		} finally {
 			component.dispose();
 		}
 	});
 
-	it("phase chips dedupe a 'Phase N:' prefix already present in the script's phase title", () => {
+	it("phase rows dedupe a 'Phase N:' prefix already present in the script's phase title", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf-3", mode: "parallel", workflow: true, rootRunId: "wf-3", startedAt: 1000 });
 		seedRun(root, { runId: "wf3-a", agentName: "explorer", parentRunId: "wf-3", rootRunId: "wf-3", phaseIndex: 1, phaseTitle: "Phase 1: recon", parallelGroupId: "pg", startedAt: 1100 });
@@ -188,9 +192,10 @@ describe("dashboard collapse and container rows", () => {
 			// Container chip: "Phase 2: verify", not "Phase 2: Phase 2: verify".
 			assert.match(text, /▾ workflow · Phase 2: verify · running/);
 			assert.doesNotMatch(text, /Phase 2: Phase 2/);
-			// Child chip: "∥ P1 recon", not "∥ P1 Phase 1: recon".
-			assert.match(text, /∥ P1 recon/);
-			assert.doesNotMatch(text, /P1 Phase 1/);
+			// Phase row: "Phase 1: recon", not "Phase 1: Phase 1: recon".
+			assert.match(text, /▾ Phase 1: recon · 1\/1/);
+			assert.doesNotMatch(text, /Phase 1: Phase 1/);
+			assert.doesNotMatch(text, /∥ P1/);
 		} finally {
 			component.dispose();
 		}

@@ -1072,6 +1072,12 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	if (workflowIds.size > 0) {
 		jobs = jobs.filter((job) => !(job.parentRunId && workflowIds.has(job.parentRunId)));
 	}
+	const nonWorkflowContainerIds = new Set(jobs
+		.filter((job) => job.kind !== "workflow" && jobs.some((other) => other.parentRunId === job.asyncId))
+		.map((job) => job.asyncId));
+	if (nonWorkflowContainerIds.size > 0) {
+		jobs = jobs.filter((job) => !nonWorkflowContainerIds.has(job.asyncId));
+	}
 	if (jobs.length === 0) return [];
 
 	// Single ordering rule: needs_attention pinned to the very top, then strictly by

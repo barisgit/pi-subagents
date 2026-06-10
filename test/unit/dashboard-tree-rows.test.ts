@@ -110,7 +110,7 @@ describe("dashboard tree rows", () => {
 		);
 
 		try {
-			const rows = component.render(180).map(stripBorders);
+			const rows = component.render(180).map(stripBorders).map((line) => line.split("│")[0] ?? line);
 			const parentIndex = rows.findIndex((line) => line.includes("fixer") && line.includes("visible parent"));
 			const childIndex = rows.findIndex((line) => line.includes("review") && line.includes("stale child"));
 			assert.notEqual(parentIndex, -1);
@@ -124,7 +124,7 @@ describe("dashboard tree rows", () => {
 		}
 	});
 
-	it("parallel dispatch renders N rows nested under their group node", () => {
+	it("parallel dispatch renders children as flat top-level rows", () => {
 		const root = tmpRegistry();
 		const groupId = "group-parallel";
 		const groupDir = path.join(root, "runs", groupId);
@@ -170,24 +170,21 @@ describe("dashboard tree rows", () => {
 		);
 
 		try {
-			const firstRender = component.render(180).map(stripBorders);
-			const groupIndex = firstRender.findIndex((line) => line.includes("parallel group"));
-			assert.notEqual(groupIndex, -1);
-			for (let i = 0; i < groupIndex - 1; i++) component.handleInput("j");
+			const firstRender = component.render(180).map(stripBorders).map((line) => line.split("│")[0] ?? line);
+			assert.equal(firstRender.findIndex((line) => line.includes("parallel group")), -1);
 
 			const rows = component.render(180).map(stripBorders);
-			const selectedGroupIndex = rows.findIndex((line) => /▾ parallel .*parallel group/.test(line));
-			assert.notEqual(selectedGroupIndex, -1);
 			const visibleAgents = [...agents].reverse();
-			const childIndexes = visibleAgents.map((agent) => rows.findIndex((line) => line.includes(`child ${agent}`)));
+			const childIndexes = visibleAgents.map((agent) => rows.findIndex((line) => line.includes(`child ${agent}`) && line.includes("∥")));
 			childIndexes.forEach((index) => assert.notEqual(index, -1));
-			assert.deepEqual(childIndexes, visibleAgents.map((_, index) => selectedGroupIndex + index + 1));
-			for (const index of childIndexes) assert.match(rows[index]!, /└─/);
+			for (const index of childIndexes) {
+				assert.doesNotMatch(rows[index]!, /└─/);
+				assert.match(rows[index]!, /∥ /);
+			}
 
 			const unrelatedIndex = rows.findIndex((line) => line.includes("unrelated 19"));
 			assert.notEqual(unrelatedIndex, -1);
 			assert.doesNotMatch(rows[unrelatedIndex]!, /└─/);
-			assert.match(rows.join("\n"), /4 agents: oracle, qa, review, fixer/);
 			// The parallel group is a CONTAINER, not an agent: its row must not be
 			// tallied in the header when its 4 leaf children are present as their own
 			// rows. 20 unrelated singles + 4 children = 24 agents (NOT 25 with the group).
