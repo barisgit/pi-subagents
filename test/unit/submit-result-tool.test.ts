@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { appendSubmitResultSystemInstruction, createSubmitResultTool, extractSubmitResultEnvelope, hasSubmitResultToolResult, isSubmitResultEnvelope, SUBMIT_RESULT_SYSTEM_INSTRUCTION } from "../../submit-result.ts";
+import { appendSubmitResultSystemInstruction, createSubmitResultTool, extractSubmitResultEnvelope, hasSubmitResultToolResult, isSubmitResultEnvelope, SUBMIT_RESULT_SYSTEM_INSTRUCTION } from "../../src/protocol/submit-result.ts";
 
 describe("submit_result tool", () => {
 	it("validates the fixed envelope and terminates", async () => {
@@ -10,7 +10,12 @@ describe("submit_result tool", () => {
 
 		assert.deepEqual(validateToolArguments(tool, { type: "toolCall", id: "good", name: "submit_result", arguments: envelope }), envelope);
 		assert.throws(() => validateToolArguments(tool, { type: "toolCall", id: "bad", name: "submit_result", arguments: { status: "ok", result: "no summary" } }), /summary|Expected required property/);
+		assert.throws(() => validateToolArguments(tool, { type: "toolCall", id: "bad-status", name: "submit_result", arguments: { ...envelope, status: "maybe" } }), /status|allowed values/);
 		assert.throws(() => validateToolArguments(tool, { type: "toolCall", id: "extra", name: "submit_result", arguments: { ...envelope, surprise: true } }), /surprise|Unexpected property/);
+
+		const parameters = tool.parameters as { properties?: { status?: Record<string, unknown> } };
+		assert.deepEqual(parameters.properties?.status?.enum, ["ok", "blocked", "failed"]);
+		assert.equal("anyOf" in (parameters.properties?.status ?? {}), false, "Cursor Composer drops submit_result args when status is encoded as anyOf const literals");
 
 		const result = await tool.execute?.("manual", envelope, new AbortController().signal, () => {}, {} as never);
 		assert.equal(result?.terminate, true);

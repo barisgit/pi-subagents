@@ -13,9 +13,18 @@ export interface SubmitResultEnvelope {
 
 export const SUBMIT_RESULT_TOOL_NAME = "submit_result";
 
+const SubmitResultStatusSchema = Type.Unsafe<SubmitResultStatus>({
+	type: "string",
+	enum: ["ok", "blocked", "failed"],
+});
+
 export function createSubmitResultParameters(resultSchema: TSchema = Type.String()): TSchema {
 	return Type.Object({
-		status: Type.Union([Type.Literal("ok"), Type.Literal("blocked"), Type.Literal("failed")]),
+		// Cursor Composer's MCP tool planner handles simple JSON Schema enums reliably,
+		// but repeatedly emitted `{}` for submit_result when this was encoded as an
+		// anyOf of const literals via Type.Union([Type.Literal(...)...]). Keep the
+		// runtime validation equally strict while presenting the provider-friendly shape.
+		status: SubmitResultStatusSchema,
 		summary: Type.String(),
 		result: resultSchema,
 		artifacts: Type.Optional(Type.Array(Type.String())),
