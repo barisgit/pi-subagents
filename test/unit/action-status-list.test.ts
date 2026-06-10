@@ -27,7 +27,7 @@ function appendStatusRun(root: string, entry: {
 	parentRunId?: string;
 	rootRunId?: string;
 	label?: string;
-	mode?: "single" | "chain" | "parallel";
+	mode?: "single" | "parallel";
 	tokens?: number;
 }): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);

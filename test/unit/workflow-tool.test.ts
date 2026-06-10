@@ -30,7 +30,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// The script's arbitrary return value is surfaced via content text, NOT details:
 		// `details` is always a real Details so the renderer can never crash on it.
 		assert.equal((result.content[0] as { text?: string } | undefined)?.text, "{\n  \"value\": 42\n}");
-		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", workflow: true, results: [], progress: [], chainAgents: [], totalSteps: 0 });
+		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", workflow: true, results: [], progress: [], agentGroups: [], totalSteps: 0 });
 	});
 
 	it("surfaces a throwing script as an error result without crashing the host", async () => {
@@ -75,7 +75,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.equal(res.out.text, "ok");
 	});
 
-	it("reports a floated .then() chain off agent() as an error (finding #1)", () => {
+	it("reports a floated .then() workflow off agent() as an error (finding #1)", () => {
 		// The script floats a DERIVATIVE of agent(): agent('bad').then(v=>v). Because
 		// agent() returns a TrackingPromise (Symbol.species = itself), the .then result
 		// is also a TrackingPromise registered in this run's owned Set, so the floated
@@ -87,12 +87,12 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.match(res.out.text, /unhandled promise rejection.*then-derived-boom/);
 	});
 
-	it("reports a 2-deep floated chain off agent() as an error", () => {
-		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'deep-chain-boom' })";
+	it("reports a 2-deep floated workflow off agent() as an error", () => {
+		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'deep-workflow-boom' })";
 		const res = runWorkflowInSubprocess("agent('explorer', 'bad').then((v) => v).then((v) => v);\nreturn 'ok';", dispatch);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, true);
-		assert.match(res.out.text, /unhandled promise rejection.*deep-chain-boom/);
+		assert.match(res.out.text, /unhandled promise rejection.*deep-workflow-boom/);
 	});
 
 	it("reports a floated async-helper agent() rejection via reason marker, not promise identity (round-6 finding)", () => {
@@ -143,7 +143,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// The phantom-slot reap attaches work.then(clear, clear); clear() calls
 		// onParallelGroupSettled -> emit -> onUpdate. If onUpdate THROWS on that frame,
 		// the promise returned by .then(clear, clear) rejects and floats unless the
-		// observer chain is fully total (try/catch in clear + .catch on the chain).
+		// observer workflow is fully total (try/catch in clear + .catch on the workflow).
 		// While a run is live the permanent containment listener would SWALLOW the
 		// float (host survives either way), so host-exit can't discriminate — we assert
 		// directly that NO unhandledRejection event is emitted for the clear frame.

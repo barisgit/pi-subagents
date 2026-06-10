@@ -1,20 +1,18 @@
 # Dispatch patterns
 
-Use the `run` shape for every dispatch. Top-level `run` items start in parallel by default; set `chain:true` when later work depends on earlier output.
+Use the `run` shape for direct subagent dispatch. Top-level `run` items are independent and may run in parallel. Use the `workflow` tool when later work depends on earlier output.
 
 ## Single
 
-Use a single task for one bounded handoff. Keep the task outcome concrete and include known constraints.
-
 ```ts
 subagent({
-  run: [{ agent: "<configured-agent>", task: "Patch the failing parser test without touching src/network." }]
+  run: [{ agent: "<configured-agent>", task: "Inspect the auth module and summarize findings." }]
 })
 ```
 
 ## Parallel
 
-Use top-level parallel tasks for independent branches. Add `batch:true` when you want one completion rollup instead of one notification per child.
+Use multiple top-level tasks for independent branches. Add `batch:true` when you want one completion rollup instead of one notification per child.
 
 ```ts
 subagent({
@@ -27,32 +25,25 @@ subagent({
 })
 ```
 
-## Chain
+## Dependent orchestration
 
-Use `chain:true` for dependent phases. Later task text can include `{previous}` to receive the prior step output.
+Use `workflow` for sequential or dependent phases. It can pass summaries/results between steps, branch, retry, loop, and decide runtime fan-out.
+
+```ts
+workflow({ script: `
+const recon = await agent("explorer", "Trace login state ownership.");
+const fix = await agent("fixer", "Implement the smallest fix using: " + recon.summary);
+return await agent("qa", "Verify the fix: " + fix.summary);
+` })
+```
+
+## Background
 
 ```ts
 subagent({
-  chain: true,
-  run: [
-    { agent: "<configured-agent>", task: "Trace login state ownership." },
-    { agent: "<configured-agent>", task: "Implement the smallest fix using: {previous}" }
-  ]
+  run: [{ agent: "qa", task: "Run the full test suite and report failures." }],
+  async: true
 })
 ```
 
-## Swarm-style parallel
-
-For a shared framing across several specialists, put the framing in `message` and specialize each `run` task. `{task}` in `message` substitutes per-task; `{in}` does the same but may appear at most once per message.
-
-```ts
-subagent({
-  message: "Evaluate the plan from this angle: {task}",
-  run: [
-    { agent: "<configured-agent>", task: "correctness risks" },
-    { agent: "<configured-agent>", task: "maintainability risks" },
-    { agent: "<configured-agent>", task: "verification gaps" }
-  ],
-  batch: true
-})
-```
+Do not poll by default after starting async work; continue independent work or wait for the host notification.

@@ -82,7 +82,7 @@ function makeHarness(cwd: string) {
 	return { execute, state, childRegistry };
 }
 
-function markAsync(state: SubagentState, runId: string, status: "queued" | "running" | "complete" | "failed" | "paused" | "lost", mode: "single" | "parallel" | "chain" = "single"): void {
+function markAsync(state: SubagentState, runId: string, status: "queued" | "running" | "complete" | "failed" | "paused" | "lost", mode: "single" | "parallel" = "single"): void {
 	state.asyncJobs.set(runId, {
 		asyncId: runId,
 		asyncDir: "/tmp/pi-subagent-resume-action",

@@ -47,7 +47,7 @@ function stripBorders(line: string): string {
 
 function appendCompleteRun(
 	root: string,
-	entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & { agentName: string; mode?: "single" | "chain" | "parallel"; cwd?: string },
+	entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & { agentName: string; mode?: "single" | "parallel"; cwd?: string },
 ): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });

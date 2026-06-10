@@ -177,7 +177,7 @@ describe("sync foreground parallel executor", () => {
 		installFakeRuntime();
 		installPromptGate(2);
 		const deps = makeDeps(root) as any;
-		const updates: Array<{ details?: { progress?: Array<{ status?: string }>; results?: unknown[]; totalSteps?: number } }> = [];
+		const updates: Array<{ details?: { progress?: Array<{ status?: string }>; results?: unknown[] } }> = [];
 
 		const running = execute(deps, root, (update) => updates.push(update));
 		await waitForPrompts(deps);
@@ -191,7 +191,7 @@ describe("sync foreground parallel executor", () => {
 		assert.ok(settledCounts.includes(1), "merged update after the first resolved child must show 1/2 settled");
 		assert.ok(settledCounts.includes(2), "merged update after the second resolved child must show 2/2 settled");
 		const final = updates.at(-1)!;
-		assert.equal(final.details?.totalSteps, 2);
+		assert.equal(final.details?.progress?.length, 2);
 		assert.equal(final.details?.progress?.every((progress) => progress.status !== "running"), true);
 		assert.equal(final.details?.results?.length, 2);
 	});

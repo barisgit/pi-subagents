@@ -25,16 +25,10 @@ export const TaskSchema = Type.Object({
 	output: Type.Optional(OutputOverride),
 }, { additionalProperties: false });
 
-export const StepSchema = Type.Union([
-	TaskSchema,
-	Type.Array(TaskSchema, { minItems: 1, description: "Parallel sub-step; valid only with chain:true." }),
-], {
-	description: "Task, or Task[] as a parallel sub-step inside chain:true.",
-});
+export const StepSchema = TaskSchema;
 
 export const SubagentParams = Type.Object({
-	run: Type.Optional(Type.Array(StepSchema, { minItems: 1, description: "Work steps to dispatch." })),
-	chain: Type.Optional(Type.Boolean({ description: "Run steps sequentially; default false means parallel." })),
+	run: Type.Optional(Type.Array(StepSchema, { minItems: 1, description: "Work to dispatch." })),
 	async: Type.Optional(Type.Boolean({ description: "Run detached (returns immediately)." })),
 	batch: Type.Optional(Type.Boolean({ description: "Collapse completion notifications into one rollup." })),
 	concurrency: Type.Optional(Type.Number({ description: "Max parallel tasks." })),
@@ -52,10 +46,9 @@ export const SubagentParams = Type.Object({
 }, { additionalProperties: false });
 
 export type Task = Static<typeof TaskSchema>;
-export type Step = Task | Task[];
+export type Step = Task;
 export type SubagentToolInput = {
 	run?: Step[];
-	chain?: boolean;
 	async?: boolean;
 	batch?: boolean;
 	concurrency?: number;
@@ -71,4 +64,3 @@ export const TopLevelTaskItem = TaskSchema;
 export const SequentialStepSchema = TaskSchema;
 export const ParallelTaskSchema = TaskSchema;
 export const ParallelStepSchema = Type.Array(TaskSchema, { minItems: 1 });
-export const ChainItem = StepSchema;

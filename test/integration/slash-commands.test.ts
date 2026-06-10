@@ -312,20 +312,20 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 	});
 
 	// SKIP: pre-existing integration failure unrelated to subagent-liveness charter; see commit 6a501e7
-	it.skip("forwards preset config from /run, /chain, and /parallel", async () => {
+	it.skip("forwards preset config from /run, and /parallel", async () => {
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
 		const events = createEventBus();
 		const requestedPresets: Array<{ command: string; preset?: string }> = [];
 		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
-			const payload = data as { requestId: string; params?: { preset?: string; chain?: boolean; run?: unknown[] } };
-			const command = payload.params?.chain ? "chain" : (payload.params?.run?.length ?? 0) > 1 ? "parallel" : "run";
+			const payload = data as { requestId: string; params?: { preset?: string; run?: unknown[] } };
+			const command = (payload.params?.run?.length ?? 0) > 1 ? "parallel" : "run";
 			requestedPresets.push({ command, preset: payload.params?.preset });
 			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId: payload.requestId });
 			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
 				requestId: payload.requestId,
 				result: {
 					content: [{ type: "text", text: `${command} finished` }],
-					details: { mode: command === "run" ? "single" : command === "chain" ? "chain" : "parallel", results: [] },
+					details: { mode: command === "run" ? "single" : "parallel", results: [] },
 				},
 				isError: false,
 			});
@@ -342,12 +342,10 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler("fixer[preset=fast] inspect this", createCommandContext());
-		await commands.get("chain")!.handler("[preset=fast] scout \"scan\" -> planner", createCommandContext());
 		await commands.get("parallel")!.handler("[preset=fast] scout \"scan\" -> reviewer \"review\"", createCommandContext());
 
 		assert.deepEqual(requestedPresets, [
 			{ command: "run", preset: "fast" },
-			{ command: "chain", preset: "fast" },
 			{ command: "parallel", preset: "fast" },
 		]);
 	});

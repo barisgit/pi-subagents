@@ -249,12 +249,15 @@ export interface SingleResult {
 }
 
 export interface Details {
-	mode: "single" | "parallel" | "chain" | "management";
+	mode: "single" | "parallel" | "management";
 	context?: "fresh" | "fork";
 	/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
 	label?: string;
 	/** Workflow Details keep mode:"parallel" for canonical rendering shape but relabel as workflow in UI. */
 	workflow?: boolean;
+	/** Workflow step labels retained for workflow rendering. */
+	agentGroups?: string[];
+	totalSteps?: number;
 	results: SingleResult[];
 	/**
 	 * Canonical run-level usage aggregate. Sum of `results[].usage` across every
@@ -282,10 +285,6 @@ export interface Details {
 		originalLines?: number;
 		artifactPath?: string;
 	};
-	// Chain metadata for observability
-	chainAgents?: string[];      // Agent names in order, e.g., ["scout", "planner"]
-	totalSteps?: number;         // Total steps in chain
-	currentStepIndex?: number;   // 0-indexed current step (for running chains)
 	/**
 	 * Running-frame denominator override for parallel/workflow headers. A workflow
 	 * parallel() group registers its members one at a time (each suspends at its
@@ -351,9 +350,7 @@ export interface AsyncStatus {
 	runId: string;
 	// charter nested-subagent-display: persisted parent link for hierarchy rendering.
 	parentRunId?: string;
-	// 'parallel' is used when the runner is invoked with a single parallel-only step;
-	// distinguishes top-level parallel from a real multi-step chain for display.
-	mode: "single" | "chain" | "parallel";
+	mode: "single" | "parallel";
 	/** Run-level caller-provided summary; populated for single runs and uniform-label parallel runs. */
 	label?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
@@ -425,7 +422,7 @@ export interface AsyncJobState {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
-	mode?: "single" | "chain" | "parallel";
+	mode?: "single" | "parallel";
 	agents?: string[];
 	/** Run-level caller-provided summary; populated for single runs and uniform-label parallel runs. */
 	label?: string;
@@ -478,7 +475,7 @@ export interface SubagentState {
 		asyncDir?: string;
 		// charter nested-subagent-display: sync rows carry hierarchy before disk handoff.
 		parentRunId?: string;
-		mode: "single" | "parallel" | "chain";
+		mode: "single" | "parallel";
 		startedAt: number;
 		updatedAt: number;
 		/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
@@ -767,7 +764,6 @@ export const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
 export const BASE_TEMP_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
 export const RUNS_DIR = path.join(BASE_TEMP_DIR, "async-subagent-runs");
-export const CHAIN_RUNS_DIR = path.join(BASE_TEMP_DIR, "chain-runs");
 export const TEMP_ARTIFACTS_DIR = path.join(BASE_TEMP_DIR, "artifacts");
 export const WIDGET_KEY = "subagent-async";
 export const SLASH_RESULT_TYPE = "subagent-slash-result";

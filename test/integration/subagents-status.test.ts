@@ -640,7 +640,7 @@ describe("SubagentsStatusComponent", () => {
 		});
 		controls.set("newer", {
 			runId: "newer",
-			mode: "chain",
+			mode: "parallel",
 			startedAt: 200,
 			updatedAt: 300,
 			currentAgent: "planner",

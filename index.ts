@@ -5,7 +5,7 @@
  * - Sync (default): Streams output, renders markdown, tracks usage
  * - Async: Background execution, emits events when done
  *
- * Modes: run[], chain:true, or management via action/id.
+ * Modes: run[] or management via action/id.
  * Toggle: async parameter (default: false, configurable via config.json)
  *
  * Config file: ~/.pi/agent/subagent.json
@@ -26,7 +26,6 @@ import { createIdleTracker } from "./idle-tracker.ts";
 import { logger } from "./logger.ts";
 import { resolveAgentToolPatterns, resolveToolPatterns } from "./resolve-tool-patterns.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
-import { cleanupOldChainDirs } from "./settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor } from "./subagent-executor.ts";
@@ -444,8 +443,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 		}
 	}
-
-	cleanupOldChainDirs();
 
 	const config = loadConfig();
 	configureXmlStripping(config.stripXmlTags);
@@ -887,27 +884,25 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage runs",
-		description: `Delegate a bounded task to a named specialist agent, run several in parallel, fork same-role branches, or inspect/resume background runs. Use when a specialist or background run beats doing the work inline. For multi-step orchestration where a later step depends on an earlier step's RESULT (branch, retry, loop, runtime fan-out), use the workflow tool instead of chains.
+		description: `Delegate a bounded task to a named specialist agent, run several in parallel, fork same-role branches, or inspect/resume background runs. Use when a specialist or background run beats doing the work inline. Use the workflow tool for multi-step orchestration where a later step depends on an earlier step's result, needs branching, retry/fallback, loops, or runtime fan-out.
 
-Shape: run: Step[] dispatches work. Step is a Task; inside chain:true a Step may be Task[] for a parallel sub-step.
+Shape: run: Task[] dispatches work. Multiple entries run in parallel.
 
-Top fields: run work steps; chain runs steps sequentially (false/default = parallel) and threads {previous}; async runs in the background and returns immediately with an id so the parent can keep working; batch collapses multi-task completion notices into one rollup; concurrency caps parallel starts; worktree sets top-level isolated-worktree mode for parallel runs; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status/interrupt (optional; newest run when omitted) and is required for resume.
+Top fields: run work entries; async runs in the background and returns immediately with an id so the parent can keep working; batch collapses multi-entry completion notices into one rollup; concurrency caps parallel starts; worktree sets top-level isolated-worktree mode for parallel runs; message is shared dispatch framing or the next turn for action:"resume"; action is list/status/interrupt/resume; id targets status/interrupt (optional; newest run when omitted) and is required for resume.
 
 Async/background contract: after starting an async run, do not wait by default with sleep/status loops. Pi will send a completion or needs-attention message and trigger a new turn when the run needs you. Continue independent work or stop if blocked on the result. Use status/sleep checks only for immediate management or genuinely necessary inspection.
 
 Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; output path/boolean capture override.
 
-Substitution: in message, {task} and {in} become each Task.task; at most one {in} per message. In chained task text, {previous} becomes the prior/merged output. context defaults to "fresh". "fork" is same-agent self-branching only (e.g. fixer→fixer, explorer→explorer, main→main), never role switching; cross-agent delegation uses "fresh".
+Substitution: in message, {task} and {in} become each Task.task; at most one {in} per message. context defaults to "fresh". "fork" is same-agent self-branching only (e.g. fixer→fixer, explorer→explorer, main→main), never role switching; cross-agent delegation uses "fresh".
 
 Examples:
 // single
 { run:[{ agent:"fixer", task:"Patch the bug" }] }
 // parallel
 { run:[{ agent:"explorer", task:"Find relevant tests" },{ agent:"qa", task:"Run the checks" }], batch:true }
-// chain with parallel review+QA sub-step (fixed pipeline only; if a step must INSPECT a result, use the workflow tool)
-{ chain:true, run:[{ agent:"explorer", task:"Trace the flow" },{ agent:"fixer", task:"Patch using {previous}" },[{ agent:"review", task:"Review {previous}" },{ agent:"qa", task:"Verify {previous}" }]] }
 
-Run management: Use { action: "list" } when available agents/chains are unknown or may have changed; execute only executable/non-disabled agents. Use action:"status" (id optional; lists all when omitted) / action:"interrupt" (id optional; newest running run when omitted) / action:"resume" id message.
+Run management: Use { action: "list" } when available agents are unknown or may have changed; execute only executable/non-disabled agents. Use action:"status" (id optional; lists all when omitted) / action:"interrupt" (id optional; newest running run when omitted) / action:"resume" id message.
 
 Author agents as files under \`agents/<name>.md\`. For advanced patterns see skills/subagent.`,
 		parameters: SubagentParams,
@@ -926,21 +921,6 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 			}
 			const run = args.run ?? [];
 			const asyncLabel = args.async === true ? theme.fg("warning", " [background]") : "";
-			if (args.chain === true) {
-				const parallelSubSteps = run.filter((step) => Array.isArray(step)) as unknown[][];
-				const flatTaskCount = run.reduce<number>(
-					(sum, step) => sum + (Array.isArray(step) ? step.length : 1),
-					0,
-				);
-				const chainLabel = parallelSubSteps.length > 0
-					? `chain (${run.length} steps, ${flatTaskCount} tasks)`
-					: `chain (${run.length})`;
-				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}${chainLabel}${asyncLabel}`,
-					0,
-					0,
-				);
-			}
 			if (run.length > 1)
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${run.length})${asyncLabel}`,

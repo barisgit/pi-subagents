@@ -1,6 +1,6 @@
 ---
 name: subagent
-description: Use for delegating bounded repo work to configured subagents, parallel/chain runs, workflow scripts with control flow, same-role forks, async jobs, and run management.
+description: Use for delegating bounded repo work to configured subagents, parallel runs, workflow scripts with control flow, same-role forks, async jobs, and run management.
 ---
 
 # Subagent
@@ -23,10 +23,9 @@ Delegate when work needs any of these:
 
 - Use one `run` task for a bounded handoff.
 - Put multiple top-level `run` tasks in parallel when they do not depend on each other.
-- Set `chain:true` only for a FIXED pipeline where later steps need earlier output as text; use `{previous}` in later task text.
-- Use the `workflow` tool instead of a chain when any DECISION sits between dispatches: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps.
+- Use the `workflow` tool for sequential or dependent orchestration: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps.
 - Set `batch:true` when several children should return one rollup notification.
-- Use `action:"list"` if agent names/chains are uncertain; use status/interrupt/resume only for live run management.
+- Use `action:"list"` if agent names are uncertain; use status/interrupt/resume only for live run management.
 
 ## Workflow: orchestration with control flow
 
@@ -54,14 +53,9 @@ subagent({
 })
 
 subagent({
-  chain: true,
   run: [
-    { agent: "<configured-agent>", task: "Trace the failing flow and name exact files." },
-    { agent: "<configured-agent>", task: "Patch only the files justified here: {previous}" },
-    [
-      { agent: "<configured-agent>", task: "Review the patch for regressions: {previous}" },
-      { agent: "<configured-agent>", task: "Run the relevant checks and report evidence: {previous}" }
-    ]
+    { agent: "<configured-agent>", task: "Find relevant tests." },
+    { agent: "<configured-agent>", task: "Run the relevant checks and report evidence." }
   ],
   batch: true
 })
@@ -71,8 +65,7 @@ subagent({
 
 Open exactly the reference that matches the decision you are making:
 
-- `references/dispatch-patterns.md` — choosing single, parallel, chain, async, worktree, or swarm-style dispatch.
-- `references/chain-semantics.md` — using `{previous}` or nested parallel sub-steps inside `chain:true`.
+- `references/dispatch-patterns.md` — choosing single, parallel, async, worktree, or swarm-style dispatch.
 - `references/context-fork.md` — before setting `context:"fork"`; confirms same-agent-only branching.
 - `references/resume.md` — resuming or messaging a live async run.
 - `references/batch-notifications.md` — setting `batch:true` and interpreting rollup payloads.

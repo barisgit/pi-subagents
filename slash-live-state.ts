@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import type { SubagentToolInput as SubagentParamsLike, Step, Task } from "./schemas.ts";
+import type { SubagentToolInput as SubagentParamsLike, Task } from "./schemas.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { type Details, type SingleResult, type Usage, SLASH_RESULT_TYPE } from "./types.ts";
 
@@ -76,12 +76,7 @@ function runTasks(params: SubagentParamsLike): Task[] {
 }
 
 function runContext(params: SubagentParamsLike): "fresh" | "fork" | undefined {
-	for (const step of params.run ?? []) {
-		const tasks = Array.isArray(step) ? step : [step];
-		const found = tasks.find((task) => task.context !== undefined)?.context;
-		if (found) return found;
-	}
-	return undefined;
+	return (params.run ?? []).find((task) => task.context !== undefined)?.context;
 }
 
 function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
@@ -103,59 +98,6 @@ function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult
 				tokens: 0,
 				durationMs: 0,
 			})),
-		},
-	};
-}
-
-function chainStepLabel(step: Step): string {
-	return Array.isArray(step) ? `[${step.map((entry) => entry.agent).join("+")}]` : step.agent;
-}
-
-function flattenChainResults(chain: Step[], message: string | undefined): SingleResult[] {
-	const results: SingleResult[] = [];
-	let flatIndex = 0;
-	for (const step of chain) {
-		if (Array.isArray(step)) {
-			for (const rawTask of step) {
-				const task = taskWithMessage(rawTask, message);
-				results.push(createPlaceholderResult(task.agent, task.task, results.length === 0 ? "running" : "pending", flatIndex));
-				flatIndex++;
-			}
-			continue;
-		}
-		const task = taskWithMessage(step, message);
-		results.push(createPlaceholderResult(task.agent, task.task, results.length === 0 ? "running" : "pending", flatIndex));
-		flatIndex++;
-	}
-	return results;
-}
-
-function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const chain = params.run ?? [];
-	const results = flattenChainResults(chain, params.message);
-	return {
-		content: [{
-			type: "text",
-			text: results.map((result, index) => `Step ${index + 1}: ${result.agent}\n${result.task}`).join("\n\n"),
-		}],
-		details: {
-			mode: "chain",
-			...(runContext(params) ? { context: runContext(params) } : {}),
-			results,
-			progress: results.map((result, index) => ({
-				index,
-				agent: result.agent,
-				status: index === 0 ? "running" as const : "pending" as const,
-				task: result.task,
-				recentTools: [],
-				recentOutput: [],
-				toolCount: 0,
-				tokens: 0,
-				durationMs: 0,
-			})),
-			chainAgents: chain.map((step) => chainStepLabel(step)),
-			totalSteps: chain.length,
-			currentStepIndex: 0,
 		},
 	};
 }
@@ -186,9 +128,7 @@ function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<D
 
 export function buildSlashInitialResult(requestId: string, params: SubagentParamsLike): SlashMessageDetails {
 	const run = params.run ?? [];
-	const result = params.chain === true
-		? buildChainInitialResult(params)
-		: run.length > 1
+	const result = run.length > 1
 		? buildParallelInitialResult(params)
 		: buildSingleInitialResult(params);
 	liveSnapshots.set(requestId, { result, version: nextVersion() });
@@ -213,12 +153,10 @@ export function applySlashUpdate(requestId: string, update: SlashSubagentUpdate)
 	if (!snapshot) return;
 	const progress = update.progress;
 	if (!progress || !snapshot.result.details) return;
-	const currentStepIndex = progress.findIndex((entry) => entry.status === "running");
 	const nextDetails: Details = {
 		...snapshot.result.details,
 		progress,
 		results: cloneResultsWithProgress(snapshot.result.details.results, progress),
-		...(snapshot.result.details.mode === "chain" && currentStepIndex >= 0 ? { currentStepIndex } : {}),
 	};
 	liveSnapshots.set(requestId, {
 		result: {

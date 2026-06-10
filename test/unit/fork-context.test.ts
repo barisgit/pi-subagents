@@ -75,7 +75,7 @@ describe("createForkContextResolver", () => {
 		assert.deepEqual(seenLeafIds, ["leaf-xyz", "leaf-xyz", "leaf-xyz"]);
 	});
 
-	it("creates isolated branched sessions per index (parallel and chain compatible)", () => {
+	it("creates isolated branched sessions per index", () => {
 		let count = 0;
 		const resolver = createForkContextResolver(manager({
 			getSessionFile: () => "/tmp/parent.jsonl",
@@ -85,11 +85,11 @@ describe("createForkContextResolver", () => {
 
 		const singleSession = resolver.sessionFileForIndex(0);
 		const parallelSessions = [resolver.sessionFileForIndex(1), resolver.sessionFileForIndex(2)];
-		const chainSessions = [resolver.sessionFileForIndex(3), resolver.sessionFileForIndex(4)];
+		const laterSessions = [resolver.sessionFileForIndex(3), resolver.sessionFileForIndex(4)];
 
 		assert.equal(singleSession, "/tmp/fork-1.jsonl");
 		assert.deepEqual(parallelSessions, ["/tmp/fork-2.jsonl", "/tmp/fork-3.jsonl"]);
-		assert.deepEqual(chainSessions, ["/tmp/fork-4.jsonl", "/tmp/fork-5.jsonl"]);
+		assert.deepEqual(laterSessions, ["/tmp/fork-4.jsonl", "/tmp/fork-5.jsonl"]);
 		assert.equal(count, 5);
 	});
 

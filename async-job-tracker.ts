@@ -327,7 +327,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			id?: string;
 			asyncDir?: string;
 			agent?: string;
-			chain?: string[];
 			parentRunId?: string;
 			kind?: string;
 			controlConfig?: ResolvedControlConfig;
@@ -340,8 +339,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			logger.warn("handleStarted: no asyncDir for runId", { id: info.id });
 			return;
 		}
-		const agents = info.chain && info.chain.length > 0 ? info.chain : info.agent ? [info.agent] : undefined;
-		const mode = info.parentRunId ? "parallel" : info.chain ? "chain" : "single";
+		const agents = info.agent ? [info.agent] : undefined;
+		const mode = info.parentRunId ? "parallel" : "single";
 		const status = readStatus(asyncDir);
 		idleTracker?.onAsyncStarted(info.id);
 		state.asyncJobs.set(info.id, {

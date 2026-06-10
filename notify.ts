@@ -8,7 +8,7 @@ import { getCurrentPi } from "./current-pi.ts";
 import { logger } from "./logger.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_NOTIFY_DELIVERED_EVENT } from "./types.ts";
 
-interface ChainStepResult {
+interface ChildStepResult {
 	agent: string;
 	label?: string;
 	output?: string;
@@ -26,9 +26,9 @@ interface ChainStepResult {
 	shareUrl?: string;
 }
 
-function dedupeChildrenByRunIdKeepLatest(children: ChainStepResult[]): ChainStepResult[] {
-	const byRunId = new Map<string, ChainStepResult>();
-	const passthrough: ChainStepResult[] = [];
+function dedupeChildrenByRunIdKeepLatest(children: ChildStepResult[]): ChildStepResult[] {
+	const byRunId = new Map<string, ChildStepResult>();
+	const passthrough: ChildStepResult[] = [];
 	for (const child of children) {
 		const runId = child.runId ?? child.id;
 		if (!runId) {
@@ -77,8 +77,8 @@ interface SubagentResult {
 	shareUrl?: string;
 	gistUrl?: string;
 	shareError?: string;
-	results?: ChainStepResult[];
-	children?: ChainStepResult[];
+	results?: ChildStepResult[];
+	children?: ChildStepResult[];
 	batch?: boolean;
 	batchId?: string;
 	kind?: string;
@@ -129,7 +129,7 @@ function singleNotificationContent(result: SubagentResult): string {
 		.join("\n");
 }
 
-function batchNotificationContent(result: SubagentResult, children: ChainStepResult[]): string {
+function batchNotificationContent(result: SubagentResult, children: ChildStepResult[]): string {
 	const total = result.total ?? children.length;
 	const completed = result.completed ?? children.filter((child) => child.state === "complete" || child.success).length;
 	const lines = children.map((child) => {
@@ -156,7 +156,7 @@ function stateGlyph(state: string): string {
 	return "✗";
 }
 
-function batchNotificationDetails(result: SubagentResult, children: ChainStepResult[]): SubagentBatchNotifyDetails {
+function batchNotificationDetails(result: SubagentResult, children: ChildStepResult[]): SubagentBatchNotifyDetails {
 	const total = result.total ?? children.length;
 	const completed = result.completed ?? children.filter((child) => child.state === "complete" || child.success).length;
 	return {
@@ -181,7 +181,7 @@ function notifyPolicyFor(result: SubagentResult): NotifyPolicy {
 	return result.batch === true ? "rollup" : "each";
 }
 
-function childResultFrom(result: SubagentResult, child: ChainStepResult, index: number, total: number): SubagentResult {
+function childResultFrom(result: SubagentResult, child: ChildStepResult, index: number, total: number): SubagentResult {
 	return {
 		...result,
 		id: child.id ?? child.runId ?? `${result.id ?? "subagent"}:${index}`,
@@ -294,7 +294,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		emitDelivered([result.runId ?? result.id ?? undefined]);
 	};
 
-	const notifyChildren = (result: SubagentResult, children: ChainStepResult[], now: number) => {
+	const notifyChildren = (result: SubagentResult, children: ChildStepResult[], now: number) => {
 		const total = result.total ?? children.length;
 		for (const [index, child] of children.entries()) {
 			sendOnce(childResultFrom(result, child, index, total), now);
@@ -390,7 +390,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 			return;
 		}
 
-		// Back-compat: older emitters and chain/single paths only send the group
+		// Back-compat: older emitters and single paths only send the group
 		// completion event with children[]. Preserve the previous behavior when no
 		// time-separated per-run events were accumulated for this group.
 		if (children && policy === "each") {

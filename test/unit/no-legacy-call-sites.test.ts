@@ -169,8 +169,8 @@ test("no legacy call sites", async (t) => {
 		assertClean("agent files are slim", [path.join(projectRoot, "agents")]);
 	});
 
-	await t.test("chain-files-clean", () => {
-		assertClean("chain files are slim", [path.join(projectRoot, "chains")]);
+	await t.test("legacy-files-clean", () => {
+		assertClean("legacy files are slim", [path.join(projectRoot, "legacy")]);
 	});
 
 	await t.test("scripts-clean", () => {

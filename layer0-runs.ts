@@ -73,7 +73,7 @@ export interface OpenGroupOpts {
 	parentSessionId?: string;
 	kind?: "workflow";
 	source?: "sync" | "async";
-	mode?: "single" | "chain" | "parallel";
+	mode?: "single" | "parallel";
 	label?: string;
 }
 

@@ -61,8 +61,7 @@ describe("doctrine doc", () => {
 			"sessionDir",
 			"control",
 			"skill",
-			"chainDir",
-			"artifacts",
+						"artifacts",
 			"progress",
 			"agentScope",
 			"includeInternal",
@@ -80,7 +79,7 @@ describe("doctrine doc", () => {
 		const renames = h2Section(readDoc(), "Renames");
 		assert.match(renames, /`prompt`\s*\|\s*`message`/);
 		assert.match(renames, /`tasks`\s*\|\s*`run`/);
-		assert.match(renames, /`sequential`\s*\|\s*`chain`/);
+		assert.match(renames, /`parallel`/);
 	});
 
 	it("baseline version recorded", () => {

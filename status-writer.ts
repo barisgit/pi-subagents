@@ -37,7 +37,7 @@ type StatusStep = {
 };
 
 export interface StatusMeta {
-	mode?: "single" | "chain" | "parallel";
+	mode?: "single" | "parallel";
 	label?: string;
 	cwd?: string;
 	parentRunId?: string;
@@ -57,7 +57,7 @@ export interface StatusMeta {
 type StatusPayload = {
 	version: typeof STATUS_JSON_VERSION;
 	runId: string;
-	mode: "single" | "chain" | "parallel";
+	mode: "single" | "parallel";
 	label?: string;
 	cwd?: string;
 	parentRunId?: string;
@@ -144,7 +144,7 @@ export class StatusWriter {
 			outputText: result.outputText,
 		});
 		if (this.status) {
-			// Prefer caller-provided aggregate (chain/parallel sum across all
+			// Prefer caller-provided aggregate (parallel sum across all
 			// steps); fall back to single-step result.usage.
 			const aggregate = options?.totalUsage ?? result.usage;
 			// Shared run-level terminal convention (state/endedAt/lastUpdate/

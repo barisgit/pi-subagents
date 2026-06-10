@@ -56,7 +56,7 @@ export interface AsyncRunSummary {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
-	mode: "single" | "chain" | "parallel";
+	mode: "single" | "parallel";
 	cwd?: string;
 	startedAt: number;
 	lastUpdate?: number;

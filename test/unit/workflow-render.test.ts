@@ -47,7 +47,7 @@ describe("workflow final result rendering does not throw on non-Details payloads
 		// Round-5 repros: a payload with non-empty results[] passes the cheap
 		// hasRenderableResults pre-check, so it reaches the structured body; the body's
 		// try/catch must still fall back to text rather than crash the host TUI when an
-		// element omits a field the renderer derefs without optional chaining.
+		// element omits a field the renderer derefs without optional workflowing.
 		["fully-shaped result but non-array top-level progress", { mode: "parallel", progress: "x", results: [{ agent: "A", task: "t", exitCode: 0, usage: { input: 0, output: 0 } }] }],
 		["result element with malformed messages", { results: [{ agent: "A", task: "t", exitCode: 0, usage: { input: 0, output: 0 }, messages: { length: 1 } }] }],
 	] as Array<[string, unknown]>) {
@@ -134,11 +134,11 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		assert.equal(final?.results.length, 2);
 		// results[] and progress[] stay aligned one-per-agent so header/body/denominator agree.
 		assert.deepEqual(final?.results.map((r) => [r.agent, r.progress?.status]), [["A", "completed"], ["B", "completed"]]);
-		assert.deepEqual(final?.chainAgents, ["A", "B"]);
+		assert.deepEqual(final?.agentGroups, ["A", "B"]);
 		assert.equal(final?.totalSteps, 2);
 	});
 
-	it("emits serial lone agents as separate chain steps but brackets true parallel siblings", async () => {
+	it("emits serial lone agents as separate workflow steps but brackets true parallel siblings", async () => {
 		const tool = createWorkflowTool({
 			openWorkflowGroup: () => ({
 				groupRunId: "group-1",
@@ -155,7 +155,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			undefined,
 			{} as never,
 		) as AgentToolResult<Details> | undefined;
-		assert.deepEqual(serial?.details?.chainAgents, ["A", "B"]);
+		assert.deepEqual(serial?.details?.agentGroups, ["A", "B"]);
 		assert.equal(serial?.details?.totalSteps, 2);
 
 		const parallel = await tool.execute?.(
@@ -165,7 +165,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			undefined,
 			{} as never,
 		) as AgentToolResult<Details> | undefined;
-		assert.deepEqual(parallel?.details?.chainAgents, ["[A+B]"]);
+		assert.deepEqual(parallel?.details?.agentGroups, ["[A+B]"]);
 		assert.equal(parallel?.details?.totalSteps, 1);
 	});
 
@@ -186,7 +186,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			undefined,
 			{} as never,
 		) as AgentToolResult<Details> | undefined;
-		assert.deepEqual(parallel?.details?.chainAgents, ["[A+B]"]);
+		assert.deepEqual(parallel?.details?.agentGroups, ["[A+B]"]);
 		assert.equal(parallel?.details?.totalSteps, 1);
 	});
 
@@ -222,7 +222,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			label: "Phase 1: inventory",
 			results: [running],
 			progress: [running.progress],
-			chainAgents: ["explorer"],
+			agentGroups: ["explorer"],
 			totalSteps: 1,
 		};
 
@@ -238,7 +238,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			label: "Phase 1: inventory",
 			results: [result("explorer", "inventory", 0, 0)],
 			progress: [result("explorer", "inventory", 0, 0).progress!],
-			chainAgents: ["explorer"],
+			agentGroups: ["explorer"],
 			totalSteps: 1,
 		};
 
@@ -258,7 +258,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			mode: "parallel",
 			workflow: true,
 			label: "Phase 1: inventory",
-			chainAgents: ["[A+B]"],
+			agentGroups: ["[A+B]"],
 			totalSteps: 1,
 			results: [runningA, runningB],
 			progress: [runningA.progress, runningB.progress],
@@ -297,7 +297,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		) as AgentToolResult<Details> | undefined;
 
 		const final = executed?.details;
-		assert.deepEqual(final?.chainAgents, ["[explorer+explorer]", "synth"]);
+		assert.deepEqual(final?.agentGroups, ["[explorer+explorer]", "synth"]);
 		assert.equal(final?.totalSteps, 2);
 		assert.equal(final?.mode, "parallel");
 		assert.equal(final?.workflow, true);

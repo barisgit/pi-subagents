@@ -9,7 +9,7 @@ afterEach(() => ids.forEach(rmRun));
 
 describe("inline nested rollup", () => {
 	it("renders the direct child as one line and rolls the whole subtree into a nested hint", () => {
-		// Build a deep chain a1 -> a2 -> ... -> a6, each spawning the next.
+		// Build a deep nesting a1 -> a2 -> ... -> a6, each spawning the next.
 		for (let i = 0; i < ids.length; i++) {
 			writeRun(ids[i]!, { parentRunId: i === 0 ? undefined : ids[i - 1], agent: `a${i + 1}`, label: `l${i + 1}`, events: [
 				tool("read", { path: `/tmp/${i}` }),

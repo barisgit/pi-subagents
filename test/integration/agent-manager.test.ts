@@ -40,10 +40,10 @@ describe("agent manager", () => {
 
 		const entry = component["agents"].find((candidate) => candidate.config.name === "alpha");
 		assert.ok(entry);
-		component["enterEdit"](entry!);
-		component["editState"]!.draft.name = "beta";
+		(component as any)["enterEdit"](entry!);
+		(component as any)["editState"]!.draft.name = "beta";
 
-		assert.equal(component["saveEdit"](), true);
+		assert.equal((component as any)["saveEdit"](), true);
 		assert.equal(fs.existsSync(originalPath), false);
 		assert.equal(fs.existsSync(path.join(agentsDir, "beta.md")), true);
 	});
@@ -70,44 +70,9 @@ describe("agent manager", () => {
 
 		const entry = component["agents"].find((candidate) => candidate.config.name === "alpha");
 		assert.ok(entry);
-		component["enterEdit"](entry!);
+		(component as any)["enterEdit"](entry!);
 
-		assert.equal(component["editState"]?.fields.includes("disabled" as never), false);
+		assert.equal((component as any)["editState"]?.fields.includes("disabled" as never), false);
 	});
 
-	it("collects a task before launching a multi-agent chain selection", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-manager-chain-task-"));
-		tempDirs.push(root);
-		let result: ManagerResult | undefined;
-
-		const component = new AgentManagerComponent(
-			{ requestRender() {} } as unknown as ConstructorParameters<typeof AgentManagerComponent>[0],
-			{
-				fg(_color: string, text: string) { return text; },
-				bg(_color: string, text: string) { return text; },
-			} as unknown as ConstructorParameters<typeof AgentManagerComponent>[1],
-			{ ...discoverAgentsAll(root), cwd: root },
-			[],
-			[],
-			(next) => { result = next; },
-		);
-
-		const entries = component["agents"].slice(0, 2);
-		assert.equal(entries.length, 2);
-		component["enterTaskInput"](entries.map((entry) => entry.id));
-
-		assert.equal(component["screen"], "task-input");
-		assert.equal(result, undefined);
-
-		component["taskEditor"].buffer = "Investigate";
-		component["taskEditor"].cursor = "Investigate".length;
-		component.handleInput("\r");
-
-		assert.deepEqual(result, {
-			action: "chain",
-			agents: entries.map((entry) => entry.config.name),
-			task: "Investigate",
-			skipClarify: true,
-		});
-	});
 });

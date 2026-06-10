@@ -183,6 +183,6 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		// Value lives in content text; details is always a real Details (here the empty
 		// snapshot for a script that dispatched no agents), never the arbitrary value.
 		assert.equal((result?.content[0] as { text?: string }).text, "{\n  \"value\": 42\n}");
-		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", workflow: true, results: [], progress: [], chainAgents: [], totalSteps: 0 });
+		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", workflow: true, results: [], progress: [], agentGroups: [], totalSteps: 0 });
 	});
 });

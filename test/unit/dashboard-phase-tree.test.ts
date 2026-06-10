@@ -36,7 +36,7 @@ function stripBorders(line: string): string {
 interface SeedRun {
 	runId: string;
 	agentName?: string;
-	mode?: "single" | "chain" | "parallel";
+	mode?: "single" | "parallel";
 	state?: "running" | "complete";
 	label?: string;
 	parentRunId?: string;

@@ -29,7 +29,7 @@ describe("async status helpers", () => {
 		try {
 			createAsyncDir(root, "run-a", {
 				runId: "run-a",
-				mode: "chain",
+				mode: "parallel",
 				state: "running",
 				startedAt: 100,
 				lastUpdate: 200,
@@ -218,7 +218,7 @@ describe("async status helpers", () => {
 		try {
 			createAsyncDir(root, "run-running", {
 				runId: "run-running",
-				mode: "chain",
+				mode: "parallel",
 				state: "running",
 				startedAt: 100,
 				lastUpdate: 300,

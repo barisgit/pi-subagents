@@ -92,7 +92,7 @@ function writeCompleteRun(root: string, runId = "resume-run") {
 	return { runRecordDir, sessionFile };
 }
 
-function writeCompleteChainRun(root: string, runId = "chain-run") {
+function writeCompleteParallelRun(root: string, runId = "parallel-run") {
 	const runRecordDir = path.join(root, runId);
 	const step0Session = path.join(runRecordDir, "run-0", "session.jsonl");
 	const step1Session = path.join(runRecordDir, "run-1", "session.jsonl");
@@ -100,9 +100,9 @@ function writeCompleteChainRun(root: string, runId = "chain-run") {
 	fs.mkdirSync(path.dirname(step1Session), { recursive: true });
 	fs.writeFileSync(step0Session, "{\"sessionId\":\"same-session-id\"}\n", "utf8");
 	fs.writeFileSync(step1Session, "{\"sessionId\":\"same-session-id\"}\n", "utf8");
-	appendRunEntry({ runId, runRecordDir, mode: "chain", source: "sync", agentNames: ["fixer", "fixer"], rootRunId: runId, cwd: root, startedAt: 1000 });
+	appendRunEntry({ runId, runRecordDir, mode: "parallel", source: "sync", agentNames: ["fixer", "fixer"], rootRunId: runId, cwd: root, startedAt: 1000 });
 	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-		runId, mode: "chain", state: "complete", startedAt: 1000, endedAt: 6000, cwd: root,
+		runId, mode: "parallel", state: "complete", startedAt: 1000, endedAt: 6000, cwd: root,
 		steps: [
 			{ agent: "fixer", status: "complete", startedAt: 1000, endedAt: 5000, durationMs: 4000, sessionFile: step0Session },
 			{ agent: "fixer", status: "complete", startedAt: 5000, endedAt: 6000, durationMs: 1000, sessionFile: step1Session },
@@ -179,10 +179,10 @@ describe("sync resume foreground", () => {
 		assert.ok(status.resumedAt >= before);
 	});
 
-	it("foreground chain-step resume finalizes only the resumed step and preserves sibling step fields", async () => {
+	it("foreground step resume finalizes only the resumed step and preserves sibling step fields", async () => {
 		const h = setup();
-		const run = writeCompleteChainRun(tempDir!);
-		await h.execute({ action: "resume", id: "chain-run:1", message: "continue", async: false });
+		const run = writeCompleteParallelRun(tempDir!);
+		await h.execute({ action: "resume", id: "parallel-run:1", message: "continue", async: false });
 		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
 		// The resumed step (1) is finalized.
 		assert.equal(status.steps[1].status, "complete");

@@ -25,7 +25,6 @@ describe("schema field set", () => {
 			"action",
 			"async",
 			"batch",
-			"chain",
 			"concurrency",
 			"id",
 			"message",

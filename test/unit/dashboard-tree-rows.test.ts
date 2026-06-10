@@ -33,7 +33,7 @@ function stripBorders(line: string): string {
 	return line.replace(/^│/, "").replace(/│$/, "").trim();
 }
 
-function appendCompleteRun(root: string, entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & { agentName: string; mode?: "single" | "chain" | "parallel"; cwd?: string }): void {
+function appendCompleteRun(root: string, entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & { agentName: string; mode?: "single" | "parallel"; cwd?: string }): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
 	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({

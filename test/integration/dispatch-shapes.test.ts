@@ -202,28 +202,6 @@ describe("dispatch shapes", () => {
 		assert.ok(elapsed < 180, `expected default concurrency to use run.length, elapsed ${elapsed}ms`);
 	});
 
-	it("chain-length-3 dispatches run length sequentially", async () => {
-		const seenTasks: string[] = [];
-		restoreRuntime = installFakeRuntime(["one", "two", "three"].map((output) => new FakeAgentSession(async (task, session) => {
-			seenTasks.push(task);
-			await delay(20);
-			session.emit(assistantMessage(output));
-		})));
-
-		const result = await execute(tempDir, {
-			run: [
-				{ agent: "A", task: "first" },
-				{ agent: "B", task: "second sees {previous}" },
-				{ agent: "C", task: "third sees {previous}" },
-			],
-			chain: true,
-		});
-
-		assert.equal(result.isError, undefined, resultText(result));
-		assert.equal(result.details?.mode, "chain");
-		assert.equal(result.details?.results?.length, 3);
-		assert.deepEqual(seenTasks, ["first", "second sees one", "third sees two"]);
-	});
 
 	it("swarm-shared-message substitutes message per task", async () => {
 		const seenTasks: string[] = [];

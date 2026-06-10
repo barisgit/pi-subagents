@@ -20,7 +20,7 @@ describe("registered subagent tool description", () => {
 			assert.doesNotMatch(description, new RegExp(`\\b${builtinName}\\b`));
 		}
 		assert.doesNotMatch(description, /before executing, use \{ action: "list" \}/i);
-		assert.match(description, /use \{ action: "list" \} when available agents\/chains are unknown or may have changed/i);
+		assert.match(description, /use \{ action: "list" \} when available agents are unknown or may have changed/i);
 		assert.match(description, /executable\/non-disabled/i);
 	});
 });

@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
 	RUNS_DIR,
-	CHAIN_RUNS_DIR,
 	TEMP_ARTIFACTS_DIR,
 	BASE_TEMP_DIR,
 	resolveTempScopeId,
@@ -53,11 +52,9 @@ describe("resolveTempScopeId", () => {
 describe("shared temp paths", () => {
 	it("anchors shared temp directories under one scoped root", () => {
 		assert.equal(path.dirname(RUNS_DIR), BASE_TEMP_DIR);
-		assert.equal(path.dirname(CHAIN_RUNS_DIR), BASE_TEMP_DIR);
 		assert.equal(path.dirname(TEMP_ARTIFACTS_DIR), BASE_TEMP_DIR);
 		assert.match(path.basename(BASE_TEMP_DIR), /^pi-subagents-/);
 		assert.equal(path.basename(RUNS_DIR), "async-subagent-runs");
-		assert.equal(path.basename(CHAIN_RUNS_DIR), "chain-runs");
 		assert.equal(path.basename(TEMP_ARTIFACTS_DIR), "artifacts");
 	});
 });

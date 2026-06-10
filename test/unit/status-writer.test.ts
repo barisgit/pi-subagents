@@ -138,7 +138,7 @@ describe("StatusWriter", () => {
 	it("records running state transitions and current tool activity", async () => {
 		const dir = tempDir("pi-status-writer-state-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 10 });
-		writer.initialize({ mode: "chain", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
+		writer.initialize({ mode: "parallel", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
 
 		writer.enqueue({
 			runId: "run-1",
@@ -150,7 +150,7 @@ describe("StatusWriter", () => {
 		await delay(30);
 		const status = readStatus(dir);
 
-		assert.equal(status.mode, "chain");
+		assert.equal(status.mode, "parallel");
 		assert.equal(status.state, "running");
 		assert.equal(status.currentTool, "read");
 		assert.equal(status.currentToolStartedAt, 200);

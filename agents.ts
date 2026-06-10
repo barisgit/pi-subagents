@@ -7,7 +7,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { KNOWN_FIELDS } from "./agent-serializer.ts";
-import { parseChain } from "./chain-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import type {
@@ -163,25 +162,6 @@ interface SubagentSettings {
 
 const EMPTY_SUBAGENT_SETTINGS: SubagentSettings = { overrides: {} };
 
-export interface ChainStepConfig {
-	agent: string;
-	task: string;
-	output?: string | false;
-	reads?: string[] | false;
-	model?: string;
-	skills?: string[] | false;
-	progress?: boolean;
-}
-
-export interface ChainConfig {
-	name: string;
-	description: string;
-	source: AgentSource;
-	filePath: string;
-	steps: ChainStepConfig[];
-	extraFields?: Record<string, string>;
-}
-
 export interface RegisteredPersonaDir {
 	extensionId: string;
 	path: string;
@@ -205,7 +185,6 @@ export interface AgentDiscoveryAllResult {
 	builtin: AgentConfig[];
 	user: AgentConfig[];
 	project: AgentConfig[];
-	chains: ChainConfig[];
 	userDir: string;
 	projectDir: string | null;
 	userSettingsPath: string;
@@ -750,7 +729,6 @@ function loadAgentsFromDir(dir: string, source: AgentSource, options?: { forceIn
 
 	for (const entry of entries) {
 		if (!entry.name.endsWith(".md")) continue;
-		if (entry.name.endsWith(".chain.md")) continue;
 		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
 
 		const filePath = path.join(dir, entry.name);
@@ -885,43 +863,6 @@ function loadAgentsFromDir(dir: string, source: AgentSource, options?: { forceIn
 	return agents;
 }
 
-function loadChainsFromDir(dir: string, source: AgentSource): ChainConfig[] {
-	const chains: ChainConfig[] = [];
-
-	if (!fs.existsSync(dir)) {
-		return chains;
-	}
-
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return chains;
-	}
-
-	for (const entry of entries) {
-		if (!entry.name.endsWith(".chain.md")) continue;
-		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-
-		const filePath = path.join(dir, entry.name);
-		let content: string;
-		try {
-			content = fs.readFileSync(filePath, "utf-8");
-		} catch {
-			continue;
-		}
-
-		try {
-			const chainSource = source === "builtin" ? "user" : source;
-			chains.push(parseChain(content, chainSource, filePath));
-		} catch {
-			continue;
-		}
-	}
-
-	return chains;
-}
-
 function isDirectory(p: string): boolean {
 	try {
 		return fs.statSync(p).isDirectory();
@@ -1025,18 +966,6 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 	}
 	const projectBase = Array.from(projectMap.values());
 
-	const chainMap = new Map<string, ChainConfig>();
-	for (const dir of projectDirs) {
-		for (const chain of loadChainsFromDir(dir, "project")) {
-			chainMap.set(chain.name, chain);
-		}
-	}
-	const chains = [
-		...loadChainsFromDir(userDirOld, "user"),
-		...loadChainsFromDir(userDirNew, "user"),
-		...Array.from(chainMap.values()),
-	];
-
 	const presetBuiltin = applyPresetOverlays(builtinBase, options);
 	// See note in `discoverAgents`: extension-registered personas bypass the
 	// strictAgents filter, but they still receive per-agent overlays from the
@@ -1058,7 +987,6 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 		builtin: filterBySurface([...presetBuiltin.agents, ...registeredAgents]),
 		user: filterBySurface(presetUser.agents),
 		project: filterBySurface(presetProject.agents),
-		chains,
 		userDir,
 		projectDir,
 		userSettingsPath,

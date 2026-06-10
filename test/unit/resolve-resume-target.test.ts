@@ -60,22 +60,18 @@ describe("resolveResumeTarget", () => {
 		assert.equal(target.rootRunId, "single-run");
 	});
 
-	it("chain step resolves the targeted step's own session file, not step 0", () => {
+	it("parallel group resume asks for an individual child runId", () => {
 		const root = setup();
-		const runRecordDir = path.join(root, "chain-run");
+		const runRecordDir = path.join(root, "parallel-run");
 		const step0File = path.join(runRecordDir, "run-0", "session.jsonl");
 		const step1File = path.join(runRecordDir, "run-1", "session.jsonl");
 		writeSessionFile(step0File);
 		writeSessionFile(step1File);
-		appendRunEntry({ runId: "chain-run", runRecordDir, mode: "chain", source: "async", agentNames: ["explorer", "fixer"], rootRunId: "chain-run", cwd: root, startedAt: 333 });
-		// Async chain status stores the run-level sessionFile as step 0's file; per-step files differ.
-		writeStatus(runRecordDir, { runId: "chain-run", mode: "chain", state: "complete", startedAt: 333, cwd: root, sessionFile: step0File, steps: [{ agent: "explorer", status: "complete", sessionFile: step0File }, { agent: "fixer", status: "complete", sessionFile: step1File }] });
+		appendRunEntry({ runId: "parallel-run", runRecordDir, mode: "parallel", source: "async", agentNames: ["explorer", "fixer"], rootRunId: "parallel-run", cwd: root, startedAt: 333 });
+		// Async status stores the run-level sessionFile as step 0's file; per-step files differ.
+		writeStatus(runRecordDir, { runId: "parallel-run", mode: "parallel", state: "complete", startedAt: 333, cwd: root, sessionFile: step0File, steps: [{ agent: "explorer", status: "complete", sessionFile: step0File }, { agent: "fixer", status: "complete", sessionFile: step1File }] });
 
-		const target = resolveResumeTarget("chain-run", 1);
-
-		assert.equal(target.sessionFile, step1File);
-		assert.notEqual(target.sessionFile, step0File);
-		assert.equal(target.agentName, "fixer");
+		assert.throws(() => resolveResumeTarget("parallel-run", 1), /parallel group; resume an individual child runId/);
 	});
 
 	it("unknown runId is rejected", () => {

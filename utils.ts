@@ -353,7 +353,7 @@ export function compactForegroundDetails(details: Details): Details {
  * Sum the canonical per-step usages on a foreground Details' results[] into a
  * single Usage aggregate. Used to populate `details.totalUsage` so consumers
  * (pi-bar, dashboards, charters) have one place to read per-run totals
- * regardless of mode (single/parallel/chain). Empty results return zeroes.
+ * regardless of mode (single/parallel). Empty results return zeroes.
  *
  * Per-step `result.usage` already includes accumulated cacheRead/cacheWrite/cost
  * + descendant usage bubbled in via the child-run onEvent path, so summing here

@@ -213,7 +213,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	// ways: (1) its WorkflowAgentError reason carries THIS run's token (survives
 	// async fns / await / Promise.all — identity-independent), or (2) the floated
 	// promise is a TrackingPromise derivative in this run's `owned` Set (catches a
-	// NON-agent raw error thrown through a tracked parallel()/agent() chain).
+	// NON-agent raw error thrown through a tracked parallel()/agent() path).
 	//
 	// Best-effort gap (documented in the tool description): a RAW promise the
 	// script fabricates with no agent()/parallel() lineage (a bare
@@ -296,7 +296,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 			// sibling's pending slot and render a premature 'agent N-1/N'. Attached as a
 			// fully-total observer so it never floats: allSettled never rejects, the
 			// callback itself can't throw (a throwing onParallelGroupSettled/emit must
-			// not reject the observer chain), and the returned promise is swallowed.
+			// not reject the observer path), and the returned promise is swallowed.
 			// The script still awaits the separate tracked Promise.all below.
 			const clear = () => {
 				try {
@@ -429,12 +429,12 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 	const buildDetails = (): Details => {
 		const orderedEntries = [...results.entries()].sort(([a], [b]) => a - b);
 		const ordered = orderedEntries.map(([, result]) => result);
-		const chainAgents: string[] = [];
+		const agentGroups: string[] = [];
 		for (let i = 0; i < orderedEntries.length; i++) {
 			const [index, result] = orderedEntries[i]!;
 			const parallelGroupId = childPhases.get(index)?.parallelGroupId;
 			if (!parallelGroupId) {
-				chainAgents.push(result.agent);
+				agentGroups.push(result.agent);
 				continue;
 			}
 			const group = [result.agent];
@@ -444,15 +444,15 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 				group.push(nextResult.agent);
 				i++;
 			}
-			chainAgents.push(group.length === 1 ? group[0]! : `[${group.join("+")}]`);
+			agentGroups.push(group.length === 1 ? group[0]! : `[${group.join("+")}]`);
 		}
 		return {
 			mode: "parallel",
 			workflow: true,
 			results: ordered,
 			progress: ordered.map((result) => result.progress).filter((p): p is AgentProgress => p !== undefined),
-			chainAgents,
-			totalSteps: chainAgents.length || results.size,
+			agentGroups,
+			totalSteps: agentGroups.length,
 			// Widen the running-frame denominator to include parallel siblings that
 			// have not registered yet. Only meaningful while agents are in flight; once
 			// everything settles, pendingByGroup is empty and the header falls back to
@@ -597,7 +597,7 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 					const asyncDir = asyncGroup.asyncDir ?? "";
 					return {
 						content: [{ type: "text", text: `Workflow running...\nState: running\n${formatAsyncStatusHint(asyncGroup.groupRunId)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-						details: { mode: "parallel", workflow: true, results: [], chainAgents: [], runId: asyncGroup.groupRunId, asyncId: asyncGroup.groupRunId, asyncDir },
+						details: { mode: "parallel", workflow: true, results: [], runId: asyncGroup.groupRunId, asyncId: asyncGroup.groupRunId, asyncDir },
 					};
 				}
 				const value = await run();

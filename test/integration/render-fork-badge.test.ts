@@ -5,10 +5,10 @@ type RenderSubagentResult = (
 	result: {
 		content: Array<{ type: "text"; text: string }>;
 		details?: {
-			mode: "single" | "parallel" | "chain" | "management";
+			mode: "single" | "parallel" | "workflow" | "management";
 			context?: "fresh" | "fork";
 			results: unknown[];
-		chainAgents?: string[];
+		agentGroups?: string[];
 		totalSteps?: number;
 		currentStepIndex?: number;
 		};
@@ -244,8 +244,8 @@ describe("renderSubagentResult fork indicator", () => {
 		const widget = renderSubagentResult!({
 			content: [{ type: "text", text: "paused" }],
 			details: {
-				mode: "chain",
-				chainAgents: ["worker"],
+				mode: "workflow",
+				agentGroups: ["worker"],
 				results: [{
 					agent: "worker",
 					task: "pause",
@@ -258,7 +258,7 @@ describe("renderSubagentResult fork indicator", () => {
 		}, { expanded: false }, theme);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /^■ chain/);
+		assert.match(text, /^■ workflow/);
 		assert.match(text, /└─ Paused/);
 	});
 
@@ -266,8 +266,8 @@ describe("renderSubagentResult fork indicator", () => {
 		const widget = renderSubagentResult!({
 			content: [{ type: "text", text: "done" }],
 			details: {
-				mode: "chain",
-				chainAgents: ["worker"],
+				mode: "workflow",
+				agentGroups: ["worker"],
 				results: [{
 					agent: "worker",
 					task: "check without output target",
@@ -287,8 +287,8 @@ describe("renderSubagentResult fork indicator", () => {
 		const widget = renderSubagentResult!({
 			content: [{ type: "text", text: "running" }],
 			details: {
-				mode: "chain",
-				chainAgents: ["a", "b"],
+				mode: "workflow",
+				agentGroups: ["a", "b"],
 				totalSteps: 2,
 				currentStepIndex: 0,
 				results: [{
@@ -351,13 +351,13 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.doesNotMatch(text, /Agent 1: worker/);
 	});
 
-	it("renders nested parallel chain with parent-step counts and ∥ sub-step labels", () => {
+	it("renders nested parallel workflow with parent-step counts and ∥ sub-step labels", () => {
 		const widget = renderSubagentResult!({
 			content: [{ type: "text", text: "done" }],
 			details: {
-				mode: "chain",
-				// chain shape: seed -> [left, right] -> tail
-				chainAgents: ["explorer", "[explorer+explorer]", "explorer"],
+				mode: "workflow",
+				// workflow shape: seed -> [left, right] -> tail
+				agentGroups: ["explorer", "[explorer+explorer]", "explorer"],
 				totalSteps: 4,
 				results: [
 					{ agent: "explorer", task: "seed", exitCode: 0, messages: [], usage: emptyUsage },

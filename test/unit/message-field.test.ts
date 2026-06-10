@@ -167,28 +167,6 @@ describe("message field", () => {
 		assert.deepEqual(seenTasks, ["Shared context for alpha"]);
 	});
 
-	it("previous-substitution-in-chain interpolates upstream output", async () => {
-		const seenTasks: string[] = [];
-		restoreRuntime = installFakeRuntime(["first output", "second output"].map((output) => new FakeAgentSession(async (task, session) => {
-			seenTasks.push(task);
-			session.emit(events.assistantMessage(output) as Record<string, unknown>);
-		})));
-
-		const result = await execute(tempDir, {
-			run: [
-				{ agent: "A", task: "first" },
-				{ agent: "B", task: "second" },
-			],
-			chain: true,
-			message: "Task {task}; previous {previous}",
-		});
-
-		assert.equal(result.isError, undefined, text(result));
-		assert.deepEqual(seenTasks, [
-			"Task first; previous ",
-			"Task second; previous first output",
-		]);
-	});
 
 	it("in-substitution-equals-task resolves {in} like {task}", async () => {
 		const seenTasks: string[] = [];

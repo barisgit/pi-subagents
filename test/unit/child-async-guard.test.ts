@@ -119,20 +119,6 @@ describe("subagent executor child-session async guard", () => {
 		assert.match(result.content[0]?.text ?? "", /only allowed from the host session/i);
 	});
 
-	it("rejects async:true chain dispatch from inside a child session", async () => {
-		globalStore[CHILD_SESSION_FLAG_KEY] = true;
-		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
-		const result = await executor.execute(
-			"id-chain",
-			{ run: [{ agent: "tester", task: "step1" }], chain: true, async: true },
-			new AbortController().signal,
-			undefined,
-			makeCtx("/tmp/pi-subagent-child-async-guard"),
-		);
-		assert.equal(result.isError, true);
-		assert.equal(result.details?.mode, "chain");
-		assert.match(result.content[0]?.text ?? "", /only allowed from the host session/i);
-	});
 
 	it("does NOT reject async:true when called from the host session (flag unset)", async () => {
 		// We don't need the run to actually complete; we just need to be sure the

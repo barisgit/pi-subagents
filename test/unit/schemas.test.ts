@@ -38,11 +38,11 @@ describe("SubagentParams schema", () => {
 		assert.deepEqual((outputSchema.anyOf as JsonSchemaNode[] | undefined)?.map((schema) => schema.type), ["string", "boolean"]);
 	});
 
-	it("models run steps as Task or Task[]", () => {
+	it("models run steps as Task", () => {
 		const runSchema = (SubagentParams.properties as unknown as Record<string, JsonSchemaNode>).run as JsonSchemaNode | undefined;
 		assert.ok(runSchema, "run schema should exist");
 		assert.equal(runSchema.type, "array");
-		assert.deepEqual((runSchema.items as JsonSchemaNode | undefined)?.anyOf, StepSchema.anyOf);
+		assert.deepEqual(runSchema.items, StepSchema);
 	});
 
 	it("does not emit description-only schema nodes", () => {
@@ -81,7 +81,6 @@ describe("SubagentParams schema", () => {
 		const validValues = [
 			{ run: [{ agent: "main", task: "check this" }] },
 			{ run: [{ agent: "main", task: "a" }, { agent: "explorer", task: "b", context: "fresh", output: false }], concurrency: 2 },
-			{ chain: true, run: [{ agent: "main", task: "a" }, [{ agent: "main", task: "b" }, { agent: "main", task: "c" }]], worktree: true },
 			{ action: "list" },
 			{ action: "status", id: "run-123" },
 			{ action: "interrupt", id: "run-123" },
@@ -99,7 +98,7 @@ describe("SubagentParams schema", () => {
 
 	it("rejects representative removed fields", () => {
 		const validator = Compile(SubagentParams);
-		for (const field of ["tasks", "prompt", "model", "skill", "agentScope", "cwd"]) {
+		for (const field of ["tasks", "prompt", "model", "skill", "agentScope", "cwd", "chain"]) {
 			assert.equal(validator.Check({ [field]: "removed" }), false, `${field} should be rejected`);
 		}
 	});

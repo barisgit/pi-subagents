@@ -162,7 +162,7 @@ export function tintAgentName(name: string, color: string | undefined): string {
 }
 
 // Distinctive multi-headline spinner: sparkle/star cycle (vs the ASCII '- \ | /').
-// Used only on the top-level parallel/chain/single header so the headline reads as
+// Used only on the top-level parallel/single header so the headline reads as
 // "the container is alive" without making every per-agent row spin too.
 const MULTI_SPINNER = ["\u2733", "\u2734", "\u2735", "\u2736", "\u2737", "\u2738", "\u2739", "\u273A", "\u273B", "\u273C", "\u273D"];
 export function multiSpinnerFrame(): string {
@@ -844,10 +844,10 @@ function buildThinkingBar(
 }
 
 /**
- * Build a chain progress bar. `done` slots filled (success), `running` slots filled (accent),
+ * Build a progress bar. `done` slots filled (success), `running` slots filled (accent),
  * remainder empty (dim). Returns the themed string ready to embed.
  */
-function buildChainBar(theme: Theme, done: number, running: number, total: number, width = 8): string {
+function buildProgressBar(theme: Theme, done: number, running: number, total: number, width = 8): string {
 	if (total <= 0) return "";
 	const d = Math.max(0, Math.min(total, done));
 	const r = Math.max(0, Math.min(total - d, running));
@@ -945,13 +945,12 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 	}
 	const agents = job.agents ?? [];
 	const fallbackName = job.currentAgent ?? job.agents?.[0] ?? "agent";
-	const desc = describeAgentLabel({
-		mode: job.mode,
-		agents,
-		agentColors: job.agentColors ?? agents.map((a) => colorForAgentName(a)),
-		fallbackName,
-		fallbackColor: job.agentColor ?? colorForAgentName(fallbackName),
-	});
+	const desc = describeAgentLabel(
+		agents.length ? agents : [fallbackName],
+		job.mode ?? "single",
+		job.agentColor ?? colorForAgentName(fallbackName),
+		job.agentColors ?? agents.map((a) => colorForAgentName(a)),
+	);
 	const tint = (text: string, color: string | undefined): string => {
 		const bold = themeBold(theme, text);
 		return color ? tintAgentName(bold, color) : theme.fg("toolTitle", bold);
@@ -988,12 +987,11 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	}
 	const stepsTotal = job.stepsTotal ?? job.agents?.length ?? 1;
 	const completedParallelSteps = job.stepStatuses?.filter((status) => status === "complete" || status === "failed" || status === "skipped").length;
-	// Label distinguishes chain (sequential multi-step) from parallel (concurrent children).
+	// Label distinguishes sequence (sequential multi-step) from parallel (concurrent children).
 	const badge = formatShapeBadge({
-		mode: job.mode,
+		mode: job.mode ?? "single",
 		total: stepsTotal,
 		current: job.mode === "parallel" ? (completedParallelSteps ?? 0) : (job.currentStep ?? 0) + 1,
-		fallbackLabel: "step",
 	});
 	if (badge) parts.push(badge);
 	// Suppress phase chip for terminal runs so finished jobs don't keep
@@ -1287,22 +1285,22 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			sawProgress = true;
 			summary.toolCount += prog.toolCount;
 			summary.tokens += prog.tokens;
-			summary.durationMs = d.mode === "chain" ? summary.durationMs + prog.durationMs : Math.max(summary.durationMs, prog.durationMs);
+			summary.durationMs = Math.max(summary.durationMs, prog.durationMs);
 		}
 		if (sawProgress) totalSummary = summary;
 	}
-	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
-	// For chains with nested parallel sub-steps, count parent chain steps (e.g. 3) rather than
+	const hasParallelInSequence = (d as any).agentGroups?.some((a: string) => a.startsWith("["));
+	// For nested parallel groups, count parent steps (e.g. 3) rather than
 	// flattened tasks (e.g. 4) so header/body share the same denominator. Compute parent-aware
 	// done count by checking whether every child in a parallel group has settled.
-	const chainParentTotal = hasParallelInChain && d.chainAgents?.length
-		? d.chainAgents.length
-		: (d.totalSteps ?? d.results.length);
-	const chainParentOk = (() => {
-		if (!hasParallelInChain || !d.chainAgents?.length) return ok;
+	const sequenceParentTotal = hasParallelInSequence && (d as any).agentGroups?.length
+		? (d as any).agentGroups.length
+		: ((d as any).totalSteps ?? d.results.length);
+	const sequenceParentOk = (() => {
+		if (!hasParallelInSequence || !(d as any).agentGroups?.length) return ok;
 		let done = 0;
 		let cursor = 0;
-		for (const entry of d.chainAgents) {
+		for (const entry of (d as any).agentGroups) {
 			const childCount = entry.startsWith("[") && entry.endsWith("]")
 				? entry.slice(1, -1).split("+").length
 				: 1;
@@ -1316,20 +1314,20 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		}
 		return done;
 	})();
-	// Fix C: a parallel/workflow header counts real agents (d.results) not chainAgents
+	// Fix C: a parallel/workflow header counts real agents (d.results) not agentGroups
 	// bracket entries, so a 2-agent fan-out reads "agent x/2" not "x/1".
 	const settledAgents = d.results.filter((r) => {
 		const status = r.progress?.status;
 		return status !== "running" && status !== "pending";
 	}).length;
-	const headerOk = d.mode === "parallel" ? settledAgents : chainParentOk;
+	const headerOk = d.mode === "parallel" ? settledAgents : sequenceParentOk;
 	// expectedAgents (workflow parallel fan-out) widens the running denominator to
 	// include siblings that have not registered into results[] yet, so a 2-agent
 	// group never flashes "agent 1/1"; it is only set while agents run, so settled
 	// frames fall back to results.length.
 	const parallelTotal = Math.max(d.results.length, d.expectedAgents ?? 0);
-	const totalCount = d.mode === "parallel" ? parallelTotal : chainParentTotal;
-	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : Math.min(totalCount, headerOk + (hasRunning ? 1 : 0));
+	const totalCount = d.mode === "parallel" ? parallelTotal : sequenceParentTotal;
+	const currentStep = (d as any).currentStepIndex !== undefined ? (d as any).currentStepIndex + 1 : Math.min(totalCount, headerOk + (hasRunning ? 1 : 0));
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
 	const modeLabel = d.workflow ? "workflow" : d.mode;
@@ -1345,16 +1343,16 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	// Chain progress bar: parent-step granularity already computed above as chainParentTotal/Ok.
-	const chainBar = (d.mode === "chain" && chainParentTotal > 1)
-		? buildChainBar(theme, chainParentOk, hasRunning ? 1 : 0, chainParentTotal, adaptiveBarWidth())
+	// Progress bar: parent-step granularity already computed above as sequenceParentTotal/Ok.
+	const sequenceBar = (false && sequenceParentTotal > 1)
+		? buildProgressBar(theme, sequenceParentOk, hasRunning ? 1 : 0, sequenceParentTotal, adaptiveBarWidth())
 		: "";
-	const chainBarPrefix = chainBar ? `${chainBar} ` : "";
+	const sequenceBarPrefix = sequenceBar ? `${sequenceBar} ` : "";
 	// Child tally lives on each per-row header in multi-compact; the top-level mode
 	// header only shows aggregate run stats. (Single-compact still puts the tally on
 	// its single header since there's no per-row layer.)
 	const statsTail = `${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`;
-	const headlinePrefix = chainBarPrefix ? ` ${chainBarPrefix}` : "";
+	const headlinePrefix = sequenceBarPrefix ? ` ${sequenceBarPrefix}` : "";
 	const uniformLabel = (() => {
 		if (d.label) return d.label;
 		const first = d.results[0]?.label;
@@ -1364,18 +1362,18 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const headLabelTail = uniformLabel ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(uniformLabel, 30))}` : "";
 	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`, width), 0, 0));
 
-	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
-	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
+	const useResultsDirectly = hasParallelInSequence || !(d as any).agentGroups?.length;
+	const stepsToShow = useResultsDirectly ? d.results.length : (d as any).agentGroups!.length;
 
-	// When parallel sub-steps are nested in a chain, results are flattened but chainAgents preserves
-	// the grouping (e.g. ["a", "[b+c]", "d"] for 3 chain steps / 4 results). Build a per-result
+	// When parallel groups are nested, results are flattened but agentGroups preserves
+	// the grouping (e.g. ["a", "[b+c]", "d"] for 3 steps / 4 results). Build a per-result
 	// label override so the body shows "Step 2.1 / Step 2.2" instead of misleading sequential numbering.
-	const chainStepLabels: string[] | undefined = (() => {
-		if (!hasParallelInChain || !d.chainAgents?.length) return undefined;
+	const sequenceStepLabels: string[] | undefined = (() => {
+		if (!hasParallelInSequence || !(d as any).agentGroups?.length) return undefined;
 		const labels: string[] = [];
 		let resultCursor = 0;
-		for (let stepIdx = 0; stepIdx < d.chainAgents.length; stepIdx++) {
-			const entry = d.chainAgents[stepIdx];
+		for (let stepIdx = 0; stepIdx < (d as any).agentGroups.length; stepIdx++) {
+			const entry = (d as any).agentGroups[stepIdx];
 			if (entry.startsWith("[") && entry.endsWith("]")) {
 				const children = entry.slice(1, -1).split("+");
 				for (let childIdx = 0; childIdx < children.length; childIdx++) {
@@ -1401,7 +1399,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 
 	for (let i = 0; i < stepsToShow; i++) {
 		const r = d.results[i];
-		const agentName = useResultsDirectly ? (r?.agent || `${itemLabel}-${i + 1}`) : (d.chainAgents![i] || r?.agent || `${itemLabel}-${i + 1}`);
+		const agentName = useResultsDirectly ? (r?.agent || `${itemLabel}-${i + 1}`) : ((d as any).agentGroups![i] || r?.agent || `${itemLabel}-${i + 1}`);
 		if (!r) {
 			c.addChild(new Text(truncLine(theme.fg("dim", `  ◦ ${itemTitle} ${i + 1}: ${agentName} · pending`), width), 0, 0));
 			continue;
@@ -1411,7 +1409,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
-		const stepNumber: string | number = chainStepLabels?.[i]
+		const stepNumber: string | number = sequenceStepLabels?.[i]
 			?? (r.progress?.index !== undefined ? r.progress.index + 1 : progressFromArray?.index !== undefined ? progressFromArray.index + 1 : i + 1);
 		const stepStats = statJoin(theme, [
 			formatTurnStat(r.usage?.turns),
@@ -1679,10 +1677,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 				if (prog) {
 					acc.toolCount += prog.toolCount;
 					acc.tokens += prog.tokens;
-					acc.durationMs =
-						d.mode === "chain"
-							? acc.durationMs + prog.durationMs
-							: Math.max(acc.durationMs, prog.durationMs);
+					acc.durationMs = Math.max(acc.durationMs, prog.durationMs);
 				}
 				return acc;
 			},
@@ -1697,25 +1692,25 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	const modeLabel = d.workflow ? "workflow" : d.mode;
 	const labelTail = d.workflow && d.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(d.label, 30))}` : "";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
-	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
+	const hasParallelInSequence = (d as any).agentGroups?.some((a: string) => a.startsWith("["));
 	// expectedAgents widens the denominator for an in-flight workflow fan-out whose
 	// siblings have not registered yet (else a 2-agent group flashes "1/1"); it is
 	// only set while running, so settled frames fall back to the normal totals.
 	const totalCount = Math.max(
-		hasParallelInChain ? d.results.length : (d.totalSteps ?? d.results.length),
+		hasParallelInSequence ? d.results.length : ((d as any).totalSteps ?? d.results.length),
 		d.expectedAgents ?? 0,
 	);
-	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : ok + 1;
+	const currentStep = (d as any).currentStepIndex !== undefined ? (d as any).currentStepIndex + 1 : ok + 1;
 	const stepInfo = hasRunning ? ` ${currentStep}/${totalCount}` : ` ${ok}/${totalCount}`;
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
 	
-	const chainVis = d.chainAgents?.length
+	const sequenceVis = (d as any).agentGroups?.length
 		? (() => {
 				let resultCursor = 0;
-				const pieces = d.chainAgents.map((entry, stepIdx) => {
+				const pieces = (d as any).agentGroups.map((entry: string, stepIdx: number) => {
 					const isParallel = entry.startsWith("[") && entry.endsWith("]");
 					const children = isParallel ? entry.slice(1, -1).split("+") : [entry];
-					const childPieces = children.map((agent) => {
+					const childPieces = children.map((agent: string) => {
 						const result = d.results[resultCursor++];
 						const isRunning = result?.progress?.status === "running";
 						const isFailed = result && result.exitCode !== 0 && !isRunning;
@@ -1752,21 +1747,21 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			0,
 		),
 	);
-	if (chainVis) {
-		c.addChild(new Text(fit(`  ${chainVis}`), 0, 0));
+	if (sequenceVis) {
+		c.addChild(new Text(fit(`  ${sequenceVis}`), 0, 0));
 	}
 
-	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
-	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
+	const useResultsDirectly = hasParallelInSequence || !(d as any).agentGroups?.length;
+	const stepsToShow = useResultsDirectly ? d.results.length : (d as any).agentGroups!.length;
 
 	// Mirror the background-renderer logic so nested parallel sub-steps display as "2.1∥ / 2.2∥"
 	// instead of falsely-sequential "Step 2 / Step 3".
-	const chainStepLabelsFg: string[] | undefined = (() => {
-		if (!hasParallelInChain || !d.chainAgents?.length) return undefined;
+	const sequenceStepLabelsFg: string[] | undefined = (() => {
+		if (!hasParallelInSequence || !(d as any).agentGroups?.length) return undefined;
 		const labels: string[] = [];
 		let resultCursor = 0;
-		for (let stepIdx = 0; stepIdx < d.chainAgents.length; stepIdx++) {
-			const entry = d.chainAgents[stepIdx];
+		for (let stepIdx = 0; stepIdx < (d as any).agentGroups.length; stepIdx++) {
+			const entry = (d as any).agentGroups[stepIdx];
 			if (entry.startsWith("[") && entry.endsWith("]")) {
 				const children = entry.slice(1, -1).split("+");
 				for (let childIdx = 0; childIdx < children.length; childIdx++) {
@@ -1785,10 +1780,10 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		const r = d.results[i];
 		const agentName = useResultsDirectly 
 			? (r?.agent || `step-${i + 1}`)
-			: (d.chainAgents![i] || r?.agent || `step-${i + 1}`);
+			: ((d as any).agentGroups![i] || r?.agent || `step-${i + 1}`);
 
 		if (!r) {
-			const pendingLabel = chainStepLabelsFg?.[i] ?? `${i + 1}`;
+			const pendingLabel = sequenceStepLabelsFg?.[i] ?? `${i + 1}`;
 			c.addChild(new Text(fit(theme.fg("dim", `  ${itemTitle} ${pendingLabel}: ${agentName}`)), 0, 0));
 			c.addChild(new Text(theme.fg("dim", `    status: pending`), 0, 0));
 			c.addChild(new Spacer(1));
@@ -1799,7 +1794,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			|| d.progress?.find((p) => p.agent === r.agent && p.status === "running");
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg?.status === "running";
-		const stepNumber: string | number = chainStepLabelsFg?.[i]
+		const stepNumber: string | number = sequenceStepLabelsFg?.[i]
 			?? (typeof rProg?.index === "number" ? rProg.index + 1 : i + 1);
 
 		const resultOutput = getSingleResultOutput(r);

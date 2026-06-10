@@ -72,7 +72,7 @@ export interface ForegroundRunSummary {
 	resumeCount?: number;
 	phase?: RunPhase;
 	phaseStartedAt?: number;
-	mode: "single" | "parallel" | "chain";
+	mode: "single" | "parallel";
 	cwd?: string;
 	startedAt: number;
 	lastUpdate?: number;
@@ -323,20 +323,20 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 		return tintAgentName(name, run.run.currentAgentColor ?? colorForAgentName(name));
 	}
 	if (run.run.workflow) return tintAgentName("workflow", colorForAgentName("workflow"));
-	const steps = run.run.mode === "parallel"
+	const mode = run.run.mode ?? "single";
+	const steps = (mode === "parallel"
 		? run.run.steps.filter((s) => s.agent)
-		: run.run.steps;
+		: run.run.steps).filter((s) => s.agent);
 	const running = run.run.steps.find((step) => step.status === "running");
-	const fallbackStep = running ?? run.run.steps[0];
+	const fallbackName = running?.agent ?? run.run.steps.find((step) => step.agent)?.agent ?? mode;
 	// Per-step disk-persisted color falls back to the live name -> color map so completed
 	// async rows (and any run whose status.json never recorded a step.live.color) still tint.
-	const desc = describeAgentLabel({
-		mode: run.run.mode,
-		agents: steps.map((s) => s.agent),
-		agentColors: steps.map((s) => s.color ?? colorForAgentName(s.agent)),
-		fallbackName: fallbackStep?.agent ?? run.run.mode,
-		fallbackColor: fallbackStep?.color ?? colorForAgentName(fallbackStep?.agent ?? run.run.mode),
-	});
+	const desc = describeAgentLabel(
+		steps.map((s) => s.agent!),
+		mode,
+		colorForAgentName(fallbackName),
+		steps.map((s) => s.color ?? colorForAgentName(s.agent!)),
+	);
 	if (desc.kind === "uniformParallel") return tintAgentName(`parallel(${desc.total})`, desc.color);
 	if (desc.kind === "mixedParallel") {
 		return desc.agents.map((a) => tintAgentName(a.name, a.color)).join(theme.fg("dim", "+"));
@@ -344,7 +344,7 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 	return tintAgentName(desc.name, desc.color);
 }
 
-// Multi-step shape badge. 'chain 3/8' for sequential, 'parallel 3/5' for concurrent.
+// Multi-step shape badge for parallel progress, e.g. 'parallel 3/5'.
 // Empty for single-step runs to keep the left-pane line compact.
 function workflowPhaseChip(run: LiveRun): string {
 	if (run.source !== "async" || run.run.phaseIndex === undefined) return "";
@@ -359,11 +359,11 @@ function workflowPhaseChip(run: LiveRun): string {
 function runShapeBadge(run: LiveRun): string {
 	if (run.source === "sync") return "";
 	const total = run.run.steps.length;
-	// Parallel progress uses done-count; chain progress uses 1-based current step.
+	// Parallel progress uses done-count.
 	const current = run.run.mode === "parallel"
 		? run.run.steps.filter((s) => s.status === "complete" || s.status === "failed" || s.status === "skipped").length
 		: (run.run.currentStep ?? 0) + 1;
-	return formatShapeBadge({ mode: run.run.mode, total, current });
+	return formatShapeBadge({ mode: run.run.mode ?? "single", total, current }) ?? "";
 }
 
 // A run shows a live, ticking elapsed/spinner label iff it is NOT terminal and

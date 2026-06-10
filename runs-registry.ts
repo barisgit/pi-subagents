@@ -17,7 +17,7 @@ import * as path from "node:path";
 export interface RunsRegistryEntry {
 	runId: string;
 	runRecordDir: string; // canonical: <parentSessionDir>/<runId>/
-	mode: "single" | "chain" | "parallel";
+	mode: "single" | "parallel";
 	source: "sync" | "async";
 	agentName?: string;
 	agentNames?: string[];
