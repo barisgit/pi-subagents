@@ -4,6 +4,7 @@ import {
 	buildModelCandidates,
 	isRetryableModelFailure,
 	resolveModelCandidate,
+	resolveModelRef,
 } from "../../src/dispatch/model-fallback.ts";
 
 describe("model fallback helpers", () => {
@@ -60,6 +61,28 @@ describe("model fallback helpers", () => {
 			buildModelCandidates("gpt-5-mini", ["gpt-5-mini", "anthropic/claude-sonnet-4"], ambiguous, "github-copilot"),
 			["github-copilot/gpt-5-mini", "anthropic/claude-sonnet-4"],
 		);
+	});
+
+	it("resolves provider-qualified refs by splitting on the first slash", () => {
+		const models = [
+			{ provider: "anthropic", id: "claude-fable-5" },
+			{ provider: "openrouter", id: "anthropic/claude-fable-5" },
+		];
+		assert.deepEqual(resolveModelRef("anthropic/claude-fable-5", models, undefined), models[0]);
+		assert.deepEqual(resolveModelRef("openrouter/anthropic/claude-fable-5", models, undefined), models[1]);
+	});
+
+	it("does not resolve a provider-qualified ref as a different provider's model id", () => {
+		const models = [
+			{ provider: "anthropic", id: "claude-opus-4-8" },
+			{ provider: "openrouter", id: "anthropic/claude-fable-5" },
+		];
+		assert.equal(resolveModelRef("anthropic/claude-fable-5", models, undefined), undefined);
+	});
+
+	it("still resolves raw slash model ids when the first segment is not a provider", () => {
+		const models = [{ provider: "openrouter", id: "vendor/model-name" }];
+		assert.deepEqual(resolveModelRef("vendor/model-name", models, undefined), models[0]);
 	});
 
 	it("detects retryable provider/model failures", () => {

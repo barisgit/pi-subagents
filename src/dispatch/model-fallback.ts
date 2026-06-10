@@ -6,6 +6,11 @@ export interface AvailableModelInfo {
 	fullId: string;
 }
 
+export interface ModelRefInfo {
+	provider: string;
+	id: string;
+}
+
 export interface ModelAttemptSummary {
 	model: string;
 	success: boolean;
@@ -58,6 +63,25 @@ export function buildModelCandidates(
 		candidates.push(normalized);
 	}
 	return candidates;
+}
+
+export function resolveModelRef<T extends ModelRefInfo>(
+	ref: string | undefined,
+	models: T[],
+	fallback: T | undefined,
+	findByProvider?: (provider: string, id: string) => T | undefined,
+): T | undefined {
+	if (!ref) return fallback ?? models[0];
+	const slashIdx = ref.indexOf("/");
+	if (slashIdx !== -1) {
+		const provider = ref.substring(0, slashIdx);
+		const id = ref.substring(slashIdx + 1);
+		const providerMatch = findByProvider?.(provider, id)
+			?? models.find((model) => model.provider.toLowerCase() === provider.toLowerCase() && model.id === id);
+		if (providerMatch) return providerMatch;
+		if (models.some((model) => model.provider.toLowerCase() === provider.toLowerCase())) return undefined;
+	}
+	return models.find((model) => model.id === ref) ?? fallback ?? models[0];
 }
 
 const RETRYABLE_MODEL_FAILURE_PATTERNS = [

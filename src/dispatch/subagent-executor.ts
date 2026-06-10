@@ -8,7 +8,7 @@ import { type AgentConfig, type AgentScope, resolveAgentColor } from "../shared/
 import { ensureArtifactsDir, getArtifactPaths, getArtifactsDir, writeArtifact, writeMetadata } from "../shared/artifacts.ts";
 import { resolveExecutionAgentScope } from "./agent-scope.ts";
 import { handleManagementAction } from "../surfaces/agent-management.ts";
-import { buildModelCandidates, resolveModelCandidate } from "./model-fallback.ts";
+import { buildModelCandidates, resolveModelCandidate, resolveModelRef } from "./model-fallback.ts";
 import { aggregateParallelOutputs } from "./parallel-utils.ts";
 import { recordRun } from "../state/run-history.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
@@ -1179,7 +1179,7 @@ function buildAsyncChildStep(input: {
 	);
 	const primaryModelRef = applyThinkingSuffix(modelRefs[0], agentConfig.thinking);
 	const parsedPrimary = splitModelThinking(primaryModelRef, agentConfig.thinking);
-	const primaryModel = resolveModelFromRef(parsedPrimary.modelRef, availableModels, data.ctx.model);
+	const primaryModel = resolveModelFromRef(parsedPrimary.modelRef, availableModels, data.ctx.model, data.ctx.modelRegistry);
 	if (!primaryModel) {
 		return {
 			error: {
@@ -1190,7 +1190,7 @@ function buildAsyncChildStep(input: {
 		};
 	}
 	const modelCandidates = modelRefs.slice(1)
-		.map((ref) => resolveModelFromRef(splitModelThinking(applyThinkingSuffix(ref, agentConfig.thinking), agentConfig.thinking).modelRef, availableModels, undefined))
+		.map((ref) => resolveModelFromRef(splitModelThinking(applyThinkingSuffix(ref, agentConfig.thinking), agentConfig.thinking).modelRef, availableModels, undefined, data.ctx.modelRegistry))
 		.filter((model): model is Model<any> => Boolean(model));
 	const rawSkills = input.skills !== undefined ? input.skills : resolveStepBehavior(agentConfig, { skills: undefined }).skills;
 	const skillNames = data.forkReuse || rawSkills === false ? [] : (rawSkills ?? agentConfig.skills ?? []);
@@ -1798,9 +1798,8 @@ function splitModelThinking(modelRef: string | undefined, fallbackThinking: stri
 	return { modelRef: modelRef.slice(0, colonIdx), thinkingLevel };
 }
 
-function resolveModelFromRef(ref: string | undefined, models: Model<any>[], fallback: Model<any> | undefined): Model<any> | undefined {
-	if (!ref) return fallback ?? models[0];
-	return models.find((model) => `${model.provider}/${model.id}` === ref || model.id === ref) ?? fallback ?? models[0];
+function resolveModelFromRef(ref: string | undefined, models: Model<any>[], fallback: Model<any> | undefined, modelRegistry?: ExtensionContext["modelRegistry"]): Model<any> | undefined {
+	return resolveModelRef(ref, models, fallback, (provider, id) => modelRegistry?.find?.(provider, id));
 }
 
 export function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
@@ -1894,7 +1893,7 @@ async function runInProcessChildStep(input: {
 	);
 	const primaryModelRef = applyThinkingSuffix(modelRefs[0], agentConfig.thinking);
 	const parsedPrimary = splitModelThinking(primaryModelRef, agentConfig.thinking);
-	const primaryModel = resolveModelFromRef(parsedPrimary.modelRef, availableModels, data.ctx.model);
+	const primaryModel = resolveModelFromRef(parsedPrimary.modelRef, availableModels, data.ctx.model, data.ctx.modelRegistry);
 	if (!primaryModel) {
 		return {
 			agent: agentConfig.name,
@@ -1907,7 +1906,7 @@ async function runInProcessChildStep(input: {
 		};
 	}
 	const modelCandidates = modelRefs.slice(1)
-		.map((ref) => resolveModelFromRef(splitModelThinking(applyThinkingSuffix(ref, agentConfig.thinking), agentConfig.thinking).modelRef, availableModels, undefined))
+		.map((ref) => resolveModelFromRef(splitModelThinking(applyThinkingSuffix(ref, agentConfig.thinking), agentConfig.thinking).modelRef, availableModels, undefined, data.ctx.modelRegistry))
 		.filter((model): model is Model<any> => Boolean(model));
 	const skillNames = input.skills ?? agentConfig.skills ?? [];
 	const { resolved: resolvedSkills, missing: missingSkills } = data.forkReuse

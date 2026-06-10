@@ -16,6 +16,7 @@ import {
 	type ResolvedControlConfig,
 	type SubagentState,
 	POLL_INTERVAL_MS,
+	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
 	type SubagentNeedsAttentionPayload,
@@ -25,11 +26,13 @@ import { readStatus } from "../shared/utils.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
 import { readWorkflowGroupState } from "../workflow/workflow-group-state.ts";
 import { logger } from "../shared/logger.ts";
+import type { UtilsClient } from "pi-extension-utils";
 
 interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
 	pollIntervalMs?: number;
 	idleTracker?: IdleTracker;
+	getWidgetClient?: (ctx: ExtensionContext) => UtilsClient | undefined;
 }
 
 // Widen to string: the on-disk status.json can carry terminal exit states
@@ -99,13 +102,14 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const completionRetentionMs = options.completionRetentionMs ?? 10000;
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
 	const idleTracker = options.idleTracker;
+	const getWidgetClient = options.getWidgetClient;
 	const lastActivityStateByRunId = new Map<string, ActivityState | undefined>();
 	// Runs whose completion notification already reached the host turn. Guards
 	// the delivered-before-complete listener-order race: notify may emit the
 	// delivered event before this tracker's own complete handler runs.
 	const deliveredRunIds = new Set<string>();
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
-		renderWidget(ctx, jobs);
+		renderWidget(ctx, jobs, getWidgetClient?.(ctx));
 		// TODO(sdk-0.75-shape): ExtensionUIContext no longer exposes requestRender;
 		// renderWidget now captures TUI.requestRender for animation ticks.
 	};
@@ -430,6 +434,29 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 	};
 
+	// Reclaimed runs must be re-announced on the bus: cross-extension listeners
+	// (e.g. pi-charter's Ralph loop) track running subagents via async-started/
+	// complete events and lose that state on host reload. Only the idle tracker
+	// and the bus are notified; state.asyncJobs is still populated by the caller
+	// (this tracker's own handleStarted listener tolerates the self-emitted
+	// event — it overwrites the same runId key and the poller corrects status).
+	const announceReclaimed = (runId: string, asyncDir: string, agent?: string, parentRunId?: string, kind?: string): void => {
+		idleTracker?.onAsyncStarted(runId);
+		try {
+			pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
+				id: runId,
+				runId,
+				asyncDir,
+				reclaimed: true,
+				...(agent ? { agent } : {}),
+				...(parentRunId ? { parentRunId } : {}),
+				...(kind ? { kind } : {}),
+			});
+		} catch {
+			// Bus listeners must not break session rehydration.
+		}
+	};
+
 	const rehydrateFromRegistry = (ctx?: ExtensionContext): number => {
 		const hostSessionId = ctx?.sessionManager?.getSessionId?.();
 		if (!hostSessionId) return 0;
@@ -446,6 +473,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			// its single workflow row across a host reload.
 			if (entry.kind === "workflow") {
 				if (readWorkflowGroupState(entry.runRecordDir) !== "running") continue;
+				announceReclaimed(entry.runId, entry.runRecordDir, "workflow", undefined, "workflow");
 				state.asyncJobs.set(entry.runId, {
 					asyncId: entry.runId,
 					asyncDir: entry.runRecordDir,
@@ -464,6 +492,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			const status = readStatus(entry.runRecordDir);
 			if (!status || isTerminalAsyncStatus(status.state)) continue;
 			const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : undefined);
+			announceReclaimed(entry.runId, entry.runRecordDir, agents?.[0], entry.parentRunId ?? status.parentRunId);
 			state.asyncJobs.set(entry.runId, {
 				asyncId: entry.runId,
 				asyncDir: entry.runRecordDir,

@@ -36,6 +36,7 @@ import { controlNotificationKey, formatControlNoticeMessage } from "./src/dispat
 import { registerSlashCommands } from "./src/surfaces/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "./src/dispatch/prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "./src/surfaces/slash-bridge.ts";
+import { connect, type UtilsClient } from "pi-extension-utils";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./src/state/slash-live-state.ts";
 import { inspectSubagentStatus } from "./src/state/run-status.ts";
 import registerSubagentNotify, { type SubagentBatchNotifyDetails, type SubagentNotifyDetails } from "./src/surfaces/notify.ts";
@@ -258,12 +259,14 @@ class SubagentControlNoticeComponent implements Component {
 		const header = ` ⚠ Subagent ${eventLabel}: ${this.details.event.agent} `;
 		const headerText = truncateToWidth(header, bodyWidth, "");
 		const headerPadding = Math.max(0, bodyWidth - visibleWidth(headerText));
-		const lines = [this.theme.fg("accent", `╭${headerText}${borderChar.repeat(headerPadding)}╮`)];
+		// Truncation/inner styles inject ANSI resets; keep the closing border in
+		// its own accent segment so a reset inside the text can't bleach it.
+		const lines = [this.theme.fg("accent", `╭${headerText}`) + this.theme.fg("accent", `${borderChar.repeat(headerPadding)}╮`)];
 
 		for (const line of wrapTextWithAnsi(formatSubagentControlNotice(this.details), bodyWidth)) {
-			const text = truncateToWidth(line, bodyWidth, "");
+			const text = truncateToWidth(line, bodyWidth, "…");
 			const padding = Math.max(0, bodyWidth - visibleWidth(text));
-			lines.push(this.theme.fg("accent", `│${text}${" ".repeat(padding)}│`));
+			lines.push(this.theme.fg("accent", `│${text}`) + " ".repeat(padding) + this.theme.fg("accent", "│"));
 		}
 		lines.push(this.theme.fg("accent", `╰${borderChar.repeat(bodyWidth)}╯`));
 		return lines;
@@ -296,12 +299,14 @@ class SubagentNotifyNoticeComponent implements Component {
 			: ` Subagent ${this.details.status}: ${this.details.agent} `;
 		const headerText = truncateToWidth(header, bodyWidth, "");
 		const headerPadding = Math.max(0, bodyWidth - visibleWidth(headerText));
-		const lines = [this.theme.fg("accent", `╭${headerText}${borderChar.repeat(headerPadding)}╮`)];
+		// Truncation/inner styles inject ANSI resets; keep the closing border in
+		// its own accent segment so a reset inside the text can't bleach it.
+		const lines = [this.theme.fg("accent", `╭${headerText}`) + this.theme.fg("accent", `${borderChar.repeat(headerPadding)}╮`)];
 
 		for (const line of this.bodyLines()) {
-			const text = truncateToWidth(line, bodyWidth, "");
+			const text = truncateToWidth(line, bodyWidth, "…");
 			const padding = Math.max(0, bodyWidth - visibleWidth(text));
-			lines.push(this.theme.fg("accent", `│${text}${" ".repeat(padding)}│`));
+			lines.push(this.theme.fg("accent", `│${text}`) + " ".repeat(padding) + this.theme.fg("accent", "│"));
 		}
 		lines.push(this.theme.fg("accent", `╰${borderChar.repeat(bodyWidth)}╯`));
 		return lines;
@@ -339,8 +344,9 @@ class SubagentNotifyNoticeComponent implements Component {
 		for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
 			lines.push(`  └─ ${line}`);
 		}
-		if (!this.options.expanded && trimmedPreview.includes("\n")) lines.push("  Ctrl+O full notification");
-		if (this.details.sessionLabel && this.details.sessionValue) lines.push(`  ${this.details.sessionLabel}: ${shortenPath(this.details.sessionValue)}`);
+		if (this.options.expanded && this.details.sessionLabel && this.details.sessionValue) {
+			lines.push(`  ${this.details.sessionLabel}: ${shortenPath(this.details.sessionValue)}`);
+		}
 		return lines;
 	}
 }
@@ -462,6 +468,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 
 	const runtimeCleanup = () => {
+		widgetClient?.dispose();
+		widgetClient = undefined;
 		stopWidgetAnimation();
 		stopResultAnimations();
 		if (state.poller) {
@@ -479,7 +487,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	if (!isChildSession) globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
 	const idleTracker = createIdleTracker(pi);
-	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered } = createAsyncJobTracker(pi, state, { idleTracker });
+	let widgetClient: UtilsClient | undefined;
+	const getWidgetClient = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return undefined;
+		widgetClient ??= connect(pi, { ctx, clientId: "pi-subagents" });
+		return widgetClient;
+	};
+	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered } = createAsyncJobTracker(pi, state, { idleTracker, getWidgetClient });
 	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
@@ -767,9 +781,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	async function applyRootModel(ctx: ExtensionContext, modelRef: string | undefined): Promise<void> {
 		const normalizedModel = normalizeName(modelRef);
 		if (!normalizedModel) return;
-		const model = ctx.modelRegistry.getAvailable().find((candidate) =>
-			`${candidate.provider}/${candidate.id}` === normalizedModel || candidate.id === normalizedModel
-		);
+		const slashIdx = normalizedModel.indexOf("/");
+		const model = slashIdx === -1
+			? ctx.modelRegistry.getAvailable().find((candidate) => candidate.id === normalizedModel)
+			: ctx.modelRegistry.find(normalizedModel.substring(0, slashIdx), normalizedModel.substring(slashIdx + 1));
 		if (!model) {
 			notify(ctx, `Role '${activeRootRoleName ?? "unknown"}': model '${normalizedModel}' was not found`, "warning");
 			return;
@@ -954,7 +969,7 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 
 	pi.registerTool(tool);
 	pi.registerTool(workflowTool);
-	registerSlashCommands(pi, state);
+	registerSlashCommands(pi, state, getWidgetClient);
 	pi.registerCommand("role", {
 		description: "Show or switch the active root role",
 		getArgumentCompletions: getRootRoleCompletions,
@@ -1085,7 +1100,7 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 		if (!ctx.hasUI) return;
 		state.lastUiContext = ctx;
 		if (state.asyncJobs.size > 0) {
-			renderWidget(ctx, Array.from(state.asyncJobs.values()));
+			renderWidget(ctx, Array.from(state.asyncJobs.values()), getWidgetClient(ctx));
 			ensurePoller();
 		}
 	});
@@ -1105,6 +1120,7 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = ctx.sessionManager.getSessionId() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		state.lastUiContext = ctx;
+		getWidgetClient(ctx);
 		cleanupSessionArtifacts(ctx);
 		resetJobs(ctx);
 		rehydrateFromRegistry(ctx);
@@ -1157,8 +1173,8 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 		if (globalStore[runtimeCleanupStoreKey] === runtimeCleanup) {
 			delete globalStore[runtimeCleanupStoreKey];
 		}
-		if (state.lastUiContext?.hasUI) {
-			state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
-		}
+		widgetClient?.widgets.remove("aboveEditor", WIDGET_KEY);
+		widgetClient?.dispose();
+		widgetClient = undefined;
 	});
 }

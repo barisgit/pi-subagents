@@ -23,6 +23,7 @@ import { getDisplayItems, getSingleResultOutput, readStatus } from "../shared/ut
 import { readRunTranscript, previewArgs, type TranscriptLine } from "../state/run-transcript.ts";
 import { statusToSummary, type AsyncRunSummary } from "../state/async-status.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
+import type { UtilsClient } from "pi-extension-utils";
 
 type Theme = Pick<ExtensionContext["ui"]["theme"], "fg"> & { bold: (value: string) => string };
 
@@ -1171,10 +1172,13 @@ export function stopResultAnimations(): void {
 /**
  * Render the async jobs widget
  */
-export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
+export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[], client?: UtilsClient): void {
 	if (jobs.length === 0) {
 		stopWidgetAnimation();
-		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
+		if (ctx.hasUI) {
+			if (client) client.widgets.remove("aboveEditor", WIDGET_KEY);
+			else ctx.ui.setWidget(WIDGET_KEY, undefined);
+		}
 		return;
 	}
 	if (!ctx.hasUI) {
@@ -1186,10 +1190,12 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 
 	// Factory delivers a Component; latestWidgetJobs is captured by closure so the
 	// same factory continues to render fresh data on each animation tick.
-	ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
+	const factory = (tui: TUI, theme: Theme) => {
 		latestWidgetTui = tui;
 		return buildWidgetComponent(theme);
-	});
+	};
+	if (client) client.widgets.set("aboveEditor", WIDGET_KEY, factory as Parameters<UtilsClient["widgets"]["set"]>[2]);
+	else ctx.ui.setWidget(WIDGET_KEY, factory);
 	if (hasAnimatedWidgetJobs(jobs)) ensureWidgetAnimation();
 	else stopWidgetAnimation();
 }

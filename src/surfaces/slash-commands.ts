@@ -9,6 +9,7 @@ import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-s
 import { logger } from "../shared/logger.ts";
 import { discoverAvailableSkills } from "../shared/skills.ts";
 import type { SubagentToolInput as SubagentParamsLike } from "../protocol/schemas.ts";
+import type { UtilsClient } from "pi-extension-utils";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import {
 	applySlashUpdate,
@@ -421,6 +422,7 @@ const parseAgentArgs = (
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
+	getWidgetClient?: (ctx: ExtensionContext) => UtilsClient | undefined,
 ): void {
 	pi.registerCommand("agents", {
 		description: "Open the Agents Manager",
@@ -501,15 +503,19 @@ export function registerSlashCommands(
 			}
 			return ids;
 		};
-		await ctx.ui.custom<void>(
-			(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
-				listForegroundRuns: () => foregroundRunsFromState(state),
-				sessionCwd,
-				...(sessionId ? { sessionId } : {}),
-				getBranchAnchorRunIds,
-			}),
-			{ overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
-		);
+		const lease = getWidgetClient?.(ctx)?.fullscreen.acquire();
+		try {
+			await ctx.ui.custom<void>(
+				(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
+					listForegroundRuns: () => foregroundRunsFromState(state),
+					sessionCwd,
+					...(sessionId ? { sessionId } : {}),
+					getBranchAnchorRunIds,
+				}),
+			);
+		} finally {
+			lease?.release();
+		}
 	};
 
 	pi.registerCommand("subagents-status", {
