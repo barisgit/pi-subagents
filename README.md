@@ -78,15 +78,16 @@ Press `Ctrl+Shift+A` or run `/agents` to browse agents, inspect resolved prompts
 
 ## Management actions
 
-The `subagent` tool can list and manage agent definitions:
+The `subagent` tool can list agents and manage runs:
 
 ```ts
 { action: "list" }
-{ action: "get", agent: "explorer" }
-{ action: "create", config: { name: "auditor", description: "Read-only audit", systemPrompt: "..." } }
-{ action: "update", agent: "auditor", config: { skills: "qa-validation" } }
-{ action: "delete", agent: "auditor" }
+{ action: "status", id: "<run-id>" }
+{ action: "interrupt", id: "<run-id>" }
+{ action: "resume", id: "<run-id>", message: "..." }
 ```
+
+Agent definitions are created and edited as markdown files under `agents/`, or through the Agents Manager TUI.
 
 ## Worktree isolation
 

@@ -58,7 +58,7 @@
 - `render.ts` — renders run progress, results, and widgets.
 - `single-output.ts` — formats single-run output blocks.
 - `slash-bridge.ts` — connects slash-command subagent dispatch.
-- `slash-commands.ts` — registers `/run`, `/chain`, `/parallel`, and manager commands.
+- `slash-commands.ts` — registers `/run`, `/parallel`, `/agents`, and `/subagents-status`.
 - `subagents-status.ts` — renders aggregate subagent status.
 - `text-editor.ts` — supports inline text editing interactions.
 

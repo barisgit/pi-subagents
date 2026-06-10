@@ -20,6 +20,7 @@ describe("chain docs eviction", () => {
 	it("removes chain-mode teaching from docs and tool descriptions", () => {
 		const samples = [
 			["README.md", read("README.md")],
+			["codemap.md", read("codemap.md")],
 			["skills/subagent/SKILL.md", read("skills/subagent/SKILL.md")],
 			["subagent description", toolDescription(read("index.ts"), "description: `Delegate a bounded task", "parameters: SubagentParams")],
 			["workflow description", toolDescription(read("src/workflow/workflow.ts"), "description: `Orchestrate multiple subagents", "parameters: WorkflowParams")],
@@ -28,6 +29,7 @@ describe("chain docs eviction", () => {
 		for (const [name, text] of samples) {
 			assert.doesNotMatch(text, /chain:true/, `${name} must not teach chain:true`);
 			assert.doesNotMatch(text, /\{previous\}/, `${name} must not teach previous substitution`);
+			assert.doesNotMatch(text, /[`/]chain\b/, `${name} must not reference chain surfaces`);
 		}
 	});
 

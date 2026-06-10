@@ -324,4 +324,15 @@ describe("subagent async widget rendering", () => {
 		assert.doesNotMatch(childLine, /  [├└]─/, "child renders at top-level widget depth");
 	});
 
+	it("keeps a single (non-parallel) parent visible when it has child rows", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "single-parent", asyncDir: "/tmp/s", status: "running", mode: "single", agents: ["oracle"], currentAgent: "oracle" },
+			{ asyncId: "nested-child", asyncDir: "/tmp/s/c", status: "running", parentRunId: "single-parent", agents: ["explorer"], currentAgent: "explorer" },
+		], theme, 200);
+		const body = lines.join("\n");
+
+		assert.match(body, /oracle/, "a single async run that spawned a child still renders");
+		assert.match(body, /explorer/, "its child renders too");
+	});
+
 });
