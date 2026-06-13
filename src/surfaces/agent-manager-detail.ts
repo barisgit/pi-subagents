@@ -6,7 +6,7 @@ import type { RunEntry } from "../state/run-history.ts";
 import { buildSkillInjection, resolveSkills } from "../shared/skills.ts";
 import { ensureCursorVisible, getCursorDisplayPos, renderEditor, wrapText } from "./text-editor.ts";
 import type { TextEditorState } from "./text-editor.ts";
-import { pad, row, renderHeader, renderFooter, formatPath, formatScrollInfo } from "./render-helpers.ts";
+import { pad, row, renderHeader, renderFooter, formatPath, formatScrollInfo } from "pi-extension-utils";
 
 export interface DetailState {
 	resolved: boolean;

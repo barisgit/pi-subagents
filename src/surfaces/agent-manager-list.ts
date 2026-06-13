@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { AgentSource } from "../shared/agents.ts";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { pad, row, renderHeader, renderFooter, fuzzyFilter, formatScrollInfo } from "./render-helpers.ts";
+import { pad, row, renderHeader, renderFooter, fuzzyFilter, formatScrollInfo } from "pi-extension-utils";
 
 export interface ListAgent {
 	id: string;

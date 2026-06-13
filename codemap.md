@@ -54,7 +54,6 @@
 - `formatters.ts` — formats durations, paths, and display text.
 - `idle-tracker.ts` — observes idle/notification thresholds.
 - `notify.ts` — registers subagent completion and attention notifications.
-- `render-helpers.ts` — shared TUI rendering helpers.
 - `render.ts` — renders run progress, results, and widgets.
 - `single-output.ts` — formats single-run output blocks.
 - `slash-bridge.ts` — connects slash-command subagent dispatch.

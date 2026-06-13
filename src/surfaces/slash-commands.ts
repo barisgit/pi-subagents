@@ -503,18 +503,18 @@ export function registerSlashCommands(
 			}
 			return ids;
 		};
-		const lease = getWidgetClient?.(ctx)?.fullscreen.acquire();
-		try {
-			await ctx.ui.custom<void>(
-				(tui, theme, _kb, done) => new SubagentsStatusComponent(tui, theme, () => done(undefined), {
-					listForegroundRuns: () => foregroundRunsFromState(state),
-					sessionCwd,
-					...(sessionId ? { sessionId } : {}),
-					getBranchAnchorRunIds,
-				}),
-			);
-		} finally {
-			lease?.release();
+		const componentFactory = (tui: unknown, theme: unknown, done: (value: void) => void) =>
+			new SubagentsStatusComponent(tui as never, theme as never, () => done(undefined), {
+				listForegroundRuns: () => foregroundRunsFromState(state),
+				sessionCwd,
+				...(sessionId ? { sessionId } : {}),
+				getBranchAnchorRunIds,
+			});
+		const client = getWidgetClient?.(ctx);
+		if (client) {
+			await client.ui.fullscreen<void>((tui, theme, _kb, done) => componentFactory(tui, theme, done));
+		} else {
+			await ctx.ui.custom<void>((tui, theme, _kb, done) => componentFactory(tui, theme, done));
 		}
 	};
 

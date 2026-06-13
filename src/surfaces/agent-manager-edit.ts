@@ -3,7 +3,7 @@ import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { defaultSystemPromptMode, type AgentConfig, type BuiltinAgentOverrideBase } from "../shared/agents.ts";
 import { createEditorState, ensureCursorVisible, getCursorDisplayPos, handleEditorInput, renderEditor, wrapText } from "./text-editor.ts";
 import type { TextEditorState } from "./text-editor.ts";
-import { pad, row, renderHeader, renderFooter, formatScrollInfo } from "./render-helpers.ts";
+import { pad, row, renderHeader, renderFooter, formatScrollInfo } from "pi-extension-utils";
 
 export interface ModelInfo { provider: string; id: string; fullId: string; }
 export interface SkillInfo { name: string; source: string; description?: string; }

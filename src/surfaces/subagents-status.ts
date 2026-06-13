@@ -2,7 +2,27 @@ import * as path from "node:path";
 import { colorForAgentName } from "../shared/agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	boxRow,
+	computeSplitPaneLayout,
+	dispatchNavKeys,
+	endCursor,
+	endScrollOffset,
+	ensureCursorVisible as ensurePaneCursorVisible,
+	flatRule,
+	homeCursor,
+	homeScrollOffset,
+	moveCursor,
+	moveScrollOffset,
+	pageCursor,
+	pageScrollOffset,
+	renderKeyRow,
+	resizeSplitPane,
+	titledBottomSegment,
+	titledTopSegment,
+	togglePaneFocus,
+} from "pi-extension-utils";
 import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
 import { previewArgs, readRunTranscript } from "../state/run-transcript.ts";
@@ -10,7 +30,6 @@ import { formatDuration, formatTokens } from "./formatters.ts";
 import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
 import { compareRunsForDisplay, deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase, type RunPhase } from "../state/run-phase.ts";
-import { flatRule, formatScrollInfo, padRight, titledBottomSegment, titledTopSegment } from "./render-helpers.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
 import { type ActivityState, type RunDisplayState, type SubagentState } from "../protocol/types.ts";
 import { listRunsByRootRunIds, readAllEntries, readShardEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
@@ -1232,31 +1251,40 @@ export class SubagentsStatusComponent implements Component {
 	private ensureSelectionVisible(): void {
 		const index = this.selectedIndex();
 		if (index < 0) return;
-		if (index < this.leftScroll) this.leftScroll = index;
 		// The left list shares the body with the legend block; use the actual list
 		// height captured at last render so j/k/G/g keep the selection in view
 		// instead of letting it scroll behind the legend or off the bottom.
 		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
-		const limit = this.leftScroll + listHeight;
-		if (index >= limit) this.leftScroll = index - listHeight + 1;
+		const state = ensurePaneCursorVisible({
+			cursor: index,
+			scroll: this.leftScroll,
+			itemCount: this.displayRows().length,
+			viewportHeight: listHeight,
+		});
+		this.leftScroll = state.scroll;
+	}
+
+	private applySelectionState(state: { cursor: number; scroll: number }): void {
+		const visible = this.displayRows();
+		if (visible.length === 0) return;
+		this.selectedId = this.rowKey(visible[state.cursor]!);
+		this.leftScroll = state.scroll;
 	}
 
 	private moveSelection(delta: number): void {
 		const visible = this.displayRows();
 		if (visible.length === 0) return;
-		const current = this.selectedIndex();
-		const next = Math.max(0, Math.min(visible.length - 1, current + delta));
-		this.selectedId = this.rowKey(visible[next]!);
-		this.ensureSelectionVisible();
+		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
+		this.applySelectionState(moveCursor({ cursor: this.selectedIndex(), scroll: this.leftScroll, itemCount: visible.length, viewportHeight: listHeight }, delta));
 		this.tui.requestRender();
 	}
 
 	private jumpSelection(toEnd: boolean): void {
 		const visible = this.displayRows();
 		if (visible.length === 0) return;
-		const index = toEnd ? visible.length - 1 : 0;
-		this.selectedId = this.rowKey(visible[index]!);
-		this.ensureSelectionVisible();
+		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
+		const state = { cursor: this.selectedIndex(), scroll: this.leftScroll, itemCount: visible.length, viewportHeight: listHeight };
+		this.applySelectionState(toEnd ? endCursor(state) : homeCursor(state));
 		this.tui.requestRender();
 	}
 
@@ -1264,10 +1292,12 @@ export class SubagentsStatusComponent implements Component {
 	 * when the left pane is focused). Page size is the list height captured at the
 	 * last render so it matches what the user actually sees. */
 	private pageSelection(direction: 1 | -1, fraction = 1): void {
-		if (this.displayRows().length === 0) return;
+		const visible = this.displayRows();
+		if (visible.length === 0) return;
 		const page = this.lastLeftListHeight || computeBodyHeight(this.tui);
 		const step = Math.max(1, Math.floor(page * fraction));
-		this.moveSelection(direction * step);
+		this.applySelectionState(pageCursor({ cursor: this.selectedIndex(), scroll: this.leftScroll, itemCount: visible.length, viewportHeight: page }, direction, step));
+		this.tui.requestRender();
 	}
 
 	private getRightScrollState(): ScrollState {
@@ -1288,7 +1318,7 @@ export class SubagentsStatusComponent implements Component {
 		const state = this.getRightScrollState();
 		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
 		const maxTop = Math.max(0, lines.length - this.lastRightHeight);
-		state.top = Math.max(0, Math.min(maxTop, state.top + delta));
+		state.top = moveScrollOffset({ offset: state.top, contentLength: lines.length, viewportHeight: this.lastRightHeight }, delta);
 		state.sticky = state.top >= maxTop;
 		this.tui.requestRender();
 	}
@@ -1310,147 +1340,120 @@ export class SubagentsStatusComponent implements Component {
 
 	private scrollRightByPage(direction: 1 | -1): void {
 		const page = Math.max(1, this.lastRightHeight);
-		this.scrollRight(direction * page);
+		const run = this.selectedRun();
+		if (!run) return;
+		const state = this.getRightScrollState();
+		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
+		const maxTop = Math.max(0, lines.length - this.lastRightHeight);
+		state.top = pageScrollOffset({ offset: state.top, contentLength: lines.length, viewportHeight: this.lastRightHeight }, direction, page);
+		state.sticky = state.top >= maxTop;
+		this.tui.requestRender();
 	}
 
 
 
 	handleInput(data: string): void {
-		// matchesKey handles both legacy (raw char) and Kitty CSI-u sequences.
-		// Plain `data === "j"` only worked when Kitty keyboard protocol was off.
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q")) {
-			this.done();
-			return;
-		}
-		if (matchesKey(data, "tab")) {
-			this.focus = this.focus === "left" ? "right" : "left";
-			this.tui.requestRender();
-			return;
-		}
-		// `[` shrinks the left pane (gives more space to the right transcript),
-		// `]` grows it. Step is SPLIT_STEP_COLS / total-width so the fraction shifts
-		// proportionally regardless of terminal width.
-		if (data === "[" || matchesKey(data, "[")) {
-			this.shiftSplit(-1);
-			return;
-		}
-		if (data === "]" || matchesKey(data, "]")) {
-			this.shiftSplit(1);
-			return;
-		}
-		if (matchesKey(data, "j") || matchesKey(data, "down")) {
-			if (this.focus === "right") this.scrollRight(1);
-			else this.moveSelection(1);
-			return;
-		}
-		if (matchesKey(data, "k") || matchesKey(data, "up")) {
-			if (this.focus === "right") this.scrollRight(-1);
-			else this.moveSelection(-1);
-			return;
-		}
-		if (matchesKey(data, "g")) {
-			if (this.focus === "right") {
-				const state = this.getRightScrollState();
-				state.top = 0;
-				state.sticky = false;
+		dispatchNavKeys(data, {
+			close: this.done,
+			closeKeys: ["escape", "ctrl+c", "q"],
+			bannedKeys: ["b", "r", "p", "a", "c"],
+			focusToggle: () => {
+				this.focus = togglePaneFocus(this.focus);
 				this.tui.requestRender();
-			} else {
-				this.jumpSelection(false);
-			}
-			return;
-		}
-		if (matchesKey(data, "shift+g")) {
-			if (this.focus === "right") {
-				const state = this.getRightScrollState();
-				state.sticky = true;
-				this.tui.requestRender();
-			} else {
-				this.jumpSelection(true);
-			}
-			return;
-		}
-		// Legacy explicit right-pane scroll bindings stay available regardless of focus.
-		if (matchesKey(data, "shift+j") || matchesKey(data, "shift+down")) {
-			this.scrollRight(1);
-			return;
-		}
-		if (matchesKey(data, "shift+k") || matchesKey(data, "shift+up")) {
-			this.scrollRight(-1);
-			return;
-		}
-		if (matchesKey(data, "pageDown")) {
-			if (this.focus === "right") this.scrollRightByPage(1);
-			else this.pageSelection(1);
-			return;
-		}
-		if (matchesKey(data, "pageUp")) {
-			if (this.focus === "right") this.scrollRightByPage(-1);
-			else this.pageSelection(-1);
-			return;
-		}
-		if (matchesKey(data, "d") || matchesKey(data, "space")) {
-			if (this.focus === "right") this.scrollRight(Math.max(1, Math.floor(this.lastRightHeight / 2)));
-			else this.pageSelection(1, 0.5);
-			return;
-		}
-		if (matchesKey(data, "u") || matchesKey(data, "shift+space")) {
-			if (this.focus === "right") this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
-			else this.pageSelection(-1, 0.5);
-			return;
-		}
-		if (matchesKey(data, "a")) {
-			this.showAllSessions = !this.showAllSessions;
-			this.reload();
-			this.tui.requestRender();
-			return;
-		}
-		if (matchesKey(data, "return") || matchesKey(data, "o")) {
-			this.toggleCollapse();
-		}
+			},
+			extraBindings: [
+				{ keys: "[", handler: () => this.shiftSplit(-1) },
+				{ keys: "]", handler: () => this.shiftSplit(1) },
+				{ keys: ["shift+j", "shift+down"], handler: () => this.scrollRight(1) },
+				{ keys: ["shift+k", "shift+up"], handler: () => this.scrollRight(-1) },
+				{ keys: ["d", "space"], handler: () => {
+					if (this.focus === "right") this.scrollRight(Math.max(1, Math.floor(this.lastRightHeight / 2)));
+					else this.pageSelection(1, 0.5);
+				} },
+				{ keys: ["u", "shift+space"], handler: () => {
+					if (this.focus === "right") this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
+					else this.pageSelection(-1, 0.5);
+				} },
+				{ keys: "a", handler: () => {
+					this.showAllSessions = !this.showAllSessions;
+					this.reload();
+					this.tui.requestRender();
+				} },
+				{ keys: ["return", "o"], handler: () => this.toggleCollapse() },
+			],
+			move: (delta) => {
+				if (this.focus === "right") this.scrollRight(delta);
+				else this.moveSelection(delta);
+			},
+			home: () => {
+				if (this.focus === "right") {
+					const state = this.getRightScrollState();
+					state.top = homeScrollOffset();
+					state.sticky = false;
+					this.tui.requestRender();
+				} else {
+					this.jumpSelection(false);
+				}
+			},
+			end: () => {
+				if (this.focus === "right") {
+					const state = this.getRightScrollState();
+					const run = this.selectedRun();
+					if (run) {
+						const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
+						state.top = endScrollOffset(lines.length, this.lastRightHeight);
+					}
+					state.sticky = true;
+					this.tui.requestRender();
+				} else {
+					this.jumpSelection(true);
+				}
+			},
+			page: (delta) => {
+				if (this.focus === "right") this.scrollRightByPage(delta);
+				else this.pageSelection(delta);
+			},
+		});
 	}
 
 	private bodyRow(left: string, right: string, leftWidth: number, rightWidth: number): string {
-		// All chrome glyphs use `dim` so the borders read as a single uniform tone
-		// (matches pi-charter); previously the `│` was `border`-tinted while the
-		// dash runs were `dim`, which produced the 2/3-color border the user saw.
-		const border = this.theme.fg("dim", "│");
-		const leftCell = padRight(truncateToWidth(left, leftWidth), leftWidth);
-		const rightCell = padRight(truncateToWidth(right, rightWidth), rightWidth);
-		return border + leftCell + border + rightCell + border;
+		return boxRow(this.theme, left, right, leftWidth, rightWidth);
 	}
 
 	private shiftSplit(direction: -1 | 1): void {
 		const cols = this.tui.terminal?.columns ?? process.stdout.columns ?? 120;
-		const step = SPLIT_STEP_COLS / Math.max(1, cols);
-		const next = Math.min(0.7, Math.max(0.2, this.splitFraction + direction * step));
-		// Don't let the fraction accumulate past the point where it changes the
-		// rendered width — otherwise hitting LEFT_PANE_CAP (or MIN_RIGHT_PANE) on
-		// `]` would inflate the fraction silently and require many `[` presses to
-		// recover. Compare achievable widths instead of raw fractions.
 		const currentLeft = this.computeLeftWidth(cols);
-		const probeFraction = this.splitFraction;
-		this.splitFraction = next;
-		const nextLeft = this.computeLeftWidth(cols);
-		if (nextLeft === currentLeft) {
-			this.splitFraction = probeFraction;
+		const next = resizeSplitPane({
+			totalWidth: cols,
+			leftFraction: this.splitFraction,
+			minLeftWidth: MIN_LEFT_PANE,
+			minRightWidth: MIN_RIGHT_PANE,
+			leftMaxWidth: this.leftPaneCap,
+			direction,
+			stepCols: SPLIT_STEP_COLS,
+		});
+		if (next.leftWidth === currentLeft) {
 			return;
 		}
+		this.splitFraction = next.leftFraction;
 		this.tui.requestRender();
 	}
 
 	private computeLeftWidth(totalWidth: number): number {
-		const raw = Math.round(totalWidth * this.splitFraction);
-		const capped = Math.min(this.leftPaneCap, totalWidth - 3 - MIN_RIGHT_PANE);
-		return Math.max(MIN_LEFT_PANE, Math.min(capped, raw));
+		return computeSplitPaneLayout({
+			totalWidth,
+			leftFraction: this.splitFraction,
+			minLeftWidth: MIN_LEFT_PANE,
+			minRightWidth: MIN_RIGHT_PANE,
+			leftMaxWidth: this.leftPaneCap,
+		}).leftWidth;
 	}
 
 	private buildLegendLines(width: number): string[] {
 		if (width <= 0) return [];
 		const keyW = Math.min(LEGEND_KEY_W, Math.max(3, width - 6));
 		return LEGEND_ENTRIES.map(([key, desc]) => {
-			const keyCell = padRight(key, keyW);
-			const line = `${keyCell}  ${desc}`;
-			return this.theme.fg("dim", truncateToWidth(line, width));
+			return this.theme.fg("dim", renderKeyRow(key, desc, width, keyW));
 		});
 	}
 
@@ -1515,8 +1518,15 @@ export class SubagentsStatusComponent implements Component {
 
 	render(width: number): string[] {
 		const w = Math.max(8, width);
-		const leftWidth = this.computeLeftWidth(w);
-		const rightWidth = Math.max(MIN_RIGHT_PANE, w - 3 - leftWidth);
+		const layout = computeSplitPaneLayout({
+			totalWidth: w,
+			leftFraction: this.splitFraction,
+			minLeftWidth: MIN_LEFT_PANE,
+			minRightWidth: MIN_RIGHT_PANE,
+			leftMaxWidth: this.leftPaneCap,
+		});
+		const leftWidth = layout.leftWidth;
+		const rightWidth = Math.max(MIN_RIGHT_PANE, layout.rightWidth);
 		this.lastRightWidth = rightWidth;
 
 		const now = Date.now();
@@ -1555,10 +1565,12 @@ export class SubagentsStatusComponent implements Component {
 		// terminal resize) produce a visible selection instead of an empty slice.
 		const selectedIdx = this.selectedIndex();
 		if (selectedIdx >= 0) {
-			if (selectedIdx < this.leftScroll) this.leftScroll = selectedIdx;
-			else if (selectedIdx >= this.leftScroll + listHeight) this.leftScroll = selectedIdx - listHeight + 1;
-			const maxLeftScroll = Math.max(0, leftListLines.length - listHeight);
-			if (this.leftScroll > maxLeftScroll) this.leftScroll = maxLeftScroll;
+			this.leftScroll = ensurePaneCursorVisible({
+				cursor: selectedIdx,
+				scroll: this.leftScroll,
+				itemCount: leftListLines.length,
+				viewportHeight: listHeight,
+			}).scroll;
 		}
 		const divider = flatRule(this.theme, "keys", leftWidth);
 
@@ -1566,9 +1578,8 @@ export class SubagentsStatusComponent implements Component {
 		let rightTop = 0;
 		if (selected) {
 			const state = this.getRightScrollState();
-			const maxTop = Math.max(0, rightLines.length - bodyHeight);
-			if (state.sticky) state.top = maxTop;
-			state.top = Math.max(0, Math.min(maxTop, state.top));
+			if (state.sticky) state.top = endScrollOffset(rightLines.length, bodyHeight);
+			state.top = moveScrollOffset({ offset: state.top, contentLength: rightLines.length, viewportHeight: bodyHeight }, 0);
 			rightTop = state.top;
 		}
 
@@ -1600,7 +1611,6 @@ export class SubagentsStatusComponent implements Component {
 			rows.push(this.bodyRow(left, right, leftWidth, rightWidth));
 		}
 		rows.push(this.bottomBorder(leftWidth, rightWidth, rightTop, rightLines.length));
-		void formatScrollInfo;
 		return rows;
 	}
 
