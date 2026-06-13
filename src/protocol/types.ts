@@ -160,7 +160,7 @@ export interface PersonaInfo {
  * Identity + ancestry of the AgentSession this API publication belongs to.
  *
  * Published per-session: the host session sees `{ role: "host", currentAgent:
- * "main", ... }` and each in-process child session sees its own child shape.
+ * <active root role>, ... }` and each in-process child session sees its own child shape.
  * Other extensions loaded inside a child session (e.g. pi-charter) read this
  * to attribute work to the correct agent/run without polling env vars.
  */
@@ -180,7 +180,7 @@ export interface SubagentExposedAPI {
 	list(options?: { includeInternal?: boolean }): PersonaInfo[];
 	/**
 	 * Identity + lineage for the session this API publication belongs to.
-	 * - Host session: `{ role: "host", currentAgent: "main", depth: 0, ... }`.
+	 * - Host session: `{ role: "host", currentAgent: <active root role>, depth: 0, ... }`.
 	 * - Child session: lineage carried from the dispatch (parent agent/session,
 	 *   root session, depth, runId).
 	 * Returns `null` only if the publication races ahead of session_start.

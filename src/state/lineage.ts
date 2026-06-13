@@ -12,14 +12,14 @@
  * on the child's pi.events as `SUBAGENT_EXPOSE_API_EVENT`.
  *
  * For the host (UI-bearing) session, lineage is { role: "host", currentAgent:
- * "main", parentAgent: null, parentSessionId: null, rootSessionId: <self> }.
- * Host lineage is set on the first host activate.
+ * <active root role>, parentAgent: null, parentSessionId: null, rootSessionId:
+ * <self> }. Host lineage is set on the first host activate.
  */
 
 export interface SubagentLineage {
 	/** "host" for the UI-bearing root session, "child" for any in-process child. */
 	role: "host" | "child";
-	/** Agent persona running in this session ("main" for host, the spawned agent name for children). */
+	/** Agent persona running in this session (active root role for host, spawned agent name for children). */
 	currentAgent: string;
 	/** Direct parent agent persona (null for host, the spawner agent for children). */
 	parentAgent: string | null;
@@ -111,20 +111,21 @@ export function setChildLineage(sessionId: string, lineage: SubagentLineage): vo
 	store().set(sessionId, lineage);
 }
 
-/** Record the host's lineage. Idempotent: only sets if not already present. */
-export function setHostLineage(sessionId: string): SubagentLineage {
+/** Record or refresh the host's lineage. */
+export function setHostLineage(sessionId: string, currentAgent = ""): SubagentLineage {
 	const m = store();
 	const existing = m.get(sessionId);
-	if (existing) return existing;
 	const lineage: SubagentLineage = {
-		role: "host",
-		currentAgent: "main",
-		parentAgent: null,
-		parentSessionId: null,
+		...(existing ?? {
+			role: "host" as const,
+			parentAgent: null,
+			parentSessionId: null,
+			depth: 0,
+			runId: null,
+			rootRunId: null,
+		}),
+		currentAgent,
 		rootSessionId: sessionId,
-		depth: 0,
-		runId: null,
-		rootRunId: null,
 	};
 	m.set(sessionId, lineage);
 	return lineage;

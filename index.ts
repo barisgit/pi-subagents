@@ -32,6 +32,7 @@ import { createSubagentExecutor } from "./src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry } from "./src/dispatch/in-process-executor.ts";
 import { createWorkflowTool } from "./src/workflow/workflow.ts";
 import { createAsyncJobTracker } from "./src/surfaces/async-job-tracker.ts";
+import { selectRootRole } from "./src/shared/root-role-selection.ts";
 import { controlNotificationKey, formatControlNoticeMessage } from "./src/dispatch/subagent-control.ts";
 import { registerSlashCommands } from "./src/surfaces/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "./src/dispatch/prompt-template-bridge.ts";
@@ -572,7 +573,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// rootSessionId so callers never see undefined.
 	let hostLineage: SubagentLineage = {
 		role: "host",
-		currentAgent: "main",
+		currentAgent: "",
 		parentAgent: null,
 		parentSessionId: null,
 		rootSessionId: null,
@@ -605,7 +606,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const sid = ctx.sessionManager?.getSessionId?.();
 		if (typeof sid === "string" && sid.length > 0) {
 			hostLineage = { ...hostLineage, rootSessionId: sid };
-			setHostLineage(sid);
+			setHostLineage(sid, hostLineage.currentAgent);
 			// Re-emit so any listener that subscribed before session_start gets the
 			// updated rootSessionId.
 			exposeSubagentApi();
@@ -831,6 +832,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		activeWorkflowName = workflowName;
 		activeRootRoleName = role.name;
 		activeRootRole = role;
+		hostLineage = { ...hostLineage, currentAgent: role.name };
+		if (hostLineage.rootSessionId) setHostLineage(hostLineage.rootSessionId, role.name);
+		exposeSubagentApi();
 		if (previousRootRoleName !== role.name || previousWorkflowName !== workflowName) {
 			pi.appendEntry("role-state", { name: role.name, workflow: workflowName });
 		}
@@ -856,11 +860,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const roleFlag = normalizeName(pi.getFlag("role"));
 		const envRole = normalizeName(process.env.PI_ROLE);
 		const restoredRole = getLatestCustomStateName(ctx, "role-state");
-		const requestedRole = roleFlag ?? envRole ?? restoredRole ?? defaultRole ?? "orchestrator";
-		const candidates = [requestedRole, defaultRole, "orchestrator", availableRoles[0]?.name].filter((value): value is string => Boolean(value));
-		const selectedRole = candidates
-			.map((candidate) => availableRoles.find((role) => role.name === candidate))
-			.find((role): role is AgentConfig => Boolean(role));
+		const requestedRole = roleFlag ?? envRole ?? restoredRole ?? defaultRole;
+		const selectedRole = selectRootRole(availableRoles, { roleFlag, envRole, restoredRole, defaultRole });
 
 		if (!selectedRole) {
 			notify(ctx, `Unable to resolve a main role. Available: ${availableRoles.map((role) => role.name).join(", ")}`, "warning");
