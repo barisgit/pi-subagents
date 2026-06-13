@@ -194,7 +194,7 @@ describe("dashboard tree rows", () => {
 		}
 	});
 
-	it("PageDown/PageUp move the left-pane selection by a viewport page", () => {
+	it("d/u move the left-pane selection by a half-page", () => {
 		const root = tmpRegistry();
 		// More runs than one viewport page so a page jump is observable.
 		for (let i = 0; i < 60; i++) {
@@ -223,15 +223,15 @@ describe("dashboard tree rows", () => {
 			const start = counterIndex();
 			assert.equal(start, 1, "selection should start at row 1");
 
-			// One PageDown must advance by a full page (>1), not a single row.
-			component.handleInput("\x1b[6~"); // PgDn (CSI 6~)
-			const afterPgDn = counterIndex();
-			assert.ok(afterPgDn > start + 1, `PageDown should jump a page, got ${start} -> ${afterPgDn}`);
+			// One half-page down must advance by more than a single row.
+			component.handleInput("d");
+			const afterDown = counterIndex();
+			assert.ok(afterDown > start + 1, `d should jump a half-page, got ${start} -> ${afterDown}`);
 
-			// PageUp returns toward the top by the same page size.
-			component.handleInput("\x1b[5~"); // PgUp (CSI 5~)
-			const afterPgUp = counterIndex();
-			assert.equal(afterPgUp, start, `PageUp should return to the top, got ${afterPgUp}`);
+			// Half-page up returns toward the top by the same page size.
+			component.handleInput("u");
+			const afterUp = counterIndex();
+			assert.equal(afterUp, start, `u should return to the top, got ${afterUp}`);
 		} finally {
 			component.dispose();
 		}

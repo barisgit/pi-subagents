@@ -179,12 +179,14 @@ describe("SubagentsStatusComponent", () => {
 				assert.match(output, /─── Step 1: waiter ───/);
 				assert.match(output, /→ bash .* · 400ms/);
 				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
-				// Charter-style legend lives in a dedicated left-pane section above the
-				// bottom border; per-pane footers carry only counters now.
-				assert.match(output, /j\/k\s+move\/scroll/);
-				assert.match(output, /PgUp\/PgDn\s+page list \/ scroll/);
+				// paneOverlay owns standard action legend rows; custom dashboard actions are appended.
+				assert.match(output, /tab\/←\/→\s+focus/);
+				assert.match(output, /j\/k\s+select/);
+				assert.match(output, /u\/d\s+half-page/);
+				assert.doesNotMatch(output, /pgup\/pgdn\s+page/);
+				assert.match(output, /return\/o\s+collapse group/);
 				assert.match(output, /a\s+all sessions/);
-				assert.match(output, /q \/ esc\s+close/);
+				assert.match(output, /q\/esc\s+close/);
 			} finally {
 				component.dispose();
 			}
@@ -547,6 +549,30 @@ describe("SubagentsStatusComponent", () => {
 		}
 	});
 
+	it("keeps top border within terminal width with long selected title and tail", () => {
+		const run = createRun("run-wide-title", "running", {
+			label: "long selected subagent title ".repeat(4),
+			currentTool: "task_manage",
+		});
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [run], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			for (const line of component.render(120)) {
+				assert.ok(visibleWidth(line) <= 120, `line too wide: ${visibleWidth(line)} ${line}`);
+			}
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("auto-refresh requests render and stops after dispose", async () => {
 		let renderRequests = 0;
 		const component = new SubagentsStatusComponent(
@@ -653,8 +679,8 @@ describe("SubagentsStatusComponent", () => {
 		assert.equal(runs[0]?.currentTool, "bash");
 	});
 
-	it("PgDn key scrolls the right pane by a full page", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-pgdn-"));
+	it("scrollRightPaneByPage scrolls the right pane by a full page", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-page-api-"));
 		try {
 			// Build a long event log so the right pane has room to scroll.
 			const events: Array<Record<string, unknown>> = [
@@ -678,7 +704,7 @@ describe("SubagentsStatusComponent", () => {
 			}
 			makeEventsFile(dir, events);
 
-			const run = createRun("run-pgdn", "running", { asyncDir: dir });
+			const run = createRun("run-page-api", "running", { asyncDir: dir });
 			const component = new SubagentsStatusComponent(
 				createTestTui(() => {}),
 				createTestTheme(),
@@ -690,35 +716,15 @@ describe("SubagentsStatusComponent", () => {
 			);
 
 			try {
-				// First render establishes lastRightHeight/lastRightWidth for the scroller.
-				// The right pane is sticky-to-bottom by design (tail-style transcript), so
-				// the initial scroll offset is at the bottom, not the top.
 				component.render(120);
-				// PgUp/PgDn are focus-aware: they page the left list by default and only
-				// scroll the right transcript when the right pane is focused. Tab over.
-				component.handleInput("\t");
-				const bottom = component.getRightPaneScrollTop();
-				assert.ok(bottom > 0, `right pane should start sticky-at-bottom, got ${bottom}`);
+				assert.equal(component.getRightPaneScrollTop(), 0);
 
-				// Scroll back to the top using PgUp (CSI 5~). Need multiple presses to clear
-				// the full transcript depth; loop until we hit 0 or run out of iterations.
-				for (let i = 0; i < 50 && component.getRightPaneScrollTop() > 0; i++) {
-					component.handleInput("\x1b[5~");
-				}
-				assert.equal(component.getRightPaneScrollTop(), 0, "PgUp should walk back to the top");
-
-				// PgDn legacy sequence (CSI 6~) advances by a full page.
-				component.handleInput("\x1b[6~");
-				const afterPgDn = component.getRightPaneScrollTop();
-				assert.ok(afterPgDn > 0, `PgDn should advance the right-pane offset, got ${afterPgDn}`);
-
-				// Walk back to top again and verify the direct API matches the keypress delta.
-				for (let i = 0; i < 50 && component.getRightPaneScrollTop() > 0; i++) {
-					component.handleInput("\x1b[5~");
-				}
 				component.scrollRightPaneByPage(1);
-				const afterApiPage = component.getRightPaneScrollTop();
-				assert.equal(afterApiPage, afterPgDn, "scrollRightPaneByPage(1) matches PgDn keypress");
+				const afterPageDown = component.getRightPaneScrollTop();
+				assert.ok(afterPageDown > 0, `scrollRightPaneByPage(1) should advance the right-pane offset, got ${afterPageDown}`);
+
+				component.scrollRightPaneByPage(-1);
+				assert.equal(component.getRightPaneScrollTop(), 0, "scrollRightPaneByPage(-1) should walk back to the top");
 			} finally {
 				component.dispose();
 			}

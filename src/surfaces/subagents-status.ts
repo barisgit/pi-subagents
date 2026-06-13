@@ -4,24 +4,19 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-	boxRow,
 	computeSplitPaneLayout,
-	dispatchNavKeys,
 	endCursor,
-	endScrollOffset,
 	ensureCursorVisible as ensurePaneCursorVisible,
-	flatRule,
 	homeCursor,
-	homeScrollOffset,
 	moveCursor,
 	moveScrollOffset,
 	pageCursor,
 	pageScrollOffset,
-	renderKeyRow,
+	paneOverlay,
 	resizeSplitPane,
-	titledBottomSegment,
-	titledTopSegment,
 	togglePaneFocus,
+	type PaneOverlayComponent,
+	type PaneOverlayContext,
 } from "pi-extension-utils";
 import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
@@ -49,20 +44,6 @@ const DEFAULT_LEFT_FRACTION = 0.4;
 const SPLIT_STEP_COLS = 4;
 const MIN_VIEWPORT_HEIGHT = 12;
 // Shared legend lives in the left pane's bottom section, charter-picker style.
-// Only put keys that work regardless of focus here; pane-specific extras go
-// into the bottom-border hint of each side.
-const LEGEND_KEY_W = 11;
-const LEGEND_ENTRIES: ReadonlyArray<readonly [string, string]> = [
-	["tab",       "switch pane"],
-	["j/k",       "move/scroll"],
-	["g / G",     "top / bottom"],
-	["PgUp/PgDn", "page list / scroll"],
-	["u / d",     "half-page up / down"],
-	["[ / ]",     "resize split"],
-	["a",         "all sessions"],
-	["enter",     "collapse group"],
-	["q / esc",   "close"],
-];
 // Only the two titled chrome rows (top border + bottom border) consume vertical
 // space inside the overlay region. We fill the rest with body rows so the
 // dashboard reads as a true fullscreen page instead of a short floating card.
@@ -643,6 +624,8 @@ export type DisplayRow =
 	| { kind: "run"; run: LiveRun; depth: number; parallelMarker?: boolean; suppressPhaseChip?: boolean }
 	| { kind: "phase"; id: string; workflowId: string; phaseIndex: number; title?: string; depth: number; done: number; total: number; running: boolean; collapsed: boolean };
 
+type OverlayDisplayRow = DisplayRow | { kind: "empty"; id: "empty" };
+
 function phaseRowDone(run: LiveRun): boolean {
 	const state = run.run.state;
 	return state === "complete" || state === "failed" || state === "interrupted" || state === "skipped";
@@ -932,6 +915,7 @@ export class SubagentsStatusComponent implements Component {
 	private readonly tui: TUI;
 	private readonly theme: Theme;
 	private readonly done: () => void;
+	private readonly overlay: PaneOverlayComponent;
 	private readonly listRunsForOverlay: (recentLimit?: number) => AsyncRunOverlayData;
 	private readonly listForegroundRuns: () => ForegroundRunSummary[];
 	private readonly leftPaneCap: number;
@@ -953,6 +937,7 @@ export class SubagentsStatusComponent implements Component {
 	private rightScroll = new Map<string, ScrollState>();
 	private lastRightHeight = MIN_VIEWPORT_HEIGHT;
 	private lastRightWidth = 0;
+	private lastLeftWidth = 0;
 	// Captured at the end of each render so keyboard handlers (j/k/g/G) can
 	// scroll the left run list relative to its actual visible window rather than
 	// guessing from the right pane's height.
@@ -962,7 +947,7 @@ export class SubagentsStatusComponent implements Component {
 	private sessionId: string | undefined;
 	private readonly getBranchAnchorRunIds: (() => Set<string>) | undefined;
 	private showAllSessions = false;
-	// Charter-style focus: `tab` toggles which pane receives j/k/g/G/PgUp/PgDn.
+	// Charter-style focus: `tab` toggles which pane receives navigation.
 	// Left = move selection; right = scroll transcript.
 	private focus: "left" | "right" = "left";
 	// Split fraction: portion of total width assigned to the left pane. `[` and
@@ -991,6 +976,7 @@ export class SubagentsStatusComponent implements Component {
 		this.sessionId = deps.sessionId;
 		this.getBranchAnchorRunIds = deps.getBranchAnchorRunIds;
 		this.refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
+		this.overlay = this.createPaneOverlay();
 		this.reload();
 		// Seed the signature so the first timer tick doesn't spuriously diff against
 		// undefined; the initial paint is driven by the overlay open, not the timer.
@@ -998,7 +984,97 @@ export class SubagentsStatusComponent implements Component {
 		this.scheduleRefresh();
 	}
 
-	// Self-scheduling refresh tick. Reloads the derived run set, then requests a
+	private createPaneOverlay(): PaneOverlayComponent {
+		const factory = paneOverlay<void, OverlayDisplayRow>({
+			height: (tui) => computeBodyHeight(tui as TUI),
+			primary: {
+				mode: "cursor",
+				rows: () => this.overlayRows(),
+				selectionKey: (row) => this.overlayRowKey(row),
+				onSelectionChange: (row) => {
+					this.selectedId = row && row.kind !== "empty" ? this.rowKey(row) : undefined;
+				},
+				renderRow: (row, ctx) => this.renderOverlayPrimaryRow(row, ctx),
+				title: () => this.overlayPrimaryTitle(),
+				footer: (ctx) => {
+					const visibleCount = this.displayRows().length;
+					return visibleCount > 0
+						? `${ctx.selectedIndex + 1}/${visibleCount}${this.showAllSessions ? "  [all sessions]" : ""}`
+						: "(no runs)";
+				},
+			},
+			detail: {
+				rows: (ctx) => {
+					const run = this.runForOverlayRow(ctx.selectedRow);
+					return run ? buildRightLines(this.theme, run, Math.max(20, this.lastRightWidth || 80), this.runs) : [];
+				},
+				title: (ctx) => {
+					const run = this.runForOverlayRow(ctx.selectedRow);
+					return run ? `${selectedRunTitle(run)} [${run.run.displayState ?? run.run.state}]` : "No run selected";
+				},
+			},
+			closeKeys: ["escape", "ctrl+c", "q"],
+			bannedKeys: ["b", "r", "p", "c"],
+			legendPlacement: "primary",
+			perSelectionScroll: true,
+			stickyBottom: true,
+			split: {
+				initialFraction: DEFAULT_LEFT_FRACTION,
+				minPrimaryWidth: MIN_LEFT_PANE,
+				minDetailWidth: MIN_RIGHT_PANE,
+				maxPrimaryWidth: this.leftPaneCap,
+				stepCols: SPLIT_STEP_COLS,
+			},
+			customActions: [
+				{
+					keys: ["return", "o"],
+					label: "collapse group",
+					run: (ctx) => this.toggleCollapseRow(ctx.selectedRow && ctx.selectedRow.kind !== "empty" ? ctx.selectedRow : undefined),
+				},
+				{
+					keys: "a",
+					label: "all sessions",
+					run: () => {
+						this.showAllSessions = !this.showAllSessions;
+						this.reload();
+					},
+				},
+			],
+		});
+		return factory(this.tui, this.theme, undefined, () => this.done()) as PaneOverlayComponent;
+	}
+
+	private overlayRows(): OverlayDisplayRow[] {
+		const rows = this.displayRows();
+		return rows.length > 0 ? rows : [{ kind: "empty", id: "empty" }];
+	}
+
+	private overlayRowKey(row: OverlayDisplayRow): string {
+		return row.kind === "empty" ? row.id : this.rowKey(row);
+	}
+
+	private renderOverlayPrimaryRow(row: OverlayDisplayRow, ctx: PaneOverlayContext<void, OverlayDisplayRow>): string {
+		if (row.kind === "empty") return this.theme.fg("dim", "No subagent runs");
+		const isSelected = this.overlayRowKey(row) === ctx.selectedKey;
+		const showCwd = this.showAllSessions || !(this.sessionId || this.sessionCwd);
+		const lineWidth = Math.max(20, this.lastLeftWidth || 80);
+		if (row.kind === "phase") return buildPhaseLine(this.theme, row, isSelected, lineWidth);
+		const containerInfo = this.containerRowInfo(row.run);
+		return buildLeftLine(this.theme, row.run, isSelected, Date.now(), lineWidth, row.depth, showCwd, containerInfo, this.isPendingDelivery(row.run), row.suppressPhaseChip, row.parallelMarker);
+	}
+
+	private overlayPrimaryTitle(): string {
+		const scoped = Boolean(this.sessionId || this.sessionCwd);
+		const scopeMarker = this.showAllSessions || !scoped ? " · [all sessions]" : "";
+		return `Subagent runs · ${this.countAgentRows()} total${scopeMarker}`;
+	}
+
+	private runForOverlayRow(row: OverlayDisplayRow | undefined): LiveRun | undefined {
+		if (!row || row.kind === "empty") return undefined;
+		if (row.kind === "run") return row.run;
+		return this.runs.find((run) => run.run.id === row.workflowId);
+	}
+
 	// render ONLY when the structural signature changed OR a live run still needs
 	// its elapsed/spinner label advanced (render-on-diff with a coarse tick for
 	// live labels). When nothing is live and nothing changed, the next tick backs
@@ -1145,7 +1221,10 @@ export class SubagentsStatusComponent implements Component {
 
 	/** Toggle collapse on the selected container row (enter). No-op on leaf rows. */
 	private toggleCollapse(): void {
-		const row = this.selectedRow();
+		this.toggleCollapseRow(this.selectedRow());
+	}
+
+	private toggleCollapseRow(row: DisplayRow | undefined): void {
 		if (!row) return;
 		let id: string | undefined;
 		if (row.kind === "phase") id = row.id;
@@ -1312,6 +1391,15 @@ export class SubagentsStatusComponent implements Component {
 		return state;
 	}
 
+	private syncLegacyRightScrollToBottom(): void {
+		const run = this.selectedRun();
+		if (!run) return;
+		const state = this.getRightScrollState();
+		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
+		state.top = Math.max(0, lines.length - this.lastRightHeight);
+		state.sticky = true;
+	}
+
 	private scrollRight(delta: number): void {
 		const run = this.selectedRun();
 		if (!run) return;
@@ -1325,7 +1413,7 @@ export class SubagentsStatusComponent implements Component {
 
 	/**
 	 * Scroll the right pane by a full page in the given direction (+1 down, -1 up).
-	 * Exposed for tests so PgUp/PgDn behavior can be exercised without simulating keys.
+	 * Exposed for tests without simulating keys.
 	 */
 	scrollRightPaneByPage(direction: 1 | -1): void {
 		this.scrollRightByPage(direction);
@@ -1353,72 +1441,17 @@ export class SubagentsStatusComponent implements Component {
 
 
 	handleInput(data: string): void {
-		dispatchNavKeys(data, {
-			close: this.done,
-			closeKeys: ["escape", "ctrl+c", "q"],
-			bannedKeys: ["b", "r", "p", "a", "c"],
-			focusToggle: () => {
-				this.focus = togglePaneFocus(this.focus);
-				this.tui.requestRender();
-			},
-			extraBindings: [
-				{ keys: "[", handler: () => this.shiftSplit(-1) },
-				{ keys: "]", handler: () => this.shiftSplit(1) },
-				{ keys: ["shift+j", "shift+down"], handler: () => this.scrollRight(1) },
-				{ keys: ["shift+k", "shift+up"], handler: () => this.scrollRight(-1) },
-				{ keys: ["d", "space"], handler: () => {
-					if (this.focus === "right") this.scrollRight(Math.max(1, Math.floor(this.lastRightHeight / 2)));
-					else this.pageSelection(1, 0.5);
-				} },
-				{ keys: ["u", "shift+space"], handler: () => {
-					if (this.focus === "right") this.scrollRight(-Math.max(1, Math.floor(this.lastRightHeight / 2)));
-					else this.pageSelection(-1, 0.5);
-				} },
-				{ keys: "a", handler: () => {
-					this.showAllSessions = !this.showAllSessions;
-					this.reload();
-					this.tui.requestRender();
-				} },
-				{ keys: ["return", "o"], handler: () => this.toggleCollapse() },
-			],
-			move: (delta) => {
-				if (this.focus === "right") this.scrollRight(delta);
-				else this.moveSelection(delta);
-			},
-			home: () => {
-				if (this.focus === "right") {
-					const state = this.getRightScrollState();
-					state.top = homeScrollOffset();
-					state.sticky = false;
-					this.tui.requestRender();
-				} else {
-					this.jumpSelection(false);
-				}
-			},
-			end: () => {
-				if (this.focus === "right") {
-					const state = this.getRightScrollState();
-					const run = this.selectedRun();
-					if (run) {
-						const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
-						state.top = endScrollOffset(lines.length, this.lastRightHeight);
-					}
-					state.sticky = true;
-					this.tui.requestRender();
-				} else {
-					this.jumpSelection(true);
-				}
-			},
-			page: (delta) => {
-				if (this.focus === "right") this.scrollRightByPage(delta);
-				else this.pageSelection(delta);
-			},
-		});
+		if (data === "q" || data === "\u001b" || data === "\u0003") {
+			this.done();
+			return;
+		}
+		if (data === "\t" || data === "\u001b[D" || data === "\u001b[C") {
+			this.focus = togglePaneFocus(this.focus);
+			if (this.focus === "right") this.syncLegacyRightScrollToBottom();
+		}
+		this.overlay.handleInput(data);
 	}
 
-	private bodyRow(left: string, right: string, leftWidth: number, rightWidth: number): string {
-		return boxRow(this.theme, left, right, leftWidth, rightWidth);
-	}
 
 	private shiftSplit(direction: -1 | 1): void {
 		const cols = this.tui.terminal?.columns ?? process.stdout.columns ?? 120;
@@ -1449,174 +1482,34 @@ export class SubagentsStatusComponent implements Component {
 		}).leftWidth;
 	}
 
-	private buildLegendLines(width: number): string[] {
-		if (width <= 0) return [];
-		const keyW = Math.min(LEGEND_KEY_W, Math.max(3, width - 6));
-		return LEGEND_ENTRIES.map(([key, desc]) => {
-			return this.theme.fg("dim", renderKeyRow(key, desc, width, keyW));
-		});
-	}
 
-	private topBorder(leftWidth: number, rightWidth: number): string {
-		const scoped = Boolean(this.sessionId || this.sessionCwd);
-		const scopeMarker = this.showAllSessions || !scoped ? " · [all sessions]" : "";
-		const leftLabel = `Subagent runs · ${this.countAgentRows()} total${scopeMarker}`;
-		const leftFocused = this.focus === "left";
-		const leftSegment = titledTopSegment(this.theme, {
-			width: leftWidth,
-			label: leftLabel,
-			labelColor: leftFocused ? "accent" : "text",
-			labelBold: leftFocused,
-		});
-		const selected = this.selectedRun();
-		const rightFocused = this.focus === "right";
-		let rightSegment: string;
-		if (selected) {
-			const rightLabel = selectedRunTitle(selected);
-			const tailPlain = selectedRunTailPlain(selected);
-			const tailRendered = selectedRunTailRendered(this.theme, selected);
-			rightSegment = titledTopSegment(this.theme, {
-				width: rightWidth,
-				label: rightLabel,
-				tailRendered,
-				tailPlain,
-				labelColor: rightFocused ? "accent" : "text",
-				labelBold: rightFocused,
-			});
-		} else {
-			rightSegment = titledTopSegment(this.theme, {
-				width: rightWidth,
-				label: "(no selection)",
-				labelColor: "dim",
-				tailColor: "dim",
-			});
-		}
-		const corner = (s: string) => this.theme.fg("dim", s);
-		return `${corner("╭")}${leftSegment}${corner("┬")}${rightSegment}${corner("╮")}`;
-	}
 
-	private bottomBorder(leftWidth: number, rightWidth: number, rightTop: number, rightTotal: number): string {
-		// Charter-style: bottom-border carries only counter + a focused-pane key
-		// summary. The shared key reference lives in the legend section above this
-		// border, so we avoid duplicating `j/k`, `tab`, etc. here.
-		const visibleCount = this.displayRows().length;
-		const leftHint = visibleCount > 0
-			? `${this.selectedIndex() + 1}/${visibleCount}${this.showAllSessions ? "  [all sessions]" : ""}`
-			: "(no runs)";
-		const maxTop = Math.max(0, rightTotal - this.lastRightHeight);
-		const rightHint = maxTop > 0 ? `${rightTop}/${maxTop}` : "";
-
-		const leftSegment = titledBottomSegment(this.theme, leftWidth, leftHint, this.focus === "left");
-		const rightSegment = titledBottomSegment(this.theme, rightWidth, rightHint, this.focus === "right");
-		const corner = (s: string) => this.theme.fg("dim", s);
-		return `${corner("╰")}${leftSegment}${corner("┴")}${rightSegment}${corner("╯")}`;
-	}
 
 	invalidate(): void {
-		// No cached render output.
+		// paneOverlay resolves rows lazily during render; the dashboard's existing
+		// refresh timer calls requestRender when data changes.
 	}
 
 	render(width: number): string[] {
 		const w = Math.max(8, width);
 		const layout = computeSplitPaneLayout({
 			totalWidth: w,
-			leftFraction: this.splitFraction,
+			leftFraction: DEFAULT_LEFT_FRACTION,
 			minLeftWidth: MIN_LEFT_PANE,
 			minRightWidth: MIN_RIGHT_PANE,
 			leftMaxWidth: this.leftPaneCap,
 		});
-		const leftWidth = layout.leftWidth;
-		const rightWidth = Math.max(MIN_RIGHT_PANE, layout.rightWidth);
-		this.lastRightWidth = rightWidth;
-
-		const now = Date.now();
-		const showCwd = this.showAllSessions || !(this.sessionId || this.sessionCwd);
-		const leftListLines: string[] = [];
-		const rowsForDisplay = this.displayRows();
-		if (rowsForDisplay.length === 0) {
-			leftListLines.push(this.theme.fg("dim", "No subagent runs"));
-		} else {
-			for (const row of rowsForDisplay) {
-				const isSelected = this.rowKey(row) === this.selectedId;
-				if (row.kind === "phase") {
-					leftListLines.push(buildPhaseLine(this.theme, row, isSelected, leftWidth));
-					continue;
-				}
-				const containerInfo = this.containerRowInfo(row.run);
-				leftListLines.push(buildLeftLine(this.theme, row.run, isSelected, now, leftWidth, row.depth, showCwd, containerInfo, this.isPendingDelivery(row.run), row.suppressPhaseChip, row.parallelMarker));
-			}
-		}
-
-		const selected = this.selectedRun();
-		const rightLines = buildRightLines(this.theme, selected, rightWidth, this.runs);
-
-		const bodyHeight = computeBodyHeight(this.tui);
-		this.lastRightHeight = bodyHeight;
-
-		// Left pane is split vertically: top = run list, bottom = legend section.
-		// Legend takes its content height (+1 for the flatRule divider). The list
-		// absorbs whatever space remains, so it shrinks first on a tiny terminal.
-		const legendLines = this.buildLegendLines(leftWidth);
-		const legendHeight = legendLines.length;
-		const legendBlockHeight = legendHeight > 0 ? legendHeight + 1 : 0; // +1 divider
-		const listHeight = Math.max(1, bodyHeight - legendBlockHeight);
-		this.lastLeftListHeight = listHeight;
-		// Re-clamp leftScroll so j/k/G that ran before the first render (or after a
-		// terminal resize) produce a visible selection instead of an empty slice.
-		const selectedIdx = this.selectedIndex();
-		if (selectedIdx >= 0) {
-			this.leftScroll = ensurePaneCursorVisible({
-				cursor: selectedIdx,
-				scroll: this.leftScroll,
-				itemCount: leftListLines.length,
-				viewportHeight: listHeight,
-			}).scroll;
-		}
-		const divider = flatRule(this.theme, "keys", leftWidth);
-
-		// Right pane scroll bookkeeping: sticky-to-bottom for the selected run.
-		let rightTop = 0;
-		if (selected) {
-			const state = this.getRightScrollState();
-			if (state.sticky) state.top = endScrollOffset(rightLines.length, bodyHeight);
-			state.top = moveScrollOffset({ offset: state.top, contentLength: rightLines.length, viewportHeight: bodyHeight }, 0);
-			rightTop = state.top;
-		}
-
-		const visibleList = leftListLines.slice(this.leftScroll, this.leftScroll + listHeight);
-		const visibleRight = rightLines.slice(rightTop, rightTop + bodyHeight);
-
-		const rows: string[] = [this.topBorder(leftWidth, rightWidth)];
-		if (this.errorMessage) {
-			rows.push(this.bodyRow(
-				this.theme.fg("error", truncateToWidth(`status read failed: ${this.errorMessage}`, leftWidth)),
-				"",
-				leftWidth,
-				rightWidth,
-			));
-		}
-		for (let i = 0; i < bodyHeight; i++) {
-			let left: string;
-			if (i < listHeight) {
-				left = visibleList[i] ?? "";
-			} else if (i === listHeight && legendBlockHeight > 0) {
-				left = divider;
-			} else if (legendBlockHeight > 0) {
-				const legendIdx = i - (listHeight + 1);
-				left = legendLines[legendIdx] ?? "";
-			} else {
-				left = "";
-			}
-			const right = visibleRight[i] ?? "";
-			rows.push(this.bodyRow(left, right, leftWidth, rightWidth));
-		}
-		rows.push(this.bottomBorder(leftWidth, rightWidth, rightTop, rightLines.length));
-		return rows;
+		this.lastLeftWidth = layout.leftWidth;
+		this.lastRightWidth = Math.max(MIN_RIGHT_PANE, layout.rightWidth);
+		this.lastRightHeight = computeBodyHeight(this.tui);
+		this.lastLeftListHeight = Math.max(1, this.lastRightHeight - 9);
+		return this.overlay.render(width);
 	}
 
 	dispose(): void {
 		if (this.refreshTimer) clearTimeout(this.refreshTimer);
 		this.refreshTimer = undefined;
+		this.overlay.dispose();
 	}
 }
 
