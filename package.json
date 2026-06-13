@@ -57,7 +57,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "dependencies": {
-    "pi-extension-utils": "^0.3.1",
+    "pi-extension-utils": "^0.3.2",
     "typebox": "^1.1.24"
   },
   "devDependencies": {
@@ -65,6 +65,7 @@
     "@earendil-works/pi-ai": "^0.75.4",
     "@earendil-works/pi-coding-agent": "^0.75.4",
     "tiktoken": "^1.0.22",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "@earendil-works/pi-tui": "0.75.4"
   }
 }
