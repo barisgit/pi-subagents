@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { statusToSummary } from "../../src/state/async-status.ts";
+import { statusToRunView } from "../../src/state/async-status.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
@@ -100,7 +100,7 @@ describe("resume display fields", () => {
 	});
 
 	it("defaults missing fields to never-resumed summary values", () => {
-		const legacy = statusToSummary("/tmp/legacy", { runId: "legacy", mode: "single", state: "complete", startedAt: 1_000, endedAt: 2_000, steps: [] });
+		const legacy = statusToRunView("/tmp/legacy", { runId: "legacy", mode: "single", state: "complete", startedAt: 1_000, endedAt: 2_000, steps: [] });
 		assert.equal(legacy.resumeCount, 0);
 		assert.equal(legacy.resumedAt, undefined);
 	});

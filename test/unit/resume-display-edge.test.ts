@@ -8,7 +8,7 @@ import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts"
 import { buildLeftLine } from "../../src/surfaces/subagents-status.ts";
 import { __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
-import { summaryFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
 import type { SubagentState } from "../../src/protocol/types.ts";
 
@@ -100,7 +100,7 @@ describe("resume display edge cases", () => {
 		setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 		const now = 1_000_000;
 		const entry = seedRun(tempDir!, "reload-run", now - 143 * 60_000, { resumedAt: now - 12_000, resumeCount: 1, endedAt: now, lastUpdate: now });
-		const summary = summaryFromRegistryEntry(entry);
+		const summary = runViewFromRegistryEntry(entry);
 		assert.equal(summary.resumedAt, now - 12_000);
 		assert.equal(summary.resumeCount, 1);
 		const line = buildLeftLine(theme as never, { ownership: "foreign", run: summary }, false, now, 240);

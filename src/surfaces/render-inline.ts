@@ -5,7 +5,7 @@
  */
 
 import { readStatus } from "../shared/utils.ts";
-import { statusToSummary, type AsyncRunSummary } from "../state/async-status.ts";
+import { statusToRunView, type AsyncRunSummary } from "../state/async-status.ts";
 import { formatPhase } from "../state/run-phase.ts";
 import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
@@ -29,7 +29,7 @@ function readInlineRun(runId: string): { summary: AsyncRunSummary; events: Trans
 	if (!asyncDir) return undefined;
 	const status = readStatus(asyncDir);
 	if (!status) return undefined;
-	return { summary: statusToSummary(asyncDir, status), events: readRunTranscript(asyncDir) };
+	return { summary: statusToRunView(asyncDir, status), events: readRunTranscript(asyncDir) };
 }
 
 // Short-TTL cache: re-read the registry at most every 250ms per parent.
@@ -64,7 +64,7 @@ function listInlineChildRuns(parentRunId: string): AsyncRunSummary[] {
 		if (!asyncDir) continue;
 		const status = readStatus(asyncDir);
 		if (!status || status.parentRunId !== parentRunId) continue;
-		out.push(statusToSummary(asyncDir, status));
+		out.push(statusToRunView(asyncDir, status));
 	}
 	return out.sort((a, b) => a.startedAt - b.startedAt);
 }

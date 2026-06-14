@@ -8,6 +8,7 @@ import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-s
 import { logger } from "../shared/logger.ts";
 import type { SubagentToolInput as SubagentParamsLike } from "../protocol/schemas.ts";
 import type { UtilsClient } from "pi-extension-utils";
+import type { RunView } from "../state/run-view.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import {
 	applySlashUpdate,
@@ -391,6 +392,7 @@ export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
 	getWidgetClient?: (ctx: ExtensionContext) => UtilsClient | undefined,
+	childRegistry?: { listRunViews: () => RunView[] },
 ): void {
 	pi.registerCommand("run", {
 		description: "Run a subagent directly: /run [preset=name] agent[output=file] [task] [--bg] [--fork]",
@@ -470,6 +472,7 @@ export function registerSlashCommands(
 				sessionCwd,
 				...(sessionId ? { sessionId } : {}),
 				getBranchAnchorRunIds,
+				...(childRegistry ? { getOwnedRunViews: () => new Map(childRegistry.listRunViews().map((view) => [view.id, view])) } : {}),
 			});
 		const client = getWidgetClient?.(ctx);
 		if (client) {

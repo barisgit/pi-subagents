@@ -1,7 +1,7 @@
 // Regression: `subagent({ action: "status" })` with no id used to dump every
 // entry in runs-index.jsonl across every project ever spawned — including
 // thousands of long-dead test temp-dir runs whose status.json no longer
-// exists, because readSummaryForEntry synthesizes a fake `queued` stub for
+// exists, because readRunViewForEntry synthesizes a fake `queued` stub for
 // them and they match the `queued/running/lost` filter.
 //
 // Two fixes covered here:

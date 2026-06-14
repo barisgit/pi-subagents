@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { formatAsyncRunList, readSummaryForEntry } from "../../src/state/async-status.ts";
+import { formatAsyncRunList, readRunViewForEntry } from "../../src/state/async-status.ts";
 import { buildRightLines, buildWorkflowRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
-import { SubagentsStatusComponent, summaryFromRegistryEntry, type LiveRun } from "../../src/surfaces/subagents-status.ts";
+import { SubagentsStatusComponent, runViewFromRegistryEntry, type LiveRun } from "../../src/surfaces/subagents-status.ts";
 import { writeWorkflowScript } from "../../src/workflow/workflow-group-state.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
@@ -177,26 +177,26 @@ describe("workflow dashboard reader overlays", () => {
 	it("subagents-status marks workflow groups and copies registry phase tags onto child summaries", () => {
 		const { group, children, entries } = setupWorkflowRegistry();
 
-		const groupSummary = summaryFromRegistryEntry(group, entries);
+		const groupSummary = runViewFromRegistryEntry(group, entries);
 		assert.equal(groupSummary.workflow, true);
 
-		const childSummaries = children.map((child) => summaryFromRegistryEntry(child, entries));
+		const childSummaries = children.map((child) => runViewFromRegistryEntry(child, entries));
 		assertWorkflowChildren(childSummaries);
 	});
 
 	it("async-status marks workflow groups and copies registry phase tags onto child summaries", () => {
 		const { group, children, entries } = setupWorkflowRegistry();
 
-		const groupSummary = readSummaryForEntry(group, entries);
+		const groupSummary = readRunViewForEntry(group, entries);
 		assert.equal(groupSummary?.workflow, true);
 
-		const childSummaries = children.map((child) => readSummaryForEntry(child, entries)).filter((child): child is NonNullable<typeof child> => Boolean(child));
+		const childSummaries = children.map((child) => readRunViewForEntry(child, entries)).filter((child): child is NonNullable<typeof child> => Boolean(child));
 		assertWorkflowChildren(childSummaries);
 	});
 
 	it("async-status renders workflow groups by phase with bracketed parallel siblings", () => {
 		const { entries } = setupWorkflowRegistry();
-		const summaries = entries.map((entry) => readSummaryForEntry(entry, entries)).filter((summary): summary is NonNullable<typeof summary> => Boolean(summary));
+		const summaries = entries.map((entry) => readRunViewForEntry(entry, entries)).filter((summary): summary is NonNullable<typeof summary> => Boolean(summary));
 
 		const text = formatAsyncRunList(summaries);
 		assert.match(text, /workflow-group \| complete \| workflow \| tasks 3\/3 complete/);
@@ -296,8 +296,8 @@ describe("workflow dashboard reader overlays", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		writeWorkflowScript(group.runRecordDir, 'const a = await agent("explorer", "inspect");\nreturn a.summary;');
 
-		const groupSummary = summaryFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: summaryFromRegistryEntry(entry, entries) }));
+		const groupSummary = runViewFromRegistryEntry(group, entries);
+		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) }));
 		const theme = createTestTheme();
 		const lines = buildWorkflowRightLines(theme, groupSummary, 120, runs).join("\n");
 
@@ -326,8 +326,8 @@ describe("workflow dashboard reader overlays", () => {
 	it("buildRightLines routes a workflow group to the workflow pane", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		writeWorkflowScript(group.runRecordDir, 'await agent("explorer", "x");');
-		const groupSummary = summaryFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: summaryFromRegistryEntry(entry, entries) }));
+		const groupSummary = runViewFromRegistryEntry(group, entries);
+		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) }));
 		const lines = buildRightLines(createTestTheme(), { ownership: "foreign", run: groupSummary }, 120, runs).join("\n");
 		assert.match(lines, /─ Script ─/, "mutant: buildRightLines must route workflow groups to the workflow pane");
 		assert.match(lines, /─ Steps ─/);
@@ -338,7 +338,7 @@ describe("workflow dashboard reader overlays", () => {
 		const longScript = Array.from({ length: 40 }, (_, i) => `phase("step ${i}");`).join("\n");
 		writeWorkflowScript(group.runRecordDir, longScript);
 
-		const groupSummary = summaryFromRegistryEntry(group, entries);
+		const groupSummary = runViewFromRegistryEntry(group, entries);
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, []).join("\n");
 		assert.match(lines, /phase\("step 0"\);/);
 		assert.match(lines, /phase\("step 23"\);/);
@@ -348,8 +348,8 @@ describe("workflow dashboard reader overlays", () => {
 
 	it("workflow group with no script still outlines steps (no transcript fallback noise)", () => {
 		const { group, entries } = setupWorkflowRegistry();
-		const groupSummary = summaryFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: summaryFromRegistryEntry(entry, entries) }));
+		const groupSummary = runViewFromRegistryEntry(group, entries);
+		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) }));
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, runs).join("\n");
 		assert.doesNotMatch(lines, /─ Script ─/);
 		assert.match(lines, /─ Steps ─/);

@@ -281,7 +281,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool(tool);
 	pi.registerTool(workflowTool);
-	registerSlashCommands(pi, state, getWidgetClient);
+	registerSlashCommands(pi, state, getWidgetClient, childRegistry);
 	roleManager.registerRoleCommand();
 
 	// Host-only cross-activate state. Children don't need to tear down a

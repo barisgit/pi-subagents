@@ -2,7 +2,7 @@ import { AgentSession, type AgentSessionEvent, type ExtensionAPI, type Extension
 import type { ChildAgentResult, PersistedRunStatus, PersistedRunStep, StatusPatch } from "../protocol/status-types.ts";
 import { applyPatchToStatus } from "../state/status-patch.ts";
 import { statusFromMeta, type StatusMeta } from "../state/status-writer.ts";
-import { statusToSummary } from "../state/async-status.ts";
+import { statusToRunView } from "../state/async-status.ts";
 import { tokenUsageFromUsage } from "../state/usage-totals.ts";
 import type { RunView } from "../state/run-view.ts";
 
@@ -176,7 +176,7 @@ export class ChildAgentRegistry {
 
 	private toRunView(runId: string, s: PersistedRunStatus & { steps: PersistedRunStep[] }): RunView {
 		const extra = this.viewMeta.get(runId);
-		const view = statusToSummary(extra?.asyncDir ?? s.sessionDir ?? "", s);
+		const view = statusToRunView(extra?.asyncDir ?? s.sessionDir ?? "", s);
 		return {
 			...view,
 			...(extra?.parentSessionId ? { parentSessionId: extra.parentSessionId } : {}),

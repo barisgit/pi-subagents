@@ -16,7 +16,7 @@ import {
 	type PaneOverlayComponent,
 	type PaneOverlayContext,
 } from "pi-extension-utils";
-import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns } from "../state/async-status.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafRunViewCached, sortRuns } from "../state/async-status.ts";
 import { formatDuration } from "./formatters.ts";
 import { tintAgentName } from "./render-shared.ts";
 import { buildRightLines, statusGlyph } from "./dashboard-detail-renderer.ts";
@@ -92,6 +92,11 @@ interface StatusOverlayDeps {
 	// reload so a /tree revert immediately hides abandoned-branch runs. When
 	// absent, the overlay falls back to plain session-tree scoping.
 	getBranchAnchorRunIds?: () => Set<string>;
+	// Registry memory mirror accessor: returns the RunViews this process owns
+	// in-memory, keyed by run id. Owned async runs render live-from-memory; all
+	// others (post-reload, external) hydrate foreign-from-disk. Absent in tests
+	// that only exercise the disk path.
+	getOwnedRunViews?: () => Map<string, AsyncRunSummary>;
 }
 
 function entryMatchesOverlayScope(entry: RunsRegistryEntry, scope: { sessionCwd?: string; sessionId?: string }): boolean {
@@ -112,11 +117,12 @@ function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary,
 	};
 }
 
-export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntries?: RunsRegistryEntry[]): AsyncRunSummary {
-	// Shared terminal-summary cache with readSummaryForEntry: terminal leaves are
-	// reused by status.json mtime+size; active leaves are always rebuilt so the
-	// lost-transition keeps firing. See readLeafSummaryCached.
-	const summary = readLeafSummaryCached(entry.runRecordDir);
+export function runViewFromRegistryEntry(entry: RunsRegistryEntry, registryEntries?: RunsRegistryEntry[], ownedViews?: Map<string, AsyncRunSummary>): AsyncRunSummary {
+	// Owned in-process runs resolve their leaf from the registry memory mirror;
+	// non-owned entries reuse the shared terminal-summary cache with
+	// readRunViewForEntry: terminal leaves are reused by status.json mtime+size;
+	// active leaves are always rebuilt so the lost-transition keeps firing.
+	const summary = ownedViews?.get(entry.runId) ?? readLeafRunViewCached(entry.runRecordDir);
 	const lineage = {
 		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
 		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
@@ -132,7 +138,7 @@ export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 	if (!entry.agentName && !entry.agentNames) {
 		const entries = registryEntries ?? readAllEntries();
 		const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
-		const childSummaries = children.map((child) => ({ ...summaryFromRegistryEntry(child, entries), ...registryWorkflowFields(child) }));
+		const childSummaries = children.map((child) => ({ ...runViewFromRegistryEntry(child, entries, ownedViews), ...registryWorkflowFields(child) }));
 		// Shared group-synthesis seam (state + workflow override + endedAt + group
 		// object). The overlay carries currentStep:0 + lastUpdate, so pass extras.
 		return buildGroupSummary(entry, childSummaries, { extras: true });
@@ -154,7 +160,7 @@ export function summaryFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 	};
 }
 
-export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd?: string; sessionId?: string }): AsyncRunOverlayData {
+export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd?: string; sessionId?: string }, ownedViews?: Map<string, AsyncRunSummary>): AsyncRunOverlayData {
 	const seedIds = new Set([...seed.active, ...seed.recent].map((run) => run.id));
 	if (seedIds.size === 0) return seed;
 
@@ -175,7 +181,7 @@ export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { ses
 		// The scoped seed has already proven this root run belongs to the current
 		// session. Include the whole run tree by rootRunId so descendants with
 		// stale/missing session tags are still rendered under their visible parent.
-		byId.set(entry.runId, summaryFromRegistryEntry(entry, entries));
+		byId.set(entry.runId, runViewFromRegistryEntry(entry, entries, ownedViews));
 	}
 
 	const all = [...byId.values()];
@@ -227,15 +233,26 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 		.sort((a, b) => b.startedAt - a.startedAt);
 }
 
-function runKey(run: LiveRun): string {
-	return `${run.ownership}:${run.run.id}`;
+export function runKey(run: LiveRun): string {
+	// Keyed by bare run id, NOT `${ownership}:${id}`: async ownership is now
+	// time-varying (live while this process owns the run, then foreign once the
+	// registry retention sweep drops it), so an ownership-prefixed key would change
+	// under a stable run and reset the user's selection to the top row ~10s after an
+	// owned-async run completes. Ids are unique per derived pass (sync ids are
+	// deduped out of the async set in dashboard-run-source), matching the
+	// bare-id keying already used for collapsedIds.
+	return run.run.id;
 }
 
 // Returns the agent name(s) as a pre-styled string when colors apply, otherwise plain text.
 // Parallel runs with heterogeneous agents get per-piece tinting so each name uses its own color.
 function runAgentLabel(run: LiveRun, theme: Theme): string {
-	if (run.ownership === "live") {
-		const name = run.run.currentAgent ?? run.run.mode;
+	// The live-agent label is selected by the presence of currentAgent (a
+	// foreground-only field), NOT by provenance. Owned-async leaves carry no
+	// currentAgent (only real steps) so they fall through to the step logic below,
+	// and async group containers fall through to the workflow/parallel branches.
+	if (run.run.currentAgent) {
+		const name = run.run.currentAgent;
 		return tintAgentName(name, run.run.currentAgentColor ?? colorForAgentName(name));
 	}
 	if (run.run.workflow) return tintAgentName("workflow", colorForAgentName("workflow"));
@@ -292,7 +309,9 @@ function runShapeBadge(run: LiveRun): string {
 // a render (live labels) and whether the refresh interval may back off (no live
 // runs => idle).
 function runHasLiveLabel(run: LiveRun): boolean {
-	if (run.ownership !== "foreign") return run.run.state === "running" || run.run.state === "queued";
+	// Liveness is a data property of the run's state, not its provenance: a
+	// terminal/lost run freezes its label regardless of whether this process owns
+	// it. Foreground runs are always state:'running' => not terminal => live.
 	const s = run.run.state;
 	if (s === "complete" || s === "failed" || s === "interrupted" || s === "skipped" || s === "lost" || s === "paused") return false;
 	if (run.run.displayState === "lost") return false;
@@ -305,46 +324,45 @@ function runHasLiveLabel(run: LiveRun): boolean {
 // changes the painted rows: identity, order, state, derived liveness, current
 // tool, phase, and step progress. The render-on-diff gate fires a repaint when
 // this changes; the coarse-tick path separately keeps live labels advancing.
-function overlayRunsSignature(runs: LiveRun[], selectedId: string | undefined, errorMessage: string | undefined): string {
+export function overlayRunsSignature(runs: LiveRun[], selectedId: string | undefined, errorMessage: string | undefined): string {
 	const parts: string[] = [`sel:${selectedId ?? ""}`, `err:${errorMessage ? 1 : 0}`];
 	for (const run of runs) {
-		if (run.ownership === "foreign") {
-			const r = run.run;
-			parts.push(`async:${r.id}:${r.state}:${r.displayState ?? ""}:${r.currentTool ?? ""}:${r.phase ?? ""}:${r.currentStep ?? ""}:${r.steps?.length ?? 0}`);
-		} else {
-			const r = run.run;
-			parts.push(`sync:${r.id}:${r.state}:${r.currentTool ?? ""}:${r.currentIndex ?? ""}`);
-		}
+		// Provenance-free signature: include every present live-data field so the
+		// dashboard repaints whenever an owned-async child advances (step/phase/
+		// displayState/tool/activity), exactly as it does for a foreign disk run.
+		const r = run.run;
+		parts.push(`run:${r.id}:${r.state}:${r.displayState ?? ""}:${r.currentTool ?? ""}:${r.phase ?? ""}:${r.currentStep ?? ""}:${r.steps?.length ?? 0}:${r.currentIndex ?? ""}:${r.lastActivityAt ?? ""}`);
 	}
 	return parts.join("|");
 }
 
-function runElapsed(run: LiveRun, now: number): string {
+export function runElapsed(run: LiveRun, now: number): string {
 	const legStartedAt = run.run.resumedAt ?? run.run.startedAt;
-	// Terminal runs (lost/complete/failed) must not keep ticking. lost runs have no
-	// endedAt because the child crashed without writing one, so fall back to lastUpdate.
-	if (run.ownership === "foreign") {
-		if (run.run.endedAt) return formatDuration(Math.max(0, run.run.endedAt - legStartedAt));
-		// A force-killed run keeps state==='running' on disk but goes displayState==='lost'
-		// once its runner heartbeat is stale — freeze the timer on that too, not just on a
-		// terminal state, otherwise a dead run keeps ticking.
-		if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || run.run.displayState === "lost") {
-			const frozen = run.run.lastUpdate ?? run.run.startedAt;
-			return formatDuration(Math.max(0, frozen - legStartedAt));
-		}
+	// Terminal runs (lost/complete/failed) must not keep ticking. The freeze is a
+	// data property — endedAt or a terminal/lost state — NOT provenance: an owned
+	// in-process run that has completed (now ownership:'live') must freeze too, or
+	// its elapsed timer ticks forever. lost runs have no endedAt because the child
+	// crashed without writing one, so fall back to lastUpdate.
+	if (run.run.endedAt) return formatDuration(Math.max(0, run.run.endedAt - legStartedAt));
+	// A force-killed run keeps state==='running' on disk but goes displayState==='lost'
+	// once its runner heartbeat is stale — freeze the timer on that too, not just on a
+	// terminal state, otherwise a dead run keeps ticking.
+	if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || run.run.displayState === "lost") {
+		const frozen = run.run.lastUpdate ?? run.run.startedAt;
+		return formatDuration(Math.max(0, frozen - legStartedAt));
 	}
 	return formatDuration(Math.max(0, now - legStartedAt));
 }
 
-function runIdentityAge(run: LiveRun, now: number): string | undefined {
+export function runIdentityAge(run: LiveRun, now: number): string | undefined {
 	if ((run.run.resumeCount ?? 0) <= 0) return undefined;
 	// Identity age = wall time since the run first started. For a terminal run it
 	// must freeze at the end (endedAt, or lastUpdate for a lost run that crashed
 	// without one) instead of ticking against `now` forever.
 	const isLost = run.run.state === "lost" || run.run.displayState === "lost";
-	const frozenEnd = run.ownership === "foreign"
-		? run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || isLost ? run.run.lastUpdate : undefined)
-		: undefined;
+	// Freeze on terminal data, not provenance: a completed owned-async run
+	// (ownership:'live') must stop aging at endedAt/lastUpdate like a foreign one.
+	const frozenEnd = run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || isLost ? run.run.lastUpdate : undefined);
 	const end = frozenEnd ?? now;
 	return formatDuration(Math.max(0, end - run.run.startedAt));
 }
@@ -376,8 +394,10 @@ function runCwdBadge(run: LiveRun, forceShow: boolean): string {
 // Compact local-time date stamp for completed/lost runs. Today: `HH:MM`,
 // yesterday-or-older: `MM-DD HH:MM`. Returns empty for runs that have no
 // `endedAt` (running rows already show a live `Xs` elapsed counter).
-function runEndedStamp(run: LiveRun): string {
-	if (run.ownership !== "foreign") return "";
+export function runEndedStamp(run: LiveRun): string {
+	// Stamp is driven by endedAt presence (a data property), not provenance: a
+	// completed owned-async run carries endedAt and should show its end stamp.
+	// Running rows (foreground or active async) have no endedAt => "" below.
 	// A lost run crashed without writing endedAt; its last heartbeat (lastUpdate) is
 	// the best estimate of when it died, so stamp that like any other terminal row
 	// instead of leaving the tail to fall back to a frozen elapsed duration.
@@ -518,6 +538,11 @@ export class SubagentsStatusComponent implements Component {
 	private sessionCwd: string | undefined;
 	private sessionId: string | undefined;
 	private readonly getBranchAnchorRunIds: (() => Set<string>) | undefined;
+	private readonly getOwnedRunViews: (() => Map<string, AsyncRunSummary>) | undefined;
+	// The owned-run mirror snapshot for the CURRENT reload pass. Captured once at
+	// the top of reload() so the overlay producer and the ownership assignment in
+	// deriveLiveRuns agree on the exact same owned set within a pass.
+	private ownedViews: Map<string, AsyncRunSummary> = new Map();
 	private showAllSessions = false;
 	// Charter-style focus: `tab` toggles which pane receives navigation.
 	// Left = move selection; right = scroll transcript.
@@ -540,13 +565,15 @@ export class SubagentsStatusComponent implements Component {
 			const scope = this.showAllSessions ? {} : {
 				...(this.sessionId ? { sessionId: this.sessionId } : { sessionCwd: this.sessionCwd }),
 			};
-			return expandOverlayByRootRunId(listRunsFromRegistryForOverlay(limit, scope), scope);
+			const owned = this.ownedViews.size > 0 ? this.ownedViews : undefined;
+			return expandOverlayByRootRunId(listRunsFromRegistryForOverlay(limit, scope, owned), scope, owned);
 		});
 		this.listForegroundRuns = deps.listForegroundRuns ?? (() => []);
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
 		this.sessionCwd = deps.sessionCwd;
 		this.sessionId = deps.sessionId;
 		this.getBranchAnchorRunIds = deps.getBranchAnchorRunIds;
+		this.getOwnedRunViews = deps.getOwnedRunViews;
 		this.refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.overlay = this.createPaneOverlay();
 		this.reload();
@@ -668,6 +695,11 @@ export class SubagentsStatusComponent implements Component {
 
 	private reload(): void {
 		try {
+			// Snapshot the registry memory mirror ONCE per pass: the overlay producer
+			// memory-resolves owned leaves and deriveLiveRuns stamps ownership:'live'
+			// for the same ids. After a reload the registry is empty => map empty =>
+			// every run hydrates foreign-from-disk (today's behavior).
+			this.ownedViews = this.getOwnedRunViews?.() ?? new Map();
 			const overlay = this.listRunsForOverlay();
 			const sync = this.listForegroundRuns();
 			this.runs = deriveLiveRuns(overlay, sync, {
@@ -675,6 +707,7 @@ export class SubagentsStatusComponent implements Component {
 				sessionId: this.sessionId,
 				sessionCwd: this.sessionCwd,
 				branchAnchorIds: this.getBranchAnchorRunIds?.(),
+				ownedIds: new Set(this.ownedViews.keys()),
 			});
 			this.errorMessage = undefined;
 		} catch (error) {
@@ -901,8 +934,11 @@ export class SubagentsStatusComponent implements Component {
 
 function selectedRunTitle(run: LiveRun): string {
 	if (run.run.label) return run.run.label;
-	if (run.ownership === "live") {
-		return run.run.currentAgent ?? run.run.mode ?? "(run)";
+	// Title from the live currentAgent when present (foreground-only field), NOT by
+	// provenance. Owned-async runs carry no currentAgent and title from their steps
+	// (workflow/step logic below) like any disk run.
+	if (run.run.currentAgent) {
+		return run.run.currentAgent;
 	}
 	if (run.run.workflow) return "workflow";
 	const running = run.run.steps?.find((s) => s.status === "running");

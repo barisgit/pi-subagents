@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { statusToSummary } from "../../src/state/async-status.ts";
+import { statusToRunView } from "../../src/state/async-status.ts";
 import { foregroundRunsFromState } from "../../src/surfaces/subagents-status.ts";
 import { getSubagentIdentityEnv, type SubagentState } from "../../src/protocol/types.ts";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
@@ -18,7 +18,7 @@ describe("parent run id plumbing", () => {
 			startedAt: 1,
 			steps: [{ agent: "fixer", status: "running" }],
 		};
-		assert.equal(statusToSummary("/tmp/child-1", status).parentRunId, "parent-1");
+		assert.equal(statusToRunView("/tmp/child-1", status).parentRunId, "parent-1");
 	});
 
 	it("copies parentRunId from foreground controls", () => {

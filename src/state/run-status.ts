@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ASYNC_NO_POLL_GUIDANCE } from "../shared/formatting.ts";
-import { formatAsyncRunList, listRunsFromRegistry, readSummaryForEntry } from "./async-status.ts";
+import { formatAsyncRunList, listRunsFromRegistry, readRunViewForEntry } from "./async-status.ts";
 import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { type Details } from "../protocol/types.ts";
 import { readStatus } from "../shared/utils.ts";
@@ -157,7 +157,7 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 	// own; their state is synthesized from children. Fall back to the registry
 	// summary so `status id=<group>` works instead of "Status file not found."
 	if (registryMatch && registryEntries) {
-		const summary = readSummaryForEntry(registryMatch, registryEntries);
+		const summary = readRunViewForEntry(registryMatch, registryEntries);
 		if (summary) {
 			const children = registryEntries.filter((entry) => entry.parentRunId === registryMatch!.runId);
 			const lines = [
@@ -170,7 +170,7 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 				`Dir: ${asyncDir ?? registryMatch.runRecordDir}`,
 			].filter((line): line is string => Boolean(line));
 			for (const child of children) {
-				const childSummary = readSummaryForEntry(child, registryEntries);
+				const childSummary = readRunViewForEntry(child, registryEntries);
 				const agent = child.agentName ?? child.agentNames?.join("+") ?? "(group)";
 				lines.push(`Child: ${child.runId.slice(0, 8)} | ${agent} | ${childSummary?.state ?? "unknown"}${child.label ? ` | ${child.label}` : ""}`);
 			}

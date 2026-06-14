@@ -77,7 +77,7 @@ function deriveAsyncActivityState(asyncDir: string, status: PersistedRunStatus):
 	};
 }
 
-export function statusToSummary(asyncDir: string, status: PersistedRunStatus & { cwd?: string }): AsyncRunSummary {
+export function statusToRunView(asyncDir: string, status: PersistedRunStatus & { cwd?: string }): AsyncRunSummary {
 	const { activityState, lastActivityAt } = deriveAsyncActivityState(asyncDir, status);
 	const id = status.runId || path.basename(asyncDir);
 	const displayState = deriveRunDisplayState({
@@ -197,7 +197,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 		const asyncDir = path.join(asyncDirRoot, entry);
 		const status = readStatus(asyncDir) as (PersistedRunStatus & { cwd?: string }) | null;
 		if (!status) continue;
-		const summary = statusToSummary(asyncDir, status);
+		const summary = statusToRunView(asyncDir, status);
 		if (allowedStates && !allowedStates.has(summary.state)) continue;
 		runs.push(summary);
 	}
@@ -209,7 +209,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 // Registry-backed reader. Single source of truth for run discovery: enumerates
 // the runs-index.jsonl registry instead of scanning a temp dir. Both sync and
 // async runs appear as equal first-class entries.
-export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"][]; limit?: number; entries?: RunsRegistryEntry[] } = {}): AsyncRunSummary[] {
+export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"][]; limit?: number; entries?: RunsRegistryEntry[]; ownedViews?: Map<string, AsyncRunSummary> } = {}): AsyncRunSummary[] {
 	const entries = options.entries ?? readAllEntries();
 	const allowedStates = options.states ? new Set(options.states) : undefined;
 	const runs: AsyncRunSummary[] = [];
@@ -217,7 +217,7 @@ export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"
 	for (const entry of entries) {
 		if (seen.has(entry.runId)) continue;
 		seen.add(entry.runId);
-		const summary = readSummaryForEntry(entry, entries);
+		const summary = readRunViewForEntry(entry, entries, options.ownedViews);
 		if (!summary) continue;
 		if (allowedStates && !allowedStates.has(summary.state)) continue;
 		runs.push(summary);
@@ -231,10 +231,11 @@ export function listRunsFromRegistryForOverlay(
 	// session); callers that still want a top-N pass an explicit number.
 	recentLimit?: number,
 	options: { sessionCwd?: string; sessionId?: string } = {},
+	ownedViews?: Map<string, AsyncRunSummary>,
 ): AsyncRunOverlayData {
 	const all = options.sessionId
-		? listRunsFromRegistry({ entries: readShardEntries(options.sessionId) })
-		: listRunsFromRegistry();
+		? listRunsFromRegistry({ entries: readShardEntries(options.sessionId), ...(ownedViews ? { ownedViews } : {}) })
+		: listRunsFromRegistry(ownedViews ? { ownedViews } : {});
 	// Scope BEFORE the recent-limit slice. Otherwise the top-N most recent
 	// completed runs across every project drown out the current session's
 	// history and the overlay renders "0 total" even though runs-index.jsonl
@@ -315,12 +316,12 @@ export function clearLeafSummaryCacheForTests(): void {
 	leafSummaryCache.clear();
 }
 
-// Shared by both dashboard leaf builders (readSummaryForEntry here and
-// summaryFromRegistryEntry in subagents-status.ts). Returns the pure
-// statusToSummary projection (callers spread their own lineage / workflow tags
+// Shared by both dashboard leaf builders (readRunViewForEntry here and
+// runViewFromRegistryEntry in subagents-status.ts). Returns the pure
+// statusToRunView projection (callers spread their own lineage / workflow tags
 // on top); null when there is no readable status.json. Terminal results are
 // cached by status.json mtime+size; active results are always rebuilt.
-export function readLeafSummaryCached(asyncDir: string): AsyncRunSummary | null {
+export function readLeafRunViewCached(asyncDir: string): AsyncRunSummary | null {
 	const statusPath = path.join(asyncDir, "status.json");
 	let stat: fs.Stats | undefined;
 	try {
@@ -340,7 +341,7 @@ export function readLeafSummaryCached(asyncDir: string): AsyncRunSummary | null 
 		leafSummaryCache.delete(statusPath);
 		return null;
 	}
-	const summary = statusToSummary(asyncDir, status);
+	const summary = statusToRunView(asyncDir, status);
 	if (CACHEABLE_TERMINAL_STATES.has(summary.state)) {
 		leafSummaryCache.set(statusPath, { mtime: stat.mtimeMs, size: stat.size, summary });
 		if (leafSummaryCache.size > LEAF_SUMMARY_CACHE_CAP) {
@@ -355,8 +356,8 @@ export function readLeafSummaryCached(asyncDir: string): AsyncRunSummary | null 
 	return summary;
 }
 
-// Shared group-synthesis seam for both dashboard builders (readSummaryForEntry
-// here and summaryFromRegistryEntry in subagents-status.ts). Given the group
+// Shared group-synthesis seam for both dashboard builders (readRunViewForEntry
+// here and runViewFromRegistryEntry in subagents-status.ts). Given the group
 // entry and its already-decorated child summaries, computes the group state
 // (with the workflow running-override gated on a computed "complete"), the
 // max-child endedAt, and the synthesized group object. The `extras` knob adds
@@ -402,8 +403,10 @@ export function buildGroupSummary(
 	};
 }
 
-export function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries()): AsyncRunSummary | null {
-	const leaf = readLeafSummaryCached(entry.runRecordDir);
+export function readRunViewForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries(), ownedViews?: Map<string, AsyncRunSummary>): AsyncRunSummary | null {
+	// Owned in-process runs resolve their leaf from the registry memory mirror;
+	// everything else hydrates from status.json (the post-reload / foreign source).
+	const leaf = ownedViews?.get(entry.runId) ?? readLeafRunViewCached(entry.runRecordDir);
 	const sessionLineage = {
 		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
 		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
@@ -414,7 +417,7 @@ export function readSummaryForEntry(entry: RunsRegistryEntry, entries: RunsRegis
 	if (isGroup) {
 		const childSummaries = children
 			.map((child) => {
-				const summary = readSummaryForEntry(child, entries);
+				const summary = readRunViewForEntry(child, entries, ownedViews);
 				return summary ? { ...summary, ...registryWorkflowFields(child) } : null;
 			})
 			.filter((child): child is AsyncRunSummary => Boolean(child));

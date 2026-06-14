@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { statusToSummary } from "../../src/state/async-status.ts";
+import { statusToRunView } from "../../src/state/async-status.ts";
 import { StatusWriter } from "../../src/state/status-writer.ts";
 import { type PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
@@ -204,9 +204,9 @@ describe("schema-compat (backward compatible)", () => {
 			assert.equal("phase" in status, false);
 			assert.equal("phaseStartedAt" in status, false);
 
-			let summary!: ReturnType<typeof statusToSummary>;
+			let summary!: ReturnType<typeof statusToRunView>;
 			assert.doesNotThrow(() => {
-				summary = statusToSummary(dir, status);
+				summary = statusToRunView(dir, status);
 			});
 			assert.equal(summary.phase, undefined);
 			assert.equal(summary.phaseStartedAt, undefined);
@@ -249,9 +249,9 @@ describe("schema-compat (backward compatible)", () => {
 			await delay(20);
 
 			const status = readStatus(dir);
-			let summary!: ReturnType<typeof statusToSummary>;
+			let summary!: ReturnType<typeof statusToRunView>;
 			assert.doesNotThrow(() => {
-				summary = statusToSummary(dir, status);
+				summary = statusToRunView(dir, status);
 			});
 			assert.equal(summary.phase, "tool_running");
 			assert.equal(summary.phaseStartedAt, startedAt + 10);
@@ -307,9 +307,9 @@ describe("schema-compat (backward compatible)", () => {
 			writeStatus(dir, original);
 
 			const readBack = readStatus(dir);
-			let summary!: ReturnType<typeof statusToSummary>;
+			let summary!: ReturnType<typeof statusToRunView>;
 			assert.doesNotThrow(() => {
-				summary = statusToSummary(dir, readBack);
+				summary = statusToRunView(dir, readBack);
 			});
 			assert.equal(summary.phase, "thinking");
 			assert.equal(summary.phaseStartedAt, 10_100);

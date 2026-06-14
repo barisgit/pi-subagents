@@ -171,15 +171,20 @@ function buildDepthMap(runs: LiveRun[]): Map<string, number> {
 	return depths;
 }
 
-export function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummary[]): LiveRun[] {
+export function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummary[], ownedIds?: ReadonlySet<string>): LiveRun[] {
 	// Single ordering rule for the dashboard: needs_attention pinned to the very top,
 	// then everything strictly by spawn time (newest first). State buckets are NOT
 	// used here -- otherwise old failed runs would float above recently completed
 	// runs just because 'failed' bucket ranks above 'complete'. The status glyph on
 	// each row already communicates state, so bucketing only hurt the mental model.
+	//
+	// Provenance assignment: foreground runs are always live (in-process). Async
+	// overlay runs are live ONLY when this process owns them (the registry memory
+	// mirror still holds the run); after a reload the registry is empty so every
+	// async run resolves as foreign (disk-hydrated) = today's behavior.
 	const all: LiveRun[] = [];
 	for (const run of sync) all.push({ ownership: "live", run });
-	for (const run of async) all.push({ ownership: "foreign", run });
+	for (const run of async) all.push({ ownership: ownedIds?.has(run.id) ? "live" : "foreign", run });
 	return orderRunsWithChildren(baseSortLiveRuns(all));
 }
 
@@ -189,12 +194,17 @@ function phaseRowDone(run: LiveRun): boolean {
 }
 
 function isSkippedParallelContainer(runs: LiveRun[], run: LiveRun): boolean {
-	if (run.ownership !== "foreign" || run.run.workflow === true || run.run.mode !== "parallel") return false;
+	// Container detection is structural (has child rows + group shape), NOT
+	// provenance: an owned-async parallel group (now ownership:'live') is just as
+	// much a container as a foreign disk one.
+	if (run.run.workflow === true || run.run.mode !== "parallel") return false;
 	return runs.some((other) => other.run.parentRunId === run.run.id);
 }
 
 export function isGroupContainerRow(runs: LiveRun[], run: LiveRun): boolean {
-	if (run.ownership !== "foreign") return false;
+	// A container is a run that has child rows AND a group shape (workflow or
+	// parallel) — detected by STRUCTURE, not provenance, so owned-async groups nest
+	// their children identically to foreign disk groups.
 	const hasChildRows = runs.some((other) => other.run.parentRunId === run.run.id);
 	if (!hasChildRows) return false;
 	return run.run.workflow === true || run.run.mode === "parallel";
@@ -258,7 +268,9 @@ export function containerRowInfo(runs: LiveRun[], collapsedIds: ReadonlySet<stri
 export function isPendingDelivery(runs: LiveRun[], run: LiveRun): boolean {
 	if (run.run.state !== "complete" || !run.run.parentRunId) return false;
 	const parent = runs.find((other) => other.run.id === run.run.parentRunId);
-	if (!parent || parent.ownership !== "foreign") return false;
+	// Pending-delivery is a structural property of the parent group, not its
+	// provenance: an owned-async parallel parent batches child results too.
+	if (!parent) return false;
 	if (parent.run.workflow === true) return false;
 	if (parent.run.mode !== "parallel") return false;
 	const s = parent.run.state;

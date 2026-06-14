@@ -5,9 +5,9 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
-import { readSummaryForEntry } from "../../src/state/async-status.ts";
+import { readRunViewForEntry } from "../../src/state/async-status.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { summaryFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
 import { readWorkflowScript, writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
 import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
@@ -87,12 +87,12 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		const entries = readAllEntries();
 
 		writeWorkflowGroupState(runRecordDir, "running");
-		assert.equal(readSummaryForEntry(entry, entries)?.state, "running", "mutant: async-status must not synthesize an empty running workflow group as complete");
-		assert.equal(summaryFromRegistryEntry(entry, entries).state, "running", "mutant: subagents-status must not synthesize an empty running workflow group as complete");
+		assert.equal(readRunViewForEntry(entry, entries)?.state, "running", "mutant: async-status must not synthesize an empty running workflow group as complete");
+		assert.equal(runViewFromRegistryEntry(entry, entries).state, "running", "mutant: subagents-status must not synthesize an empty running workflow group as complete");
 
 		writeWorkflowGroupState(runRecordDir, "complete");
-		assert.equal(readSummaryForEntry(entry, entries)?.state, "complete");
-		assert.equal(summaryFromRegistryEntry(entry, entries).state, "complete");
+		assert.equal(readRunViewForEntry(entry, entries)?.state, "complete");
+		assert.equal(runViewFromRegistryEntry(entry, entries).state, "complete");
 		assert.equal(fs.existsSync(path.join(runRecordDir, "status.json")), false, "workflow group liveness marker must not write status.json");
 	});
 
@@ -130,8 +130,8 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		// running override must be gated on a computed "complete" and must not mask
 		// the failure in either synthesizer.
 		writeWorkflowGroupState(groupDir, "running");
-		assert.equal(readSummaryForEntry(group, entries)?.state, "failed", "mutant: async-status running override must not mask a failed child");
-		assert.equal(summaryFromRegistryEntry(group, entries).state, "failed", "mutant: subagents-status running override must not mask a failed child");
+		assert.equal(readRunViewForEntry(group, entries)?.state, "failed", "mutant: async-status running override must not mask a failed child");
+		assert.equal(runViewFromRegistryEntry(group, entries).state, "failed", "mutant: subagents-status running override must not mask a failed child");
 	});
 
 	it("opens one statusless group and nests agent children under it", async () => {
@@ -158,12 +158,12 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 			assert.equal(fs.existsSync(path.join(child.runRecordDir, "status.json")), true, "workflow children must persist their own status.json");
 		}
 
-		const summary = summaryFromRegistryEntry(group, entries);
+		const summary = runViewFromRegistryEntry(group, entries);
 		assert.equal(summary.mode, "parallel");
 		assert.equal(summary.state, "complete");
-		assert.equal(readSummaryForEntry(group, entries)?.state, "complete");
+		assert.equal(readRunViewForEntry(group, entries)?.state, "complete");
 		fs.writeFileSync(path.join(group.runRecordDir, "status.json"), JSON.stringify({ runId: group.runId, mode: "parallel", state: "running", startedAt: Date.now(), cwd: root, currentStep: 0, steps: [] }));
-		assert.equal(summaryFromRegistryEntry(group, entries).state, "running", "mutant: group status.json reclassifies the row instead of synthesizing from children");
+		assert.equal(runViewFromRegistryEntry(group, entries).state, "running", "mutant: group status.json reclassifies the row instead of synthesizing from children");
 	});
 
 	it("records a raw workflow-level failure (after a successful child) as a failed child so the group synthesizes as failed", async () => {
@@ -181,7 +181,7 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		const group = entries.find((entry) => entry.mode === "parallel" && !Object.hasOwn(entry, "agentName") && !Object.hasOwn(entry, "agentNames"))!;
 		const children = entries.filter((entry) => entry.parentRunId === group.runId);
 		assert.equal(children.length, 2, "successful child A plus a synthetic failed workflow child");
-		assert.equal(summaryFromRegistryEntry(group, entries).state, "failed", "a raw workflow error must make the group synthesize as failed, not complete");
+		assert.equal(runViewFromRegistryEntry(group, entries).state, "failed", "a raw workflow error must make the group synthesize as failed, not complete");
 	});
 
 	it("does not add a redundant synthetic child when a child already failed", async () => {
@@ -197,7 +197,7 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		const group = entries.find((entry) => entry.mode === "parallel" && !Object.hasOwn(entry, "agentName") && !Object.hasOwn(entry, "agentNames"))!;
 		const children = entries.filter((entry) => entry.parentRunId === group.runId);
 		assert.equal(children.length, 1, "the already-failed Z child is the only failure row; no redundant synthetic child");
-		assert.equal(summaryFromRegistryEntry(group, entries).state, "failed");
+		assert.equal(runViewFromRegistryEntry(group, entries).state, "failed");
 	});
 
 	it("records an unknown-agent failure as a failed child so the group does not synthesize as complete", async () => {
@@ -213,6 +213,6 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		const group = entries.find((entry) => entry.mode === "parallel" && !Object.hasOwn(entry, "agentName") && !Object.hasOwn(entry, "agentNames"))!;
 		const children = entries.filter((entry) => entry.parentRunId === group.runId);
 		assert.equal(children.length, 1, "unknown-agent dispatch must still leave a child row under the group");
-		assert.equal(summaryFromRegistryEntry(group, entries).state, "failed", "group with a failed child must synthesize as failed, not complete");
+		assert.equal(runViewFromRegistryEntry(group, entries).state, "failed", "group with a failed child must synthesize as failed, not complete");
 	});
 });

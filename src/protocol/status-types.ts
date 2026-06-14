@@ -112,7 +112,7 @@ export interface PersistedRunStep {
 /**
  * Canonical persisted shape of a run's status.json. The single writer
  * (StatusWriter) writes it and the single reader (shared/utils.ts readStatus,
- * state/async-status.ts statusToSummary) reads it. Unifies the former
+ * state/async-status.ts statusToRunView) reads it. Unifies the former
  * AsyncStatus (protocol/types.ts) and StatusPayload (state/status-writer.ts):
  * every field present in only one of the two is optional here, so the union
  * widens the type without changing the bytes either writer emits.

@@ -176,7 +176,7 @@ describe("StatusWriter", () => {
 	});
 
 	it("persists live token usage on a running (pre-finalize) patch so nested readers see non-zero tokens", async () => {
-		const { statusToSummary } = await import("../../src/state/async-status.ts");
+		const { statusToRunView } = await import("../../src/state/async-status.ts");
 		const dir = tempDir("pi-status-writer-live-tokens-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 10 });
 		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "explorer", status: "running" }] });
@@ -192,7 +192,7 @@ describe("StatusWriter", () => {
 		// status.totalTokens stays absent on a live step; the reader derives the run
 		// total by summing steps, so the nested-line token count is non-zero.
 		assert.equal(status.totalTokens, undefined);
-		const summary = statusToSummary(dir, status as unknown as PersistedRunStatus);
+		const summary = statusToRunView(dir, status as unknown as PersistedRunStatus);
 		const derived = summary.totalTokens?.total ?? summary.steps.reduce((s, st) => s + (st.tokens?.total ?? 0), 0);
 		assert.equal(derived, 743_000);
 	});
@@ -272,7 +272,7 @@ describe("phase", () => {
 	});
 
 	it("live-block-carries-phase", async () => {
-		const { statusToSummary } = await import("../../src/state/async-status.ts");
+		const { statusToRunView } = await import("../../src/state/async-status.ts");
 		const dir = tempDir("pi-status-phase-live-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 20 });
 		writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
@@ -286,7 +286,7 @@ describe("phase", () => {
 		assert.equal(live?.phase, "streaming_text");
 		assert.equal(live?.phaseStartedAt, 7000);
 
-		const summary = statusToSummary(dir, status as unknown as PersistedRunStatus);
+		const summary = statusToRunView(dir, status as unknown as PersistedRunStatus);
 		assert.equal(summary.steps[0]?.phase, "streaming_text");
 		assert.equal(summary.steps[0]?.phaseStartedAt, 7000);
 	});
@@ -324,7 +324,7 @@ describe("phase", () => {
 	});
 
 	it("backward-compat-reader", async () => {
-		const { statusToSummary } = await import("../../src/state/async-status.ts");
+		const { statusToRunView } = await import("../../src/state/async-status.ts");
 		const { createAsyncJobTracker } = await import("../../src/surfaces/async-job-tracker.ts");
 
 		const legacyDir = tempDir("pi-status-phase-legacy-");
@@ -335,7 +335,7 @@ describe("phase", () => {
 			startedAt: Date.now(),
 			steps: [{ agent: "fixer", status: "running" }],
 		};
-		const legacySummary = statusToSummary(legacyDir, legacyStatus);
+		const legacySummary = statusToRunView(legacyDir, legacyStatus);
 		assert.equal(legacySummary.phase, undefined);
 		assert.equal(legacySummary.phaseStartedAt, undefined);
 		assert.equal(legacySummary.steps[0]?.phase, undefined);
@@ -351,7 +351,7 @@ describe("phase", () => {
 			(await import("node:fs")).readFileSync((await import("node:path")).join(dir, "status.json"), "utf-8")
 		) as import("../../src/protocol/status-types.ts").PersistedRunStatus;
 
-		const summary = statusToSummary(dir, rawStatus);
+		const summary = statusToRunView(dir, rawStatus);
 		assert.equal(summary.phase, "tool_running");
 		assert.equal(summary.phaseStartedAt, 3000);
 

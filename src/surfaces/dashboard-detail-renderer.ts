@@ -110,8 +110,11 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 			out.push(theme.fg("dim", truncateToWidth(`… (+${scriptLines.length - shown.length} more lines)`, width)));
 		}
 	}
+	// Children are selected by structural parent linkage (parentRunId), NOT
+	// provenance: an owned-async run's children (now ownership:'live') must still
+	// appear in the right-pane Steps list.
 	const children = runs
-		.filter((candidate): candidate is LiveRun & { ownership: "foreign" } => candidate.ownership === "foreign" && candidate.run.parentRunId === run.id)
+		.filter((candidate) => candidate.run.parentRunId === run.id)
 		.map((candidate) => candidate.run);
 	if (children.length > 0) {
 		if (out.length > 0) out.push("");
@@ -237,7 +240,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	const out: string[] = [];
 	// Parallel children aren't 'steps' -- they race concurrently. Use 'Task N' so the
 	// right pane reads correctly for tasks: [...] async runs.
-	const stepWord = run.ownership === "foreign" && run.run.mode === "parallel" ? "Task" : "Step";
+	const stepWord = run.run.steps.length > 0 && run.run.mode === "parallel" ? "Task" : "Step";
 	for (const step of ordered) {
 		out.push(theme.fg("accent", truncateToWidth(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
 		if (step.label) {

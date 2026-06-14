@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatDuration } from "../../src/surfaces/formatters.ts";
-import { summaryFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
@@ -122,12 +122,12 @@ describe("group row status", () => {
 		});
 
 		const entries = readAllEntries();
-		const completeSummary = summaryFromRegistryEntry(completeGroup, entries);
+		const completeSummary = runViewFromRegistryEntry(completeGroup, entries);
 		assert.equal(completeSummary.state, "complete");
 		assert.equal(completeSummary.endedAt, 11000);
 		assert.equal(formatDuration(completeSummary.endedAt - completeSummary.startedAt), "10.0s");
 
-		const runningSummary = summaryFromRegistryEntry(runningGroup, entries);
+		const runningSummary = runViewFromRegistryEntry(runningGroup, entries);
 		assert.equal(runningSummary.state, "running");
 		assert.equal(runningSummary.endedAt, undefined);
 	});

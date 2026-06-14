@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { clearLeafSummaryCacheForTests, readLeafSummaryCached } from "../../src/state/async-status.ts";
+import { clearLeafSummaryCacheForTests, readLeafRunViewCached } from "../../src/state/async-status.ts";
 
 // VAL-TERMINAL-CACHE: the overlay's per-tick leaf builder caches IMMUTABLE
 // terminal summaries (so a 1Hz reload reuses them instead of re-deriving every
@@ -12,8 +12,8 @@ import { clearLeafSummaryCacheForTests, readLeafSummaryCached } from "../../src/
 // when a wedged runner's status.json mtime has frozen).
 //
 // The load-bearing observable is reference identity: on a cache hit
-// readLeafSummaryCached returns the SAME object it stored (it skips
-// statusToSummary entirely); a rebuild yields a deep-equal but distinct object.
+// readLeafRunViewCached returns the SAME object it stored (it skips
+// statusToRunView entirely); a rebuild yields a deep-equal but distinct object.
 // That distinguishes this leaf cache from the underlying readStatus parse-cache,
 // which would still rebuild a fresh summary each call.
 
@@ -54,15 +54,15 @@ afterEach(() => {
 });
 
 describe("overlay incremental leaf-summary cache", () => {
-	// Mutant: make readLeafSummaryCached always rebuild (drop the cache lookup or
+	// Mutant: make readLeafRunViewCached always rebuild (drop the cache lookup or
 	// the CACHEABLE_TERMINAL_STATES store) -> the two reads return distinct
 	// objects and this assertion fails.
 	it("caches a terminal leaf summary by mtime+size and returns the same object on a hit", () => {
 		const dir = tmpRunDir();
 		writeStatus(dir, terminalStatus("done-1", 1000));
 
-		const s1 = readLeafSummaryCached(dir);
-		const s2 = readLeafSummaryCached(dir);
+		const s1 = readLeafRunViewCached(dir);
+		const s2 = readLeafRunViewCached(dir);
 
 		assert.ok(s1, "expected a summary");
 		assert.equal(s1.state, "complete");
@@ -91,8 +91,8 @@ describe("overlay incremental leaf-summary cache", () => {
 			lastActivityAt: now - 31_000,
 		});
 
-		const s1 = readLeafSummaryCached(dir);
-		const s2 = readLeafSummaryCached(dir);
+		const s1 = readLeafRunViewCached(dir);
+		const s2 = readLeafRunViewCached(dir);
 
 		assert.ok(s1 && s2, "expected summaries");
 		assert.equal(s1.state, "running");
@@ -118,8 +118,8 @@ describe("overlay incremental leaf-summary cache", () => {
 			lastActivityAt: 1000,
 		});
 
-		const s1 = readLeafSummaryCached(dir);
-		const s2 = readLeafSummaryCached(dir);
+		const s1 = readLeafRunViewCached(dir);
+		const s2 = readLeafRunViewCached(dir);
 
 		assert.ok(s1, "expected a summary");
 		assert.equal(s1.state, "paused");
@@ -131,7 +131,7 @@ describe("overlay incremental leaf-summary cache", () => {
 	it("invalidates the terminal cache when status.json changes", () => {
 		const dir = tmpRunDir();
 		writeStatus(dir, terminalStatus("evolve-1", 1000));
-		const s1 = readLeafSummaryCached(dir);
+		const s1 = readLeafRunViewCached(dir);
 		assert.ok(s1);
 		assert.equal(s1.state, "complete");
 
@@ -139,7 +139,7 @@ describe("overlay incremental leaf-summary cache", () => {
 		const later = { ...terminalStatus("evolve-1", 2000), state: "failed", endedAt: 2000, extraPaddingField: "x".repeat(40) };
 		writeStatus(dir, later);
 
-		const s2 = readLeafSummaryCached(dir);
+		const s2 = readLeafRunViewCached(dir);
 		assert.ok(s2);
 		assert.equal(s2.state, "failed", "a changed status.json must invalidate the cache");
 		assert.notEqual(s1, s2);
