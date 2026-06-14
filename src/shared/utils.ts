@@ -8,7 +8,7 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { formatToolCall } from "./formatting.ts";
 import { type AgentProgress, type Details, type DisplayItem, type ErrorInfo, type SingleResult, type ToolCallSummary } from "../protocol/types.ts";
-import type { PersistedRunStatus } from "../protocol/status-types.ts";
+import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
 
 // ============================================================================
 // File System Utilities
@@ -72,16 +72,12 @@ export function readStatus(asyncDir: string): PersistedRunStatus | null {
 		});
 	}
 
-	let status: PersistedRunStatus;
-	try {
-		status = JSON.parse(content) as PersistedRunStatus;
-	} catch {
-		// Malformed/partial status.json (e.g. crashed mid-write). Treat as a missing/lost
-		// entry rather than poisoning callers that scan RUNS_DIR. Cache the null so
-		// we don't repeatedly re-parse the same broken file.
-		return null;
-	}
-	status = reconcileStatus(status, stat.mtimeMs);
+	// Malformed/partial status.json (e.g. crashed mid-write). Treat as a missing/lost
+	// entry rather than poisoning callers that scan RUNS_DIR by casting and trusting
+	// the bytes; the validating codec rejects bad shapes in one place.
+	const parsed = parsePersistedRunStatus(content);
+	if (!parsed.ok) return null;
+	const status = reconcileStatus(parsed.value, stat.mtimeMs);
 
 	statusCache.set(statusPath, { mtime: stat.mtimeMs, status });
 	if (statusCache.size > 50) {

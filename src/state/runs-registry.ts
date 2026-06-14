@@ -81,6 +81,19 @@ export interface ReadOptions {
 	limit?: number; // most-recent first; default unlimited
 }
 
+export function parseRunsRegistryEntryLine(line: string): RunsRegistryEntry | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(line);
+	} catch {
+		return undefined;
+	}
+	if (parsed && typeof (parsed as RunsRegistryEntry).runId === "string" && typeof (parsed as RunsRegistryEntry).runRecordDir === "string") {
+		return parsed as RunsRegistryEntry;
+	}
+	return undefined;
+}
+
 function parseEntriesFromFile(filePath: string, opts: ReadOptions): RunsRegistryEntry[] {
 	let raw: string;
 	try {
@@ -92,14 +105,8 @@ function parseEntriesFromFile(filePath: string, opts: ReadOptions): RunsRegistry
 	const entries: RunsRegistryEntry[] = [];
 	for (const line of raw.split("\n")) {
 		if (!line.trim()) continue;
-		try {
-			const parsed = JSON.parse(line) as RunsRegistryEntry;
-			if (parsed && typeof parsed.runId === "string" && typeof parsed.runRecordDir === "string") {
-				entries.push(parsed);
-			}
-		} catch {
-			// Skip malformed line; keep registry forgiving.
-		}
+		const entry = parseRunsRegistryEntryLine(line);
+		if (entry) entries.push(entry);
 	}
 	entries.reverse(); // most-recent first
 	return opts.limit !== undefined ? entries.slice(0, opts.limit) : entries;

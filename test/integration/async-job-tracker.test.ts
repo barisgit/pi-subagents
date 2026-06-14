@@ -313,7 +313,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			const childDir = path.join(asyncRoot, "wf-child");
 			// The phase label travels via the child's status.json (the poller
 			// mirrors status.label onto the job; handleStarted has no label field).
-			writeStatus(childDir, { state: "running", agent: "explorer", label: "Phase 1: recon", parentRunId: "wf-group", runnerHeartbeatAt: Date.now(), lastUpdate: Date.now(), startedAt: Date.now() });
+			writeStatus(childDir, { runId: "wf-child", mode: "single", state: "running", agent: "explorer", label: "Phase 1: recon", parentRunId: "wf-group", runnerHeartbeatAt: Date.now(), lastUpdate: Date.now(), startedAt: Date.now() });
 			tracker.handleStarted({ id: "wf-child", asyncDir: childDir, agent: "explorer", parentRunId: "wf-group" });
 
 			await new Promise((resolve) => setTimeout(resolve, 50));
@@ -326,7 +326,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(group?.label, "Phase 1: recon", "group label mirrors the active child's phase label");
 
 			// Workflow finishes: lifecycle flips, group goes pending-delivery.
-			writeStatus(childDir, { state: "complete", agent: "explorer", parentRunId: "wf-group", lastUpdate: Date.now() });
+			writeStatus(childDir, { runId: "wf-child", mode: "single", state: "complete", agent: "explorer", parentRunId: "wf-group", startedAt: Date.now(), lastUpdate: Date.now() });
 			writeWorkflowGroupState(groupDir, "complete");
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			const finished = state.asyncJobs.get("wf-group") as { status: string; pendingDelivery?: boolean } | undefined;

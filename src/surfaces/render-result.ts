@@ -651,18 +651,18 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		}
 		if (sawProgress) totalSummary = summary;
 	}
-	const hasParallelInSequence = (d as any).agentGroups?.some((a: string) => a.startsWith("["));
+	const hasParallelInSequence = d.agentGroups?.some((a: string) => a.startsWith("["));
 	// For nested parallel groups, count parent steps (e.g. 3) rather than
 	// flattened tasks (e.g. 4) so header/body share the same denominator. Compute parent-aware
 	// done count by checking whether every child in a parallel group has settled.
-	const sequenceParentTotal = hasParallelInSequence && (d as any).agentGroups?.length
-		? (d as any).agentGroups.length
-		: ((d as any).totalSteps ?? d.results.length);
+	const sequenceParentTotal = hasParallelInSequence && d.agentGroups?.length
+		? d.agentGroups.length
+		: (d.totalSteps ?? d.results.length);
 	const sequenceParentOk = (() => {
-		if (!hasParallelInSequence || !(d as any).agentGroups?.length) return ok;
+		if (!hasParallelInSequence || !d.agentGroups?.length) return ok;
 		let done = 0;
 		let cursor = 0;
-		for (const entry of (d as any).agentGroups) {
+		for (const entry of d.agentGroups) {
 			const childCount = entry.startsWith("[") && entry.endsWith("]")
 				? entry.slice(1, -1).split("+").length
 				: 1;
@@ -689,7 +689,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	// frames fall back to results.length.
 	const parallelTotal = Math.max(d.results.length, d.expectedAgents ?? 0);
 	const totalCount = d.mode === "parallel" ? parallelTotal : sequenceParentTotal;
-	const currentStep = (d as any).currentStepIndex !== undefined ? (d as any).currentStepIndex + 1 : Math.min(totalCount, headerOk + (hasRunning ? 1 : 0));
+	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : Math.min(totalCount, headerOk + (hasRunning ? 1 : 0));
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
 	const modeLabel = d.workflow ? "workflow" : d.mode;
@@ -724,18 +724,18 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const headLabelTail = uniformLabel ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(uniformLabel, 30))}` : "";
 	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`, width), 0, 0));
 
-	const useResultsDirectly = hasParallelInSequence || !(d as any).agentGroups?.length;
-	const stepsToShow = useResultsDirectly ? d.results.length : (d as any).agentGroups!.length;
+	const useResultsDirectly = hasParallelInSequence || !d.agentGroups?.length;
+	const stepsToShow = useResultsDirectly ? d.results.length : d.agentGroups!.length;
 
 	// When parallel groups are nested, results are flattened but agentGroups preserves
 	// the grouping (e.g. ["a", "[b+c]", "d"] for 3 steps / 4 results). Build a per-result
 	// label override so the body shows "Step 2.1 / Step 2.2" instead of misleading sequential numbering.
 	const sequenceStepLabels: string[] | undefined = (() => {
-		if (!hasParallelInSequence || !(d as any).agentGroups?.length) return undefined;
+		if (!hasParallelInSequence || !d.agentGroups?.length) return undefined;
 		const labels: string[] = [];
 		let resultCursor = 0;
-		for (let stepIdx = 0; stepIdx < (d as any).agentGroups.length; stepIdx++) {
-			const entry = (d as any).agentGroups[stepIdx];
+		for (let stepIdx = 0; stepIdx < d.agentGroups.length; stepIdx++) {
+			const entry = d.agentGroups[stepIdx];
 			if (entry.startsWith("[") && entry.endsWith("]")) {
 				const children = entry.slice(1, -1).split("+");
 				for (let childIdx = 0; childIdx < children.length; childIdx++) {
@@ -761,7 +761,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 
 	for (let i = 0; i < stepsToShow; i++) {
 		const r = d.results[i];
-		const agentName = useResultsDirectly ? (r?.agent || `${itemLabel}-${i + 1}`) : ((d as any).agentGroups![i] || r?.agent || `${itemLabel}-${i + 1}`);
+		const agentName = useResultsDirectly ? (r?.agent || `${itemLabel}-${i + 1}`) : (d.agentGroups![i] || r?.agent || `${itemLabel}-${i + 1}`);
 		if (!r) {
 			c.addChild(new Text(truncLine(theme.fg("dim", `  ◦ ${itemTitle} ${i + 1}: ${agentName} · pending`), width), 0, 0));
 			continue;
@@ -1054,22 +1054,22 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	const modeLabel = d.workflow ? "workflow" : d.mode;
 	const labelTail = d.workflow && d.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(d.label, 30))}` : "";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
-	const hasParallelInSequence = (d as any).agentGroups?.some((a: string) => a.startsWith("["));
+	const hasParallelInSequence = d.agentGroups?.some((a: string) => a.startsWith("["));
 	// expectedAgents widens the denominator for an in-flight workflow fan-out whose
 	// siblings have not registered yet (else a 2-agent group flashes "1/1"); it is
 	// only set while running, so settled frames fall back to the normal totals.
 	const totalCount = Math.max(
-		hasParallelInSequence ? d.results.length : ((d as any).totalSteps ?? d.results.length),
+		hasParallelInSequence ? d.results.length : (d.totalSteps ?? d.results.length),
 		d.expectedAgents ?? 0,
 	);
-	const currentStep = (d as any).currentStepIndex !== undefined ? (d as any).currentStepIndex + 1 : ok + 1;
+	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : ok + 1;
 	const stepInfo = hasRunning ? ` ${currentStep}/${totalCount}` : ` ${ok}/${totalCount}`;
 	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
 	
-	const sequenceVis = (d as any).agentGroups?.length
+	const sequenceVis = d.agentGroups?.length
 		? (() => {
 				let resultCursor = 0;
-				const pieces = (d as any).agentGroups.map((entry: string, stepIdx: number) => {
+				const pieces = d.agentGroups.map((entry: string, stepIdx: number) => {
 					const isParallel = entry.startsWith("[") && entry.endsWith("]");
 					const children = isParallel ? entry.slice(1, -1).split("+") : [entry];
 					const childPieces = children.map((agent: string) => {
@@ -1113,17 +1113,17 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		c.addChild(new Text(fit(`  ${sequenceVis}`), 0, 0));
 	}
 
-	const useResultsDirectly = hasParallelInSequence || !(d as any).agentGroups?.length;
-	const stepsToShow = useResultsDirectly ? d.results.length : (d as any).agentGroups!.length;
+	const useResultsDirectly = hasParallelInSequence || !d.agentGroups?.length;
+	const stepsToShow = useResultsDirectly ? d.results.length : d.agentGroups!.length;
 
 	// Mirror the background-renderer logic so nested parallel sub-steps display as "2.1∥ / 2.2∥"
 	// instead of falsely-sequential "Step 2 / Step 3".
 	const sequenceStepLabelsFg: string[] | undefined = (() => {
-		if (!hasParallelInSequence || !(d as any).agentGroups?.length) return undefined;
+		if (!hasParallelInSequence || !d.agentGroups?.length) return undefined;
 		const labels: string[] = [];
 		let resultCursor = 0;
-		for (let stepIdx = 0; stepIdx < (d as any).agentGroups.length; stepIdx++) {
-			const entry = (d as any).agentGroups[stepIdx];
+		for (let stepIdx = 0; stepIdx < d.agentGroups.length; stepIdx++) {
+			const entry = d.agentGroups[stepIdx];
 			if (entry.startsWith("[") && entry.endsWith("]")) {
 				const children = entry.slice(1, -1).split("+");
 				for (let childIdx = 0; childIdx < children.length; childIdx++) {
@@ -1142,7 +1142,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		const r = d.results[i];
 		const agentName = useResultsDirectly 
 			? (r?.agent || `step-${i + 1}`)
-			: ((d as any).agentGroups![i] || r?.agent || `step-${i + 1}`);
+			: (d.agentGroups![i] || r?.agent || `step-${i + 1}`);
 
 		if (!r) {
 			const pendingLabel = sequenceStepLabelsFg?.[i] ?? `${i + 1}`;

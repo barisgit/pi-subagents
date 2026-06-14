@@ -256,6 +256,7 @@ export interface Details {
 	/** Workflow step labels retained for workflow rendering. */
 	agentGroups?: string[];
 	totalSteps?: number;
+	currentStepIndex?: number;
 	results: SingleResult[];
 	/**
 	 * Canonical run-level usage aggregate. Sum of `results[].usage` across every

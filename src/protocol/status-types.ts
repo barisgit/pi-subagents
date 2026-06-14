@@ -161,6 +161,34 @@ export interface PersistedRunStatus {
 	sessionFile?: string;
 }
 
+export type PersistedRunStatusParseResult =
+	| { ok: true; value: PersistedRunStatus }
+	| { ok: false; reason: "invalid-json" | "invalid-shape" };
+
+/**
+ * Validate a raw status.json string at the disk boundary. The single reader
+ * (shared/utils.ts readStatus) routes through this instead of casting
+ * JSON.parse output, so malformed or partial files are rejected in one place
+ * rather than trusted downstream.
+ */
+export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseResult {
+	let data: unknown;
+	try {
+		data = JSON.parse(raw);
+	} catch {
+		return { ok: false, reason: "invalid-json" };
+	}
+	if (data === null || typeof data !== "object") return { ok: false, reason: "invalid-shape" };
+	const o = data as Record<string, unknown>;
+	if (typeof o.runId !== "string") return { ok: false, reason: "invalid-shape" };
+	if (o.mode !== "single" && o.mode !== "parallel") return { ok: false, reason: "invalid-shape" };
+	const validStates = ["queued", "running", "complete", "failed", "paused", "lost", "interrupted", "skipped"];
+	if (typeof o.state !== "string" || !validStates.includes(o.state)) return { ok: false, reason: "invalid-shape" };
+	if (typeof o.startedAt !== "number") return { ok: false, reason: "invalid-shape" };
+	if (o.steps !== undefined && !Array.isArray(o.steps)) return { ok: false, reason: "invalid-shape" };
+	return { ok: true, value: data as PersistedRunStatus };
+}
+
 export interface StatusPatch {
 	runId: string;
 	stepIndex: number;
