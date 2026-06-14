@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { ChildAgentResult, ChildAgentExitState, PersistedRunStatus, PersistedRunStep, StatusPatch } from "../protocol/status-types.ts";
 import type { TokenUsage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
+import { applyPatchToStatus } from "./status-patch.ts";
 
 export type FlushPolicy = "terminal" | "eager";
 
@@ -44,6 +45,36 @@ export interface StatusMeta {
 	resumeCount?: number;
 }
 
+/**
+ * Build the initial {@link PersistedRunStatus} from {@link StatusMeta}. Single
+ * source of truth for the seeded status shape: StatusWriter.initialize stamps
+ * status.json from it, and ChildAgentRegistry.seedRunView seeds its in-memory
+ * RunView mirror from the same builder so the two never diverge.
+ */
+export function statusFromMeta(runId: string, meta: StatusMeta): PersistedRunStatus & { steps: PersistedRunStep[] } {
+	const startedAt = meta.startedAt ?? Date.now();
+	return {
+		version: STATUS_JSON_VERSION,
+		runId,
+		mode: meta.mode ?? "single",
+		state: meta.state ?? "queued",
+		startedAt,
+		lastUpdate: meta.lastActivityAt ?? startedAt,
+		...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
+		...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),
+		...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
+		...(meta.resumeCount !== undefined ? { resumeCount: meta.resumeCount } : {}),
+		steps: meta.steps ? meta.steps.map((step) => ({ ...step, live: step.live ? { ...step.live } : undefined })) : [],
+		...(meta.label ? { label: meta.label } : {}),
+		...(meta.cwd ? { cwd: meta.cwd } : {}),
+		...(meta.parentRunId ? { parentRunId: meta.parentRunId } : {}),
+		...(meta.currentStep !== undefined ? { currentStep: meta.currentStep } : {}),
+		...(meta.sessionFile ? { sessionFile: meta.sessionFile } : {}),
+		...(meta.outputFile ? { outputFile: meta.outputFile } : {}),
+		...(meta.sessionDir ? { sessionDir: meta.sessionDir } : {}),
+	};
+}
+
 export class StatusWriter {
 	private readonly opts: StatusWriterOpts;
 	readonly runRecordDir: string;
@@ -71,27 +102,7 @@ export class StatusWriter {
 	}
 
 	initialize(meta: StatusMeta): void {
-		const startedAt = meta.startedAt ?? Date.now();
-		this.status = {
-			version: STATUS_JSON_VERSION,
-			runId: this.opts.runId,
-			mode: meta.mode ?? "single",
-			state: meta.state ?? "queued",
-			startedAt,
-			lastUpdate: meta.lastActivityAt ?? startedAt,
-			...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
-			...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),
-			...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
-			...(meta.resumeCount !== undefined ? { resumeCount: meta.resumeCount } : {}),
-			steps: meta.steps ? meta.steps.map((step) => ({ ...step, live: step.live ? { ...step.live } : undefined })) : [],
-			...(meta.label ? { label: meta.label } : {}),
-			...(meta.cwd ? { cwd: meta.cwd } : {}),
-			...(meta.parentRunId ? { parentRunId: meta.parentRunId } : {}),
-			...(meta.currentStep !== undefined ? { currentStep: meta.currentStep } : {}),
-			...(meta.sessionFile ? { sessionFile: meta.sessionFile } : {}),
-			...(meta.outputFile ? { outputFile: meta.outputFile } : {}),
-			...(meta.sessionDir ? { sessionDir: meta.sessionDir } : {}),
-		};
+		this.status = statusFromMeta(this.opts.runId, meta);
 		this.lastWriteAt = Date.now();
 		this.writeNow();
 	}
@@ -246,61 +257,7 @@ export class StatusWriter {
 
 	private applyPatch(patch: StatusPatch): void {
 		if (!this.status) return;
-		const now = Date.now();
-		this.status.lastUpdate = patch.endedAt ?? now;
-		this.status.currentStep = patch.stepIndex;
-		const isTerminalStepPatch = patch.endedAt !== undefined && (patch.state === "complete" || patch.state === "failed" || patch.state === "interrupted");
-		if (patch.state && !isTerminalStepPatch) this.status.state = patch.state;
-		if (patch.endedAt !== undefined) this.status.endedAt = patch.endedAt;
-		if (patch.outputText !== undefined && !isTerminalStepPatch) this.status.outputText = patch.outputText;
-		if (patch.activity) {
-			this.status.lastActivityAt = patch.activity.updatedAt;
-			if (patch.activity.toolName !== undefined) {
-				this.status.currentTool = patch.activity.toolName;
-				this.status.currentToolStartedAt = patch.activity.updatedAt;
-			} else if (patch.activity.state !== "tool_running") {
-				this.status.currentTool = undefined;
-				this.status.currentToolStartedAt = undefined;
-			}
-		}
-
-		// Merge phase: preserve last-known phase fields when a patch omits them (high-frequency patches must not erase phase state).
-		if (patch.phase !== undefined) this.status.phase = patch.phase;
-		if (patch.phaseStartedAt !== undefined) this.status.phaseStartedAt = patch.phaseStartedAt;
-		// Bump runnerHeartbeatAt on every patch to signal the runner is alive.
-		this.status.runnerHeartbeatAt = patch.runnerHeartbeatAt ?? now;
-
-		const step = this.stepFor(patch.stepIndex);
-		if (patch.state) step.status = patch.state;
-		if (patch.endedAt !== undefined) step.endedAt = patch.endedAt;
-		if (patch.activity) {
-			step.lastActivityAt = patch.activity.updatedAt;
-			if (patch.activity.toolName !== undefined) {
-				step.currentTool = patch.activity.toolName;
-				step.currentToolStartedAt = patch.activity.updatedAt;
-			} else if (patch.activity.state !== "tool_running") {
-				step.currentTool = undefined;
-				step.currentToolStartedAt = undefined;
-			}
-		}
-		if (patch.liveText !== undefined || patch.toolCallDelta || patch.toolResultDelta || patch.toolErrorDelta || patch.phase !== undefined || patch.phaseStartedAt !== undefined) {
-			step.live = step.live ?? {};
-			if (patch.liveText !== undefined) step.live.outputText = patch.liveText;
-			if (patch.toolCallDelta) step.live.toolCallCount = (step.live.toolCallCount ?? 0) + patch.toolCallDelta;
-			if (patch.toolResultDelta) step.live.toolResultCount = (step.live.toolResultCount ?? 0) + patch.toolResultDelta;
-			if (patch.toolErrorDelta) step.live.toolErrorCount = (step.live.toolErrorCount ?? 0) + patch.toolErrorDelta;
-			if (patch.phase !== undefined) step.live.phase = patch.phase;
-			if (patch.phaseStartedAt !== undefined) step.live.phaseStartedAt = patch.phaseStartedAt;
-		}
-		// Persist live token usage so nested-child readers (which can only see the
-		// on-disk status.json, not the runner's in-memory progress) show running
-		// token counts instead of ~0 until finalize. Only step.tokens is set; the
-		// run total is derived by summing steps when status.totalTokens is absent
-		// (inlineTokenCount fallback), so a single live step never clobbers a
-		// multi-step aggregate. finalize() later writes the authoritative total.
-		if (patch.tokens && patch.tokens.total > 0) {
-			step.tokens = { ...patch.tokens };
-		}
+		applyPatchToStatus(this.status, patch);
 	}
 
 	private stepFor(stepIndex: number): StatusStep {

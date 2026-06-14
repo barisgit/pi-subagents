@@ -30,7 +30,7 @@ import { extractSubmitResultEnvelope, fallbackSubmitResultEnvelope, hasSubmitRes
 import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
-export type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
+export type { ChildAgentContext, ChildAgentHandle, RunViewSeed } from "./child-agent-registry.ts";
 import type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
 export type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
 
@@ -299,8 +299,29 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext, notifyCom
 		localAbort.signal,
 	]);
 
-	const completed = executeChildAgent(step, ctx, combinedSignal, (createdSession) => {
+	// Seed the registry's in-memory RunView mirror from dispatch metadata. Only
+	// the async paths thread runViewSeed, so this naturally gates to async (sync
+	// foreground stays disk-only this VAL). seedRunView is idempotent.
+	if (ctx.runViewSeed) ctx.registry.seedRunView(step.runId, ctx.runViewSeed);
+
+	// TEE the patch stream at this single chokepoint: every patch that reaches the
+	// status.json writer (ctx.onStatusUpdate) ALSO updates the registry mirror,
+	// with no duplicate and no missed patch. Covers sync + all async paths since
+	// they all funnel through startChildAgent.
+	const teedCtx: ChildAgentContext = {
+		...ctx,
+		onStatusUpdate: (patch: StatusPatch) => {
+			ctx.registry.applyStatusPatch(patch);
+			ctx.onStatusUpdate?.(patch);
+		},
+	};
+
+	const completed = executeChildAgent(step, teedCtx, combinedSignal, (createdSession) => {
 		session = createdSession;
+	}).then((result) => {
+		// Final usage is NOT carried in the patch stream; land it in memory here.
+		ctx.registry.finalizeView(step.runId, result);
+		return result;
 	}).finally(() => {
 		ctx.registry.delete(step.runId, step.stepIndex);
 	});

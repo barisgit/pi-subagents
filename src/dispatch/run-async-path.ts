@@ -299,6 +299,28 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 	}
 	const runRecordDir = first.step.runRecordDir;
 	const startedAt = Date.now();
+	const asyncParentSessionId = ctx.sessionManager?.getSessionId ? ctx.sessionManager.getSessionId() : undefined;
+	const asyncRootSessionId = resolveDispatchRootSessionId(ctx);
+	const initializeMeta = {
+		mode,
+		startedAt,
+		cwd: effectiveCwd,
+		...(runLabel ? { label: runLabel } : {}),
+		...(parentRunId ? { parentRunId } : {}),
+		currentStep: 0,
+		sessionFile: first.step.sessionFile,
+		sessionDir: runRecordDir,
+		steps: steps.map(({ step }) => ({
+			agent: step.agentName,
+			...(step.label ? { label: step.label } : {}),
+			status: "queued",
+			sessionFile: step.sessionFile,
+			live: {
+				color: resolveAgentColor(step.agentConfig as unknown as AgentConfig),
+				thinking: (step.agentConfig as unknown as AgentConfig).thinking,
+			},
+		})),
+	};
 	const runHandle = openRunPersistence({
 		agentName: first.step.agentName,
 		task: first.step.task,
@@ -310,35 +332,22 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		sessionFile: first.step.sessionFile,
 		rootRunId,
 		...(parentRunId ? { parentRunId } : {}),
-		...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
-		...(() => {
-			const root = resolveDispatchRootSessionId(ctx);
-			return root ? { rootSessionId: root } : {};
-		})(),
+		...(asyncParentSessionId ? { parentSessionId: asyncParentSessionId } : {}),
+		...(asyncRootSessionId ? { rootSessionId: asyncRootSessionId } : {}),
 		source: "async",
 		variant: "async-detached",
-		initialize: {
-			mode,
-			startedAt,
-			cwd: effectiveCwd,
-			...(runLabel ? { label: runLabel } : {}),
-			...(parentRunId ? { parentRunId } : {}),
-			currentStep: 0,
-			sessionFile: first.step.sessionFile,
-			sessionDir: runRecordDir,
-			steps: steps.map(({ step }) => ({
-				agent: step.agentName,
-				...(step.label ? { label: step.label } : {}),
-				status: "queued",
-				sessionFile: step.sessionFile,
-				live: {
-					color: resolveAgentColor(step.agentConfig as unknown as AgentConfig),
-					thinking: (step.agentConfig as unknown as AgentConfig).thinking,
-				},
-			})),
-		},
+		initialize: initializeMeta,
 	});
 	const statusWriter = runHandle.statusWriter;
+	// Seed metadata for the registry's in-memory RunView mirror (async-only). Same
+	// StatusMeta as status.json plus the session-hierarchy + dir fields RunView carries.
+	const runViewSeed = {
+		...initializeMeta,
+		state: "queued" as const,
+		...(asyncParentSessionId ? { parentSessionId: asyncParentSessionId } : {}),
+		...(asyncRootSessionId ? { rootSessionId: asyncRootSessionId } : {}),
+		asyncDir: runRecordDir,
+	};
 	emitRunAnchor(deps.pi, { runId, rootRunId, mode, source: "async", parentRunId });
 
 	// Async children deliberately do NOT receive the parent turn's AbortSignal.
@@ -352,6 +361,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		abortSignal: asyncDetachedAbort.signal,
 		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => statusWriter.enqueue(patch),
 		registry: deps.childRegistry,
+		runViewSeed,
 		pi: deps.pi,
 	};
 	const finalizeAsync = async (handlesPromise: Promise<ChildAgentHandle[]>) => {
