@@ -8,7 +8,7 @@ import { StatusWriter } from "../state/status-writer.ts";
 import { formatRunHandle } from "../state/run-shape.ts";
 import { resolveChildCwd } from "../shared/utils.ts";
 import { mapConcurrent } from "./parallel-utils.ts";
-import { spawnRun, openGroup, openRunPersistence, finalizeRun } from "./layer0-runs.ts";
+import { spawnRun, openGroup, openRunRecord, finalizeRun } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
 import {
 	type Details,
@@ -323,7 +323,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			},
 		})),
 	};
-	const runHandle = openRunPersistence({
+	const runHandle = openRunRecord({
 		agentName: first.step.agentName,
 		task: first.step.task,
 		cwd: effectiveCwd,

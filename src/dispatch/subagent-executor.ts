@@ -82,7 +82,7 @@ import { inspectSubagentStatus } from "../state/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
 import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
-import { interruptRun, spawnRun, openGroup, awaitRun, openRunPersistence, finalizeRun, type OpenRunHandle } from "./layer0-runs.ts";
+import { interruptRun, spawnRun, openGroup, awaitRun, openRunRecord, finalizeRun, type OpenRunHandle } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "../state/lineage.ts";
@@ -1129,7 +1129,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				...step,
 				sessionFile: path.join(sessionDirForIndex(idx), "session.jsonl"),
 			}));
-			runHandle = openRunPersistence({
+			runHandle = openRunRecord({
 				agentName: steps[0]?.agent ?? "subagent",
 				task: steps[0]?.task ?? "",
 				cwd: effectiveCwd,

@@ -94,10 +94,10 @@ export interface InterruptRunResult {
 
 const controllersByRunId = new Map<string, AbortController>();
 
-export type RunPersistenceVariant = "group-child" | "sync-foreground" | "async-detached";
+export type RunRecordVariant = "group-child" | "sync-foreground" | "async-detached";
 // maps: group-child->(eager,running,finalize(result)); sync-foreground->(terminal,running,finalizeTerminal); async-detached->(eager,queued,finalize(result,{totalUsage}))
 
-export interface OpenRunPersistenceOpts {
+export interface OpenRunRecordOpts {
 	// present=use verbatim (singles); absent=randomUUID()+resolveChildSessionFile (spawnRun)
 	runId?: string;
 	runRecordDir?: string;
@@ -113,7 +113,7 @@ export interface OpenRunPersistenceOpts {
 	phaseIndex?: number;
 	phaseTitle?: string;
 	parallelGroupId?: string;
-	variant: RunPersistenceVariant;
+	variant: RunRecordVariant;
 	// caller-built initialize meta MINUS state; funnel forces state per variant.
 	initialize: Omit<StatusMeta, "state">;
 }
@@ -124,10 +124,10 @@ export interface OpenRunHandle {
 	sessionFile: string;
 	startedAt: number;
 	statusWriter: StatusWriter;
-	variant: RunPersistenceVariant;
+	variant: RunRecordVariant;
 }
 
-export function openRunPersistence(step: Layer0RunStep, opts: OpenRunPersistenceOpts): OpenRunHandle {
+export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): OpenRunHandle {
 	const runId = opts.runId ?? randomUUID();
 	const paths = (opts.runRecordDir && opts.sessionFile)
 		? { runRecordDir: opts.runRecordDir, sessionFile: opts.sessionFile, sessionRoot: opts.runRecordDir }
@@ -198,7 +198,7 @@ export function finalizeRun(handle: OpenRunHandle, payload: FinalizeRunPayload):
 }
 
 export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHandle {
-	const handle = openRunPersistence(step, {
+	const handle = openRunRecord(step, {
 		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
 		...(opts.rootRunId ? { rootRunId: opts.rootRunId } : {}),
 		...(opts.source ? { source: opts.source } : {}),
