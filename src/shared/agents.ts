@@ -6,8 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { KNOWN_FIELDS } from "../surfaces/agent-serializer.ts";
-import { mergeAgentsForScope } from "../dispatch/agent-selection.ts";
+
 import { parseFrontmatter } from "./frontmatter.ts";
 import type {
 	AgentPresetOverlay,
@@ -19,6 +18,55 @@ import type {
 } from "../protocol/types.ts";
 
 export type AgentScope = "user" | "project" | "both";
+
+/** Frontmatter keys recognized by the agent loader/serializer. */
+export const KNOWN_FIELDS = new Set([
+	"name",
+	"description",
+	"tools",
+	"model",
+	"fallbackModels",
+	"thinking",
+	"systemPromptMode",
+	"inheritProjectContext",
+	"inheritSkills",
+	"skill",
+	"skills",
+	"extensions",
+	"output",
+	"defaultReads",
+	"defaultProgress",
+	"interactive",
+	"maxSubagentDepth",
+	"disabled",
+	"surface",
+	"scope",
+	"canDelegate",
+	"allowedDelegateAgents",
+	"color",
+]);
+
+export function mergeAgentsForScope(
+	scope: AgentScope,
+	userAgents: AgentConfig[],
+	projectAgents: AgentConfig[],
+	builtinAgents: AgentConfig[] = [],
+): AgentConfig[] {
+	const agentMap = new Map<string, AgentConfig>();
+
+	for (const agent of builtinAgents) agentMap.set(agent.name, agent);
+
+	if (scope === "both") {
+		for (const agent of userAgents) agentMap.set(agent.name, agent);
+		for (const agent of projectAgents) agentMap.set(agent.name, agent);
+	} else if (scope === "user") {
+		for (const agent of userAgents) agentMap.set(agent.name, agent);
+	} else {
+		for (const agent of projectAgents) agentMap.set(agent.name, agent);
+	}
+
+	return Array.from(agentMap.values());
+}
 
 export type AgentSource = "builtin" | "user" | "project";
 export type SystemPromptMode = "append" | "replace";

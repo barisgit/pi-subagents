@@ -6,7 +6,8 @@ import { normalizeSkillInput } from "../shared/skills.ts";
 import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, dispatchAsyncChild } from "./in-process-executor.ts";
 import { StatusWriter } from "../state/status-writer.ts";
 import { formatRunHandle } from "../state/run-shape.ts";
-import { mapConcurrent, resolveChildCwd } from "../shared/utils.ts";
+import { resolveChildCwd } from "../shared/utils.ts";
+import { mapConcurrent } from "./parallel-utils.ts";
 import { appendRunEntry } from "../state/runs-registry.ts";
 import { spawnRun, openGroup } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
@@ -19,15 +20,14 @@ import {
 	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
-	resolveCurrentMaxSubagentDepth,
 	wrapForkTask,
 } from "../protocol/types.ts";
-import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ModelInfo, TaskParam } from "./subagent-executor.ts";
+import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
+import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ModelInfo, TaskParam } from "./executor-types.ts";
 import {
 	addUsageInto,
 	asyncStartedResult,
 	batchToNotifyPolicy,
-	buildAsyncChildStep,
 	buildParallelModeError,
 	buildParallelWorktreeTaskCwdError,
 	emitRunAnchor,
@@ -36,7 +36,8 @@ import {
 	resolveDispatchRootRunId,
 	resolveDispatchRootSessionId,
 	safeEmit,
-} from "./subagent-executor.ts";
+} from "./executor-helpers.ts";
+import { buildAsyncChildStep } from "./child-step-runner.ts";
 
 export function childCompletionRunId(dispatchRunId: string, stepIndex: number, total: number): string {
 	return total > 1 ? `${dispatchRunId}:${stepIndex}` : dispatchRunId;

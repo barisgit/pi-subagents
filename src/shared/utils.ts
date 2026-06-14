@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import { formatToolCall } from "../surfaces/formatters.ts";
+import { formatToolCall } from "./formatting.ts";
 import { type AgentProgress, type AsyncStatus, type Details, type DisplayItem, type ErrorInfo, type SingleResult, type ToolCallSummary } from "../protocol/types.ts";
 
 // ============================================================================
@@ -566,8 +566,4 @@ export function extractTextFromContent(content: unknown): string {
 	return texts.join("\n");
 }
 
-// ============================================================================
-// Concurrency Utilities
-// ============================================================================
 
-export { mapConcurrent } from "../dispatch/parallel-utils.ts";

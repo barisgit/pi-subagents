@@ -7,8 +7,8 @@ import { buildModelCandidates, resolveModelRef } from "./model-fallback.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../shared/skills.ts";
 import { appendSubmitResultSystemInstruction } from "../protocol/submit-result.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
-import type { ChildAgentStep } from "./in-process-executor.ts";
-import { resolveChildTools, resolveDispatchRootSessionId, type ExecutionContextData, type ExecutorDeps } from "./subagent-executor.ts";
+import type { ChildAgentStep, ExecutionContextData, ExecutorDeps } from "./executor-types.ts";
+import { resolveChildTools, resolveDispatchRootSessionId } from "./executor-helpers.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 function applyThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {

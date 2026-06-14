@@ -22,132 +22,17 @@ import {
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "../shared/logger.ts";
 import { pushPendingChildLineage, setChildLineage } from "../state/lineage.ts";
-import { advanceRunPhase, initialRunPhaseState, type RunPhase, type RunPhaseState } from "../state/run-phase.ts";
+import { advanceRunPhase, initialRunPhaseState, type RunPhaseState } from "../state/run-phase.ts";
 import { SUBAGENT_PHASE_CHANGE_EVENT, SUBAGENT_STUCK_EVENT, type ControlConfig, type SubagentLineage, type SubagentPhaseChangePayload, type SubagentStuckPayload } from "../protocol/types.ts";
+import type { ChildAgentExitState, ChildAgentResult, ChildUsage, RunPhase, StatusPatch } from "../protocol/status-types.ts";
+export type { ChildAgentExitState, ChildAgentResult, ChildUsage, RunPhase, StatusPatch } from "../protocol/status-types.ts";
 import { extractSubmitResultEnvelope, fallbackSubmitResultEnvelope, hasSubmitResultToolResult, SUBMIT_RESULT_REPROMPT, SUBMIT_RESULT_TOOL_NAME, type SubmitResultEnvelope } from "../protocol/submit-result.ts";
-
-export interface ResolvedAgentConfig {
-	name: string;
-	description?: string;
-	systemPrompt?: string;
-	tools?: string[];
-	mcpDirectTools?: string[];
-	model?: string;
-	fallbackModels?: string[];
-	thinking?: string;
-	skills?: string[];
-	[key: string]: unknown;
-}
-
-export interface ChildAgentStep {
-	runId: string;
-	stepIndex: number;
-	agentName: string;
-	agentConfig: ResolvedAgentConfig;
-	task: string;
-	cwd: string;
-	model: Model<any>;
-	modelCandidates: Model<any>[];
-	thinkingLevel?: ThinkingLevel;
-	/**
-	 * Tool allowlist for the child session.
-	 * - undefined: no allowlist (child sees ALL tools registered by pi + extensions)
-	 * - string[]: exact allowlist (use empty array for zero tools)
-	 */
-	activeToolNames: string[] | undefined;
-	customTools: ToolDefinition[];
-	systemPrompt: string;
-	skillsResolved: string[];
-	sessionFile: string;
-	runRecordDir: string;
-	forkReuse?: { sessionFile: string; agentName: string };
-	intercom?: { selfTarget?: string; bridgeTarget?: string };
-	artifactsDir?: string;
-	label?: string;
-	parentAgentName?: string;
-	parentSessionId?: string;
-	rootSessionId?: string;
-	rootRunId?: string;
-	maxSubagentDepth: number;
-	preset?: string;
-	shareEnabled: boolean;
-	controlConfig?: ControlConfig;
-	outputPath?: string;
-}
-
-export interface ChildAgentContext {
-	extensionCtx: ExtensionContext;
-	abortSignal: AbortSignal;
-	onEvent?: (stepIndex: number, e: AgentSessionEvent) => void;
-	onStatusUpdate?: (patch: StatusPatch) => void;
-	onCompleted?: (result: ChildAgentResult) => void;
-	registry: ChildAgentRegistry;
-	pi: ExtensionAPI;
-}
-
-export type ChildAgentExitState = "complete" | "failed" | "interrupted";
-
-export interface ChildUsage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	turns: number;
-}
-
-export interface ChildAgentResult {
-	runId: string;
-	stepIndex: number;
-	state: ChildAgentExitState;
-	exitCode: 0 | 1;
-	outputText: string;
-	toolCallCount: number;
-	toolResultCount: number;
-	toolErrorCount: number;
-	durationMs: number;
-	startedAt: number;
-	endedAt: number;
-	sessionFile: string;
-	shareUrl?: string;
-	error?: { message: string; reason?: string };
-	/**
-	 * Aggregate token + cost usage for this child run.
-	 *
-	 * Accumulated inside the in-process executor by watching assistant
-	 * `message_end` events on the child's AgentSession AND by reading nested
-	 * `details.totalUsage` off any `subagent` tool_execution_end results.
-	 * Equals the full descendant tree, not just direct turns.
-	 */
-	usage?: ChildUsage;
-	structuredResult?: SubmitResultEnvelope;
-}
-
-export interface ChildAgentHandle {
-	readonly runId: string;
-	readonly stepIndex: number;
-	readonly session: AgentSession;
-	readonly completed: Promise<ChildAgentResult>;
-	abort(reason: string): Promise<void>;
-}
-
-export interface StatusPatch {
-	runId: string;
-	stepIndex: number;
-	state?: ChildAgentExitState | "running" | "queued";
-	activity?: { state: string; toolName?: string; updatedAt: number };
-	liveText?: string;
-	toolCallDelta?: number;
-	toolResultDelta?: number;
-	toolErrorDelta?: number;
-	endedAt?: number;
-	outputText?: string;
-	phase?: RunPhase;
-	phaseStartedAt?: number;
-	runnerHeartbeatAt?: number;
-	toolName?: string;
-	tokens?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number };
-}
+import { ChildAgentRegistry } from "./child-agent-registry.ts";
+import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
+export { ChildAgentRegistry } from "./child-agent-registry.ts";
+export type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
+import type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
+export type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
 
 type StatusPatchBody = Omit<StatusPatch, "runId" | "stepIndex">;
 
@@ -395,72 +280,6 @@ export function __setChildAgentExecutorDepsForTest(deps: Partial<ExecutorRuntime
 	return () => {
 		runtimeDeps = previous;
 	};
-}
-
-export class ChildAgentRegistry {
-	private readonly handles = new Map<string, Map<number, ChildAgentHandle>>();
-	private readonly controllers = new Map<string, AbortController>();
-
-	signalForRun(runId: string): AbortSignal {
-		return this.controllerForRun(runId).signal;
-	}
-
-	register(handle: ChildAgentHandle): void {
-		this.controllerForRun(handle.runId);
-		let byStep = this.handles.get(handle.runId);
-		if (!byStep) {
-			byStep = new Map();
-			this.handles.set(handle.runId, byStep);
-		}
-		byStep.set(handle.stepIndex, handle);
-	}
-
-	get(runId: string): ChildAgentHandle | undefined {
-		return this.handles.get(runId)?.values().next().value;
-	}
-
-	delete(runId: string, stepIndex?: number): void {
-		if (stepIndex === undefined) {
-			this.handles.delete(runId);
-			this.controllers.delete(runId);
-			return;
-		}
-		const byStep = this.handles.get(runId);
-		byStep?.delete(stepIndex);
-		if (!byStep || byStep.size === 0) {
-			this.handles.delete(runId);
-			this.controllers.delete(runId);
-		}
-	}
-
-	list(): ChildAgentHandle[] {
-		return [...this.handles.values()].flatMap((byStep) => [...byStep.values()]);
-	}
-
-	snapshot(): { runId: string; stepIndex: number }[] {
-		return this.list().map((handle) => ({ runId: handle.runId, stepIndex: handle.stepIndex }));
-	}
-
-	async abortAll(reason: string): Promise<void> {
-		await Promise.all(this.list().map((handle) => this.abortRun(handle.runId, reason)));
-	}
-
-	async abortRun(runId: string, reason: string): Promise<void> {
-		const controller = this.controllerForRun(runId);
-		if (!controller.signal.aborted) {
-			controller.abort(reason);
-		}
-		await Promise.all([...this.handles.get(runId)?.values() ?? []].map((handle) => handle.abort(reason)));
-	}
-
-	private controllerForRun(runId: string): AbortController {
-		let controller = this.controllers.get(runId);
-		if (!controller) {
-			controller = new AbortController();
-			this.controllers.set(runId, controller);
-		}
-		return controller;
-	}
 }
 
 export function runChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): Promise<ChildAgentResult> {

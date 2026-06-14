@@ -19,23 +19,20 @@ import {
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_SPAWN_STARTED_EVENT,
-	resolveCurrentMaxSubagentDepth,
 } from "../protocol/types.ts";
+import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
+import type { ExecutionContextData, ExecutorDeps, ForegroundControlRef } from "./executor-types.ts";
 import {
-	type ExecutionContextData,
-	type ExecutorDeps,
-	type ForegroundControlRef,
 	asyncStartedResult,
-	buildAsyncChildStep,
 	createForegroundControlNotifier,
 	emitSyncLifecycleEvent,
 	interruptForegroundOnNeedsAttention,
 	mirrorForegroundProgressToStatus,
-	runInProcessChildStep,
 	safeEmit,
 	tokenUsageFromResult,
 	validationError,
-} from "./subagent-executor.ts";
+} from "./executor-helpers.ts";
+import { buildAsyncChildStep, runInProcessChildStep } from "./child-step-runner.ts";
 
 function parseChildRunId(id: string): { dispatchRunId: string; stepIndex?: number } {
 	const match = id.match(/^(.*):(\d+)$/);

@@ -1,10 +1,7 @@
 import type { Usage } from "../protocol/types.ts";
+import type { ModelInfo } from "./executor-types.ts";
 
-export interface AvailableModelInfo {
-	provider: string;
-	id: string;
-	fullId: string;
-}
+export type AvailableModelInfo = ModelInfo;
 
 export interface ModelRefInfo {
 	provider: string;

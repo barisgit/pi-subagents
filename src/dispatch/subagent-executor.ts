@@ -15,6 +15,56 @@ import { discoverAvailableSkills, normalizeSkillInput } from "../shared/skills.t
 import { createForkContextResolver } from "./fork-context.ts";
 import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, type StatusPatch, ChildAgentRegistry, dispatchAsyncChild, runChildAgent } from "./in-process-executor.ts";
 import { prepareChildStep } from "./prepare-child-step.ts";
+import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ForegroundControlRef, InternalSubagentParams, ModelInfo, TaskParam } from "./executor-types.ts";
+export type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ForegroundControlRef, ModelInfo, TaskParam } from "./executor-types.ts";
+import {
+	addUsageInto,
+	applyForegroundProgress,
+	asyncStartedResult,
+	batchToNotifyPolicy,
+	buildParallelModeError,
+	buildParallelWorktreeTaskCwdError,
+	createForegroundControlNotifier,
+	emitRunAnchor,
+	emitSyncLifecycleEvent,
+	emptyUsage,
+	getRequestedModeLabel,
+	interruptForegroundOnNeedsAttention,
+	mirrorForegroundProgressToStatus,
+	resolveChildTools,
+	resolveDispatchParentRunId,
+	resolveDispatchRootRunId,
+	resolveDispatchRootSessionId,
+	safeEmit,
+	sumUsages,
+	tokenUsageFromResult,
+	validationError,
+} from "./executor-helpers.ts";
+export {
+	addUsageInto,
+	applyForegroundProgress,
+	asyncStartedResult,
+	batchToNotifyPolicy,
+	buildParallelModeError,
+	buildParallelWorktreeTaskCwdError,
+	createForegroundControlNotifier,
+	emitRunAnchor,
+	emitSyncLifecycleEvent,
+	emptyUsage,
+	getRequestedModeLabel,
+	interruptForegroundOnNeedsAttention,
+	mirrorForegroundProgressToStatus,
+	resolveChildTools,
+	resolveDispatchParentRunId,
+	resolveDispatchRootRunId,
+	resolveDispatchRootSessionId,
+	safeEmit,
+	sumUsages,
+	tokenUsageFromResult,
+	validationError,
+} from "./executor-helpers.ts";
+import { buildAsyncChildStep, runInProcessChildStep } from "./child-step-runner.ts";
+export { buildAsyncChildStep, runInProcessChildStep } from "./child-step-runner.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
 import { createActivityTicker, formatControlIntercomMessage, formatControlInterruptReason, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutput, resolveSingleOutputPath } from "../surfaces/single-output.ts";
@@ -42,84 +92,6 @@ import { getLineageForSession, resolveRootSessionIdForSession } from "../state/l
 import type { SubagentToolInput, Step, Task } from "../protocol/schemas.ts";
 import type { WorkflowGroupHandle } from "../workflow/workflow.ts";
 import { writeWorkflowGroupState } from "../workflow/workflow-group-state.ts";
-/**
- * Resolve the parent runId for a dispatch happening NOW. The dispatching
- * session's lineage tells us our own runId; that becomes the parent for any
- * runs we spawn from this turn. Falls back to PI_SUBAGENT_PARENT_RUN_ID for
- * legacy/out-of-process callers, but the in-process executor doesn't set env
- * so lineage is the canonical source.
- */
-export function resolveDispatchParentRunId(ctx: { sessionManager?: { getSessionId?: () => string | undefined } }): string | undefined {
-	const sid = ctx.sessionManager?.getSessionId?.();
-	if (sid) {
-		const lineage = getLineageForSession(sid);
-		if (lineage?.runId) return lineage.runId;
-	}
-	return process.env.PI_SUBAGENT_PARENT_RUN_ID;
-}
-export function resolveDispatchRootRunId(ctx: { sessionManager?: { getSessionId?: () => string | undefined } }, runId: string): string {
-	const sid = ctx.sessionManager?.getSessionId?.();
-	if (sid) {
-		const lineage = getLineageForSession(sid);
-		if (lineage?.rootRunId) return lineage.rootRunId;
-	}
-	return process.env.PI_SUBAGENT_ROOT_RUN_ID || runId;
-}
-
-export function resolveDispatchRootSessionId(
-	ctx: { sessionManager?: { getSessionId?: () => string | undefined } },
-	fallbackSessionId?: string,
-): string | undefined {
-	return resolveRootSessionIdForSession(ctx.sessionManager?.getSessionId?.() ?? fallbackSessionId);
-}
-
-/**
- * Append an invisible branch anchor to the HOST session tree for a TOP-LEVEL
- * dispatch. The overlay reads these via getBranch() to scope its top-level rows
- * to the current /tree branch (a revert moves the leaf, dropping abandoned
- * anchors). NESTED dispatches (parentRunId defined) are never anchored — the
- * shard already expands them under their parent. The runId passed MUST equal
- * the runId that appears as the overlay's top-level row for this dispatch (for
- * parallel/workflow that is the openGroup CONTAINER runId, not an inner run).
- * appendEntry is display:false + non-LLM; the try/catch guards a disposed pi
- * during session replacement (mirrors safeEmit).
- */
-export function emitRunAnchor(
-	pi: ExtensionAPI,
-	anchor: { runId: string; rootRunId: string; mode: RunMode; source: "sync" | "async"; parentRunId: string | undefined },
-): void {
-	if (anchor.parentRunId !== undefined) return;
-	try {
-		pi.appendEntry("subagent_run", {
-			runId: anchor.runId,
-			rootRunId: anchor.rootRunId,
-			mode: anchor.mode,
-			source: anchor.source,
-		});
-	} catch {
-		// disposed pi during session replacement — drop the anchor rather than crash
-	}
-}
-
-/**
- * Emit a subagent lifecycle event on the host pi.events bus, resolving the
- * CURRENT pi at emit time. The SDK invalidates captured pi on session
- * replacement (newSession/fork/switchSession/reload); resolving fresh avoids
- * emitting into a disposed bus. The try/catch protects against the brief
- * window where the previous pi is disposed but the new activate hasn't fired
- * yet — we drop those (rare) emits rather than crash the executor.
- */
-export function safeEmit(channel: string, data: unknown): void {
-	try {
-		const pi = getCurrentPi();
-		logger.info("safeEmit", { channel, hasPi: !!pi });
-		pi?.events.emit(channel, data);
-	} catch (err) {
-		logger.warn("safeEmit: threw", { channel, err: err instanceof Error ? err.message : String(err) });
-		// Ignore: stale pi during reload window. Listeners on the next activate
-		// will be re-attached and pick up future events.
-	}
-}
 import {
 	findWorktreeTaskCwdConflict,
 	formatWorktreeTaskCwdConflict,
@@ -155,161 +127,20 @@ import {
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_SPAWN_STARTED_EVENT,
 	type SubagentNeedsAttentionPayload,
-	checkNestedDelegationGuard,
-	checkSubagentDepth,
 	isInsideChildSession,
 	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
-	resolveCurrentMaxSubagentDepth,
 	truncateOutput,
 	wrapForkTask,
 } from "../protocol/types.ts";
-export interface ModelInfo {
-	provider: string;
-	id: string;
-	fullId: string;
-}
-
-export interface TaskParam {
-	agent: string;
-	task: string;
-	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
-	label?: string;
-	cwd?: string;
-	count?: number;
-	model?: string;
-	skill?: string | string[] | boolean;
-}
+import { checkNestedDelegationGuard, checkSubagentDepth, resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
 export type { SubagentToolInput, Step, Task };
 export type { SubagentToolInput as SubagentParamsLike };
-export function batchToNotifyPolicy(batch: boolean | undefined): "rollup" | "each" {
-	return batch === true ? "rollup" : "each";
-}
-interface InternalSubagentParams {
-	action?: string;
-	id?: string;
-	runId?: string;
-	dir?: string;
-	agent?: string;
-	task?: string;
-	/** Caller-provided short summary (~5-10 words) shown in widgets and status overlays. */
-	label?: string;
-	tasks?: TaskParam[];
-	prompt?: string;
-	message?: string;
-	concurrency?: number;
-	worktree?: boolean;
-	batch?: boolean;
-	context?: "fresh" | "fork";
-	async?: boolean;
-	clarify?: boolean;
-	share?: boolean;
-	control?: ControlConfig;
-	sessionDir?: string;
-	cwd?: string;
-	maxOutput?: MaxOutputConfig;
-	artifacts?: boolean;
-	includeProgress?: boolean;
-	model?: string;
-	skill?: string | string[] | boolean;
-	output?: string | boolean;
-	agentScope?: unknown;
-	preset?: string;
-	metadata?: SubagentMetadata;
-	rawAgentConfig?: AgentConfig;
-}
-export interface ExecutorDeps {
-	pi: ExtensionAPI;
-	state: SubagentState;
-	config: ExtensionConfig;
-	asyncByDefault: boolean;
-	tempArtifactsDir: string;
-	childRegistry: ChildAgentRegistry;
-	expandTilde: (p: string) => string;
-	discoverAgents: (cwd: string, scope: AgentScope, options?: { preset?: string; includeInternal?: boolean }) => { agents: AgentConfig[] };
-	getActiveRootRoleName?: () => string | undefined;
-}
-export interface ExecutionContextData {
-	params: InternalSubagentParams;
-	effectiveCwd: string;
-	ctx: ExtensionContext;
-	signal: AbortSignal;
-	onUpdate?: (r: AgentToolResult<Details>) => void;
-	agents: AgentConfig[];
-	runId: string;
-	rootRunId: string;
-	shareEnabled: boolean;
-	sessionRoot: string;
-	sessionDirForIndex: (idx?: number) => string;
-	sessionFileForIndex: (idx?: number) => string | undefined;
-	artifactConfig: ArtifactConfig;
-	artifactsDir: string;
-	backgroundRequestedWhileClarifying: boolean;
-	effectiveAsync: boolean;
-	controlConfig: ResolvedControlConfig;
-	intercomBridge: IntercomBridgeState;
-	forkReuse?: ForkReuseConfig;
-}
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
 	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
 }
 type ForegroundControl = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
-
-/**
- * Copy a runner progress snapshot onto the in-memory foreground control. This
- * field-copy is identical at all three foreground dispatch sites (resume,
- * parallel-inline, single); only `agent` and `index` diverge per site so the
- * caller resolves them. Background runs never reach this (they have no
- * in-memory control -- the owned-progress vs poll-disk fork).
- */
-export function applyForegroundProgress(
-	control: ForegroundControl,
-	agent: string,
-	index: number,
-	firstProgress: AgentProgress | undefined,
-	finalOutput: string | undefined,
-): void {
-	control.currentAgent = agent;
-	control.currentAgentColor = firstProgress?.color;
-	control.currentIndex = index;
-	control.currentActivityState = firstProgress?.activityState;
-	control.lastActivityAt = firstProgress?.lastActivityAt;
-	control.currentTool = firstProgress?.currentTool;
-	control.currentToolStartedAt = firstProgress?.currentToolStartedAt;
-	control.phase = firstProgress?.phase;
-	control.phaseStartedAt = firstProgress?.phaseStartedAt;
-	control.lastToolEndAt = firstProgress?.lastToolEndAt;
-	control.recentTools = firstProgress?.recentTools;
-	control.recentOutput = firstProgress?.recentOutput;
-	control.finalOutput = finalOutput;
-	control.updatedAt = Date.now();
-}
-
-/**
- * Mirror a runner progress snapshot into the sync status.json run-level fields.
- * Shared by the single + resume foreground sites; the `steps` array stays
- * caller-built (resume echoes siblings and finalizes only the resumed step;
- * single builds a 1-element array) -- an essential fork. The parallel site does
- * NOT use this: a parallel child persists via StatusWriter.enqueue.
- */
-export function mirrorForegroundProgressToStatus(
-	runId: string,
-	firstProgress: AgentProgress | undefined,
-	currentStep: number,
-	steps: unknown,
-	runRecordDir: string | undefined,
-): void {
-	writeSyncRunStatusUpdate(runId, {
-		currentStep,
-		lastActivityAt: firstProgress?.lastActivityAt,
-		currentTool: firstProgress?.currentTool,
-		currentToolStartedAt: firstProgress?.currentToolStartedAt,
-		phase: firstProgress?.phase,
-		phaseStartedAt: firstProgress?.phaseStartedAt,
-		steps: steps as never,
-	}, {}, runRecordDir);
-}
 
 function getForegroundControl(state: SubagentState, runId: string | undefined) {
 	if (runId) return state.foregroundControls.get(runId);
@@ -335,13 +166,6 @@ const SLIM_TOP_LEVEL_KEYS = new Set(["run", "async", "batch", "concurrency", "wo
 const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "output"]);
 const ALLOWED_CONTROL_ACTIONS = ["list", "status", "interrupt", "resume"] as const;
 const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);
-export function validationError(message: string): AgentToolResult<Details> {
-	return {
-		content: [{ type: "text", text: message }],
-		isError: true,
-		details: { mode: "management" as const, results: [] },
-	};
-}
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -486,42 +310,6 @@ function getAsyncInterruptTarget(state: SubagentState, runId: string | undefined
 	}
 	return newest ? { asyncId: newest.asyncId, asyncDir: newest.asyncDir } : undefined;
 }
-function emitControlNotification(input: {
-	pi: ExtensionAPI;
-	controlConfig: ResolvedControlConfig;
-	intercomBridge: IntercomBridgeState;
-	event: ControlEvent;
-}): void {
-	if (!shouldNotifyControlEvent(input.controlConfig, input.event)) return;
-	const childIntercomTarget = input.intercomBridge.active
-		? resolveSubagentIntercomTarget(input.event.runId, input.event.agent, input.event.index)
-		: undefined;
-	const payload = {
-		event: input.event,
-		source: "foreground" as const,
-		childIntercomTarget,
-		noticeText: formatControlNoticeMessage(input.event, childIntercomTarget),
-	};
-	if (input.controlConfig.notifyChannels.includes("event")) {
-		input.pi.events.emit(SUBAGENT_CONTROL_EVENT, payload);
-		if (input.event.type === "needs_attention") {
-			input.pi.events.emit(SUBAGENT_NEEDS_ATTENTION_EVENT, {
-				runId: input.event.runId,
-				agent: input.event.agent,
-				ts: input.event.ts,
-				message: input.event.message,
-				...(input.event.index !== undefined ? { index: input.event.index } : {}),
-			} satisfies SubagentNeedsAttentionPayload);
-		}
-	}
-	if (input.controlConfig.notifyChannels.includes("intercom") && input.intercomBridge.active && input.intercomBridge.orchestratorTarget) {
-		input.pi.events.emit(SUBAGENT_CONTROL_INTERCOM_EVENT, {
-			...payload,
-			to: input.intercomBridge.orchestratorTarget,
-			message: formatControlIntercomMessage(input.event, childIntercomTarget),
-		});
-	}
-}
 function interruptAllAsyncRuns(state: SubagentState, childRegistry: ChildAgentRegistry): AgentToolResult<Details> {
 	const handles = childRegistry.list();
 	const asyncHandles = handles.filter((handle) => state.asyncJobs.has(handle.runId));
@@ -607,28 +395,6 @@ function interruptAsyncRun(state: SubagentState, childRegistry: ChildAgentRegist
 		};
 	}
 }
-export function createForegroundControlNotifier(data: Pick<ExecutionContextData, "controlConfig" | "intercomBridge">, deps: Pick<ExecutorDeps, "pi">): (event: ControlEvent) => void {
-	return (event) => emitControlNotification({
-		pi: deps.pi,
-		controlConfig: data.controlConfig,
-		intercomBridge: data.intercomBridge,
-		event,
-	});
-}
-export type ForegroundControlRef = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
-export function interruptForegroundOnNeedsAttention(
-	event: ControlEvent,
-	interruptController: AbortController,
-	foregroundControl?: ForegroundControlRef,
-): boolean {
-	if (event.type !== "needs_attention" || interruptController.signal.aborted) return false;
-	interruptController.abort(formatControlInterruptReason(event));
-	if (foregroundControl) {
-		foregroundControl.currentActivityState = undefined;
-		foregroundControl.updatedAt = Date.now();
-	}
-	return true;
-}
 function validateExecutionInput(
 	params: InternalSubagentParams,
 	agents: AgentConfig[],
@@ -648,11 +414,6 @@ function validateExecutionInput(
 		};
 	}
 	return null;
-}
-function getRequestedModeLabel(params: InternalSubagentParams): Details["mode"] {
-	if ((params.tasks?.length ?? 0) > 0) return "parallel";
-	if (params.agent) return "single";
-	return "single";
 }
 function buildRequestedModeError(params: InternalSubagentParams, message: string): AgentToolResult<Details> {
 	return withForkContext(
@@ -780,500 +541,6 @@ function toExecutionErrorResult(params: InternalSubagentParams, error: unknown):
 		params.context,
 	);
 }
-export interface AsyncDispatchStep {
-	step: ChildAgentStep;
-	cleanTask: string;
-	agentConfig: AgentConfig;
-}
-
-
-export function buildAsyncChildStep(input: {
-	data: ExecutionContextData;
-	deps: ExecutorDeps;
-	agentConfig: AgentConfig;
-	task: string;
-	stepIndex: number;
-	cwd: string;
-	label?: string;
-	modelOverride?: string;
-	skills?: string[] | false;
-	output?: string | false;
-	maxSubagentDepth: number;
-}): AsyncDispatchStep | { error: AgentToolResult<Details> } {
-	const { data, deps, agentConfig, stepIndex } = input;
-	const rawSkills = input.skills !== undefined ? input.skills : resolveStepBehavior(agentConfig, { skills: undefined }).skills;
-	const skillNames = data.forkReuse || rawSkills === false ? [] : (rawSkills ?? agentConfig.skills ?? []);
-	const outputPath = resolveSingleOutputPath(input.output, data.ctx.cwd, input.cwd);
-	const cleanTask = input.task;
-	const task = injectSingleOutputInstruction(cleanTask, outputPath);
-	const prepared = prepareChildStep({
-		data,
-		deps,
-		agentConfig,
-		stepIndex,
-		cwd: input.cwd,
-		task,
-		skillNames,
-		intercom: data.intercomBridge.active
-			? { selfTarget: resolveSubagentIntercomTarget(data.runId, agentConfig.name, stepIndex), bridgeTarget: data.intercomBridge.orchestratorTarget }
-			: undefined,
-		...(outputPath ? { outputPath } : {}),
-		...(input.label ? { label: input.label } : {}),
-		...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
-		maxSubagentDepth: input.maxSubagentDepth,
-	});
-	if ("error" in prepared) {
-		return {
-			error: {
-				content: [{ type: "text", text: "No model available for child agent." }],
-				isError: true,
-				details: { mode: getRequestedModeLabel(data.params), results: [] },
-			},
-		};
-	}
-	return { step: prepared.step, cleanTask, agentConfig };
-}
-
-export function asyncStartedResult(input: {
-	mode: "single" | "parallel";
-	runId: string;
-	asyncDir: string;
-	text: string;
-	children?: Array<{ runId: string; agent: string; label?: string; stepIndex: number }>;
-}): AgentToolResult<Details> {
-	return {
-		content: [{ type: "text", text: `${input.text}\nState: running\n${formatAsyncStatusHint(input.runId)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-		details: {
-			mode: input.mode,
-			results: [],
-			runId: input.runId,
-			asyncId: input.runId,
-			asyncDir: input.asyncDir,
-			...(input.children ? { children: input.children } : {}),
-		},
-	};
-}
-
-export function buildParallelModeError(message: string): AgentToolResult<Details> {
-	return {
-		content: [{ type: "text", text: message }],
-		isError: true,
-		details: { mode: "parallel" as const, results: [] },
-	};
-}
-
-export function tokenUsageFromResult(result: SingleResult): { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number } | undefined {
-	return tokenUsageFromUsage(result.usage);
-}
-
-export function emitSyncLifecycleEvent(
-	pi: ExtensionAPI,
-	event: string,
-	payload: {
-		runId: string;
-		agent: string;
-		task?: string;
-		cwd?: string;
-		exitCode?: number;
-		error?: string;
-		metadata?: SubagentMetadata;
-	},
-): void {
-	pi.events.emit(event, payload);
-}
-
-export function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-}
-
-/**
- * Add `addend` into `base` in place and return `base`.
- * Treats missing fields as 0. Preserves explicit zeroes on the optional fields.
- */
-export function addUsageInto(base: Usage, addend: Usage | undefined): Usage {
-	if (!addend) return base;
-	base.input += addend.input || 0;
-	base.output += addend.output || 0;
-	base.cacheRead = (base.cacheRead ?? 0) + (addend.cacheRead || 0);
-	base.cacheWrite = (base.cacheWrite ?? 0) + (addend.cacheWrite || 0);
-	base.cost = (base.cost ?? 0) + (addend.cost || 0);
-	base.turns = (base.turns ?? 0) + (addend.turns || 0);
-	return base;
-}
-
-/** Sum any number of usages into a fresh accumulator. */
-export function sumUsages(...usages: (Usage | undefined)[]): Usage {
-	const total = emptyUsage();
-	for (const u of usages) addUsageInto(total, u);
-	return total;
-}
-
-export function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
-	// Semantics:
-	//   tools frontmatter absent (undefined)  -> no allowlist => session sees ALL tools
-	//   tools frontmatter explicit list       -> allowlist exactly those names
-	//   tools: []                              -> explicit empty allowlist (zero tools)
-	// Globs/negations were already expanded at registration time via
-	// resolveAgentToolPatterns(discoverAgents(...)) in index.ts, so by the time
-	// we reach here agentConfig.tools is either undefined or a concrete name list.
-	const expanded = agentConfig.tools === undefined
-		? undefined
-		: [...new Set([...agentConfig.tools, SUBMIT_RESULT_TOOL_NAME])];
-	// A non-delegating agent must never reach a delegation tool, even if its allowlist
-	// (e.g. `*`) expanded to include one. `workflow` spawns child agents exactly like
-	// `subagent`, so both are stripped whenever canDelegate is explicitly false. This is
-	// the process-independent gate for in-process children (the env-based
-	// checkNestedDelegationGuard only covers separate-process dispatch).
-	const activeToolNames = agentConfig.canDelegate === false && expanded !== undefined
-		? expanded.filter((name) => name !== "subagent" && name !== "workflow")
-		: expanded;
-	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
-	const customTools = [
-		...pi.getAllTools().filter((tool) => customToolNames.has(tool.name)),
-		createSubmitResultTool(),
-	] as ToolDefinition[];
-	return { activeToolNames, customTools };
-}
-
-function combineOptionalSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
-	const controller = new AbortController();
-	const abort = (signal: AbortSignal) => {
-		if (!controller.signal.aborted) controller.abort(signal.reason);
-	};
-	for (const signal of signals) {
-		if (!signal) continue;
-		if (signal.aborted) {
-			abort(signal);
-			break;
-		}
-		signal.addEventListener("abort", () => abort(signal), { once: true });
-	}
-	return controller.signal;
-}
-
-function appendProgressOutput(progress: AgentProgress, text: string): void {
-	const lines = text.split("\n").slice(-10).filter((line) => line.trim());
-	if (lines.length === 0) return;
-	progress.recentOutput.push(...lines);
-	if (progress.recentOutput.length > 50) progress.recentOutput.splice(0, progress.recentOutput.length - 50);
-}
-
-function snapshotProgress(progress: AgentProgress): AgentProgress {
-	return {
-		...progress,
-		skills: progress.skills ? [...progress.skills] : undefined,
-		recentTools: progress.recentTools.map((tool) => ({ ...tool })),
-		recentOutput: [...progress.recentOutput],
-	};
-}
-
-export async function runInProcessChildStep(input: {
-	data: ExecutionContextData;
-	deps: ExecutorDeps;
-	agentConfig: AgentConfig;
-	task: string;
-	cleanTask: string;
-	stepIndex: number;
-	cwd: string;
-	label?: string;
-	modelOverride?: string;
-	skills?: string[];
-	outputPath?: string;
-	maxSubagentDepth: number;
-	interruptSignal?: AbortSignal;
-	onUpdate?: (r: AgentToolResult<Details>) => void;
-	onControlEvent?: (event: ControlEvent) => void;
-	intercomSessionName?: string;
-	mode?: Details["mode"];
-	wrapUpdateDetails?: (update: AgentToolResult<Details>) => AgentToolResult<Details>;
-	layer0?: { runId: string; runRecordDir: string; sessionFile: string; rootRunId: string };
-	onLayer0StatusUpdate?: (patch: StatusPatch) => void;
-}): Promise<SingleResult> {
-	const { data, deps, agentConfig, stepIndex } = input;
-	const skillNames = input.skills ?? agentConfig.skills ?? [];
-	const prepared = prepareChildStep({
-		data,
-		deps,
-		agentConfig,
-		stepIndex,
-		cwd: input.cwd,
-		task: input.task,
-		skillNames,
-		intercom: input.intercomSessionName || data.intercomBridge.orchestratorTarget
-			? { selfTarget: input.intercomSessionName, bridgeTarget: data.intercomBridge.orchestratorTarget }
-			: undefined,
-		...(input.outputPath ? { outputPath: input.outputPath } : {}),
-		...(input.label ? { label: input.label } : {}),
-		...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
-		maxSubagentDepth: input.maxSubagentDepth,
-		...(input.layer0 ? { layer0: input.layer0 } : {}),
-	});
-	if ("error" in prepared) {
-		return {
-			agent: agentConfig.name,
-			task: input.cleanTask,
-			...(input.label ? { label: input.label } : {}),
-			exitCode: 1,
-			messages: [],
-			usage: emptyUsage(),
-			error: "No model available for child agent.",
-		};
-	}
-	const { step, missingSkills, modelRefs } = prepared;
-	const primaryModel = step.model;
-	const childRunId = step.runId;
-
-	let artifactPathsResult: ArtifactPaths | undefined;
-	if (data.artifactConfig.enabled) {
-		artifactPathsResult = getArtifactPaths(data.artifactsDir, data.runId, agentConfig.name, stepIndex);
-		ensureArtifactsDir(data.artifactsDir);
-		if (data.artifactConfig.includeInput !== false) writeArtifact(artifactPathsResult.inputPath, `# Task for ${agentConfig.name}\n\n${input.cleanTask}`);
-	}
-	const outputSnapshot = captureSingleOutputSnapshot(input.outputPath);
-	const usage = emptyUsage();
-	const messages: Message[] = [];
-	const startedAt = Date.now();
-	const progress: AgentProgress = {
-		index: stepIndex,
-		agent: agentConfig.name,
-		status: "running",
-		task: input.cleanTask,
-		skills: step.skillsResolved.length > 0 ? step.skillsResolved : undefined,
-		recentTools: [],
-		recentOutput: missingSkills.length > 0 ? [`Skills not found: ${missingSkills.join(", ")}`] : [],
-		toolCount: 0,
-		tokens: 0,
-		durationMs: 0,
-		lastActivityAt: startedAt,
-		thinking: agentConfig.thinking,
-		color: resolveAgentColor(agentConfig),
-		tokenSamples: [{ ts: startedAt, tokens: 0 }],
-	};
-	const resultShell: SingleResult = {
-		agent: agentConfig.name,
-		task: input.cleanTask,
-		...(input.label ? { label: input.label } : {}),
-		exitCode: 0,
-		messages,
-		usage,
-		model: `${primaryModel.provider}/${primaryModel.id}`,
-		attemptedModels: modelRefs.length > 0 ? modelRefs : undefined,
-		artifactPaths: artifactPathsResult,
-		skills: step.skillsResolved.length > 0 ? step.skillsResolved : undefined,
-		skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
-		progress,
-	};
-	const activityTicker = createActivityTicker({
-		runId: childRunId,
-		agent: agentConfig.name,
-		index: stepIndex,
-		config: data.controlConfig,
-		getStartedAt: () => startedAt,
-		getLastActivityAt: () => progress.lastActivityAt,
-		getPhase: () => progress.phase,
-		onNeedsAttention: input.onControlEvent,
-	});
-	const emitUpdate = () => {
-		progress.activityState = activityTicker.tick();
-		progress.durationMs = Date.now() - startedAt;
-		const progressSnapshot = snapshotProgress(progress);
-		const update: AgentToolResult<Details> = {
-			content: [{ type: "text", text: getFinalOutput(messages) || resultShell.finalOutput || "(running...)" }],
-			details: {
-				mode: input.mode ?? "single",
-				runId: input.layer0?.runId ?? data.runId,
-				results: [{ ...resultShell, progress: progressSnapshot, messages: [...messages], usage: { ...usage } }],
-				totalUsage: { ...usage },
-				progress: [progressSnapshot],
-			},
-		};
-		input.onUpdate?.(input.wrapUpdateDetails ? input.wrapUpdateDetails(update) : update);
-	};
-	const applyStatusPatchToProgress = (patch: StatusPatch) => {
-		let shouldEmit = false;
-		if (patch.activity?.updatedAt !== undefined) {
-			progress.lastActivityAt = patch.activity.updatedAt;
-			shouldEmit = true;
-		}
-		if (patch.phase !== undefined) {
-			progress.phase = patch.phase;
-			shouldEmit = true;
-		}
-		if (patch.phaseStartedAt !== undefined) {
-			progress.phaseStartedAt = patch.phaseStartedAt;
-			shouldEmit = true;
-		}
-		if (shouldEmit) emitUpdate();
-	};
-	let childResult: ChildAgentResult | undefined;
-	try {
-		childResult = await runChildAgent(step, {
-			extensionCtx: data.ctx,
-			abortSignal: combineOptionalSignals(data.signal, input.interruptSignal),
-			onEvent: (_stepIndex: number, event: AgentSessionEvent) => {
-			const record = event as Record<string, unknown>;
-			const now = Date.now();
-			progress.lastActivityAt = now;
-			if (record.type === "tool_execution_start") {
-				const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-				if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
-					progress.toolCount++;
-					progress.currentTool = toolName;
-					progress.currentToolRawArgs = record.args && typeof record.args === "object" && !Array.isArray(record.args) ? record.args as Record<string, unknown> : undefined;
-					progress.currentToolArgs = progress.currentToolRawArgs ? JSON.stringify(progress.currentToolRawArgs).slice(0, 200) : undefined;
-					progress.currentToolStartedAt = now;
-				}
-				emitUpdate();
-			} else if (record.type === "tool_execution_end") {
-				if (progress.currentTool) {
-					const durationMs = progress.currentToolStartedAt !== undefined ? Math.max(0, now - progress.currentToolStartedAt) : undefined;
-					progress.recentTools.push({ tool: progress.currentTool, args: progress.currentToolArgs || "", rawArgs: progress.currentToolRawArgs, endMs: now, durationMs });
-				}
-				// Bubble nested subagent usage into the parent's accumulator. When a
-				// child agent invokes the `subagent` tool, the tool_result carries
-				// `details.totalUsage` representing the full descendant tree. Adding
-				// it here means parent SingleResult.usage (and therefore
-				// details.totalUsage on the foreground return) includes nested work
-				// even though the descendant's message_end events fire on a
-				// different AgentSession's bus.
-				const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-				if (toolName === "subagent" && record.result && typeof record.result === "object") {
-					const result = record.result as { details?: { totalUsage?: Usage } };
-					const nested = result.details?.totalUsage;
-					if (nested) {
-						usage.input += nested.input || 0;
-						usage.output += nested.output || 0;
-						usage.cacheRead = (usage.cacheRead ?? 0) + (nested.cacheRead || 0);
-						usage.cacheWrite = (usage.cacheWrite ?? 0) + (nested.cacheWrite || 0);
-						usage.cost = (usage.cost ?? 0) + (nested.cost || 0);
-						progress.tokens = totalUsageTokens(usage);
-					}
-				}
-				progress.currentTool = undefined;
-				progress.currentToolArgs = undefined;
-				progress.currentToolRawArgs = undefined;
-				progress.currentToolStartedAt = undefined;
-				progress.lastToolEndAt = now;
-				emitUpdate();
-			} else if (record.type === "message_end" && record.message) {
-				const message = record.message as Message;
-				messages.push(message);
-				if (message.role === "assistant") {
-					usage.turns = (usage.turns ?? 0) + 1;
-					const u = message.usage;
-					if (u) {
-						usage.input += u.input || 0;
-						usage.output += u.output || 0;
-						usage.cacheRead = (usage.cacheRead ?? 0) + (u.cacheRead || 0);
-						usage.cacheWrite = (usage.cacheWrite ?? 0) + (u.cacheWrite || 0);
-						usage.cost = (usage.cost ?? 0) + (u.cost?.total || 0);
-						progress.tokens = totalUsageTokens(usage);
-						progress.tokenSamples?.push({ ts: now, tokens: progress.tokens });
-						// Persist live token usage to this child's status.json so nested-child
-						// readers (which only see the on-disk status, not in-memory progress)
-						// show running token counts instead of ~0 until finalize.
-						const liveTokens = tokenUsageFromUsage(usage);
-						if (liveTokens) input.onLayer0StatusUpdate?.({ runId: childRunId, stepIndex, tokens: liveTokens });
-					}
-					appendProgressOutput(progress, extractTextFromContent(message.content));
-				}
-				emitUpdate();
-			}
-		},
-			onStatusUpdate: (patch) => {
-				applyStatusPatchToProgress(patch);
-				input.onLayer0StatusUpdate?.(patch);
-			},
-			registry: deps.childRegistry,
-			pi: deps.pi,
-		});
-	} finally {
-		activityTicker.stop();
-	}
-	if (!childResult) throw new Error(`Child agent did not produce a result for ${childRunId}`);
-	progress.activityState = undefined;
-	return childResultToSingleResult(childResult, {
-		resultShell,
-		progress,
-		startedAt,
-		artifactPathsResult,
-		artifactConfig: data.artifactConfig,
-		maxOutput: data.params.maxOutput,
-		outputPath: input.outputPath,
-		outputSnapshot,
-	});
-}
-
-function childResultToSingleResult(childResult: ChildAgentResult, input: {
-	resultShell: SingleResult;
-	progress: AgentProgress;
-	startedAt: number;
-	artifactPathsResult?: ArtifactPaths;
-	artifactConfig: ArtifactConfig;
-	maxOutput?: MaxOutputConfig;
-	outputPath?: string;
-	outputSnapshot?: ReturnType<typeof captureSingleOutputSnapshot>;
-}): SingleResult {
-	const result = input.resultShell;
-	result.exitCode = childResult.exitCode;
-	result.error = childResult.error?.message;
-	result.interrupted = childResult.state === "interrupted" ? true : undefined;
-	result.sessionFile = childResult.sessionFile;
-	result.shareUrl = childResult.shareUrl;
-	result.structuredResult = childResult.structuredResult;
-	let fullOutput = getFinalOutput(result.messages ?? []) || childResult.outputText;
-	if (input.outputPath && result.exitCode === 0) {
-		const resolvedOutput = resolveSingleOutput(input.outputPath, fullOutput, input.outputSnapshot);
-		fullOutput = resolvedOutput.fullOutput;
-		result.savedOutputPath = resolvedOutput.savedPath;
-		result.outputSaveError = resolvedOutput.saveError;
-	}
-	result.finalOutput = fullOutput;
-	input.progress.status = result.exitCode === 0 ? "completed" : "failed";
-	input.progress.durationMs = childResult.durationMs || Date.now() - input.startedAt;
-	if (result.error) input.progress.error = result.error;
-	result.progressSummary = {
-		toolCount: childResult.toolCallCount || input.progress.toolCount,
-		tokens: totalUsageTokens(result.usage),
-		durationMs: input.progress.durationMs,
-	};
-	if (input.artifactPathsResult && input.artifactConfig.enabled !== false) {
-		result.artifactPaths = input.artifactPathsResult;
-		if (input.artifactConfig.includeOutput !== false) writeArtifact(input.artifactPathsResult.outputPath, result.finalOutput ?? "");
-		if (input.artifactConfig.includeMetadata !== false) {
-			writeMetadata(input.artifactPathsResult.metadataPath, {
-				runId: childResult.runId,
-				agent: result.agent,
-				task: result.task,
-				exitCode: result.exitCode,
-				usage: result.usage,
-				model: result.model,
-				attemptedModels: result.attemptedModels,
-				durationMs: result.progressSummary.durationMs,
-				toolCount: result.progressSummary.toolCount,
-				error: result.error,
-				skills: result.skills,
-				skillsWarning: result.skillsWarning,
-				timestamp: Date.now(),
-			});
-		}
-	}
-	if (input.maxOutput) {
-		const truncationResult = truncateOutput(result.finalOutput ?? "", { ...DEFAULT_MAX_OUTPUT, ...input.maxOutput }, input.artifactPathsResult?.outputPath);
-		if (truncationResult.truncated) result.truncation = truncationResult;
-	}
-	return result;
-}
-
-export function buildParallelWorktreeTaskCwdError(
-	tasks: ReadonlyArray<{ agent: string; cwd?: string }>,
-	sharedCwd: string,
-): string | undefined {
-	const conflict = findWorktreeTaskCwdConflict(tasks, sharedCwd);
-	if (!conflict) return undefined;
-	return formatWorktreeTaskCwdConflict(conflict, sharedCwd);
-}
-
 async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
 	const {
 		params,

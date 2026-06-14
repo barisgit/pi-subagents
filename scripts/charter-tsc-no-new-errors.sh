@@ -26,11 +26,14 @@ npx tsc --noEmit 2>&1 \
   | sort -u > "$current"
 set -e
 
-# Reduce baseline to the same key format.
+# Reduce baseline to the same key format. An empty baseline (zero known
+# errors) is a valid state, so don't let grep's no-match exit trip pipefail.
 baseline_keys=$(mktemp); trap 'rm -f "$current" "$baseline_keys"' EXIT
+set +e
 grep -E '^[^[:space:]].*\([0-9]+,[0-9]+\): error TS[0-9]+' "$baseline" \
   | sed -E 's/^([^()]+)\(([0-9]+),[0-9]+\): error (TS[0-9]+).*/\1:\2:\3/' \
   | sort -u > "$baseline_keys"
+set -e
 
 new_errors=$(comm -23 "$current" "$baseline_keys" || true)
 

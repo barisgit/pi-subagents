@@ -4,7 +4,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveTempScopeId } from "../protocol/types.ts";
+import { resolveTempScopeId } from "./runtime-env.ts";
 
 export const BASE_TEMP_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
 export const RUNS_DIR = path.join(BASE_TEMP_DIR, "async-subagent-runs");

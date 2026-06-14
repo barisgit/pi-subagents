@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { ASYNC_NO_POLL_GUIDANCE } from "../surfaces/async-guidance.ts";
+import { ASYNC_NO_POLL_GUIDANCE } from "../shared/formatting.ts";
 import { formatAsyncRunList, listRunsFromRegistry, readSummaryForEntry } from "./async-status.ts";
 import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { type Details } from "../protocol/types.ts";

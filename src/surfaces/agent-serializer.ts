@@ -1,31 +1,7 @@
 import * as fs from "node:fs";
-import type { AgentConfig } from "../shared/agents.ts";
+import { type AgentConfig, KNOWN_FIELDS } from "../shared/agents.ts";
 
-export const KNOWN_FIELDS = new Set([
-	"name",
-	"description",
-	"tools",
-	"model",
-	"fallbackModels",
-	"thinking",
-	"systemPromptMode",
-	"inheritProjectContext",
-	"inheritSkills",
-	"skill",
-	"skills",
-	"extensions",
-	"output",
-	"defaultReads",
-	"defaultProgress",
-	"interactive",
-	"maxSubagentDepth",
-	"disabled",
-	"surface",
-	"scope",
-	"canDelegate",
-	"allowedDelegateAgents",
-	"color",
-]);
+export { KNOWN_FIELDS };
 
 function joinComma(values: string[] | undefined): string | undefined {
 	if (!values || values.length === 0) return undefined;

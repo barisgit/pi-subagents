@@ -3,12 +3,12 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import { resolveModelCandidate } from "./model-fallback.ts";
-import { aggregateParallelOutputs } from "./parallel-utils.ts";
+import { aggregateParallelOutputs, mapConcurrent } from "./parallel-utils.ts";
 import { recordRun } from "../state/run-history.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
 import { normalizeSkillInput } from "../shared/skills.ts";
 import { resolveSubagentIntercomTarget } from "./intercom-bridge.ts";
-import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd } from "../shared/utils.ts";
+import { compactForegroundDetails, getSingleResultOutput, resolveChildCwd } from "../shared/utils.ts";
 import { interruptRun, spawnRun, awaitRun } from "./layer0-runs.ts";
 import { createForegroundRunController } from "./foreground-run-controller.ts";
 import {
@@ -22,9 +22,9 @@ import {
 	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
-	resolveCurrentMaxSubagentDepth,
 	wrapForkTask,
 } from "../protocol/types.ts";
+import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -32,14 +32,14 @@ import {
 	formatWorktreeDiffSummary,
 	type WorktreeSetup,
 } from "./worktree.ts";
-import type { ExecutionContextData, ExecutorDeps, ModelInfo, TaskParam } from "./subagent-executor.ts";
+import type { ExecutionContextData, ExecutorDeps, ModelInfo, TaskParam } from "./executor-types.ts";
 import {
 	buildParallelModeError,
 	buildParallelWorktreeTaskCwdError,
 	createForegroundControlNotifier,
 	resolveDispatchRootSessionId,
-	runInProcessChildStep,
-} from "./subagent-executor.ts";
+} from "./executor-helpers.ts";
+import { runInProcessChildStep } from "./child-step-runner.ts";
 
 interface ForegroundParallelRunInput {
 	data: ExecutionContextData;

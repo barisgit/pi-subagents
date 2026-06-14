@@ -2,23 +2,11 @@ import {
 	type ActivityState,
 	type ControlConfig,
 	type ControlEvent,
-	type ControlEventType,
-	type ControlNotificationChannel,
 	type ResolvedControlConfig,
 } from "../protocol/types.ts";
+import { CONTROL_EVENT_TYPES, CONTROL_NOTIFICATION_CHANNELS, DEFAULT_CONTROL_CONFIG, deriveActivityState } from "../shared/control-policy.ts";
 
-const CONTROL_EVENT_TYPES: ControlEventType[] = ["needs_attention"];
-const CONTROL_NOTIFICATION_CHANNELS: ControlNotificationChannel[] = ["event", "async", "intercom"];
-const DEFAULT_NOTIFY_ON: ControlEventType[] = ["needs_attention"];
-const ENGAGED_PHASES = new Set<string>(["waiting_model", "thinking", "streaming_text", "retrying"]);
-export const DEFAULT_NEEDS_ATTENTION_AFTER_MS = 15 * 60 * 1000;
-
-export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
-	enabled: true,
-	needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_AFTER_MS,
-	notifyOn: DEFAULT_NOTIFY_ON,
-	notifyChannels: CONTROL_NOTIFICATION_CHANNELS,
-};
+export { DEFAULT_CONTROL_CONFIG, DEFAULT_NEEDS_ATTENTION_AFTER_MS, deriveActivityState } from "../shared/control-policy.ts";
 
 function parsePositiveInt(value: unknown): number | undefined {
 	if (typeof value !== "number") return undefined;
@@ -54,21 +42,6 @@ export function resolveControlConfig(
 		notifyOn: [...notifyOn],
 		notifyChannels: [...notifyChannels],
 	};
-}
-
-export function deriveActivityState(input: {
-	config: ResolvedControlConfig;
-	startedAt: number;
-	lastActivityAt?: number;
-	phase?: string;
-	now?: number;
-}): ActivityState | undefined {
-	if (!input.config.enabled) return undefined;
-	if (input.phase && ENGAGED_PHASES.has(input.phase)) return undefined;
-	const now = input.now ?? Date.now();
-	const lastActivity = input.lastActivityAt ?? input.startedAt;
-	const ageMs = Math.max(0, now - lastActivity);
-	return ageMs > input.config.needsAttentionAfterMs ? "needs_attention" : undefined;
 }
 
 export function shouldEmitControlEvent(

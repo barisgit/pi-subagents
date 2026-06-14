@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readAllEntries, appendRunEntry } from "../state/runs-registry.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import { StatusWriter } from "../state/status-writer.ts";
-import type { ChildAgentResult } from "./in-process-executor.ts";
+import type { ChildAgentResult } from "../protocol/status-types.ts";
+import { computeGroupStatus, type Layer0ChildStatus, type Layer0GroupStatus } from "../state/group-status.ts";
 
-export type Layer0GroupStatus = "running" | "complete" | "failed";
-export type Layer0ChildStatus = "pending" | "queued" | "running" | "complete" | "failed" | "interrupted" | string;
+export { computeGroupStatus, type Layer0ChildStatus, type Layer0GroupStatus } from "../state/group-status.ts";
 
 export interface Layer0RunStep {
 	agentName: string;
@@ -92,12 +92,6 @@ export interface InterruptRunResult {
 }
 
 const controllersByRunId = new Map<string, AbortController>();
-
-export function computeGroupStatus(childStatuses: Layer0ChildStatus[]): Layer0GroupStatus {
-	if (childStatuses.some((status) => status === "pending" || status === "queued" || status === "running")) return "running";
-	if (childStatuses.some((status) => status === "failed" || status === "interrupted")) return "failed";
-	return "complete";
-}
 
 export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHandle {
 	const runId = randomUUID();

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ChildAgentResult, ChildAgentExitState, StatusPatch } from "../dispatch/in-process-executor.ts";
+import type { ChildAgentResult, ChildAgentExitState, StatusPatch } from "../protocol/status-types.ts";
 import type { RunPhase } from "./run-phase.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 

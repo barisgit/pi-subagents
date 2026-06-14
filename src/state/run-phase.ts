@@ -1,19 +1,9 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { formatDuration } from "../surfaces/formatters.ts";
+import { formatDuration } from "../shared/formatting.ts";
 import { SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
+import type { RunPhase } from "../protocol/status-types.ts";
 
-/** Observable execution phase for a child agent run. */
-export type RunPhase =
-	| "idle"
-	| "waiting_model"
-	| "thinking"
-	| "streaming_text"
-	| "finishing"
-	| "tool_running"
-	| "tool_streaming"
-	| "retrying"
-	| "queued_follow_up"
-	| "paused";
+export type { RunPhase } from "../protocol/status-types.ts";
 
 /**
  * Pure, JSON-serializable phase snapshot for a child agent run.

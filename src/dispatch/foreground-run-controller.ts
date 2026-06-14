@@ -1,5 +1,5 @@
 import type { AgentProgress, SubagentState } from "../protocol/types.ts";
-import { applyForegroundProgress } from "./subagent-executor.ts";
+import { applyForegroundProgress } from "./executor-helpers.ts";
 
 type ForegroundControl = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
 
