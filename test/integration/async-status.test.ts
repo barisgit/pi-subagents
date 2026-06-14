@@ -250,7 +250,7 @@ describe("async status helpers", () => {
 			assert.equal(overlay.recent[0]?.id, "run-failed");
 
 			const text = formatAsyncRunList(overlay.active);
-			assert.match(text, /Active async runs: 1/);
+			assert.match(text, /Subagent runs: 1/);
 			assert.match(text, /run-running/);
 			assert.match(text, /scout/);
 		} finally {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { stopWidgetAnimation } from "../../src/surfaces/render.ts";
+import { stopWidgetAnimation } from "../../src/surfaces/render-widget.ts";
 import { buildLeftLine, type LiveRun } from "../../src/surfaces/subagents-status.ts";
 
 const theme = {

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
 
-const { buildWidgetLines, renderWidget, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } = await import("../../src/surfaces/render.ts") as unknown as {
+const { buildWidgetLines, renderWidget, stopWidgetAnimation } = await import("../../src/surfaces/render-widget.ts") as unknown as {
 	buildWidgetLines: (jobs: Array<Record<string, unknown>>, theme: { fg(name: string, text: string): string; bold(text: string): string }, width?: number) => string[];
 	renderWidget: (ctx: Record<string, unknown>, jobs: Array<Record<string, unknown>>) => void;
-	stopResultAnimations: () => void;
 	stopWidgetAnimation: () => void;
+};
+const { stopResultAnimations, syncResultAnimation } = await import("../../src/surfaces/render-result.ts") as unknown as {
+	stopResultAnimations: () => void;
 	syncResultAnimation: (result: Record<string, unknown>, context: { state: { subagentResultAnimationTimer?: ReturnType<typeof setInterval> }; invalidate: () => void }) => void;
 };
 

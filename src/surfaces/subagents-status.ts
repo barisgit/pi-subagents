@@ -2,32 +2,44 @@ import * as path from "node:path";
 import { colorForAgentName } from "../shared/agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	computeSplitPaneLayout,
 	endCursor,
 	ensureCursorVisible as ensurePaneCursorVisible,
 	homeCursor,
 	moveCursor,
-	moveScrollOffset,
 	pageCursor,
-	pageScrollOffset,
 	paneOverlay,
 	resizeSplitPane,
 	togglePaneFocus,
 	type PaneOverlayComponent,
 	type PaneOverlayContext,
 } from "pi-extension-utils";
-import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
-import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
-import { previewArgs, readRunTranscript } from "../state/run-transcript.ts";
-import { formatDuration, formatTokens } from "./formatters.ts";
-import { findInlineChildRun, multiSpinnerFrame, renderNestedChild, tintAgentName } from "./render.ts";
-import { compareRunsForDisplay, deriveRunDisplayState } from "../state/run-liveness.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafSummaryCached, sortRuns } from "../state/async-status.ts";
+import { formatDuration } from "./formatters.ts";
+import { tintAgentName } from "./render-shared.ts";
+import { buildRightLines, statusGlyph } from "./dashboard-detail-renderer.ts";
+import { deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase, type RunPhase } from "../state/run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
 import { type ActivityState, type RunDisplayState, type SubagentState } from "../protocol/types.ts";
 import { listRunsByRootRunIds, readAllEntries, readShardEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
+import {
+	containerRowInfo as deriveContainerRowInfo,
+	countAgentRows as deriveCountAgentRows,
+	deriveDisplayRows,
+	isGroupContainerRow as deriveIsGroupContainerRow,
+	isPendingDelivery as deriveIsPendingDelivery,
+	parentRunIdOf,
+	type ContainerRowInfo,
+	type DisplayRow,
+} from "./dashboard-row-model.ts";
+import { deriveLiveRuns } from "./dashboard-run-source.ts";
+
+// Re-exported from the pure row-derivation model so existing import sites stay stable.
+export { runMatchesSession } from "./dashboard-row-model.ts";
+export type { ContainerRowInfo, DisplayRow } from "./dashboard-row-model.ts";
 
 const AUTO_REFRESH_MS = 1000;
 // When no run is live (all rows terminal/lost/idle), nothing needs a per-second
@@ -201,75 +213,6 @@ export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { ses
 	};
 }
 
-// Decides whether a run row directly belongs to the current session. Sync runs
-// always belong to the current session (they share the in-process cwd). Async
-// rows are direct matches only when their own session/cwd metadata matches; the
-// overlay separately keeps descendants of matching rows so nested runs with
-// stale lineage still render under their visible parent.
-export function runMatchesSession(
-	run: LiveRun,
-	scope: { sessionId?: string; sessionCwd?: string } | string | undefined,
-): boolean {
-	// Back-compat: previously the second arg was just sessionCwd as a string.
-	const { sessionId, sessionCwd } = typeof scope === "string"
-		? { sessionId: undefined, sessionCwd: scope }
-		: scope ?? {};
-	if (!sessionId && !sessionCwd) return true;
-	if (run.source === "sync") return true;
-	if (sessionId) {
-		const tag = run.run.rootSessionId ?? run.run.parentSessionId;
-		if (!tag) return false;
-		return tag === sessionId;
-	}
-	const runCwd = run.run.cwd;
-	if (!runCwd) return false;
-	return runCwd === sessionCwd;
-}
-
-function filterRunsToSessionTree(
-	runs: LiveRun[],
-	scope: { sessionId?: string; sessionCwd?: string },
-	anchorRunIds?: Set<string>,
-): LiveRun[] {
-	if (!scope.sessionId && !scope.sessionCwd) return runs;
-	const present = new Set(runs.map((run) => run.run.id));
-	const byParent = new Map<string, LiveRun[]>();
-	for (const run of runs) {
-		const parentRunId = parentRunIdOf(run);
-		if (!parentRunId) continue;
-		const siblings = byParent.get(parentRunId) ?? [];
-		siblings.push(run);
-		byParent.set(parentRunId, siblings);
-	}
-
-	// A forest-root is a top-level row in the overlay tree: no parentRunId, or a
-	// parent that is not itself present in the filtered set. Branch-aware
-	// membership is decided ONLY at forest-roots; descendants of an included
-	// root always flow in (a nested child is never independently anchored).
-	const isForestRoot = (run: LiveRun): boolean => {
-		const parentRunId = parentRunIdOf(run);
-		return !parentRunId || !present.has(parentRunId);
-	};
-
-	const included = new Set<string>();
-	const includeWithDescendants = (run: LiveRun): void => {
-		if (included.has(run.run.id)) return;
-		included.add(run.run.id);
-		for (const child of byParent.get(run.run.id) ?? []) includeWithDescendants(child);
-	};
-	for (const run of runs) {
-		if (!isForestRoot(run)) continue;
-		if (!runMatchesSession(run, scope)) continue;
-		// Tree-aware membership: when an anchor set is supplied, a top-level run is
-		// a member only if its branch anchor is on the CURRENT message-tree branch
-		// (a /tree revert drops abandoned-branch anchors). When no anchor set is
-		// supplied (tests, or before anchors exist), fall back to session match.
-		if (anchorRunIds && !anchorRunIds.has(run.run.id)) continue;
-		includeWithDescendants(run);
-	}
-	return runs.filter((run) => included.has(run.run.id));
-}
-
 export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundControls"> & { baseCwd?: string }): ForegroundRunSummary[] {
 	return Array.from(state.foregroundControls.values())
 		.map((control: ForegroundControl) => {
@@ -441,137 +384,6 @@ function stateBucket(state: AsyncRunSummary["state"]): number {
 	}
 }
 
-function baseSortLiveRuns(runs: LiveRun[]): LiveRun[] {
-	return [...runs].sort((a, b) => compareRunsForDisplay({ ...a.run, updatedAt: a.run.lastUpdate }, { ...b.run, updatedAt: b.run.lastUpdate }));
-}
-
-function parentRunIdOf(run: LiveRun): string | undefined {
-	return run.run.parentRunId;
-}
-
-function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
-	// charter nested-subagent-display: parent rows immediately precede visible children.
-	const byParent = new Map<string, LiveRun[]>();
-	const ids = new Set(sorted.map((run) => run.run.id));
-	const roots: LiveRun[] = [];
-	for (const run of sorted) {
-		const parentRunId = parentRunIdOf(run);
-		if (parentRunId && ids.has(parentRunId)) {
-			const children = byParent.get(parentRunId) ?? [];
-			children.push(run);
-			byParent.set(parentRunId, children);
-		} else {
-			roots.push(run);
-		}
-	}
-	const childrenForDisplay = (parent: LiveRun, children: LiveRun[]): LiveRun[] => {
-		if (parent.source !== "async" || !parent.run.workflow) return children;
-		return children
-			.map((child, index) => ({ child, index }))
-			.sort((a, b) => {
-				const phaseA = a.child.source === "async" ? a.child.run.phaseIndex ?? 0 : 0;
-				const phaseB = b.child.source === "async" ? b.child.run.phaseIndex ?? 0 : 0;
-				if (phaseA !== phaseB) return phaseA - phaseB;
-				const groupA = a.child.source === "async" ? a.child.run.parallelGroupId ?? "" : "";
-				const groupB = b.child.source === "async" ? b.child.run.parallelGroupId ?? "" : "";
-				if (groupA !== groupB) return groupA.localeCompare(groupB);
-				return a.index - b.index;
-			})
-			.map(({ child }) => child);
-	};
-	const out: LiveRun[] = [];
-	const visit = (run: LiveRun) => {
-		out.push(run);
-		for (const child of childrenForDisplay(run, byParent.get(run.run.id) ?? [])) visit(child);
-	};
-	for (const run of roots) visit(run);
-	return out;
-}
-
-function buildDepthMap(runs: LiveRun[]): Map<string, number> {
-	const ids = new Set(runs.map((run) => run.run.id));
-	const byId = new Map(runs.map((run) => [run.run.id, run] as const));
-	const depths = new Map<string, number>();
-	const depthFor = (run: LiveRun, seen = new Set<string>()): number => {
-		const cached = depths.get(run.run.id);
-		if (cached !== undefined) return cached;
-		const parent = parentRunIdOf(run);
-		if (!parent || !ids.has(parent) || seen.has(parent)) {
-			depths.set(run.run.id, 0);
-			return 0;
-		}
-		seen.add(run.run.id);
-		const parentRun = byId.get(parent);
-		const depth = parentRun ? Math.min(4, depthFor(parentRun, seen) + 1) : 0;
-		depths.set(run.run.id, depth);
-		return depth;
-	};
-	for (const run of runs) depthFor(run);
-	return depths;
-}
-
-function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummary[]): LiveRun[] {
-	// Single ordering rule for the dashboard: needs_attention pinned to the very top,
-	// then everything strictly by spawn time (newest first). State buckets are NOT
-	// used here -- otherwise old failed runs would float above recently completed
-	// runs just because 'failed' bucket ranks above 'complete'. The status glyph on
-	// each row already communicates state, so bucketing only hurt the mental model.
-	const all: LiveRun[] = [];
-	for (const run of sync) all.push({ source: "sync", run });
-	for (const run of async) all.push({ source: "async", run });
-	return orderRunsWithChildren(baseSortLiveRuns(all));
-}
-
-function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: ActivityState | undefined, displayState?: RunDisplayState): string {
-	if (displayState === "lost") return theme.fg("error", "!");
-	if (displayState === "needs_attention" || activity === "needs_attention") return theme.fg("warning", "!");
-	switch (state) {
-		case "running": return theme.fg("accent", multiSpinnerFrame());
-		case "queued": return theme.fg("dim", "○");
-		case "paused": return theme.fg("warning", "⏸");
-		case "complete": return theme.fg("success", "✓");
-		case "failed": return theme.fg("error", "✗");
-		case "interrupted": return theme.fg("warning", "■");
-		case "skipped": return theme.fg("dim", "·");
-		case "lost": return theme.fg("error", "!");
-	}
-	return theme.fg("dim", "·");
-}
-
-function wrapText(text: string, width: number): string[] {
-	if (width <= 0) return [];
-	const out: string[] = [];
-	for (const paragraph of text.split("\n")) {
-		if (!paragraph) {
-			out.push("");
-			continue;
-		}
-		let line = "";
-		for (const word of paragraph.split(/\s+/)) {
-			if (!word) continue;
-			const candidate = line ? `${line} ${word}` : word;
-			if (visibleWidth(candidate) <= width) {
-				line = candidate;
-				continue;
-			}
-			if (visibleWidth(word) > width) {
-				if (line) out.push(line);
-				let rest = word;
-				while (visibleWidth(rest) > width) {
-					out.push(truncateToWidth(rest, width));
-					rest = rest.slice(width);
-				}
-				line = rest;
-				continue;
-			}
-			out.push(line);
-			line = word;
-		}
-		if (line) out.push(line);
-	}
-	return out;
-}
-
 // Compact cwd badge (rightmost path segment, capped) for any row. Suppressed
 // entirely in scoped mode — every visible run shares the current session cwd,
 // so repeating it on every row is just noise (`pi-subagents · pi-subagents ·
@@ -609,27 +421,7 @@ function runEndedStamp(run: LiveRun): string {
 	return `${mo}-${dd} ${hh}:${mm}`;
 }
 
-/** Extra rendering context for a group-container row (parallel group, workflow
- * group): collapse marker, child progress, current phase synthesized from the
- * children, and the collapsed-state inline agent summary. */
-export interface ContainerRowInfo {
-	collapsed: boolean;
-	done: number;
-	total: number;
-	phaseChip?: string;
-	agentsSummary?: string;
-}
-
-export type DisplayRow =
-	| { kind: "run"; run: LiveRun; depth: number; parallelMarker?: boolean; suppressPhaseChip?: boolean }
-	| { kind: "phase"; id: string; workflowId: string; phaseIndex: number; title?: string; depth: number; done: number; total: number; running: boolean; collapsed: boolean };
-
 type OverlayDisplayRow = DisplayRow | { kind: "empty"; id: "empty" };
-
-function phaseRowDone(run: LiveRun): boolean {
-	const state = run.run.state;
-	return state === "complete" || state === "failed" || state === "interrupted" || state === "skipped";
-}
 
 export function buildPhaseLine(theme: Theme, row: Extract<DisplayRow, { kind: "phase" }>, selected: boolean, width: number): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
@@ -716,201 +508,6 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	return truncateToWidth(text, width, "");
 }
 
-function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs: LiveRun[]): string[] {
-	const children = runs.filter((candidate) => parentRunIdOf(candidate) === run.run.id);
-	if (children.length === 0) return [];
-	const agents = children.map((child) => {
-		if (child.source === "sync") return child.run.currentAgent ?? child.run.mode;
-		return child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode;
-	});
-	const uniqueAgents = Array.from(new Set(agents.filter(Boolean)));
-	const agentWord = children.length === 1 ? "agent" : "agents";
-	const suffix = uniqueAgents.length > 0 ? `: ${uniqueAgents.join(", ")}` : "";
-	return [theme.fg("dim", truncateToWidth(`${children.length} ${agentWord}${suffix}`, width))];
-}
-
-// Cap the script section so a huge orchestration script can't drown the step
-// outline below it; the outline is the part that changes while a workflow runs.
-const WORKFLOW_SCRIPT_MAX_LINES = 24;
-
-function childTokenTotal(child: AsyncRunSummary): number {
-	if (child.totalTokens) return child.totalTokens.total;
-	return child.steps.reduce((sum, step) => sum + (step.tokens?.total ?? 0), 0);
-}
-
-// Workflow groups get a purpose-built right pane: the SCRIPT that produced the
-// orchestration (the workflow's whole identity) followed by a phase-grouped
-// step outline synthesized from the child runs. The generic transcript pane is
-// useless for groups (the container has no session of its own).
-export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, width: number, runs: LiveRun[]): string[] {
-	const out: string[] = [];
-	const script = run.asyncDir ? readWorkflowScript(run.asyncDir) : undefined;
-	if (script) {
-		out.push(theme.fg("accent", truncateToWidth("─── Script ───", width)));
-		const scriptLines = script.replace(/\t/g, "  ").split("\n");
-		// Trim leading/trailing blank lines but keep interior structure verbatim:
-		// code must not be word-wrap reflowed.
-		while (scriptLines.length > 0 && scriptLines[0]?.trim() === "") scriptLines.shift();
-		while (scriptLines.length > 0 && scriptLines[scriptLines.length - 1]?.trim() === "") scriptLines.pop();
-		const shown = scriptLines.slice(0, WORKFLOW_SCRIPT_MAX_LINES);
-		for (const line of shown) out.push(theme.fg("muted", truncateToWidth(line, width)));
-		if (scriptLines.length > shown.length) {
-			out.push(theme.fg("dim", truncateToWidth(`… (+${scriptLines.length - shown.length} more lines)`, width)));
-		}
-	}
-	const children = runs
-		.filter((candidate): candidate is LiveRun & { source: "async" } => candidate.source === "async" && candidate.run.parentRunId === run.id)
-		.map((candidate) => candidate.run);
-	if (children.length > 0) {
-		if (out.length > 0) out.push("");
-		out.push(theme.fg("accent", truncateToWidth("─── Steps ───", width)));
-		let lastPhaseKey: number | undefined;
-		let shownPhaseHeader = false;
-		for (const child of sortedWorkflowChildren(children)) {
-			if (child.phaseIndex !== lastPhaseKey || !shownPhaseHeader) {
-				lastPhaseKey = child.phaseIndex;
-				shownPhaseHeader = true;
-				const label = child.phaseIndex === undefined && !child.phaseTitle ? "" : workflowPhaseLabel(child);
-				if (label) out.push(theme.fg("muted", truncateToWidth(label, width)));
-			}
-			const agent = child.steps.find((step) => step.agent)?.agent ?? child.mode;
-			const glyph = statusGlyph(theme, child.state, child.activityState, child.displayState);
-			// parallelGroupId is a raw UUID; render a compact marker instead of the id.
-			const parallelTag = child.parallelGroupId ? theme.fg("dim", "∥ ") : "";
-			const stats: string[] = [child.state];
-			const end = child.endedAt ?? Date.now();
-			stats.push(formatDuration(Math.max(0, end - child.startedAt)));
-			const tokens = childTokenTotal(child);
-			if (tokens > 0) stats.push(`${formatTokens(tokens)} tok`);
-			if (child.state === "running" && child.currentTool) stats.push(`→ ${child.currentTool}`);
-			const labelPart = child.label ? ` — ${child.label}` : "";
-			const line = `  ${glyph} ${parallelTag}${tintAgentName(agent, colorForAgentName(agent))} · ${stats.join(" · ")}${labelPart}`;
-			out.push(truncateToWidth(line, width));
-		}
-	}
-	return out;
-}
-
-export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
-	if (!run) return [theme.fg("dim", "(no events yet)")];
-	if (run.source === "async" && run.run.workflow) {
-		const workflowLines = buildWorkflowRightLines(theme, run.run, width, runs);
-		if (workflowLines.length > 0) return workflowLines;
-	}
-	const childSummary = buildChildSummaryLines(theme, run, width, runs);
-	const asyncDir = run.run.asyncDir;
-	if (!asyncDir) return childSummary.length > 0 ? childSummary : [theme.fg("dim", "(no events yet)")];
-	const events = readRunTranscript(asyncDir);
-	if (events.length === 0) return childSummary.length > 0 ? childSummary : [theme.fg("dim", "(no events yet)")];
-	// Shared set so each nested child run is rendered at most once across all steps.
-	const rightPaneUsed = new Set<string>();
-
-	// Parallel runs share one run record with N session transcripts, one per step.
-	// Render order chronological-within-step
-	// so each step reads as a coherent block instead of interleaved noise.
-	type Step = { index: number; agent: string; startTs?: number; lines: string[]; final?: string; ended?: boolean; task?: string; label?: string };
-	const steps = new Map<number, Step>();
-	const ensureStep = (index: number, agent: string): Step => {
-		let s = steps.get(index);
-		if (!s) {
-			s = { index, agent, lines: [] };
-			steps.set(index, s);
-		}
-		if (!s.agent && agent) s.agent = agent;
-		return s;
-	};
-
-	for (const event of events) {
-		if (event.kind === "step-start") {
-			const step = ensureStep(event.stepIndex, event.agent);
-			if (!step.startTs) step.startTs = event.ts;
-			if (event.task && !step.task) step.task = event.task;
-			if (event.label && !step.label) step.label = event.label;
-			continue;
-		}
-		if (event.kind === "tool") {
-			const step = ensureStep(event.stepIndex, "");
-			// charter inline-nested-fix: suppress plain `subagent` raw-args lines in the
-			// right pane and recurse into the child run via the shared renderer, mirroring
-			// the left-pane/compact-card wiring. Falls back to the plain line when the
-			// child hasn't flushed its status.json yet.
-			if (event.toolName === "subagent") {
-				const isAsync = event.rawArgs?.async === true;
-				if (!isAsync) {
-					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
-					if (child) {
-						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
-							step.lines.push(theme.fg("dim", truncateToWidth(line, width)));
-						}
-						continue;
-					}
-				}
-			}
-			const suffix = event.durationMs !== undefined ? ` · ${event.durationMs}ms` : "";
-			const prefix = `→ ${event.toolName}`;
-			const argsBudget = Math.max(1, width - visibleWidth(prefix) - 1 - visibleWidth(suffix));
-			const argsPreview = event.rawArgs ? previewArgs(event.rawArgs, argsBudget) : event.argsPreview;
-			const argsPart = argsPreview ? ` ${argsPreview}` : "";
-			const base = `${prefix}${argsPart}`;
-			if (suffix) {
-				const baseTrim = truncateToWidth(base, Math.max(0, width - visibleWidth(suffix)));
-				step.lines.push(`${baseTrim}${theme.fg("dim", suffix)}`);
-			} else {
-				step.lines.push(truncateToWidth(base, width));
-			}
-			continue;
-		}
-		if (event.kind === "step-end") {
-			const step = ensureStep(event.stepIndex, event.agent);
-			step.ended = true;
-			const middle: string[] = ["done"];
-			if (event.status) middle.push(event.status);
-			if (event.tokens !== undefined) middle.push(`${event.tokens}t`);
-			if (event.durationMs !== undefined) middle.push(`${event.durationMs}ms`);
-			const text = `─── ${middle.join(" · ")} ───`;
-			step.lines.push(theme.fg("dim", truncateToWidth(text, width)));
-			continue;
-		}
-		if (event.kind === "final-text") {
-			const step = ensureStep(event.stepIndex, event.agent);
-			step.final = event.text;
-			continue;
-		}
-	}
-
-	const ordered = [...steps.values()].sort((a, b) => {
-		if (a.startTs !== undefined && b.startTs !== undefined) return a.startTs - b.startTs;
-		return a.index - b.index;
-	});
-	const out: string[] = [];
-	// Parallel children aren't 'steps' -- they race concurrently. Use 'Task N' so the
-	// right pane reads correctly for tasks: [...] async runs.
-	const stepWord = run.source === "async" && run.run.mode === "parallel" ? "Task" : "Step";
-	for (const step of ordered) {
-		out.push(theme.fg("accent", truncateToWidth(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
-		if (step.label) {
-			out.push(theme.fg("muted", truncateToWidth(`Label: ${step.label}`, width)));
-		}
-		if (step.task) {
-			out.push(theme.fg("dim", truncateToWidth("→ prompt:", width)));
-			for (const wrapped of wrapText(step.task, width)) out.push(theme.fg("muted", wrapped));
-		}
-		for (const line of step.lines) out.push(line);
-		if (step.final) {
-			const border = "─".repeat(Math.max(0, width));
-			out.push(theme.fg("dim", border));
-			for (const wrapped of wrapText(step.final, width)) out.push(wrapped);
-			out.push(theme.fg("dim", border));
-		}
-	}
-	return out;
-}
-
-interface ScrollState {
-	top: number;
-	sticky: boolean;
-}
-
 export class SubagentsStatusComponent implements Component {
 	private readonly tui: TUI;
 	private readonly theme: Theme;
@@ -934,7 +531,6 @@ export class SubagentsStatusComponent implements Component {
 	private collapsedIds = new Set<string>();
 	private selectedId?: string;
 	private leftScroll = 0;
-	private rightScroll = new Map<string, ScrollState>();
 	private lastRightHeight = MIN_VIEWPORT_HEIGHT;
 	private lastRightWidth = 0;
 	private lastLeftWidth = 0;
@@ -1098,14 +694,12 @@ export class SubagentsStatusComponent implements Component {
 		try {
 			const overlay = this.listRunsForOverlay();
 			const sync = this.listForegroundRuns();
-			const syncIds = new Set(sync.map((run) => run.id));
-			// charter nested-subagent-display: prefer in-memory sync rows while disk mirrors exist.
-			const combined = [...overlay.active, ...overlay.recent].filter((run) => !syncIds.has(run.id));
-			this.runs = sortLiveRuns(sync, combined);
-			if (!this.showAllSessions && (this.sessionId || this.sessionCwd)) {
-				const anchorRunIds = this.getBranchAnchorRunIds?.();
-				this.runs = filterRunsToSessionTree(this.runs, { sessionId: this.sessionId, sessionCwd: this.sessionCwd }, anchorRunIds);
-			}
+			this.runs = deriveLiveRuns(overlay, sync, {
+				showAllSessions: this.showAllSessions,
+				sessionId: this.sessionId,
+				sessionCwd: this.sessionCwd,
+				branchAnchorIds: this.getBranchAnchorRunIds?.(),
+			});
 			this.errorMessage = undefined;
 		} catch (error) {
 			this.runs = [];
@@ -1139,84 +733,8 @@ export class SubagentsStatusComponent implements Component {
 		return row.kind === "run" ? runKey(row.run) : row.id;
 	}
 
-	private isSkippedParallelContainer(run: LiveRun): boolean {
-		if (run.source !== "async" || run.run.workflow === true || run.run.mode !== "parallel") return false;
-		return this.runs.some((other) => other.run.parentRunId === run.run.id);
-	}
-
 	private displayRows(): DisplayRow[] {
-		const skippedParallelIds = new Set(this.runs.filter((run) => this.isSkippedParallelContainer(run)).map((run) => run.run.id));
-		const displayRuns = this.runs.filter((run) => !skippedParallelIds.has(run.run.id));
-		const depthMap = buildDepthMap(displayRuns);
-		const ids = new Set(this.runs.map((run) => run.run.id));
-		const childrenByParent = new Map<string, LiveRun[]>();
-		for (const run of this.runs) {
-			const parentId = run.run.parentRunId;
-			if (!parentId || !ids.has(parentId)) continue;
-			const children = childrenByParent.get(parentId) ?? [];
-			children.push(run);
-			childrenByParent.set(parentId, children);
-		}
-
-		const rows: DisplayRow[] = [];
-		const processed = new Set<string>();
-		const emitRun = (run: LiveRun, depth: number, options: { parallelMarker?: boolean; suppressPhaseChip?: boolean } = {}) => {
-			processed.add(run.run.id);
-			rows.push({ kind: "run", run, depth, ...options });
-		};
-		const emitWorkflowChildren = (workflow: LiveRun, depth: number) => {
-			if (this.collapsedIds.has(workflow.run.id)) return;
-			const children = childrenByParent.get(workflow.run.id) ?? [];
-			const phaseless = children.filter((child) => child.source !== "async" || child.run.phaseIndex === undefined);
-			for (const child of phaseless) emitTree(child, depth + 1);
-
-			const phaseIndexes = Array.from(new Set(children
-				.filter((child): child is LiveRun & { source: "async" } => child.source === "async" && child.run.phaseIndex !== undefined)
-				.map((child) => child.run.phaseIndex!))).sort((a, b) => a - b);
-			for (const phaseIndex of phaseIndexes) {
-				const phaseChildren = children.filter((child): child is LiveRun & { source: "async" } => child.source === "async" && child.run.phaseIndex === phaseIndex);
-				const phaseId = `phase:${workflow.run.id}:${phaseIndex}`;
-				const title = dedupePhaseTitle(phaseChildren.find((child) => child.run.phaseTitle)?.run.phaseTitle);
-				const parallelGroups = new Set(phaseChildren.map((child) => child.run.parallelGroupId).filter((id): id is string => Boolean(id)));
-				rows.push({
-					kind: "phase",
-					id: phaseId,
-					workflowId: workflow.run.id,
-					phaseIndex,
-					...(title !== undefined ? { title } : {}),
-					depth: depth + 1,
-					done: phaseChildren.filter(phaseRowDone).length,
-					total: phaseChildren.length,
-					running: phaseChildren.some((child) => child.run.state === "running" || child.run.state === "queued"),
-					collapsed: this.collapsedIds.has(phaseId),
-				});
-				if (this.collapsedIds.has(phaseId)) continue;
-				for (const child of phaseChildren) emitTree(child, depth + 2, { suppressPhaseChip: true, parallelMarker: child.run.parallelGroupId !== undefined && parallelGroups.has(child.run.parallelGroupId) });
-			}
-		};
-		const emitTree = (run: LiveRun, depth: number, options: { parallelMarker?: boolean; suppressPhaseChip?: boolean } = {}) => {
-			if (processed.has(run.run.id)) return;
-			if (skippedParallelIds.has(run.run.id)) {
-				processed.add(run.run.id);
-				for (const child of childrenByParent.get(run.run.id) ?? []) emitTree(child, depth, { parallelMarker: true });
-				return;
-			}
-			emitRun(run, depth, options);
-			if (run.source === "async" && run.run.workflow === true) {
-				emitWorkflowChildren(run, depth);
-				return;
-			}
-			for (const child of childrenByParent.get(run.run.id) ?? []) emitTree(child, depth + 1);
-		};
-
-		for (const run of this.runs) {
-			const parentId = run.run.parentRunId;
-			const hasKnownParent = parentId !== undefined && ids.has(parentId);
-			if (hasKnownParent) continue;
-			const depth = depthMap.get(run.run.id) ?? 0;
-			emitTree(run, depth);
-		}
-		return rows;
+		return deriveDisplayRows(this.runs, this.collapsedIds);
 	}
 
 	/** Toggle collapse on the selected container row (enter). No-op on leaf rows. */
@@ -1228,7 +746,7 @@ export class SubagentsStatusComponent implements Component {
 		if (!row) return;
 		let id: string | undefined;
 		if (row.kind === "phase") id = row.id;
-		else if (row.run.source === "async" && row.run.run.workflow === true && this.isGroupContainerRow(row.run)) id = row.run.run.id;
+		else if (row.run.source === "async" && row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) id = row.run.run.id;
 		if (!id) return;
 		if (this.collapsedIds.has(id)) this.collapsedIds.delete(id);
 		else this.collapsedIds.add(id);
@@ -1262,69 +780,19 @@ export class SubagentsStatusComponent implements Component {
 	 * parallel fan-out reads as "3 total"). A real agent that happens to have spawned
 	 * sub-agents (mode "single" with children) is still a genuine agent and counts. */
 	private countAgentRows(): number {
-		return this.runs.reduce((sum, run) => sum + (this.isGroupContainerRow(run) ? 0 : 1), 0);
+		return deriveCountAgentRows(this.runs);
 	}
 
 	private isGroupContainerRow(run: LiveRun): boolean {
-		if (run.source !== "async") return false;
-		const hasChildRows = this.runs.some((other) => other.run.parentRunId === run.run.id);
-		if (!hasChildRows) return false;
-		return run.run.workflow === true || run.run.mode === "parallel";
+		return deriveIsGroupContainerRow(this.runs, run);
 	}
 
-	/** Synthesize the container-row enrichment (collapse marker, done/total child
-	 * progress, current phase, collapsed agent summary) from the children. */
 	private containerRowInfo(run: LiveRun): ContainerRowInfo | undefined {
-		if (!this.isGroupContainerRow(run)) return undefined;
-		const children = this.runs.filter((other) => other.run.parentRunId === run.run.id);
-		const done = children.filter((child) => {
-			const s = child.run.state;
-			return s === "complete" || s === "failed" || s === "interrupted" || s === "skipped";
-		}).length;
-		// Current phase = the highest phase any child has reached (workflow only).
-		let phaseChip: string | undefined;
-		if (run.source === "async" && run.run.workflow === true) {
-			let best: { index: number; title?: string } | undefined;
-			for (const child of children) {
-				if (child.source !== "async" || child.run.phaseIndex === undefined) continue;
-				if (!best || child.run.phaseIndex > best.index) {
-					best = { index: child.run.phaseIndex, ...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}) };
-				}
-			}
-			if (best && run.run.state === "running") {
-				const title = dedupePhaseTitle(best.title);
-				phaseChip = title ? `Phase ${best.index}: ${title}` : `Phase ${best.index}`;
-			}
-		}
-		const collapsed = this.collapsedIds.has(run.run.id);
-		let agentsSummary: string | undefined;
-		if (collapsed) {
-			const agents = children.map((child) => child.source === "sync"
-				? child.run.currentAgent ?? child.run.mode
-				: child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode);
-			const unique = Array.from(new Set(agents.filter(Boolean)));
-			agentsSummary = `${children.length} ${children.length === 1 ? "agent" : "agents"}${unique.length > 0 ? `: ${unique.join(", ")}` : ""}`;
-		}
-		return {
-			collapsed,
-			done,
-			total: children.length,
-			...(phaseChip !== undefined ? { phaseChip } : {}),
-			...(agentsSummary !== undefined ? { agentsSummary } : {}),
-		};
+		return deriveContainerRowInfo(this.runs, this.collapsedIds, run);
 	}
 
-	/** A parallel-group child that finished while its group is still open has a
-	 * result not yet delivered to the parent turn (rollup batching). Workflow
-	 * children are excluded: the script consumes results as they complete. */
 	private isPendingDelivery(run: LiveRun): boolean {
-		if (run.run.state !== "complete" || !run.run.parentRunId) return false;
-		const parent = this.runs.find((other) => other.run.id === run.run.parentRunId);
-		if (!parent || parent.source !== "async") return false;
-		if (parent.run.workflow === true) return false;
-		if (parent.run.mode !== "parallel") return false;
-		const s = parent.run.state;
-		return s === "running" || s === "queued";
+		return deriveIsPendingDelivery(this.runs, run);
 	}
 
 	private ensureSelectionVisible(): void {
@@ -1379,67 +847,6 @@ export class SubagentsStatusComponent implements Component {
 		this.tui.requestRender();
 	}
 
-	private getRightScrollState(): ScrollState {
-		const run = this.selectedRun();
-		if (!run) return { top: 0, sticky: true };
-		const key = runKey(run);
-		let state = this.rightScroll.get(key);
-		if (!state) {
-			state = { top: 0, sticky: true };
-			this.rightScroll.set(key, state);
-		}
-		return state;
-	}
-
-	private syncLegacyRightScrollToBottom(): void {
-		const run = this.selectedRun();
-		if (!run) return;
-		const state = this.getRightScrollState();
-		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
-		state.top = Math.max(0, lines.length - this.lastRightHeight);
-		state.sticky = true;
-	}
-
-	private scrollRight(delta: number): void {
-		const run = this.selectedRun();
-		if (!run) return;
-		const state = this.getRightScrollState();
-		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
-		const maxTop = Math.max(0, lines.length - this.lastRightHeight);
-		state.top = moveScrollOffset({ offset: state.top, contentLength: lines.length, viewportHeight: this.lastRightHeight }, delta);
-		state.sticky = state.top >= maxTop;
-		this.tui.requestRender();
-	}
-
-	/**
-	 * Scroll the right pane by a full page in the given direction (+1 down, -1 up).
-	 * Exposed for tests without simulating keys.
-	 */
-	scrollRightPaneByPage(direction: 1 | -1): void {
-		this.scrollRightByPage(direction);
-	}
-
-	/** Test-only accessor for the right-pane scroll offset of the currently selected run. */
-	getRightPaneScrollTop(): number {
-		const run = this.selectedRun();
-		if (!run) return 0;
-		return this.rightScroll.get(runKey(run))?.top ?? 0;
-	}
-
-	private scrollRightByPage(direction: 1 | -1): void {
-		const page = Math.max(1, this.lastRightHeight);
-		const run = this.selectedRun();
-		if (!run) return;
-		const state = this.getRightScrollState();
-		const lines = buildRightLines(this.theme, run, this.lastRightWidth || 80, this.runs);
-		const maxTop = Math.max(0, lines.length - this.lastRightHeight);
-		state.top = pageScrollOffset({ offset: state.top, contentLength: lines.length, viewportHeight: this.lastRightHeight }, direction, page);
-		state.sticky = state.top >= maxTop;
-		this.tui.requestRender();
-	}
-
-
-
 	handleInput(data: string): void {
 		if (data === "q" || data === "\u001b" || data === "\u0003") {
 			this.done();
@@ -1447,11 +854,9 @@ export class SubagentsStatusComponent implements Component {
 		}
 		if (data === "\t" || data === "\u001b[D" || data === "\u001b[C") {
 			this.focus = togglePaneFocus(this.focus);
-			if (this.focus === "right") this.syncLegacyRightScrollToBottom();
 		}
 		this.overlay.handleInput(data);
 	}
-
 
 	private shiftSplit(direction: -1 | 1): void {
 		const cols = this.tui.terminal?.columns ?? process.stdout.columns ?? 120;

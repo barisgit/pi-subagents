@@ -6,7 +6,8 @@ import { after, afterEach, describe, it } from "node:test";
 import { statusToSummary } from "../../src/state/async-status.ts";
 import { StatusWriter } from "../../src/state/status-writer.ts";
 import { writeSyncRunStatusUpdate } from "../../src/state/sync-run-persistence.ts";
-import { RUNS_DIR, type AsyncStatus } from "../../src/protocol/types.ts";
+import { type AsyncStatus } from "../../src/protocol/types.ts";
+import { RUNS_DIR } from "../../src/shared/runtime-paths.ts";
 
 function createTempDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

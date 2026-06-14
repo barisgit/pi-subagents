@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "../shared/agents.ts";
 import { logger } from "../shared/logger.ts";
+import { expandTilde } from "../shared/config.ts";
 import type { ExtensionConfig, IntercomBridgeConfig, IntercomBridgeMode } from "../protocol/types.ts";
 
 const DEFAULT_INTERCOM_EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "pi-intercom");
@@ -96,10 +97,6 @@ function extensionSandboxAllowsIntercom(extensions: string[] | undefined, extens
 		if (normalized.includes("/pi-intercom/")) return true;
 	}
 	return false;
-}
-
-function expandTilde(filePath: string): string {
-	return filePath.startsWith("~/") ? path.join(os.homedir(), filePath.slice(2)) : filePath;
 }
 
 function resolveInstructionTemplate(instructionFile: string, settingsDir: string): string {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { assertCompleteResumeTarget, resolveResumeTarget } from "../../src/dispatch/subagent-executor.ts";
+import { assertCompleteResumeTarget, resolveResumeTarget } from "../../src/dispatch/resume-run.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createTempDir, removeTempDir } from "../support/helpers.ts";
 

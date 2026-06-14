@@ -10,6 +10,7 @@ type RenderSubagentResult = (
 			results: unknown[];
 		agentGroups?: string[];
 		totalSteps?: number;
+		expectedAgents?: number;
 		currentStepIndex?: number;
 		};
 	},
@@ -21,7 +22,7 @@ type RenderSubagentResult = (
 ) => { render(width: number): string[] };
 
 let renderSubagentResult: RenderSubagentResult | undefined;
-({ renderSubagentResult } = await import("../../src/surfaces/render.ts") as unknown as {
+({ renderSubagentResult } = await import("../../src/surfaces/render-result.ts") as unknown as {
 	renderSubagentResult?: RenderSubagentResult;
 });
 
@@ -323,6 +324,7 @@ describe("renderSubagentResult fork indicator", () => {
 			details: {
 				mode: "parallel",
 				totalSteps: 3,
+				expectedAgents: 3,
 				results: [{
 					agent: "worker",
 					task: "third task",

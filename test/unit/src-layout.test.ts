@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-const moduleDirs = ["dispatch", "state", "surfaces", "workflow", "protocol", "shared"];
+const moduleDirs = ["api", "dispatch", "runtime", "state", "surfaces", "workflow", "protocol", "shared"];
 
 describe("source layout", () => {
 	test("keeps only index.ts at the repository root", () => {

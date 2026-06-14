@@ -3,6 +3,9 @@
 ## Entry point
 - `index.ts` — root extension entry point; registers tools, slash commands, notifications, widgets, and async/status APIs while importing implementation from `src/`.
 
+## `src/api/`
+- `exposed-subagent-api.ts` — publishes the cross-extension subagent API and lineage for host and child sessions.
+
 ## `src/dispatch/`
 - `agent-scope.ts` — validates same-role fork scope and inherited agent context.
 - `agent-selection.ts` — resolves requested agent personas for dispatch.
@@ -15,12 +18,17 @@
 - `parallel-utils.ts` — normalizes and summarizes parallel dispatch inputs.
 - `prompt-template-bridge.ts` — registers prompt-template delegation hooks.
 - `resolve-tool-patterns.ts` — expands allowed tool pattern configuration.
+- `run-async-path.ts` — runs the async/background single and parallel dispatch path (detached, returns immediately; null when not async).
+- `run-parallel-path.ts` — runs the foreground parallel dispatch path with worktree setup/cleanup and shared foreground control.
 - `sdk-0.75-compat.ts` — adapts older SDK event/result shapes.
 - `subagent-control.ts` — formats foreground control and notification events.
 - `subagent-executor.ts` — orchestrates subagent runs, async/background mode, worktrees, progress, and resume.
 - `subagent-prompt-runtime.ts` — prepares runtime prompt sections for children.
 - `top-level-async.ts` — enforces top-level async dispatch policy.
 - `worktree.ts` — creates and cleans isolated worktree execution roots.
+
+## `src/runtime/`
+- `root-role-manager.ts` — manages the root session role lifecycle: discovery, activation, settings preservation, and the `/role` command.
 
 ## `src/state/`
 - `async-status.ts` — stores async status and completion metadata.
@@ -42,13 +50,7 @@
 
 ## `src/surfaces/`
 - `agent-management.ts` — applies create/edit/archive actions to agent definitions.
-- `agent-manager-detail.ts` — renders agent detail views.
-- `agent-manager-edit.ts` — renders agent editing flows.
-- `agent-manager-list.ts` — renders agent list views.
-- `agent-manager-parallel.ts` — renders parallel manager interactions.
-- `agent-manager.ts` — coordinates the Agents Manager TUI.
 - `agent-serializer.ts` — serializes agent markdown/frontmatter.
-- `agent-templates.ts` — supplies built-in agent templates.
 - `async-guidance.ts` — formats user guidance for async/background runs.
 - `async-job-tracker.ts` — tracks async jobs for widget display.
 - `formatters.ts` — formats durations, paths, and display text.
@@ -57,9 +59,8 @@
 - `render.ts` — renders run progress, results, and widgets.
 - `single-output.ts` — formats single-run output blocks.
 - `slash-bridge.ts` — connects slash-command subagent dispatch.
-- `slash-commands.ts` — registers `/run`, `/parallel`, `/agents`, and `/subagents-status`.
+- `slash-commands.ts` — registers `/run`, `/parallel`, and `/subagents-status`.
 - `subagents-status.ts` — renders aggregate subagent status.
-- `text-editor.ts` — supports inline text editing interactions.
 
 ## `src/workflow/`
 - `workflow-group-state.ts` — tracks grouped workflow child state.

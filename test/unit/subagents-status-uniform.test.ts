@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { type AsyncRunSummary } from "../../src/state/async-status.ts";
-import { buildRightLines, type ForegroundRunSummary } from "../../src/surfaces/subagents-status.ts";
+import { buildRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
+import { type ForegroundRunSummary } from "../../src/surfaces/subagents-status.ts";
 import type { AsyncStatus } from "../../src/protocol/types.ts";
 
 const theme = { fg: (_name: string, text: string) => text, bg: (_name: string, text: string) => text } as never;

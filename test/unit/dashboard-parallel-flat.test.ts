@@ -1,123 +1,73 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, describe, it } from "node:test";
-import { buildWidgetLines } from "../../src/surfaces/render.ts";
-import { SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
+import { describe, it } from "node:test";
+import { buildWidgetLines } from "../../src/surfaces/render-widget.ts";
+import { deriveDisplayRows, isPendingDelivery } from "../../src/surfaces/dashboard-row-model.ts";
+import type { LiveRun } from "../../src/surfaces/subagents-status.ts";
+import type { AsyncRunSummary } from "../../src/state/async-status.ts";
 
-type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
-type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
-
-const tmpRoots: string[] = [];
-
-function tmpRegistry(): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-parallel-flat-"));
-	tmpRoots.push(root);
-	setRegistryPathForTests(path.join(root, "registry", "runs-index.jsonl"));
-	return root;
-}
-
-function createTestTui(): StatusTui {
-	return { requestRender: () => {}, terminal: { rows: 48 } } as StatusTui;
-}
-
-function createTaggingTheme(): StatusTheme {
+function createTaggingTheme() {
 	return {
 		fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
 		bg: (_token: string, text: string) => text,
-	} as StatusTheme;
+	} as unknown as Parameters<typeof buildWidgetLines>[1];
 }
 
-function stripBorders(line: string): string {
-	return line.replace(/^│/, "").replace(/│$/, "").trim();
-}
-
-function leftRows(component: SubagentsStatusComponent): string[] {
-	return component.render(180).map((line) => {
-		const normalized = line.replace(/<dim>│<\/dim>/g, "│");
-		const unbordered = normalized.replace(/^│/, "").replace(/│$/, "").trim();
-		return unbordered.split("│")[0] ?? unbordered;
-	});
-}
-
-interface SeedRun {
-	runId: string;
-	agentName?: string;
+interface AsyncSeed {
+	id: string;
 	mode?: "single" | "parallel";
-	state?: "running" | "complete";
+	state?: AsyncRunSummary["state"];
 	label?: string;
 	parentRunId?: string;
-	rootRunId?: string;
+	agent?: string;
 	startedAt: number;
 }
 
-function seedRun(root: string, entry: SeedRun): void {
-	const runRecordDir = path.join(root, "runs", entry.runId);
-	fs.mkdirSync(runRecordDir, { recursive: true });
-	const state = entry.state ?? "running";
-	const terminal = state !== "running";
-	if (entry.agentName) {
-		fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-			runId: entry.runId,
-			mode: entry.mode ?? "single",
-			state,
-			startedAt: entry.startedAt,
-			lastUpdate: terminal ? entry.startedAt + 1 : Date.now(),
-			runnerHeartbeatAt: terminal ? entry.startedAt + 1 : Date.now(),
-			...(terminal ? { endedAt: entry.startedAt + 1 } : {}),
-			cwd: root,
-			currentStep: 0,
-			...(entry.label ? { label: entry.label } : {}),
-			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-			steps: [{ agent: entry.agentName, status: state, startedAt: entry.startedAt, ...(terminal ? { endedAt: entry.startedAt + 1 } : {}) }],
-		}), "utf8");
-	}
-	appendRunEntry({
-		runId: entry.runId,
-		runRecordDir,
-		mode: entry.mode ?? "single",
+function asyncRun(seed: AsyncSeed): LiveRun {
+	const state = seed.state ?? "running";
+	return {
 		source: "async",
-		...(entry.agentName ? { agentName: entry.agentName } : {}),
-		...(entry.label ? { label: entry.label } : {}),
-		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-		...(entry.rootRunId ? { rootRunId: entry.rootRunId } : {}),
-		cwd: root,
-		startedAt: entry.startedAt,
-	} as RunsRegistryEntry);
+		run: {
+			id: seed.id,
+			asyncDir: `/tmp/${seed.id}`,
+			mode: seed.mode ?? "single",
+			state,
+			startedAt: seed.startedAt,
+			lastUpdate: seed.startedAt + 1,
+			steps: seed.agent ? [{ index: 0, agent: seed.agent, status: state, startedAt: seed.startedAt }] : [],
+			...(seed.label ? { label: seed.label } : {}),
+			...(seed.parentRunId ? { parentRunId: seed.parentRunId } : {}),
+		} as unknown as AsyncRunSummary,
+	};
 }
 
-afterEach(() => {
-	setRegistryPathForTests(null);
-	for (const root of tmpRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-});
-
 describe("dashboard parallel flat presentation", () => {
-	it("hides parallel containers while rendering children flat with batch markers and pending delivery", () => {
-		const root = tmpRegistry();
-		seedRun(root, { runId: "batch", mode: "parallel", label: "parallel group", rootRunId: "batch", startedAt: 1000 });
-		seedRun(root, { runId: "done", agentName: "explorer", parentRunId: "batch", rootRunId: "batch", state: "complete", startedAt: 1100 });
-		seedRun(root, { runId: "live", agentName: "qa", parentRunId: "batch", rootRunId: "batch", state: "running", startedAt: 1200 });
+	it("flattens a parallel container into top-level child rows with batch markers and pending delivery", () => {
+		const runs: LiveRun[] = [
+			asyncRun({ id: "batch", mode: "parallel", label: "parallel group", startedAt: 1000 }),
+			asyncRun({ id: "done", agent: "explorer", parentRunId: "batch", state: "complete", startedAt: 1100 }),
+			asyncRun({ id: "live", agent: "qa", parentRunId: "batch", state: "running", startedAt: 1200 }),
+		];
 
-		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, { refreshMs: 0 });
-		try {
-			const rows = leftRows(component);
-			const body = rows.join("\n");
-			assert.doesNotMatch(body, /parallel group/);
-			assert.doesNotMatch(body, /▾ parallel/);
-			const done = rows.find((line) => line.includes("explorer") && line.includes("∥")) ?? "";
-			const live = rows.find((line) => line.includes("qa") && line.includes("∥")) ?? "";
-			assert.ok(done, "expected complete child row");
-			assert.ok(live, "expected running child row");
-			assert.doesNotMatch(done, /└─/);
-			assert.doesNotMatch(live, /└─/);
-			assert.match(done, /∥ /);
-			assert.match(live, /∥ /);
-			assert.match(done, /<accent>✓<\/accent>/);
-		} finally {
-			component.dispose();
-		}
+		const rows = deriveDisplayRows(runs, new Set());
+
+		// The parallel CONTAINER is never emitted as its own row.
+		assert.equal(rows.some((row) => row.kind === "run" && row.run.run.id === "batch"), false);
+
+		// Both children render flat (depth 0) with the parallel batch marker.
+		const done = rows.find((row) => row.kind === "run" && row.run.run.id === "done");
+		const live = rows.find((row) => row.kind === "run" && row.run.run.id === "live");
+		assert.ok(done && done.kind === "run", "expected complete child row");
+		assert.ok(live && live.kind === "run", "expected running child row");
+		assert.equal(done.depth, 0);
+		assert.equal(live.depth, 0);
+		assert.equal(done.parallelMarker, true);
+		assert.equal(live.parallelMarker, true);
+
+		// A child that completed while its group is still open is pending delivery.
+		const doneRun = runs.find((run) => run.run.id === "done")!;
+		const liveRun = runs.find((run) => run.run.id === "live")!;
+		assert.equal(isPendingDelivery(runs, doneRun), true);
+		assert.equal(isPendingDelivery(runs, liveRun), false);
 	});
 
 	it("hides parallel containers in the widget while keeping children at top-level depth", () => {

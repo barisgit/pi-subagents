@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createAsyncJobTracker } from "../../src/surfaces/async-job-tracker.ts";
-import { buildWidgetLines, stopWidgetAnimation } from "../../src/surfaces/render.ts";
+import { buildWidgetLines, stopWidgetAnimation } from "../../src/surfaces/render-widget.ts";
 
 const tmpRoots: string[] = [];
 

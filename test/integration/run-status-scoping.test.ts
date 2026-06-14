@@ -116,7 +116,7 @@ describe("inspectSubagentStatus no-id list scoping", () => {
 		}
 		const result = inspectSubagentStatus({ sessionId: "sess-current", sessionCwd: "/scoped/proj" });
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		assert.match(text, /No active async runs\./);
+		assert.match(text, /No subagent runs\./);
 		assert.doesNotMatch(text, /noise-/);
 	});
 });

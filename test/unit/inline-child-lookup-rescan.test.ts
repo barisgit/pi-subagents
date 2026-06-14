@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { findInlineChildRun } from "../../src/surfaces/render.ts";
+import { findInlineChildRun } from "../../src/surfaces/render-inline.ts";
 import { rmRun, writeRun } from "./inline-nested-helpers.ts";
 
 const parent = "inline-lookup-parent";

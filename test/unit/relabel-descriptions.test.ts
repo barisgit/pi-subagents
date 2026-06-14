@@ -13,7 +13,7 @@ function readSource(file: string): string {
 
 describe("description relabel guards", () => {
 	it("keeps tool and slash-command descriptions mode-neutral", () => {
-		const index = readSource("index.ts");
+		const index = readSource("src/dispatch/subagent-tool.ts");
 		const slash = readSource("src/surfaces/slash-commands.ts");
 		const schemas = readSource("src/protocol/schemas.ts");
 

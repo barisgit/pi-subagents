@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatAsyncRunList, readSummaryForEntry } from "../../src/state/async-status.ts";
-import { buildRightLines, buildWorkflowRightLines, SubagentsStatusComponent, summaryFromRegistryEntry, type LiveRun } from "../../src/surfaces/subagents-status.ts";
+import { buildRightLines, buildWorkflowRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
+import { SubagentsStatusComponent, summaryFromRegistryEntry, type LiveRun } from "../../src/surfaces/subagents-status.ts";
 import { writeWorkflowScript } from "../../src/workflow/workflow-group-state.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 

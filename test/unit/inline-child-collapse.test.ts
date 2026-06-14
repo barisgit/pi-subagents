@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { renderNestedChild } from "../../src/surfaces/render.ts";
+import { renderNestedChild } from "../../src/surfaces/render-inline.ts";
 import { rmRun, tool, writeRun } from "./inline-nested-helpers.ts";
 
 const cases = [

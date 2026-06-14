@@ -4,211 +4,137 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import { countAgentRows, deriveDisplayRows, filterRunsToSessionTree } from "../../src/surfaces/dashboard-row-model.ts";
+import type { LiveRun } from "../../src/surfaces/subagents-status.ts";
+import type { AsyncRunSummary } from "../../src/state/async-status.ts";
 import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
-
-type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
-type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
 
 const tmpRoots: string[] = [];
 
-function tmpRegistry(): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-tree-rows-"));
-	tmpRoots.push(root);
-	setRegistryPathForTests(path.join(root, "registry", "runs-index.jsonl"));
-	return root;
+interface AsyncSeed {
+	id: string;
+	agent: string;
+	label?: string;
+	mode?: "single" | "parallel";
+	parentRunId?: string;
+	rootSessionId?: string;
+	parentSessionId?: string;
+	cwd?: string;
+	state?: AsyncRunSummary["state"];
+	startedAt: number;
 }
 
-function createTestTui(requestRender: () => void): StatusTui {
-	return { requestRender, terminal: { rows: 48 } } as StatusTui;
-}
-
-function createTestTheme(): StatusTheme {
+function asyncRun(seed: AsyncSeed): LiveRun {
+	const state = seed.state ?? "complete";
 	return {
-		fg: (_token: string, text: string) => text,
-		bg: (_token: string, text: string) => text,
-	} as StatusTheme;
-}
-
-function stripBorders(line: string): string {
-	return line.replace(/^│/, "").replace(/│$/, "").trim();
-}
-
-function appendCompleteRun(root: string, entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & { agentName: string; mode?: "single" | "parallel"; cwd?: string }): void {
-	const runRecordDir = path.join(root, "runs", entry.runId);
-	fs.mkdirSync(runRecordDir, { recursive: true });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-		runId: entry.runId,
-		mode: entry.mode ?? "single",
-		state: "complete",
-		startedAt: entry.startedAt,
-		lastUpdate: entry.startedAt + 1,
-		endedAt: entry.startedAt + 1,
-		cwd: entry.cwd ?? root,
-		currentStep: 0,
-		...(entry.label ? { label: entry.label } : {}),
-		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-		steps: [{ agent: entry.agentName, status: "complete", startedAt: entry.startedAt, endedAt: entry.startedAt + 1 }],
-	}), "utf8");
-	appendRunEntry({
-		runId: entry.runId,
-		runRecordDir,
-		mode: entry.mode ?? "single",
 		source: "async",
-		agentName: entry.agentName,
-		...(entry.label ? { label: entry.label } : {}),
-		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-		...(entry.rootRunId ? { rootRunId: entry.rootRunId } : {}),
-		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
-		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
-		cwd: entry.cwd ?? root,
-		startedAt: entry.startedAt,
-	});
+		run: {
+			id: seed.id,
+			asyncDir: `/tmp/${seed.id}`,
+			mode: seed.mode ?? "single",
+			state,
+			startedAt: seed.startedAt,
+			lastUpdate: seed.startedAt + 1,
+			steps: [{ index: 0, agent: seed.agent, status: state, startedAt: seed.startedAt }],
+			...(seed.label ? { label: seed.label } : {}),
+			...(seed.parentRunId ? { parentRunId: seed.parentRunId } : {}),
+			...(seed.rootSessionId ? { rootSessionId: seed.rootSessionId } : {}),
+			...(seed.parentSessionId ? { parentSessionId: seed.parentSessionId } : {}),
+			...(seed.cwd ? { cwd: seed.cwd } : {}),
+		} as unknown as AsyncRunSummary,
+	};
 }
-
-afterEach(() => {
-	setRegistryPathForTests(null);
-	for (const root of tmpRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-});
 
 describe("dashboard tree rows", () => {
-	it("session-scoped dashboard keeps nested descendants from the host session shard", () => {
-		const root = tmpRegistry();
-		appendCompleteRun(root, {
-			runId: "parent-visible",
-			agentName: "fixer",
-			label: "visible parent",
-			rootRunId: "parent-visible",
-			parentSessionId: "sess-host",
-			rootSessionId: "sess-host",
-			startedAt: 100,
-		});
-		appendCompleteRun(root, {
-			runId: "child-stale-lineage",
-			agentName: "review",
-			label: "stale child",
-			parentRunId: "parent-visible",
-			rootRunId: "parent-visible",
-			parentSessionId: "sess-child",
-			rootSessionId: "sess-host",
-			startedAt: 200,
-		});
-		appendCompleteRun(root, {
-			runId: "unrelated-other-session",
-			agentName: "qa",
-			label: "other session",
-			rootRunId: "unrelated-other-session",
-			parentSessionId: "sess-other",
-			rootSessionId: "sess-other",
-			startedAt: 300,
-		});
+	it("session-scoped filter keeps nested descendants from the host session shard", () => {
+		const runs: LiveRun[] = [
+			asyncRun({ id: "parent-visible", agent: "fixer", label: "visible parent", rootSessionId: "sess-host", parentSessionId: "sess-host", startedAt: 100 }),
+			// Child has stale lineage (parentSessionId sess-child) but its root session
+			// is the host: it must still flow in as a descendant of the visible parent.
+			asyncRun({ id: "child-stale-lineage", agent: "review", label: "stale child", parentRunId: "parent-visible", rootSessionId: "sess-host", parentSessionId: "sess-child", startedAt: 200 }),
+			asyncRun({ id: "unrelated-other-session", agent: "qa", label: "other session", rootSessionId: "sess-other", parentSessionId: "sess-other", startedAt: 300 }),
+		];
 
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{ refreshMs: 1000, sessionId: "sess-host", sessionCwd: root },
-		);
+		const scoped = filterRunsToSessionTree(runs, { sessionId: "sess-host" });
+		const ids = scoped.map((run) => run.run.id);
+		assert.deepEqual(ids.sort(), ["child-stale-lineage", "parent-visible"]);
 
-		try {
-			const rows = component.render(180).map(stripBorders).map((line) => line.split("│")[0] ?? line);
-			const parentIndex = rows.findIndex((line) => line.includes("fixer") && line.includes("visible parent"));
-			const childIndex = rows.findIndex((line) => line.includes("review") && line.includes("stale child"));
-			assert.notEqual(parentIndex, -1);
-			assert.notEqual(childIndex, -1);
-			assert.equal(childIndex, parentIndex + 1);
-			assert.match(rows[childIndex]!, /└─/);
-			assert.doesNotMatch(rows.join("\n"), /other session/);
-			assert.match(rows.join("\n"), /Subagent runs · 2 total/);
-		} finally {
-			component.dispose();
-		}
+		const rows = deriveDisplayRows(scoped, new Set());
+		const parentIndex = rows.findIndex((row) => row.kind === "run" && row.run.run.id === "parent-visible");
+		const childIndex = rows.findIndex((row) => row.kind === "run" && row.run.run.id === "child-stale-lineage");
+		assert.notEqual(parentIndex, -1);
+		assert.equal(childIndex, parentIndex + 1, "descendant renders immediately after its parent");
+		const childRow = rows[childIndex]!;
+		assert.equal(childRow.kind === "run" && childRow.depth, 1, "descendant is rendered one level deep");
+		assert.equal(countAgentRows(scoped), 2);
 	});
 
-	it("parallel dispatch renders children as flat top-level rows", () => {
-		const root = tmpRegistry();
-		const groupId = "group-parallel";
-		const groupDir = path.join(root, "runs", groupId);
-		fs.mkdirSync(groupDir, { recursive: true });
-		appendRunEntry({
-			runId: groupId,
-			runRecordDir: groupDir,
-			mode: "parallel",
-			source: "sync",
-			label: "parallel group",
-			rootRunId: groupId,
-			cwd: root,
-			startedAt: 1,
-		});
-
+	it("parallel dispatch flattens children to top-level rows and the container is not tallied", () => {
+		const runs: LiveRun[] = [
+			asyncRun({ id: "group-parallel", agent: "group", mode: "parallel", state: "running", label: "parallel group", startedAt: 1 }),
+		];
 		for (let i = 0; i < 20; i++) {
-			appendCompleteRun(root, {
-				runId: `unrelated-${i}`,
-				agentName: "other",
-				label: `unrelated ${i}`,
-				rootRunId: `unrelated-${i}`,
-				startedAt: 10 + i,
-			});
+			runs.push(asyncRun({ id: `unrelated-${i}`, agent: "other", label: `unrelated ${i}`, startedAt: 10 + i }));
 		}
-
 		const agents = ["fixer", "review", "qa", "oracle"];
 		agents.forEach((agent, index) => {
-			appendCompleteRun(root, {
-				runId: `child-${agent}`,
-				agentName: agent,
-				label: `child ${agent}`,
-				parentRunId: groupId,
-				rootRunId: groupId,
-				startedAt: 100 + index,
-			});
+			runs.push(asyncRun({ id: `child-${agent}`, agent, label: `child ${agent}`, parentRunId: "group-parallel", startedAt: 100 + index }));
 		});
 
-		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
-			() => {},
-			{ refreshMs: 1000, sessionCwd: root },
-		);
+		const rows = deriveDisplayRows(runs, new Set());
 
-		try {
-			const firstRender = component.render(180).map(stripBorders).map((line) => line.split("│")[0] ?? line);
-			assert.equal(firstRender.findIndex((line) => line.includes("parallel group")), -1);
+		// The parallel group CONTAINER is never emitted.
+		assert.equal(rows.some((row) => row.kind === "run" && row.run.run.id === "group-parallel"), false);
 
-			const rows = component.render(180).map(stripBorders);
-			const visibleAgents = [...agents].reverse();
-			const childIndexes = visibleAgents.map((agent) => rows.findIndex((line) => line.includes(`child ${agent}`) && line.includes("∥")));
-			childIndexes.forEach((index) => assert.notEqual(index, -1));
-			for (const index of childIndexes) {
-				assert.doesNotMatch(rows[index]!, /└─/);
-				assert.match(rows[index]!, /∥ /);
-			}
-
-			const unrelatedIndex = rows.findIndex((line) => line.includes("unrelated 19"));
-			assert.notEqual(unrelatedIndex, -1);
-			assert.doesNotMatch(rows[unrelatedIndex]!, /└─/);
-			// The parallel group is a CONTAINER, not an agent: its row must not be
-			// tallied in the header when its 4 leaf children are present as their own
-			// rows. 20 unrelated singles + 4 children = 24 agents (NOT 25 with the group).
-			assert.match(rows.join("\n"), /Subagent runs · 24 total/);
-		} finally {
-			component.dispose();
+		// Each child renders flat (depth 0) with the parallel batch marker.
+		for (const agent of agents) {
+			const row = rows.find((r) => r.kind === "run" && r.run.run.id === `child-${agent}`);
+			assert.ok(row && row.kind === "run", `expected row for child ${agent}`);
+			assert.equal(row.depth, 0);
+			assert.equal(row.parallelMarker, true);
 		}
+
+		// The container is NOT an agent: 20 unrelated singles + 4 children = 24.
+		assert.equal(countAgentRows(runs), 24);
 	});
 
 	it("d/u move the left-pane selection by a half-page", () => {
-		const root = tmpRegistry();
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-tree-rows-"));
+		tmpRoots.push(root);
+		setRegistryPathForTests(path.join(root, "registry", "runs-index.jsonl"));
 		// More runs than one viewport page so a page jump is observable.
 		for (let i = 0; i < 60; i++) {
-			appendCompleteRun(root, {
-				runId: `run-${String(i).padStart(2, "0")}`,
+			const runId = `run-${String(i).padStart(2, "0")}`;
+			const runRecordDir = path.join(root, "runs", runId);
+			fs.mkdirSync(runRecordDir, { recursive: true });
+			const startedAt = 1000 - i; // descending so run-00 sorts first (newest)
+			fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
+				runId,
+				mode: "single",
+				state: "complete",
+				startedAt,
+				lastUpdate: startedAt + 1,
+				endedAt: startedAt + 1,
+				cwd: root,
+				currentStep: 0,
+				label: `run ${String(i).padStart(2, "0")}`,
+				steps: [{ agent: "fixer", status: "complete", startedAt, endedAt: startedAt + 1 }],
+			}), "utf8");
+			appendRunEntry({
+				runId,
+				runRecordDir,
+				mode: "single",
+				source: "async",
 				agentName: "fixer",
 				label: `run ${String(i).padStart(2, "0")}`,
-				rootRunId: `run-${String(i).padStart(2, "0")}`,
-				startedAt: 1000 - i, // descending so run-00 sorts first (newest)
-			});
+				rootRunId: runId,
+				cwd: root,
+				startedAt,
+			} as RunsRegistryEntry);
 		}
 		const component = new SubagentsStatusComponent(
-			createTestTui(() => {}),
-			createTestTheme(),
+			{ requestRender: () => {}, terminal: { rows: 48 } } as ConstructorParameters<typeof SubagentsStatusComponent>[0],
+			{ fg: (_t: string, text: string) => text, bg: (_t: string, text: string) => text } as ConstructorParameters<typeof SubagentsStatusComponent>[1],
 			() => {},
 			{ refreshMs: 1000, sessionCwd: root },
 		);
@@ -216,19 +142,16 @@ describe("dashboard tree rows", () => {
 			// Establish lastLeftListHeight via a first render; selection starts at top.
 			component.render(180);
 			const counterIndex = (): number => {
-				// The selection counter "N/60" lives in the bottom border (├─ N/60 ─┤).
 				const m = component.render(180).join("\n").match(/(\d+)\/60/);
 				return m ? Number(m[1]) : -1;
 			};
 			const start = counterIndex();
 			assert.equal(start, 1, "selection should start at row 1");
 
-			// One half-page down must advance by more than a single row.
 			component.handleInput("d");
 			const afterDown = counterIndex();
 			assert.ok(afterDown > start + 1, `d should jump a half-page, got ${start} -> ${afterDown}`);
 
-			// Half-page up returns toward the top by the same page size.
 			component.handleInput("u");
 			const afterUp = counterIndex();
 			assert.equal(afterUp, start, `u should return to the top, got ${afterUp}`);
@@ -236,4 +159,9 @@ describe("dashboard tree rows", () => {
 			component.dispose();
 		}
 	});
+});
+
+afterEach(() => {
+	setRegistryPathForTests(null);
+	for (const root of tmpRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });

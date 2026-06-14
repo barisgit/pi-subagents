@@ -50,7 +50,6 @@ The workflow sandbox provides `agent(role, task)`, `parallel(thunks)`, and `phas
 
 - `/run <agent> [task]` — run one agent.
 - `/parallel agent1 "task1" -> agent2 "task2"` — run independent tasks in parallel.
-- `/agents` — open the Agents Manager overlay.
 - `/subagents-status` — inspect active/recent runs.
 
 Slash commands support inline config such as `[model=...]`, `[output=...]`, `[preset=...]`, and `--bg` for background execution.
@@ -72,10 +71,6 @@ You are the explorer. Trace code paths, identify tests, and report exact evidenc
 
 Project agents override user agents of the same name; user/project agents override bundled examples.
 
-## Agents Manager
-
-Press `Ctrl+Shift+A` or run `/agents` to browse agents, inspect resolved prompts, select several agents for parallel launch, and start runs from a TUI. Agent creation and durable edits can also be done by editing markdown files or through management actions.
-
 ## Management actions
 
 The `subagent` tool can list agents and manage runs:
@@ -87,7 +82,7 @@ The `subagent` tool can list agents and manage runs:
 { action: "resume", id: "<run-id>", message: "..." }
 ```
 
-Agent definitions are created and edited as markdown files under `agents/`, or through the Agents Manager TUI.
+Agent definitions are created and edited as markdown files under `agents/`.
 
 ## Worktree isolation
 

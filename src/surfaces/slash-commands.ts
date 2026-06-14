@@ -3,11 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { discoverAgents, discoverAgentsAll } from "../shared/agents.ts";
-import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
+import { discoverAgents } from "../shared/agents.ts";
 import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-status.ts";
 import { logger } from "../shared/logger.ts";
-import { discoverAvailableSkills } from "../shared/skills.ts";
 import type { SubagentToolInput as SubagentParamsLike } from "../protocol/schemas.ts";
 import type { UtilsClient } from "pi-extension-utils";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
@@ -315,36 +313,6 @@ async function runSlashSubagent(
 	}
 }
 
-async function openAgentManager(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-): Promise<void> {
-	const agentData = { ...discoverAgentsAll(ctx.cwd), cwd: ctx.cwd };
-	const models = ctx.modelRegistry.getAvailable().map((m) => ({
-		provider: m.provider,
-		id: m.id,
-		fullId: `${m.provider}/${m.id}`,
-	}));
-	const skills = discoverAvailableSkills(ctx.cwd);
-
-	const result = await ctx.ui.custom<ManagerResult>(
-		(tui, theme, _kb, done) => new AgentManagerComponent(tui, theme, agentData, models, skills, done),
-		{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
-	);
-	if (!result) return;
-
-	if (result.action === "launch") {
-		await runSlashSubagent(pi, ctx, {
-			run: [{ agent: result.agent, task: result.task }],
-		});
-	} else if (result.action === "parallel") {
-		await runSlashSubagent(pi, ctx, {
-			run: result.tasks,
-			...(result.prompt ? { message: result.prompt } : {}),
-		});
-	}
-}
-
 interface ParsedStep { name: string; config: InlineConfig; task?: string }
 
 const parseAgentArgs = (
@@ -424,13 +392,6 @@ export function registerSlashCommands(
 	state: SubagentState,
 	getWidgetClient?: (ctx: ExtensionContext) => UtilsClient | undefined,
 ): void {
-	pi.registerCommand("agents", {
-		description: "Open the Agents Manager",
-		handler: async (_args, ctx) => {
-			await openAgentManager(pi, ctx);
-		},
-	});
-
 	pi.registerCommand("run", {
 		description: "Run a subagent directly: /run [preset=name] agent[output=file] [task] [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, false),
@@ -522,12 +483,6 @@ export function registerSlashCommands(
 		description: "Show live subagent runs",
 		handler: async (_args, ctx) => {
 			await openSubagentsStatus(ctx);
-		},
-	});
-
-	pi.registerShortcut("ctrl+shift+a", {
-		handler: async (ctx) => {
-			await openAgentManager(pi, ctx);
 		},
 	});
 

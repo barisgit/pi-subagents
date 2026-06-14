@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { renderWidget } from "./render.ts";
+import { renderWidget } from "./render-widget.ts";
 import { deriveRunDisplayState, displayStatePriority } from "../state/run-liveness.ts";
 import {
 	DEFAULT_CONTROL_CONFIG,

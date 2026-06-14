@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { RUNS_DIR, type AsyncStatus } from "../../src/protocol/types.ts";
+import { type AsyncStatus } from "../../src/protocol/types.ts";
+import { RUNS_DIR } from "../../src/shared/runtime-paths.ts";
 
 const registryPath = path.join(os.tmpdir(), `pi-inline-registry-${process.pid}.jsonl`);
 

@@ -3,7 +3,6 @@
  */
 
 import * as os from "node:os";
-import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { SubmitResultEnvelope } from "./submit-result.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -762,9 +761,6 @@ export function resolveTempScopeId(options?: {
 
 export const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
-export const BASE_TEMP_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
-export const RUNS_DIR = path.join(BASE_TEMP_DIR, "async-subagent-runs");
-export const TEMP_ARTIFACTS_DIR = path.join(BASE_TEMP_DIR, "artifacts");
 export const WIDGET_KEY = "subagent-async";
 export const SLASH_RESULT_TYPE = "subagent-slash-result";
 export const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";

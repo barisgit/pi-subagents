@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RunPhase } from "./run-phase.ts";
-import { RUNS_DIR, type AsyncStatus, type TokenUsage } from "../protocol/types.ts";
+import { type AsyncStatus, type TokenUsage } from "../protocol/types.ts";
+import { RUNS_DIR } from "../shared/runtime-paths.ts";
 import { finalizeRunScalars, writeStatusJson } from "./status-writer.ts";
 
 const MIN_UPDATE_INTERVAL_MS = 250;

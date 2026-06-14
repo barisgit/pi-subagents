@@ -55,7 +55,7 @@ function wordPattern(name: string): RegExp {
 }
 
 function readRegisteredSubagentDescription(): string {
-	const indexSource = fs.readFileSync(path.join(projectRoot, "index.ts"), "utf-8");
+	const indexSource = fs.readFileSync(path.join(projectRoot, "src", "dispatch", "subagent-tool.ts"), "utf-8");
 	const match = indexSource.match(/name:\s*"subagent",[\s\S]*?description:\s*`([\s\S]*?)`,\n\t\tparameters: SubagentParams,/);
 	assert.ok(match, "expected to find the registered subagent tool description");
 	return match[1]!;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { renderInlineAsyncToolLine } from "../../src/surfaces/render.ts";
+import { renderInlineAsyncToolLine } from "../../src/surfaces/render-inline.ts";
 import { rmRun, writeRun } from "./inline-nested-helpers.ts";
 
 const parent = "inline-async-parent";

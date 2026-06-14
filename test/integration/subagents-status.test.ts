@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderSubagentResult } from "../../src/surfaces/render.ts";
+import { renderSubagentResult } from "../../src/surfaces/render-result.ts";
 import { expandOverlayByRootRunId, foregroundRunsFromState, type ForegroundRunSummary, SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
 import type { AsyncRunOverlayData, AsyncRunSummary } from "../../src/state/async-status.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
@@ -679,59 +679,6 @@ describe("SubagentsStatusComponent", () => {
 		assert.equal(runs[0]?.currentTool, "bash");
 	});
 
-	it("scrollRightPaneByPage scrolls the right pane by a full page", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-page-api-"));
-		try {
-			// Build a long event log so the right pane has room to scroll.
-			const events: Array<Record<string, unknown>> = [
-				{ type: "subagent.step.started", stepIndex: 0, agent: "waiter", ts: 1000 },
-			];
-			for (let i = 0; i < 200; i++) {
-				events.push({
-					type: "tool_execution_start",
-					subagentStepIndex: 0,
-					toolName: "bash",
-					toolCallId: `t${i}`,
-					args: { cmd: `echo ${i}` },
-					observedAt: 1500 + i * 10,
-				});
-				events.push({
-					type: "tool_execution_end",
-					subagentStepIndex: 0,
-					toolCallId: `t${i}`,
-					observedAt: 1500 + i * 10 + 5,
-				});
-			}
-			makeEventsFile(dir, events);
-
-			const run = createRun("run-page-api", "running", { asyncDir: dir });
-			const component = new SubagentsStatusComponent(
-				createTestTui(() => {}),
-				createTestTheme(),
-				() => {},
-				{
-					listRunsForOverlay: () => ({ active: [run], recent: [] }),
-					refreshMs: 1000,
-				},
-			);
-
-			try {
-				component.render(120);
-				assert.equal(component.getRightPaneScrollTop(), 0);
-
-				component.scrollRightPaneByPage(1);
-				const afterPageDown = component.getRightPaneScrollTop();
-				assert.ok(afterPageDown > 0, `scrollRightPaneByPage(1) should advance the right-pane offset, got ${afterPageDown}`);
-
-				component.scrollRightPaneByPage(-1);
-				assert.equal(component.getRightPaneScrollTop(), 0, "scrollRightPaneByPage(-1) should walk back to the top");
-			} finally {
-				component.dispose();
-			}
-		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
 	describe("phase label", () => {
 		function renderStatus(run: AsyncRunSummary): string {
 			const component = new SubagentsStatusComponent(

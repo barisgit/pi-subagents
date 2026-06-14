@@ -1,15 +1,10 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import vm from "node:vm";
-import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
-import { parseFrontmatter } from "../shared/frontmatter.ts";
 import { writeWorkflowScript } from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "../protocol/submit-result.ts";
 import type { AgentProgress, Details, SingleResult } from "../protocol/types.ts";
@@ -621,88 +616,4 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 			}
 		},
 	};
-}
-
-export interface WorkflowRecipe {
-	name: string;
-	meta: Record<string, string>;
-	script: string;
-	filePath: string;
-	source: "project" | "user" | "builtin";
-}
-
-export interface WorkflowSearchRoot {
-	dir: string;
-	source: WorkflowRecipe["source"];
-}
-
-function isDirectory(candidate: string): boolean {
-	try {
-		return fs.statSync(candidate).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-function findNearestProjectRoot(cwd: string): string | undefined {
-	let current = path.resolve(cwd);
-	while (true) {
-		if (isDirectory(path.join(current, ".git")) || isDirectory(path.join(current, ".pi")) || fs.existsSync(path.join(current, "package.json"))) return current;
-		const parent = path.dirname(current);
-		if (parent === current) return undefined;
-		current = parent;
-	}
-}
-
-export function defaultWorkflowSearchRoots(cwd: string): WorkflowSearchRoot[] {
-	const roots: WorkflowSearchRoot[] = [];
-	const projectRoot = findNearestProjectRoot(cwd);
-	if (projectRoot) {
-		roots.push({ dir: path.join(projectRoot, ".workflows"), source: "project" });
-		roots.push({ dir: path.join(projectRoot, ".pi", "workflows"), source: "project" });
-	}
-	roots.push({ dir: path.join(os.homedir(), ".pi", "agent", "workflows"), source: "user" });
-	roots.push({ dir: path.join(os.homedir(), ".workflows"), source: "user" });
-	roots.push({ dir: path.join(path.dirname(fileURLToPath(import.meta.url)), "workflows"), source: "builtin" });
-	return roots;
-}
-
-function recipeNameFromFile(filePath: string, frontmatter: Record<string, string>): string {
-	return frontmatter.name?.trim() || path.basename(filePath).replace(/\.[^.]+$/, "");
-}
-
-function loadRecipesFromRoot(root: WorkflowSearchRoot): WorkflowRecipe[] {
-	if (!isDirectory(root.dir)) return [];
-	const entries = fs.readdirSync(root.dir, { withFileTypes: true });
-	const recipes: WorkflowRecipe[] = [];
-	for (const entry of entries) {
-		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-		if (!/\.(js|mjs|workflow)$/.test(entry.name)) continue;
-		const filePath = path.join(root.dir, entry.name);
-		const content = fs.readFileSync(filePath, "utf8");
-		const { frontmatter, body } = parseFrontmatter(content);
-		recipes.push({
-			name: recipeNameFromFile(filePath, frontmatter),
-			meta: frontmatter,
-			script: body,
-			filePath,
-			source: root.source,
-		});
-	}
-	return recipes;
-}
-
-export function discoverWorkflowRecipes(options?: { cwd?: string; searchRoots?: WorkflowSearchRoot[] }): WorkflowRecipe[] {
-	const roots = options?.searchRoots ?? defaultWorkflowSearchRoots(options?.cwd ?? process.cwd());
-	const byName = new Map<string, WorkflowRecipe>();
-	for (const root of roots) {
-		for (const recipe of loadRecipesFromRoot(root)) {
-			if (!byName.has(recipe.name)) byName.set(recipe.name, recipe);
-		}
-	}
-	return [...byName.values()];
-}
-
-export function loadWorkflowRecipe(name: string, options?: { cwd?: string; searchRoots?: WorkflowSearchRoot[] }): WorkflowRecipe | undefined {
-	return discoverWorkflowRecipes(options).find((recipe) => recipe.name === name);
 }

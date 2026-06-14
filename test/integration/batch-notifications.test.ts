@@ -266,7 +266,7 @@ describe("batch notifications", () => {
 		assert.deepEqual(rows.map((row) => row.state), ["complete", "complete", "complete"]);
 		const content = harness.sent[0]!.message.content ?? "";
 		for (const row of rows) {
-			assert.ok(content.includes(String(row.runId)), `content should include ${String(row.runId)}`);
+			assert.ok(content.includes(String(row.agent)), `content should include ${String(row.agent)}`);
 			assert.ok(content.includes(String(row.state)), `content should include ${String(row.state)}`);
 		}
 	});
@@ -344,6 +344,6 @@ describe("batch notifications", () => {
 		assert.equal(event.completed, 1);
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0]!.state, "complete");
-		assert.ok((harness.sent[0]!.message.content ?? "").includes(String(rows[0]!.runId)));
+		assert.ok((harness.sent[0]!.message.content ?? "").includes(String(rows[0]!.agent)));
 	});
 });

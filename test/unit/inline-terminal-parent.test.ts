@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { renderSubagentResult } from "../../src/surfaces/render.ts";
+import { renderSubagentResult } from "../../src/surfaces/render-result.ts";
 import { rmRun, tool, writeRun } from "./inline-nested-helpers.ts";
 
 const parent = "inline-terminal-parent";

@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { TEMP_ARTIFACTS_DIR, type ArtifactPaths } from "../protocol/types.ts";
+import { type ArtifactPaths } from "../protocol/types.ts";
+import { TEMP_ARTIFACTS_DIR } from "./runtime-paths.ts";
 const CLEANUP_MARKER_FILE = ".last-cleanup";
 
 export function getArtifactsDir(sessionFile: string | null): string {

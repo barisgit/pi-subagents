@@ -3,9 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { renderSubagentResult } from "../../src/surfaces/render.ts";
+import { renderSubagentResult } from "../../src/surfaces/render-result.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { RUNS_DIR, type AsyncStatus } from "../../src/protocol/types.ts";
+import { type AsyncStatus } from "../../src/protocol/types.ts";
+import { RUNS_DIR } from "../../src/shared/runtime-paths.ts";
 
 const ids = ["inline-wired-parent-single", "inline-wired-child-running", "inline-wired-parent-multi", "inline-wired-child-complete"];
 const theme = {

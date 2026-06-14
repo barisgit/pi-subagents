@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { resolveTempScopeId } from "../../src/protocol/types.ts";
 import {
 	RUNS_DIR,
 	TEMP_ARTIFACTS_DIR,
 	BASE_TEMP_DIR,
-	resolveTempScopeId,
-} from "../../src/protocol/types.ts";
+} from "../../src/shared/runtime-paths.ts";
 
 describe("resolveTempScopeId", () => {
 	it("prefers uid when available", () => {

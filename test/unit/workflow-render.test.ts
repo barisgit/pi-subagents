@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { createWorkflowTool } from "../../src/workflow/workflow.ts";
-import { renderSubagentResult, syncResultAnimation } from "../../src/surfaces/render.ts";
+import { renderSubagentResult, syncResultAnimation } from "../../src/surfaces/render-result.ts";
 import type { Details, SingleResult } from "../../src/protocol/types.ts";
 
 function result(agent: string, task: string, exitCode = 0, index = agent === "A" ? 0 : 1, label?: string): SingleResult {

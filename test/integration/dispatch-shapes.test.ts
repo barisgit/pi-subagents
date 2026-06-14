@@ -22,6 +22,15 @@ class FakeResourceLoader {
 class FakeAgentSession {
 	private listeners: Listener[] = [];
 	readonly promptImpl: (task: string, session: FakeAgentSession) => Promise<void>;
+	// A compliant submit_result toolResult so the in-process executor sees a valid
+	// structured submit (hasSubmitResultToolResult) and does NOT inject reprompts,
+	// which would otherwise re-run promptImpl twice per child and inflate counts.
+	readonly messages: unknown[] = [{
+		role: "toolResult",
+		toolName: "submit_result",
+		isError: false,
+		details: { status: "ok", summary: "done", result: "done", artifacts: [] },
+	}];
 
 	constructor(promptImpl: (task: string, session: FakeAgentSession) => Promise<void>) {
 		this.promptImpl = promptImpl;
