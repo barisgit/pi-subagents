@@ -21,9 +21,10 @@ import { formatDuration } from "./formatters.ts";
 import { tintAgentName } from "./render-shared.ts";
 import { buildRightLines, statusGlyph } from "./dashboard-detail-renderer.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
-import { formatPhase, type RunPhase } from "../state/run-phase.ts";
+import { formatPhase } from "../state/run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
-import { type ActivityState, type RunDisplayState, type SubagentState } from "../protocol/types.ts";
+import { type SubagentState } from "../protocol/types.ts";
+import type { LiveRun, RunView } from "../state/run-view.ts";
 import { listRunsByRootRunIds, readAllEntries, readShardEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import {
 	containerRowInfo as deriveContainerRowInfo,
@@ -69,41 +70,12 @@ function computeBodyHeight(tui?: TUI): number {
 
 type ForegroundControl = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
 
-export interface ForegroundRunSummary {
-	id: string;
-	asyncDir?: string;
-	// charter nested-subagent-display: live sync hierarchy parent link.
-	parentRunId?: string;
-	state: "running";
-	activityState?: ActivityState;
-	displayState?: RunDisplayState;
-	lastActivityAt?: number;
-	currentTool?: string;
-	currentToolStartedAt?: number;
-	resumedAt?: number;
-	resumeCount?: number;
-	phase?: RunPhase;
-	phaseStartedAt?: number;
-	mode: "single" | "parallel";
-	cwd?: string;
-	startedAt: number;
-	lastUpdate?: number;
-	/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
-	label?: string;
-	/** Per-step caller-provided labels aligned by index. */
-	agentLabels?: string[];
-	currentAgent?: string;
-	/** Theme color token for tinting the current agent name in the left pane. */
-	currentAgentColor?: string;
-	currentIndex?: number;
-	recentTools?: Array<{ tool: string; args?: string; endMs?: number }>;
-	recentOutput?: string[];
-	finalOutput?: string;
-}
-
-export type LiveRun =
-	| { source: "sync"; run: ForegroundRunSummary }
-	| { source: "async"; run: AsyncRunSummary };
+// charter VAL-RUNVIEW-TYPE: ForegroundRunSummary is now an alias of the canonical
+// RunView display type (foreground producers populate steps:[] plus the
+// foreground-only optionals). LiveRun's discriminator is provenance
+// (ownership: 'live'|'foreign'), not source: 'sync'|'async'.
+export type ForegroundRunSummary = RunView;
+export type { LiveRun };
 
 interface StatusOverlayDeps {
 	listRunsForOverlay?: (recentLimit?: number) => AsyncRunOverlayData;
@@ -227,6 +199,7 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 			});
 		return {
 				id: control.runId,
+			steps: [],
 			...(control.asyncDir ? { asyncDir: control.asyncDir } : {}),
 				...(control.parentRunId ? { parentRunId: control.parentRunId } : {}),
 				state: "running" as const,
@@ -255,13 +228,13 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 }
 
 function runKey(run: LiveRun): string {
-	return `${run.source}:${run.run.id}`;
+	return `${run.ownership}:${run.run.id}`;
 }
 
 // Returns the agent name(s) as a pre-styled string when colors apply, otherwise plain text.
 // Parallel runs with heterogeneous agents get per-piece tinting so each name uses its own color.
 function runAgentLabel(run: LiveRun, theme: Theme): string {
-	if (run.source === "sync") {
+	if (run.ownership === "live") {
 		const name = run.run.currentAgent ?? run.run.mode;
 		return tintAgentName(name, run.run.currentAgentColor ?? colorForAgentName(name));
 	}
@@ -290,7 +263,9 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 // Multi-step shape badge for parallel progress, e.g. 'parallel 3/5'.
 // Empty for single-step runs to keep the left-pane line compact.
 function workflowPhaseChip(run: LiveRun): string {
-	if (run.source !== "async" || run.run.phaseIndex === undefined) return "";
+	// phaseIndex is a disk-only (workflow) field; foreground views never set it,
+	// so the field-presence check alone selects foreign workflow children.
+	if (run.run.phaseIndex === undefined) return "";
 	// ∥ marks a child that ran inside a parallel() fan-out, so parallel-vs-
 	// sequential shape is readable in the left list, not just the right pane.
 	const marker = run.run.parallelGroupId ? "∥ " : "";
@@ -300,7 +275,8 @@ function workflowPhaseChip(run: LiveRun): string {
 }
 
 function runShapeBadge(run: LiveRun): string {
-	if (run.source === "sync") return "";
+	// Foreground views carry steps:[] => total 0 => formatShapeBadge returns
+	// undefined => ""; no provenance branch needed.
 	const total = run.run.steps.length;
 	// Parallel progress uses done-count.
 	const current = run.run.mode === "parallel"
@@ -316,7 +292,7 @@ function runShapeBadge(run: LiveRun): string {
 // a render (live labels) and whether the refresh interval may back off (no live
 // runs => idle).
 function runHasLiveLabel(run: LiveRun): boolean {
-	if (run.source !== "async") return run.run.state === "running" || run.run.state === "queued";
+	if (run.ownership !== "foreign") return run.run.state === "running" || run.run.state === "queued";
 	const s = run.run.state;
 	if (s === "complete" || s === "failed" || s === "interrupted" || s === "skipped" || s === "lost" || s === "paused") return false;
 	if (run.run.displayState === "lost") return false;
@@ -332,7 +308,7 @@ function runHasLiveLabel(run: LiveRun): boolean {
 function overlayRunsSignature(runs: LiveRun[], selectedId: string | undefined, errorMessage: string | undefined): string {
 	const parts: string[] = [`sel:${selectedId ?? ""}`, `err:${errorMessage ? 1 : 0}`];
 	for (const run of runs) {
-		if (run.source === "async") {
+		if (run.ownership === "foreign") {
 			const r = run.run;
 			parts.push(`async:${r.id}:${r.state}:${r.displayState ?? ""}:${r.currentTool ?? ""}:${r.phase ?? ""}:${r.currentStep ?? ""}:${r.steps?.length ?? 0}`);
 		} else {
@@ -347,7 +323,7 @@ function runElapsed(run: LiveRun, now: number): string {
 	const legStartedAt = run.run.resumedAt ?? run.run.startedAt;
 	// Terminal runs (lost/complete/failed) must not keep ticking. lost runs have no
 	// endedAt because the child crashed without writing one, so fall back to lastUpdate.
-	if (run.source === "async") {
+	if (run.ownership === "foreign") {
 		if (run.run.endedAt) return formatDuration(Math.max(0, run.run.endedAt - legStartedAt));
 		// A force-killed run keeps state==='running' on disk but goes displayState==='lost'
 		// once its runner heartbeat is stale — freeze the timer on that too, not just on a
@@ -366,7 +342,7 @@ function runIdentityAge(run: LiveRun, now: number): string | undefined {
 	// must freeze at the end (endedAt, or lastUpdate for a lost run that crashed
 	// without one) instead of ticking against `now` forever.
 	const isLost = run.run.state === "lost" || run.run.displayState === "lost";
-	const frozenEnd = run.source === "async"
+	const frozenEnd = run.ownership === "foreign"
 		? run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || isLost ? run.run.lastUpdate : undefined)
 		: undefined;
 	const end = frozenEnd ?? now;
@@ -401,7 +377,7 @@ function runCwdBadge(run: LiveRun, forceShow: boolean): string {
 // yesterday-or-older: `MM-DD HH:MM`. Returns empty for runs that have no
 // `endedAt` (running rows already show a live `Xs` elapsed counter).
 function runEndedStamp(run: LiveRun): string {
-	if (run.source !== "async") return "";
+	if (run.ownership !== "foreign") return "";
 	// A lost run crashed without writing endedAt; its last heartbeat (lastUpdate) is
 	// the best estimate of when it died, so stamp that like any other terminal row
 	// instead of leaving the tail to fall back to a frozen elapsed duration.
@@ -446,7 +422,7 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 		? theme.fg(run.run.state === "running" ? "accent" : "dim", containerInfo.collapsed ? "▸" : "▾")
 		: pendingDelivery
 			? theme.fg("accent", "✓")
-			: run.source === "async" && run.run.state === "complete" && run.run.steps.length === 0
+			: run.run.state === "complete" && run.run.steps.length === 0
 				? theme.fg("dim", "○")
 				: statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
 	const agent = `${parallelMarker ? theme.fg("dim", "∥ ") : ""}${runAgentLabel(run, theme)}`;
@@ -746,7 +722,7 @@ export class SubagentsStatusComponent implements Component {
 		if (!row) return;
 		let id: string | undefined;
 		if (row.kind === "phase") id = row.id;
-		else if (row.run.source === "async" && row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) id = row.run.run.id;
+		else if (row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) id = row.run.run.id;
 		if (!id) return;
 		if (this.collapsedIds.has(id)) this.collapsedIds.delete(id);
 		else this.collapsedIds.add(id);
@@ -925,7 +901,7 @@ export class SubagentsStatusComponent implements Component {
 
 function selectedRunTitle(run: LiveRun): string {
 	if (run.run.label) return run.run.label;
-	if (run.source === "sync") {
+	if (run.ownership === "live") {
 		return run.run.currentAgent ?? run.run.mode ?? "(run)";
 	}
 	if (run.run.workflow) return "workflow";

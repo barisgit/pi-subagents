@@ -19,7 +19,7 @@ describe("row phase/displayState contradiction", () => {
 	it("suppresses the working/quiet discriminant when a live phase chip is present", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "finishing-run",
 				asyncDir: "/tmp/finishing-run",
@@ -45,7 +45,7 @@ describe("row phase/displayState contradiction", () => {
 	it("keeps the state/displayState discriminant when there is no phase chip", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "quiet-run",
 				asyncDir: "/tmp/quiet-run",
@@ -65,7 +65,7 @@ describe("row phase/displayState contradiction", () => {
 	it("keeps lost authoritative over a stale running state", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "lost-run",
 				asyncDir: "/tmp/lost-run",

@@ -10,71 +10,14 @@ import { readStatus } from "../shared/utils.ts";
 import { readAllEntries, readShardEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { computeGroupStatus, type Layer0ChildStatus } from "./group-status.ts";
 import { readWorkflowGroupState } from "../workflow/workflow-group-state.ts";
+import type { RunView, RunViewStep } from "./run-view.ts";
 
-export interface AsyncRunStepSummary {
-	index: number;
-	agent: string;
-	label?: string;
-	status: string;
-	activityState?: ActivityState;
-	displayState?: RunDisplayState;
-	/** Current execution phase mirrored from status.steps[i].live. */
-	phase?: RunPhase;
-	/** Milliseconds since epoch when the step's current phase was entered. */
-	phaseStartedAt?: number;
-	lastActivityAt?: number;
-	currentTool?: string;
-	currentToolStartedAt?: number;
-	durationMs?: number;
-	tokens?: TokenUsage;
-	skills?: string[];
-	model?: string;
-	attemptedModels?: string[];
-	error?: string;
-	// Theme color token for the agent name; mirrored from status.steps[i].live.color.
-	color?: string;
-}
-
-export interface AsyncRunSummary {
-	id: string;
-	asyncDir: string;
-	// charter nested-subagent-display: dashboard hierarchy parent link.
-	parentRunId?: string;
-	// Immediate dispatcher session. Carried from the registry entry.
-	parentSessionId?: string;
-	// Top-of-tree user session. Carried from the registry entry so the overlay
-	// can scope strictly to the current session and its full nested subtree.
-	rootSessionId?: string;
-	label?: string;
-	workflow?: boolean;
-	phaseIndex?: number;
-	phaseTitle?: string;
-	parallelGroupId?: string;
-	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
-	activityState?: ActivityState;
-	displayState?: RunDisplayState;
-	lastActivityAt?: number;
-	currentTool?: string;
-	currentToolStartedAt?: number;
-	mode: "single" | "parallel";
-	cwd?: string;
-	startedAt: number;
-	lastUpdate?: number;
-	endedAt?: number;
-	runnerHeartbeatAt?: number;
-	resumedAt?: number;
-	resumeCount?: number;
-	/** Current execution phase mirrored from status.json. */
-	phase?: RunPhase;
-	/** Milliseconds since epoch when the current phase was entered. */
-	phaseStartedAt?: number;
-	currentStep?: number;
-	steps: AsyncRunStepSummary[];
-	sessionDir?: string;
-	outputFile?: string;
-	totalTokens?: TokenUsage;
-	sessionFile?: string;
-}
+// charter VAL-RUNVIEW-TYPE: AsyncRunSummary/AsyncRunStepSummary are now aliases
+// of the canonical RunView/RunViewStep display types. All existing importers
+// keep compiling unchanged; the two former interface bodies were unified into
+// src/state/run-view.ts.
+export type AsyncRunStepSummary = RunViewStep;
+export type AsyncRunSummary = RunView;
 
 export interface AsyncRunListOptions {
 	states?: Array<AsyncRunSummary["state"]>;
@@ -532,7 +475,7 @@ function formatRunHeader(run: AsyncRunSummary, children: AsyncRunSummary[] = [])
 	const stepLabel = run.mode === "parallel"
 		? `tasks ${completedParallelSteps}/${stepCount} complete`
 		: run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
-	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir);
+	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir ?? "");
 	const activity = formatActivityFacts(run);
 	const state = run.displayState ? `${run.state}/${run.displayState}` : run.state;
 	return `${run.id} | ${state}${activity ? ` | ${activity}` : ""} | ${modeLabel} | ${stepLabel} | ${cwd}`;

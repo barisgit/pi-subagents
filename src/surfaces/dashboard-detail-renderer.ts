@@ -17,7 +17,7 @@ import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { multiSpinnerFrame, tintAgentName } from "./render-shared.ts";
 import { type ActivityState, type RunDisplayState } from "../protocol/types.ts";
 import { parentRunIdOf } from "./dashboard-row-model.ts";
-import type { LiveRun } from "./subagents-status.ts";
+import type { LiveRun } from "../state/run-view.ts";
 
 export function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: ActivityState | undefined, displayState?: RunDisplayState): string {
 	if (displayState === "lost") return theme.fg("error", "!");
@@ -72,10 +72,9 @@ function wrapText(text: string, width: number): string[] {
 function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs: LiveRun[]): string[] {
 	const children = runs.filter((candidate) => parentRunIdOf(candidate) === run.run.id);
 	if (children.length === 0) return [];
-	const agents = children.map((child) => {
-		if (child.source === "sync") return child.run.currentAgent ?? child.run.mode;
-		return child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode;
-	});
+	// Field priority preserved: currentAgent (live-only) wins, else first step's
+	// agent (foreign carries steps; live carries steps:[]), else mode.
+	const agents = children.map((child) => child.run.currentAgent ?? child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode);
 	const uniqueAgents = Array.from(new Set(agents.filter(Boolean)));
 	const agentWord = children.length === 1 ? "agent" : "agents";
 	const suffix = uniqueAgents.length > 0 ? `: ${uniqueAgents.join(", ")}` : "";
@@ -112,7 +111,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 		}
 	}
 	const children = runs
-		.filter((candidate): candidate is LiveRun & { source: "async" } => candidate.source === "async" && candidate.run.parentRunId === run.id)
+		.filter((candidate): candidate is LiveRun & { ownership: "foreign" } => candidate.ownership === "foreign" && candidate.run.parentRunId === run.id)
 		.map((candidate) => candidate.run);
 	if (children.length > 0) {
 		if (out.length > 0) out.push("");
@@ -146,7 +145,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 
 export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
-	if (run.source === "async" && run.run.workflow) {
+	if (run.run.workflow) {
 		const workflowLines = buildWorkflowRightLines(theme, run.run, width, runs);
 		if (workflowLines.length > 0) return workflowLines;
 	}
@@ -238,7 +237,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	const out: string[] = [];
 	// Parallel children aren't 'steps' -- they race concurrently. Use 'Task N' so the
 	// right pane reads correctly for tasks: [...] async runs.
-	const stepWord = run.source === "async" && run.run.mode === "parallel" ? "Task" : "Step";
+	const stepWord = run.ownership === "foreign" && run.run.mode === "parallel" ? "Task" : "Step";
 	for (const step of ordered) {
 		out.push(theme.fg("accent", truncateToWidth(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
 		if (step.label) {

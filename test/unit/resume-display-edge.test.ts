@@ -103,7 +103,7 @@ describe("resume display edge cases", () => {
 		const summary = summaryFromRegistryEntry(entry);
 		assert.equal(summary.resumedAt, now - 12_000);
 		assert.equal(summary.resumeCount, 1);
-		const line = buildLeftLine(theme as never, { source: "async", run: summary }, false, now, 240);
+		const line = buildLeftLine(theme as never, { ownership: "foreign", run: summary }, false, now, 240);
 		assert.match(line, /12\.0s/);
 		assert.match(line, /age 143m0s/);
 		assert.match(line, /resumed 1×/);

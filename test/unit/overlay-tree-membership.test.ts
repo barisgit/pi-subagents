@@ -60,7 +60,7 @@ interface AsyncSeed {
 // decided purely by the branch anchor set, not by session tagging.
 function asyncRun(seed: AsyncSeed): LiveRun {
 	return {
-		source: "async",
+		ownership: "foreign",
 		run: {
 			id: seed.id,
 			asyncDir: `/tmp/${seed.id}`,

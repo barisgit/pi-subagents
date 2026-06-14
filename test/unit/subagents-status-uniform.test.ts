@@ -22,7 +22,7 @@ function asyncRun(id: string, asyncDir: string): AsyncRunSummary {
 }
 
 function syncRun(id: string, asyncDir: string): ForegroundRunSummary {
-	return { id, asyncDir, state: "running", mode: "single", startedAt: 100 };
+	return { id, steps: [], asyncDir, state: "running", mode: "single", startedAt: 100 };
 }
 
 function writeRunRecord(dir: string, id: string): void {
@@ -53,8 +53,8 @@ describe("subagents-status uniform args rendering", () => {
 			writeRunRecord(asyncDir, "async-a");
 			writeRunRecord(syncDir, "sync-a");
 
-			const asyncLines = buildRightLines(theme, { source: "async", run: asyncRun("async-a", asyncDir) }, 120);
-			const syncLines = buildRightLines(theme, { source: "sync", run: syncRun("sync-a", syncDir) }, 120);
+			const asyncLines = buildRightLines(theme, { ownership: "foreign", run: asyncRun("async-a", asyncDir) }, 120);
+			const syncLines = buildRightLines(theme, { ownership: "live", run: syncRun("sync-a", syncDir) }, 120);
 			assert.deepEqual(syncLines, asyncLines);
 			assert.ok(!syncLines.concat(asyncLines).some((line) => line.includes("preview")));
 		} finally {

@@ -297,7 +297,7 @@ describe("workflow dashboard reader overlays", () => {
 		writeWorkflowScript(group.runRecordDir, 'const a = await agent("explorer", "inspect");\nreturn a.summary;');
 
 		const groupSummary = summaryFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ source: "async", run: summaryFromRegistryEntry(entry, entries) }));
+		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: summaryFromRegistryEntry(entry, entries) }));
 		const theme = createTestTheme();
 		const lines = buildWorkflowRightLines(theme, groupSummary, 120, runs).join("\n");
 
@@ -327,8 +327,8 @@ describe("workflow dashboard reader overlays", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		writeWorkflowScript(group.runRecordDir, 'await agent("explorer", "x");');
 		const groupSummary = summaryFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ source: "async", run: summaryFromRegistryEntry(entry, entries) }));
-		const lines = buildRightLines(createTestTheme(), { source: "async", run: groupSummary }, 120, runs).join("\n");
+		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: summaryFromRegistryEntry(entry, entries) }));
+		const lines = buildRightLines(createTestTheme(), { ownership: "foreign", run: groupSummary }, 120, runs).join("\n");
 		assert.match(lines, /─ Script ─/, "mutant: buildRightLines must route workflow groups to the workflow pane");
 		assert.match(lines, /─ Steps ─/);
 	});
@@ -349,7 +349,7 @@ describe("workflow dashboard reader overlays", () => {
 	it("workflow group with no script still outlines steps (no transcript fallback noise)", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		const groupSummary = summaryFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ source: "async", run: summaryFromRegistryEntry(entry, entries) }));
+		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: summaryFromRegistryEntry(entry, entries) }));
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, runs).join("\n");
 		assert.doesNotMatch(lines, /─ Script ─/);
 		assert.match(lines, /─ Steps ─/);

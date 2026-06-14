@@ -27,7 +27,7 @@ interface AsyncSeed {
 function asyncRun(seed: AsyncSeed): LiveRun {
 	const state = seed.state ?? "complete";
 	return {
-		source: "async",
+		ownership: "foreign",
 		run: {
 			id: seed.id,
 			asyncDir: `/tmp/${seed.id}`,

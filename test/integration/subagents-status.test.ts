@@ -53,6 +53,7 @@ function createRun(id: string, state: AsyncRunSummary["state"], overrides: Parti
 function createSyncRun(id = "sync-a", asyncDir?: string): ForegroundRunSummary {
 	return {
 		id,
+		steps: [],
 		...(asyncDir ? { asyncDir } : {}),
 		state: "running",
 		mode: "parallel",
@@ -284,7 +285,7 @@ describe("SubagentsStatusComponent", () => {
 				}), "utf-8");
 			}
 			for (const entry of [
-				{ runId: "parent-run", runRecordDir: parent.asyncDir, mode: "single", source: "async", agentName: "waiter", rootRunId: "parent-run", cwd: "/proj/here", startedAt: parent.startedAt },
+				{ runId: "parent-run", runRecordDir: parent.asyncDir!, mode: "single", source: "async", agentName: "waiter", rootRunId: "parent-run", cwd: "/proj/here", startedAt: parent.startedAt },
 				{ runId: "child-interrupted", runRecordDir: interruptedDir, mode: "single", source: "async", agentName: "waiter", parentRunId: "parent-run", rootRunId: "parent-run", cwd: "/proj/here", startedAt: endedAt - 4000 },
 				{ runId: "child-skipped", runRecordDir: skippedDir, mode: "single", source: "async", agentName: "waiter", parentRunId: "parent-run", rootRunId: "parent-run", cwd: "/proj/here", startedAt: endedAt - 3000 },
 			] as const) {

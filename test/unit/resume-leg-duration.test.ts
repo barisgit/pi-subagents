@@ -14,7 +14,7 @@ describe("resume leg duration display", () => {
 	it("shows current leg duration with identity age as secondary text", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "resumed-run",
 				asyncDir: "/tmp/resumed-run",
@@ -38,7 +38,7 @@ describe("resume leg duration display", () => {
 	it("gates resumed dashboard chip to resumeCount greater than zero", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "never-resumed",
 				asyncDir: "/tmp/never-resumed",
@@ -67,7 +67,7 @@ describe("resume leg duration display", () => {
 	it("shows current leg duration on a resumed terminal row alongside the date stamp", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "resumed-terminal",
 				asyncDir: "/tmp/resumed-terminal",

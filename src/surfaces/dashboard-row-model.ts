@@ -11,7 +11,8 @@
 import { dedupePhaseTitle } from "../state/async-status.ts";
 import { compareRunsForDisplay } from "../state/run-liveness.ts";
 import type { AsyncRunSummary } from "../state/async-status.ts";
-import type { ForegroundRunSummary, LiveRun } from "./subagents-status.ts";
+import type { LiveRun } from "../state/run-view.ts";
+import type { ForegroundRunSummary } from "./subagents-status.ts";
 
 /** Extra rendering context for a group-container row (parallel group, workflow
  * group): collapse marker, child progress, current phase synthesized from the
@@ -46,7 +47,7 @@ export function runMatchesSession(
 		? { sessionId: undefined, sessionCwd: scope }
 		: scope ?? {};
 	if (!sessionId && !sessionCwd) return true;
-	if (run.source === "sync") return true;
+	if (run.ownership === "live") return true;
 	if (sessionId) {
 		const tag = run.run.rootSessionId ?? run.run.parentSessionId;
 		if (!tag) return false;
@@ -121,15 +122,19 @@ function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
 		}
 	}
 	const childrenForDisplay = (parent: LiveRun, children: LiveRun[]): LiveRun[] => {
-		if (parent.source !== "async" || !parent.run.workflow) return children;
+		// workflow is a disk-only field (foreground views never set it), so the
+		// field read selects foreign workflow parents directly.
+		if (!parent.run.workflow) return children;
 		return children
 			.map((child, index) => ({ child, index }))
 			.sort((a, b) => {
-				const phaseA = a.child.source === "async" ? a.child.run.phaseIndex ?? 0 : 0;
-				const phaseB = b.child.source === "async" ? b.child.run.phaseIndex ?? 0 : 0;
+				// phaseIndex/parallelGroupId are undefined on foreground views, so
+				// ?? 0 / ?? "" reproduce the old live-arm defaults without a branch.
+				const phaseA = a.child.run.phaseIndex ?? 0;
+				const phaseB = b.child.run.phaseIndex ?? 0;
 				if (phaseA !== phaseB) return phaseA - phaseB;
-				const groupA = a.child.source === "async" ? a.child.run.parallelGroupId ?? "" : "";
-				const groupB = b.child.source === "async" ? b.child.run.parallelGroupId ?? "" : "";
+				const groupA = a.child.run.parallelGroupId ?? "";
+				const groupB = b.child.run.parallelGroupId ?? "";
 				if (groupA !== groupB) return groupA.localeCompare(groupB);
 				return a.index - b.index;
 			})
@@ -173,8 +178,8 @@ export function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummar
 	// runs just because 'failed' bucket ranks above 'complete'. The status glyph on
 	// each row already communicates state, so bucketing only hurt the mental model.
 	const all: LiveRun[] = [];
-	for (const run of sync) all.push({ source: "sync", run });
-	for (const run of async) all.push({ source: "async", run });
+	for (const run of sync) all.push({ ownership: "live", run });
+	for (const run of async) all.push({ ownership: "foreign", run });
 	return orderRunsWithChildren(baseSortLiveRuns(all));
 }
 
@@ -184,12 +189,12 @@ function phaseRowDone(run: LiveRun): boolean {
 }
 
 function isSkippedParallelContainer(runs: LiveRun[], run: LiveRun): boolean {
-	if (run.source !== "async" || run.run.workflow === true || run.run.mode !== "parallel") return false;
+	if (run.ownership !== "foreign" || run.run.workflow === true || run.run.mode !== "parallel") return false;
 	return runs.some((other) => other.run.parentRunId === run.run.id);
 }
 
 export function isGroupContainerRow(runs: LiveRun[], run: LiveRun): boolean {
-	if (run.source !== "async") return false;
+	if (run.ownership !== "foreign") return false;
 	const hasChildRows = runs.some((other) => other.run.parentRunId === run.run.id);
 	if (!hasChildRows) return false;
 	return run.run.workflow === true || run.run.mode === "parallel";
@@ -215,10 +220,10 @@ export function containerRowInfo(runs: LiveRun[], collapsedIds: ReadonlySet<stri
 	}).length;
 	// Current phase = the highest phase any child has reached (workflow only).
 	let phaseChip: string | undefined;
-	if (run.source === "async" && run.run.workflow === true) {
+	if (run.run.workflow === true) {
 		let best: { index: number; title?: string } | undefined;
 		for (const child of children) {
-			if (child.source !== "async" || child.run.phaseIndex === undefined) continue;
+			if (child.run.phaseIndex === undefined) continue;
 			if (!best || child.run.phaseIndex > best.index) {
 				best = { index: child.run.phaseIndex, ...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}) };
 			}
@@ -231,9 +236,10 @@ export function containerRowInfo(runs: LiveRun[], collapsedIds: ReadonlySet<stri
 	const collapsed = collapsedIds.has(run.run.id);
 	let agentsSummary: string | undefined;
 	if (collapsed) {
-		const agents = children.map((child) => child.source === "sync"
-			? child.run.currentAgent ?? child.run.mode
-			: child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode);
+		// Field priority preserved: currentAgent (live-only) wins, else first
+		// step's agent (foreign), else mode. Live views carry steps:[] and foreign
+		// views carry no currentAgent, so the unified read matches both old arms.
+		const agents = children.map((child) => child.run.currentAgent ?? child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode);
 		const unique = Array.from(new Set(agents.filter(Boolean)));
 		agentsSummary = `${children.length} ${children.length === 1 ? "agent" : "agents"}${unique.length > 0 ? `: ${unique.join(", ")}` : ""}`;
 	}
@@ -252,7 +258,7 @@ export function containerRowInfo(runs: LiveRun[], collapsedIds: ReadonlySet<stri
 export function isPendingDelivery(runs: LiveRun[], run: LiveRun): boolean {
 	if (run.run.state !== "complete" || !run.run.parentRunId) return false;
 	const parent = runs.find((other) => other.run.id === run.run.parentRunId);
-	if (!parent || parent.source !== "async") return false;
+	if (!parent || parent.ownership !== "foreign") return false;
 	if (parent.run.workflow === true) return false;
 	if (parent.run.mode !== "parallel") return false;
 	const s = parent.run.state;
@@ -282,14 +288,16 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 	const emitWorkflowChildren = (workflow: LiveRun, depth: number) => {
 		if (collapsedIds.has(workflow.run.id)) return;
 		const children = childrenByParent.get(workflow.run.id) ?? [];
-		const phaseless = children.filter((child) => child.source !== "async" || child.run.phaseIndex === undefined);
+		// phaseIndex is undefined on foreground views, so field-presence alone
+		// partitions phaseless vs phased children identically to the old guard.
+		const phaseless = children.filter((child) => child.run.phaseIndex === undefined);
 		for (const child of phaseless) emitTree(child, depth + 1);
 
 		const phaseIndexes = Array.from(new Set(children
-			.filter((child): child is LiveRun & { source: "async" } => child.source === "async" && child.run.phaseIndex !== undefined)
+			.filter((child) => child.run.phaseIndex !== undefined)
 			.map((child) => child.run.phaseIndex!))).sort((a, b) => a - b);
 		for (const phaseIndex of phaseIndexes) {
-			const phaseChildren = children.filter((child): child is LiveRun & { source: "async" } => child.source === "async" && child.run.phaseIndex === phaseIndex);
+			const phaseChildren = children.filter((child) => child.run.phaseIndex === phaseIndex);
 			const phaseId = `phase:${workflow.run.id}:${phaseIndex}`;
 			const title = dedupePhaseTitle(phaseChildren.find((child) => child.run.phaseTitle)?.run.phaseTitle);
 			const parallelGroups = new Set(phaseChildren.map((child) => child.run.parallelGroupId).filter((id): id is string => Boolean(id)));
@@ -317,7 +325,7 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 			return;
 		}
 		emitRun(run, depth, options);
-		if (run.source === "async" && run.run.workflow === true) {
+		if (run.run.workflow === true) {
 			emitWorkflowChildren(run, depth);
 			return;
 		}
