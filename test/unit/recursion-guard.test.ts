@@ -1,9 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
-	checkNestedDelegationGuard,
-	checkSubagentDepth,
-	getSubagentDepthEnv,
 	DEFAULT_SUBAGENT_MAX_DEPTH,
 	isAllowedNestedOrchestratorChild,
 	isNestedOrchestratorAgent,
@@ -11,8 +8,13 @@ import {
 	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
-	resolveCurrentMaxSubagentDepth,
 } from "../../src/protocol/types.ts";
+import {
+	checkNestedDelegationGuard,
+	checkSubagentDepth,
+	getSubagentDepthEnv,
+	resolveCurrentMaxSubagentDepth,
+} from "../../src/shared/runtime-env.ts";
 
 let savedDepth: string | undefined;
 let savedMaxDepth: string | undefined;
