@@ -8,8 +8,7 @@ import { StatusWriter } from "../state/status-writer.ts";
 import { formatRunHandle } from "../state/run-shape.ts";
 import { resolveChildCwd } from "../shared/utils.ts";
 import { mapConcurrent } from "./parallel-utils.ts";
-import { appendRunEntry } from "../state/runs-registry.ts";
-import { spawnRun, openGroup } from "./layer0-runs.ts";
+import { spawnRun, openGroup, openRunPersistence, finalizeRun } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
 import {
 	type Details,
@@ -299,47 +298,48 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		return asyncStartedResult({ mode, runId: groupRunId, asyncDir: group.runRecordDir, text: handleText, children: childDetails });
 	}
 	const runRecordDir = first.step.runRecordDir;
-	const statusWriter = new StatusWriter({ runRecordDir, runId });
 	const startedAt = Date.now();
-	appendRunEntry({
+	const runHandle = openRunPersistence({
+		agentName: first.step.agentName,
+		task: first.step.task,
+		cwd: effectiveCwd,
+		...(runLabel ? { label: runLabel } : {}),
+	}, {
 		runId,
 		runRecordDir,
-		mode,
-		source: "async",
-		...(mode === "single" ? { agentName: first.step.agentName } : { agentNames: steps.map(({ step }) => step.agentName) }),
-		...(runLabel ? { label: runLabel } : {}),
-		...(parentRunId ? { parentRunId } : {}),
+		sessionFile: first.step.sessionFile,
 		rootRunId,
+		...(parentRunId ? { parentRunId } : {}),
 		...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 		...(() => {
 			const root = resolveDispatchRootSessionId(ctx);
 			return root ? { rootSessionId: root } : {};
 		})(),
-		cwd: effectiveCwd,
-		startedAt,
+		source: "async",
+		variant: "async-detached",
+		initialize: {
+			mode,
+			startedAt,
+			cwd: effectiveCwd,
+			...(runLabel ? { label: runLabel } : {}),
+			...(parentRunId ? { parentRunId } : {}),
+			currentStep: 0,
+			sessionFile: first.step.sessionFile,
+			sessionDir: runRecordDir,
+			steps: steps.map(({ step }) => ({
+				agent: step.agentName,
+				...(step.label ? { label: step.label } : {}),
+				status: "queued",
+				sessionFile: step.sessionFile,
+				live: {
+					color: resolveAgentColor(step.agentConfig as unknown as AgentConfig),
+					thinking: (step.agentConfig as unknown as AgentConfig).thinking,
+				},
+			})),
+		},
 	});
+	const statusWriter = runHandle.statusWriter;
 	emitRunAnchor(deps.pi, { runId, rootRunId, mode, source: "async", parentRunId });
-	statusWriter.initialize({
-		mode,
-		state: "queued",
-		startedAt,
-		cwd: effectiveCwd,
-		...(runLabel ? { label: runLabel } : {}),
-		...(parentRunId ? { parentRunId } : {}),
-		currentStep: 0,
-		sessionFile: first.step.sessionFile,
-		sessionDir: runRecordDir,
-		steps: steps.map(({ step }) => ({
-			agent: step.agentName,
-			...(step.label ? { label: step.label } : {}),
-			status: "queued",
-			sessionFile: step.sessionFile,
-			live: {
-				color: resolveAgentColor(step.agentConfig as unknown as AgentConfig),
-				thinking: (step.agentConfig as unknown as AgentConfig).thinking,
-			},
-		})),
-	});
 
 	// Async children deliberately do NOT receive the parent turn's AbortSignal.
 	// They survive ESC/cancel of the parent turn (matching the stated semantics:
@@ -381,7 +381,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			} else if (finalResult?.usage) {
 				addUsageInto(totalUsage, finalResult.usage as Usage);
 			}
-			if (finalResult) await statusWriter.finalize(finalResult, { totalUsage });
+			if (finalResult) finalizeRun(runHandle, { via: "result", result: finalResult, totalUsage });
 			logger.info("finalizeAsync: emitting COMPLETE", { runId, success: finalResult?.state === "complete", state: finalResult?.state });
 			const completeAgent = mode === "parallel"
 				? steps.map(({ step }) => step.agentName).join(",")

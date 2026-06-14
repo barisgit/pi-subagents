@@ -5,7 +5,6 @@ import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, Chil
 import { StatusWriter } from "../state/status-writer.ts";
 import { readStatus } from "../shared/utils.ts";
 import { tokenUsageFromTotal } from "../state/usage-totals.ts";
-import { writeSyncRunStatusEnd } from "../state/sync-run-persistence.ts";
 import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
 import { logger } from "../shared/logger.ts";
@@ -177,7 +176,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		forkReuse: undefined,
 		rootRunId: target.rootRunId,
 	};
-	const statusWriter = new StatusWriter({ runRecordDir: target.runRecordDir, runId: target.runId });
+	const statusWriter = new StatusWriter({ runRecordDir: target.runRecordDir, runId: target.runId, flushPolicy: asyncMode === false ? "terminal" : "eager" });
 	// Resume reseeds the activity/heartbeat clocks to now so the inactivity
 	// watchdog measures from the resume moment, not the original run's last
 	// activity (startedAt stays immutable for duration semantics).
@@ -252,7 +251,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 						currentToolStartedAt: firstProgress?.currentToolStartedAt,
 						...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
 					}];
-				mirrorForegroundProgressToStatus(target.runId, firstProgress, index, statusStepPatch, target.runRecordDir);
+				mirrorForegroundProgressToStatus(statusWriter, firstProgress, index, statusStepPatch);
 			},
 		});
 		fg.beginStep(target.agentName, step.stepIndex, (reason?: string) => {
@@ -320,10 +319,10 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 			emitSyncLifecycleEvent(deps.pi, SUBAGENT_FAILED_EVENT, { ...eventPayload, exitCode: 1, error: failureMessage });
 			return validationError(`Failed to resume run ${runId}: ${failureMessage}`);
 		} finally {
-			writeSyncRunStatusEnd(target.runId, {
+			statusWriter.finalizeTerminal({
 				state: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
 				// Only the resumed step is finalized; siblings echo their existing
-				// fields so writeSyncRunStatusEnd's force-overrides become no-ops
+				// fields so finalizeTerminal's force-overrides become no-ops
 				// (a patchless `{}` would flip siblings to the run-level end state).
 				steps: target.status.steps?.map((existingStep, index) => index === step.stepIndex
 					? {
@@ -339,7 +338,7 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 					error: result?.error ?? failureMessage,
 				}],
 				sessionFile: result?.sessionFile ?? target.sessionFile,
-			}, target.runRecordDir);
+			});
 			statusWriter.dispose();
 			deps.state.foregroundControls.delete(target.runId);
 			if (deps.state.lastForegroundControlId === target.runId) deps.state.lastForegroundControlId = null;

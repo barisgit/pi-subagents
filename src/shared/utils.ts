@@ -7,13 +7,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { formatToolCall } from "./formatting.ts";
-import { type AgentProgress, type AsyncStatus, type Details, type DisplayItem, type ErrorInfo, type SingleResult, type ToolCallSummary } from "../protocol/types.ts";
+import { type AgentProgress, type Details, type DisplayItem, type ErrorInfo, type SingleResult, type ToolCallSummary } from "../protocol/types.ts";
+import type { PersistedRunStatus } from "../protocol/status-types.ts";
 
 // ============================================================================
 // File System Utilities
 // ============================================================================
 
-const statusCache = new Map<string, { mtime: number; status: AsyncStatus }>();
+const statusCache = new Map<string, { mtime: number; status: PersistedRunStatus }>();
 const STALE_MTIME_THRESHOLD_MS = 10 * 60 * 1000;
 
 function getErrorMessage(error: unknown): string {
@@ -32,7 +33,7 @@ function isNotFoundError(error: unknown): boolean {
 		&& (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-function reconcileStatus(status: AsyncStatus, mtimeMs: number): AsyncStatus {
+function reconcileStatus(status: PersistedRunStatus, mtimeMs: number): PersistedRunStatus {
 	if (status.state !== "running") return status;
 	if (Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS) {
 		return { ...status, state: "lost" };
@@ -43,7 +44,7 @@ function reconcileStatus(status: AsyncStatus, mtimeMs: number): AsyncStatus {
 /**
  * Read async job status from disk (with mtime-based caching)
  */
-export function readStatus(asyncDir: string): AsyncStatus | null {
+export function readStatus(asyncDir: string): PersistedRunStatus | null {
 	const statusPath = path.join(asyncDir, "status.json");
 
 	let stat: fs.Stats;
@@ -71,9 +72,9 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 		});
 	}
 
-	let status: AsyncStatus;
+	let status: PersistedRunStatus;
 	try {
-		status = JSON.parse(content) as AsyncStatus;
+		status = JSON.parse(content) as PersistedRunStatus;
 	} catch {
 		// Malformed/partial status.json (e.g. crashed mid-write). Treat as a missing/lost
 		// entry rather than poisoning callers that scan RUNS_DIR. Cache the null so

@@ -77,15 +77,9 @@ import { compactForegroundDetails, extractTextFromContent, getFinalOutput, getSi
 import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../state/usage-totals.ts";
 import { inspectSubagentStatus } from "../state/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
-import {
-	writeSyncRunStatusEnd,
-	writeSyncRunStatusStart,
-	writeSyncRunStatusUpdate,
-	type SyncRunStepInit,
-} from "../state/sync-run-persistence.ts";
-import { appendRunEntry, readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
+import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
-import { interruptRun, spawnRun, openGroup, awaitRun } from "./layer0-runs.ts";
+import { interruptRun, spawnRun, openGroup, awaitRun, openRunPersistence, finalizeRun, type OpenRunHandle } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "../state/lineage.ts";
@@ -608,7 +602,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const fg = createForegroundRunController(foregroundControl, {
 		mirror: (firstProgress, index) => {
 			const liveStepTokens = tokenUsageFromTotal(firstProgress?.tokens);
-			mirrorForegroundProgressToStatus(runId, firstProgress, index, [{
+			mirrorForegroundProgressToStatus(data.foregroundStatusWriter, firstProgress, index, [{
 				agent: firstProgress?.agent ?? params.agent!,
 				status: firstProgress?.status ?? "running",
 				startedAt: firstProgress?.lastActivityAt,
@@ -616,7 +610,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				currentTool: firstProgress?.currentTool,
 				currentToolStartedAt: firstProgress?.currentToolStartedAt,
 				...(liveStepTokens ? { tokens: liveStepTokens } : {}),
-			}], sessionRoot);
+			}]);
 		},
 	});
 	fg.beginStep(params.agent!, 0, (reason?: string) => {
@@ -643,7 +637,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		metadata: params.metadata,
 	};
 	emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
-	writeSyncRunStatusUpdate(runId, { currentStep: 0, steps: [{ agent: params.agent!, status: "running", startedAt: Date.now(), lastActivityAt: Date.now() }] }, { flush: true }, sessionRoot);
+	data.foregroundStatusWriter?.mergePatch({ currentStep: 0, steps: [{ agent: params.agent!, status: "running", startedAt: Date.now(), lastActivityAt: Date.now() }] }, { flush: true });
 	const r = await runInProcessChildStep({
 		data,
 		deps,
@@ -1118,11 +1112,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				currentActivityState: undefined,
 				interrupt: undefined,
 			};
+		let fgWriter: StatusWriter | undefined;
+		let runHandle: OpenRunHandle | undefined;
 		if (foregroundControl) {
 			deps.state.foregroundControls.set(runId, foregroundControl);
 			deps.state.lastForegroundControlId = runId;
 			if (foregroundMode !== "parallel") {
-			const stepsRaw: Omit<SyncRunStepInit, "sessionFile">[] = hasTasks && effectiveParams.tasks
+			const stepsRaw: Array<{ agent: string; label?: string; task?: string }> = hasTasks && effectiveParams.tasks
 				? effectiveParams.tasks.map((task) => ({ agent: task.agent, task: task.task, ...(task.label ? { label: task.label } : {}) }))
 				: [{ agent: effectiveParams.agent ?? "subagent", task: effectiveParams.task ?? "", ...(effectiveParams.label ? { label: effectiveParams.label } : {}) }];
 			// Attach per-step sessionFile so the right-pane transcript reader can find
@@ -1130,35 +1126,46 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			// rather than sessionFileForIndex — for fork-reuse the latter returns a
 			// pi-managed branch path elsewhere, while the in-process executor opens
 			// the canonical path (seeded from the branch source).
-			const steps: SyncRunStepInit[] = stepsRaw.map((step, idx) => ({
+			const steps = stepsRaw.map((step, idx) => ({
 				...step,
 				sessionFile: path.join(sessionDirForIndex(idx), "session.jsonl"),
 			}));
-			writeSyncRunStatusStart(runId, {
-				mode: foregroundMode,
-				startedAt: foregroundControl.startedAt,
+			runHandle = openRunPersistence({
+				agentName: steps[0]?.agent ?? "subagent",
+				task: steps[0]?.task ?? "",
 				cwd: effectiveCwd,
 				...(foregroundRunLabel ? { label: foregroundRunLabel } : {}),
-				...(parentRunId ? { parentRunId } : {}),
-				steps,
-			}, sessionRoot);
-			appendRunEntry({
+			}, {
 				runId,
 				runRecordDir: sessionRoot,
-				mode: foregroundMode,
-				source: "sync",
-				...(foregroundMode === "single" ? { agentName: steps[0]?.agent } : { agentNames: steps.map((s) => s.agent) }),
-				...(foregroundRunLabel ? { label: foregroundRunLabel } : {}),
-				...(parentRunId ? { parentRunId } : {}),
+				...(steps[0]?.sessionFile ? { sessionFile: steps[0].sessionFile } : {}),
 				rootRunId,
+				...(parentRunId ? { parentRunId } : {}),
 				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 				...(() => {
 					const root = resolveDispatchRootSessionId(ctx);
 					return root ? { rootSessionId: root } : {};
 				})(),
-				cwd: effectiveCwd,
-				startedAt: foregroundControl.startedAt,
+				source: "sync",
+				variant: "sync-foreground",
+				initialize: {
+					mode: foregroundMode,
+					startedAt: foregroundControl.startedAt,
+					runnerHeartbeatAt: foregroundControl.startedAt,
+					cwd: effectiveCwd,
+					...(foregroundRunLabel ? { label: foregroundRunLabel } : {}),
+					...(parentRunId ? { parentRunId } : {}),
+					currentStep: 0,
+					steps: steps.map((step) => ({
+						agent: step.agent,
+						...(step.label ? { label: step.label } : {}),
+						status: "pending" as const,
+						...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
+					})),
+				},
 			});
+			fgWriter = runHandle.statusWriter;
+			execData.foregroundStatusWriter = fgWriter;
 			}
 		}
 
@@ -1181,8 +1188,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return executionResult;
 		} finally {
 			if (foregroundControl) {
-				if (foregroundMode !== "parallel") {
-					writeSyncRunStatusEnd(runId, {
+				if (foregroundMode !== "parallel" && fgWriter && runHandle) {
+					finalizeRun(runHandle, {
+						via: "terminal",
 						state: executionResult?.isError ? "failed" : "complete",
 						steps: executionResult?.details?.results?.map((result) => ({
 							status: result.exitCode === 0 ? "complete" : "failed",
@@ -1190,7 +1198,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							durationMs: result.progressSummary?.durationMs,
 							error: result.error,
 						})) ?? [],
-					}, sessionRoot);
+					});
+					fgWriter.dispose();
 				}
 				deps.state.foregroundControls.delete(runId);
 				if (deps.state.lastForegroundControlId === runId) {

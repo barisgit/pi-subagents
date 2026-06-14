@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ASYNC_NO_POLL_GUIDANCE, formatDuration, formatTokens, shortenPath } from "../shared/formatting.ts";
-import { type ActivityState, type AsyncStatus, type RunDisplayState, type TokenUsage } from "../protocol/types.ts";
+import { type ActivityState, type RunDisplayState, type TokenUsage } from "../protocol/types.ts";
+import type { PersistedRunStatus } from "../protocol/status-types.ts";
 import type { RunPhase } from "./run-phase.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "../shared/control-policy.ts";
 import { deriveRunDisplayState } from "./run-liveness.ts";
@@ -117,7 +118,7 @@ function outputFileMtime(outputFile: string | undefined): number | undefined {
 	}
 }
 
-function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { activityState?: ActivityState; lastActivityAt?: number } {
+function deriveAsyncActivityState(asyncDir: string, status: PersistedRunStatus): { activityState?: ActivityState; lastActivityAt?: number } {
 	if (status.state !== "running") return { activityState: status.activityState, lastActivityAt: status.lastActivityAt };
 	const outputPath = status.outputFile ? (path.isAbsolute(status.outputFile) ? status.outputFile : path.join(asyncDir, status.outputFile)) : undefined;
 	const currentStep = typeof status.currentStep === "number" ? status.steps?.[status.currentStep] : undefined;
@@ -133,7 +134,7 @@ function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { acti
 	};
 }
 
-export function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string }): AsyncRunSummary {
+export function statusToSummary(asyncDir: string, status: PersistedRunStatus & { cwd?: string }): AsyncRunSummary {
 	const { activityState, lastActivityAt } = deriveAsyncActivityState(asyncDir, status);
 	const id = status.runId || path.basename(asyncDir);
 	const displayState = deriveRunDisplayState({
@@ -251,7 +252,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 	const runs: AsyncRunSummary[] = [];
 	for (const entry of entries) {
 		const asyncDir = path.join(asyncDirRoot, entry);
-		const status = readStatus(asyncDir) as (AsyncStatus & { cwd?: string }) | null;
+		const status = readStatus(asyncDir) as (PersistedRunStatus & { cwd?: string }) | null;
 		if (!status) continue;
 		const summary = statusToSummary(asyncDir, status);
 		if (allowedStates && !allowedStates.has(summary.state)) continue;
@@ -391,7 +392,7 @@ export function readLeafSummaryCached(asyncDir: string): AsyncRunSummary | null 
 	}
 	const cached = leafSummaryCache.get(statusPath);
 	if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) return cached.summary;
-	const status = readStatus(asyncDir) as (AsyncStatus & { cwd?: string }) | null;
+	const status = readStatus(asyncDir) as (PersistedRunStatus & { cwd?: string }) | null;
 	if (!status) {
 		leafSummaryCache.delete(statusPath);
 		return null;

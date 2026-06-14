@@ -1,40 +1,30 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ChildAgentResult, ChildAgentExitState, StatusPatch } from "../protocol/status-types.ts";
-import type { RunPhase } from "./run-phase.ts";
+import type { ChildAgentResult, ChildAgentExitState, PersistedRunStatus, PersistedRunStep, StatusPatch } from "../protocol/status-types.ts";
+import type { TokenUsage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
+
+export type FlushPolicy = "terminal" | "eager";
+
+export interface StatusWriterOpts {
+	runRecordDir: string;
+	runId: string;
+	/** Coalescing mechanism. 'eager' (default) debounces; 'terminal' leading-edge throttles write-through. */
+	flushPolicy?: FlushPolicy;
+	/** EAGER debounce window (ms). */
+	debounceMs?: number;
+	/** TERMINAL leading-edge throttle window (ms). */
+	throttleMs?: number;
+}
+
+/** Minimum interval between throttled terminal-policy writes; the leading-edge clock. */
+const MIN_UPDATE_INTERVAL_MS = 250;
 
 type StatusState = ChildAgentExitState | "queued" | "running" | "paused" | "lost";
 
-type TokenUsage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number };
-type StatusUsage = { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number };
-
 export const STATUS_JSON_VERSION = 1;
 
-type StatusStep = {
-	agent?: string;
-	label?: string;
-	status: StatusState | string;
-	startedAt?: number;
-	endedAt?: number;
-	durationMs?: number;
-	currentTool?: string;
-	currentToolStartedAt?: number;
-	lastActivityAt?: number;
-	error?: string;
-	sessionFile?: string;
-	tokens?: TokenUsage;
-	live?: {
-		color?: string;
-		thinking?: string;
-		outputText?: string;
-		toolCallCount?: number;
-		toolResultCount?: number;
-		toolErrorCount?: number;
-		phase?: RunPhase;
-		phaseStartedAt?: number;
-	};
-};
+type StatusStep = PersistedRunStep;
 
 export interface StatusMeta {
 	mode?: "single" | "parallel";
@@ -54,51 +44,29 @@ export interface StatusMeta {
 	resumeCount?: number;
 }
 
-type StatusPayload = {
-	version: typeof STATUS_JSON_VERSION;
-	runId: string;
-	mode: "single" | "parallel";
-	label?: string;
-	cwd?: string;
-	parentRunId?: string;
-	state: StatusState;
-	startedAt: number;
-	endedAt?: number;
-	lastUpdate?: number;
-	currentStep?: number;
-	currentTool?: string;
-	currentToolStartedAt?: number;
-	lastActivityAt?: number;
-	steps: StatusStep[];
-	sessionFile?: string;
-	outputFile?: string;
-	sessionDir?: string;
-	outputText?: string;
-	error?: string;
-	totalTokens?: TokenUsage;
-	totalUsage?: StatusUsage;
-	/** Current execution phase persisted on every patch. */
-	phase?: RunPhase;
-	/** Milliseconds since epoch when the current phase was entered. */
-	phaseStartedAt?: number;
-	/** Milliseconds since epoch of last runner heartbeat (bumped on every patch). */
-	runnerHeartbeatAt?: number;
-	/** Milliseconds since epoch of the latest accepted resume. */
-	resumedAt?: number;
-	/** Number of accepted resumes for this run. */
-	resumeCount?: number;
-};
-
 export class StatusWriter {
-	private readonly opts: { runRecordDir: string; runId: string; debounceMs?: number };
+	private readonly opts: StatusWriterOpts;
+	readonly runRecordDir: string;
 	private readonly statusPath: string;
+	private readonly flushPolicy: FlushPolicy;
 	private readonly debounceMs: number;
+	private readonly throttleMs: number;
 	private timer: ReturnType<typeof setTimeout> | undefined;
-	private status: StatusPayload | undefined;
+	/**
+	 * In-memory canonical persisted run status held + serialized by the writer.
+	 * `steps` is narrowed to required because the writer always initializes it to
+	 * `[]`; readers see the optional `steps?` of PersistedRunStatus.
+	 */
+	private status: (PersistedRunStatus & { steps: PersistedRunStep[] }) | undefined;
+	/** Per-run leading-edge throttle clock (TERMINAL policy); replaces the module-global lastWriteByRun map. */
+	private lastWriteAt = 0;
 
-	constructor(opts: { runRecordDir: string; runId: string; debounceMs?: number }) {
+	constructor(opts: StatusWriterOpts) {
 		this.opts = opts;
+		this.runRecordDir = opts.runRecordDir;
+		this.flushPolicy = opts.flushPolicy ?? "eager";
 		this.debounceMs = opts.debounceMs ?? 500;
+		this.throttleMs = opts.throttleMs ?? MIN_UPDATE_INTERVAL_MS;
 		this.statusPath = path.join(opts.runRecordDir, "status.json");
 	}
 
@@ -124,13 +92,74 @@ export class StatusWriter {
 			...(meta.outputFile ? { outputFile: meta.outputFile } : {}),
 			...(meta.sessionDir ? { sessionDir: meta.sessionDir } : {}),
 		};
+		this.lastWriteAt = Date.now();
 		this.writeNow();
 	}
 
 	enqueue(patch: StatusPatch): void {
+		if (this.flushPolicy !== "eager") throw new Error("StatusWriter.enqueue requires flushPolicy 'eager'");
 		this.ensureInitialized();
 		this.applyPatch(patch);
 		this.scheduleWrite();
+	}
+
+	/**
+	 * TERMINAL-policy free-form merge with leading-edge throttle + write-through.
+	 * On each call: terminal states (complete|failed|paused) and flush:true bypass
+	 * the throttle and write immediately. Otherwise, if the throttle window has not
+	 * elapsed since the last accepted write, EARLY-RETURN WITHOUT mutating the
+	 * in-memory payload (data-drop, mirroring the old read-from-disk free function
+	 * where a throttled patch never touched disk). Dropping without applying keeps
+	 * in-memory === last-written-disk so the deep-merge base matches the prior
+	 * on-disk base and the terminal file stays byte-stable.
+	 */
+	mergePatch(patch: Partial<PersistedRunStatus>, options: { flush?: boolean } = {}): void {
+		if (this.flushPolicy !== "terminal") throw new Error("StatusWriter.mergePatch requires flushPolicy 'terminal'");
+		statusUpdateObserverForTest?.(this.opts.runId, patch, options, this.opts.runRecordDir);
+		this.ensureInitialized();
+		if (!this.status) return;
+		const now = Date.now();
+		const terminal = patch.state === "complete" || patch.state === "failed" || patch.state === "paused";
+		if (!options.flush && !terminal && this.lastWriteAt > 0 && now - this.lastWriteAt < this.throttleMs) return;
+		mergeValue(this.status as unknown as Record<string, unknown>, {
+			...patch,
+			lastUpdate: patch.lastUpdate ?? now,
+			runnerHeartbeatAt: patch.runnerHeartbeatAt ?? now,
+		});
+		this.lastWriteAt = now;
+		this.writeNow();
+	}
+
+	/**
+	 * TERMINAL-policy end write (formerly the sync end free function): finalize
+	 * the resumed/running step set, then apply the shared run-level terminal
+	 * convention. Writes immediately.
+	 */
+	finalizeTerminal(end: { state?: "complete" | "failed"; steps?: Array<Partial<StatusStep>>; totalTokens?: TokenUsage; sessionFile?: string }): void {
+		this.ensureInitialized();
+		if (!this.status) return;
+		const endedAt = Date.now();
+		const steps = this.status.steps.map((step, index) => {
+			const patch = end.steps?.[index] ?? {};
+			const status = patch.status ?? (end.state === "failed" ? "failed" : step.status === "failed" ? "failed" : "complete");
+			const startedAt = patch.startedAt ?? step.startedAt ?? this.status!.startedAt;
+			return {
+				...step,
+				...patch,
+				status,
+				endedAt: patch.endedAt ?? endedAt,
+				durationMs: patch.durationMs ?? (startedAt ? endedAt - startedAt : undefined),
+			};
+		});
+		this.status.steps = steps;
+		if (end.sessionFile) this.status.sessionFile = end.sessionFile;
+		this.applyTerminalScalars({
+			state: end.state ?? "complete",
+			endedAt,
+			...(end.totalTokens ? { totalTokens: end.totalTokens } : {}),
+		});
+		this.lastWriteAt = endedAt;
+		this.writeNow();
 	}
 
 	async finalize(result: ChildAgentResult, options?: { totalUsage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number } }): Promise<void> {
@@ -153,7 +182,7 @@ export class StatusWriter {
 			// sync writers finalize byte-consistently. Clearing phase stops
 			// dashboards computing `streaming Xs` on a long-finished run
 			// (formatPhase treats idle/undefined as the empty string).
-			finalizeRunScalars(this.status, {
+			this.applyTerminalScalars({
 				state: result.state,
 				endedAt: result.endedAt,
 				...(aggregate ? { totalTokens: tokenUsageFromUsage(aggregate) } : {}),
@@ -184,6 +213,29 @@ export class StatusWriter {
 
 	dispose(): void {
 		this.clearTimer();
+	}
+
+	/**
+	 * Apply the one terminal run-level convention (ex-finalizeRunScalars), driven
+	 * by BOTH finalize() and finalizeTerminal(): set terminal state/timestamps,
+	 * bump runnerHeartbeatAt to endedAt, clear the live phase to 'idle' (with
+	 * phaseStartedAt undefined so formatPhase yields the empty string), clear the
+	 * current tool + activity, stamp the schema version, and persist the run total
+	 * token usage when provided. Mutates this.status in place.
+	 */
+	private applyTerminalScalars(args: { state: string; endedAt: number; totalTokens?: TokenUsage }): void {
+		if (!this.status) return;
+		this.status.state = args.state as StatusState;
+		this.status.endedAt = args.endedAt;
+		this.status.lastUpdate = args.endedAt;
+		this.status.runnerHeartbeatAt = args.endedAt;
+		this.status.phase = "idle";
+		this.status.phaseStartedAt = undefined;
+		this.status.currentTool = undefined;
+		this.status.currentToolStartedAt = undefined;
+		this.status.activityState = undefined;
+		this.status.version = STATUS_JSON_VERSION;
+		if (args.totalTokens) this.status.totalTokens = args.totalTokens;
 	}
 
 	private ensureInitialized(): void {
@@ -289,46 +341,46 @@ export function __setStatusWriterWriteJsonForTest(fn: (filePath: string, payload
 	};
 }
 
-/**
- * Mutable run-status fields shared by both writers' terminal-finalize path.
- * Structurally satisfied by both StatusPayload (async StatusWriter) and
- * AsyncStatus (sync free functions), so {@link finalizeRunScalars} can drive
- * one terminal convention for both.
- */
-export interface TerminalScalarTarget {
-	state: string;
-	endedAt?: number;
-	lastUpdate?: number;
-	runnerHeartbeatAt?: number;
-	phase?: RunPhase;
-	phaseStartedAt?: number;
-	currentTool?: string;
-	currentToolStartedAt?: number;
-	activityState?: string;
-	version?: number;
-	totalTokens?: TokenUsage;
+let statusUpdateObserverForTest: ((runId: string, patch: Partial<PersistedRunStatus>, options: { flush?: boolean }, runRecordDir?: string) => void) | undefined;
+
+/** Fires inside mergePatch (TERMINAL policy) for the caller-forwards-phase test hook. */
+export function __setSyncRunStatusUpdateObserverForTest(observer: typeof statusUpdateObserverForTest): () => void {
+	const previous = statusUpdateObserverForTest;
+	statusUpdateObserverForTest = observer;
+	return () => {
+		statusUpdateObserverForTest = previous;
+	};
 }
 
 /**
- * Apply the one terminal run-level convention shared by the async StatusWriter
- * and the sync writeSyncRunStatusEnd path: set the terminal state/timestamps,
- * bump runnerHeartbeatAt to endedAt, clear the live phase to 'idle' (with
- * phaseStartedAt undefined so formatPhase yields the empty string), clear the
- * current tool + activity, stamp the schema version, and persist the run total
- * token usage when provided. Mutates the target in place.
+ * Deep merge with index-wise array merge (ex-sync-run-persistence mergeValue),
+ * backing {@link StatusWriter.mergePatch}. Kept distinct from applyPatch: the
+ * free-form Partial<PersistedRunStatus> patch language (mergePatch) does NOT converge
+ * with the structured StatusPatch language (enqueue); routing the foreground
+ * mirror through enqueue would gain step.live.* and change the on-disk step
+ * shape.
  */
-export function finalizeRunScalars(target: TerminalScalarTarget, args: { state: string; endedAt: number; totalTokens?: TokenUsage }): void {
-	target.state = args.state;
-	target.endedAt = args.endedAt;
-	target.lastUpdate = args.endedAt;
-	target.runnerHeartbeatAt = args.endedAt;
-	target.phase = "idle";
-	target.phaseStartedAt = undefined;
-	target.currentTool = undefined;
-	target.currentToolStartedAt = undefined;
-	target.activityState = undefined;
-	target.version = STATUS_JSON_VERSION;
-	if (args.totalTokens) target.totalTokens = args.totalTokens;
+function mergeValue(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+	for (const [key, value] of Object.entries(source)) {
+		if (value === undefined) continue;
+		if (Array.isArray(value)) {
+			const existing = Array.isArray(target[key]) ? [...(target[key] as unknown[])] : [];
+			for (let i = 0; i < value.length; i++) {
+				const next = value[i];
+				if (next && typeof next === "object" && !Array.isArray(next) && existing[i] && typeof existing[i] === "object" && !Array.isArray(existing[i])) {
+					existing[i] = mergeValue({ ...(existing[i] as Record<string, unknown>) }, next as Record<string, unknown>);
+				} else if (next !== undefined) {
+					existing[i] = next;
+				}
+			}
+			target[key] = existing;
+		} else if (value && typeof value === "object" && !Array.isArray(value) && target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
+			target[key] = mergeValue({ ...(target[key] as Record<string, unknown>) }, value as Record<string, unknown>);
+		} else {
+			target[key] = value;
+		}
+	}
+	return target;
 }
 
 export function writeStatusJson(filePath: string, payload: object): void {

@@ -15,6 +15,7 @@ import type {
 } from "../protocol/types.ts";
 import type { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { IntercomBridgeState } from "./intercom-bridge.ts";
+import type { StatusWriter } from "../state/status-writer.ts";
 
 export interface ModelInfo {
 	provider: string;
@@ -148,6 +149,8 @@ export interface ExecutionContextData {
 	controlConfig: ResolvedControlConfig;
 	intercomBridge: IntercomBridgeState;
 	forkReuse?: ForkReuseConfig;
+	/** Single-foreground sync status writer (TERMINAL policy); used by runSinglePath mirror/update. */
+	foregroundStatusWriter?: StatusWriter;
 }
 
 export type ForegroundControlRef = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;

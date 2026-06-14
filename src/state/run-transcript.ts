@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AsyncStatus } from "../protocol/types.ts";
+import type { PersistedRunStatus } from "../protocol/status-types.ts";
 
 export type TranscriptLine =
 	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string; label?: string }
@@ -63,7 +63,7 @@ function sameFileStats(a: CacheFileStat[], b: CacheFileStat[]): boolean {
 	return true;
 }
 
-function discoverSessionFiles(runRecordDir: string, status?: AsyncStatus): Array<{ stepIndex: number; filePath: string }> {
+function discoverSessionFiles(runRecordDir: string, status?: PersistedRunStatus): Array<{ stepIndex: number; filePath: string }> {
 	// 1. Prefer explicit per-step sessionFile recorded in status.json. This is the
 	//    only correct path when fork-reuse runs share the parent's session file
 	//    (which lives outside <runRecordDir>/run-N/).
@@ -132,7 +132,7 @@ function textFromToolResultContent(value: unknown): string {
 	return texts.join("");
 }
 
-function stepInfo(status: AsyncStatus | undefined, stepIndex: number): NonNullable<AsyncStatus["steps"]>[number] | undefined {
+function stepInfo(status: PersistedRunStatus | undefined, stepIndex: number): NonNullable<PersistedRunStatus["steps"]>[number] | undefined {
 	return status?.steps?.[stepIndex];
 }
 
@@ -140,7 +140,7 @@ function isTerminalStepStatus(status: string | undefined): boolean {
 	return status === "complete" || status === "completed" || status === "failed" || status === "skipped" || status === "paused" || status === "lost";
 }
 
-function parseSessionFile(input: { filePath: string; stepIndex: number; status?: AsyncStatus }): TranscriptLine[] {
+function parseSessionFile(input: { filePath: string; stepIndex: number; status?: PersistedRunStatus }): TranscriptLine[] {
 	let raw: string;
 	try {
 		raw = fs.readFileSync(input.filePath, "utf-8");
@@ -249,7 +249,7 @@ export function readRunTranscript(runRecordDir: string): TranscriptLine[] {
 	const statusPath = path.join(runRecordDir, "status.json");
 	// Read status FIRST so discovery can use it to find session files that live
 	// outside <runRecordDir>/run-N/ (e.g. fork-reuse sharing the parent's file).
-	const status = readJsonFile<AsyncStatus>(statusPath);
+	const status = readJsonFile<PersistedRunStatus>(statusPath);
 	const sessionFiles = discoverSessionFiles(runRecordDir, status);
 	const stats = [fileStat(statusPath), ...sessionFiles.map((session) => fileStat(session.filePath))]
 		.filter((stat): stat is CacheFileStat => Boolean(stat));

@@ -21,7 +21,7 @@ import { createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "../protocol/sub
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import type { RunMode } from "../state/run-shape.ts";
 import { tokenUsageFromUsage } from "../state/usage-totals.ts";
-import { writeSyncRunStatusUpdate } from "../state/sync-run-persistence.ts";
+import type { StatusWriter } from "../state/status-writer.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "../state/lineage.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { logger } from "../shared/logger.ts";
@@ -148,13 +148,12 @@ export function applyForegroundProgress(
  * NOT use this: a parallel child persists via StatusWriter.enqueue.
  */
 export function mirrorForegroundProgressToStatus(
-	runId: string,
+	writer: StatusWriter | undefined,
 	firstProgress: AgentProgress | undefined,
 	currentStep: number,
 	steps: unknown,
-	runRecordDir: string | undefined,
 ): void {
-	writeSyncRunStatusUpdate(runId, {
+	writer?.mergePatch({
 		currentStep,
 		lastActivityAt: firstProgress?.lastActivityAt,
 		currentTool: firstProgress?.currentTool,
@@ -162,7 +161,7 @@ export function mirrorForegroundProgressToStatus(
 		phase: firstProgress?.phase,
 		phaseStartedAt: firstProgress?.phaseStartedAt,
 		steps: steps as never,
-	}, {}, runRecordDir);
+	});
 }
 
 export function validationError(message: string): AgentToolResult<Details> {
