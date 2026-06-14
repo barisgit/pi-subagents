@@ -18,12 +18,12 @@ import {
 import {
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
-	type AsyncStatus,
 	type ControlEvent,
 	type ResolvedControlConfig,
 	type SubagentNeedsAttentionPayload,
 	type SubagentState,
 } from "../../src/protocol/types.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 let testsRun = 0;
 afterEach(() => { testsRun++; });
@@ -56,7 +56,7 @@ function emitForegroundNeedsAttention(bus: RecorderBus, event: ControlEvent): vo
 	} satisfies SubagentNeedsAttentionPayload);
 }
 
-function writeStatus(asyncDir: string, status: AsyncStatus, mtimeMs: number): void {
+function writeStatus(asyncDir: string, status: PersistedRunStatus, mtimeMs: number): void {
 	mkdirSync(asyncDir, { recursive: true });
 	const statusPath = join(asyncDir, "status.json");
 	writeFileSync(statusPath, JSON.stringify(status), "utf8");

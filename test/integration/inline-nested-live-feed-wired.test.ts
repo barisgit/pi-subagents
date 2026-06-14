@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { renderSubagentResult } from "../../src/surfaces/render-result.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { type AsyncStatus } from "../../src/protocol/types.ts";
+import { type PersistedRunStatus } from "../../src/protocol/status-types.ts";
 import { RUNS_DIR } from "../../src/shared/runtime-paths.ts";
 
 const ids = ["inline-wired-parent-single", "inline-wired-child-running", "inline-wired-parent-multi", "inline-wired-child-complete"];
@@ -23,7 +23,7 @@ function rmRun(id: string): void {
 
 function writeRun(id: string, opts: {
 	parentRunId?: string;
-	state?: AsyncStatus["state"];
+	state?: PersistedRunStatus["state"];
 	agent?: string;
 	label?: string;
 	startedAt?: number;
@@ -37,7 +37,7 @@ function writeRun(id: string, opts: {
 	const startedAt = opts.startedAt ?? Date.now() - 1_500;
 	const endedAt = opts.endedAt ?? Date.now();
 	const state = opts.state ?? "running";
-	const status: AsyncStatus = {
+	const status: PersistedRunStatus = {
 		runId: id,
 		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
 		mode: "single",

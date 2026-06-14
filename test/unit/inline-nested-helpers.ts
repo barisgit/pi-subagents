@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { type AsyncStatus } from "../../src/protocol/types.ts";
+import { type PersistedRunStatus } from "../../src/protocol/status-types.ts";
 import { RUNS_DIR } from "../../src/shared/runtime-paths.ts";
 
 const registryPath = path.join(os.tmpdir(), `pi-inline-registry-${process.pid}.jsonl`);
@@ -13,7 +13,7 @@ function useInlineRegistry(): void {
 
 export function writeRun(id: string, opts: {
 	parentRunId?: string;
-	state?: AsyncStatus["state"];
+	state?: PersistedRunStatus["state"];
 	agent?: string;
 	label?: string;
 	startedAt?: number;
@@ -27,7 +27,7 @@ export function writeRun(id: string, opts: {
 	const startedAt = opts.startedAt ?? Date.now() - 1_500;
 	const endedAt = opts.endedAt ?? Date.now();
 	const state = opts.state ?? "running";
-	const status: AsyncStatus = {
+	const status: PersistedRunStatus = {
 		runId: id,
 		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
 		mode: "single",

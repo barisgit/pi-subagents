@@ -5,9 +5,7 @@ import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { statusToSummary } from "../../src/state/async-status.ts";
 import { StatusWriter } from "../../src/state/status-writer.ts";
-import { writeSyncRunStatusUpdate } from "../../src/state/sync-run-persistence.ts";
-import { type AsyncStatus } from "../../src/protocol/types.ts";
-import { RUNS_DIR } from "../../src/shared/runtime-paths.ts";
+import { type PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 function createTempDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -17,11 +15,11 @@ function removeTempDir(dir: string): void {
 	fs.rmSync(dir, { recursive: true, force: true });
 }
 
-function readStatus(dir: string): AsyncStatus {
-	return JSON.parse(fs.readFileSync(path.join(dir, "status.json"), "utf-8")) as AsyncStatus;
+function readStatus(dir: string): PersistedRunStatus {
+	return JSON.parse(fs.readFileSync(path.join(dir, "status.json"), "utf-8")) as PersistedRunStatus;
 }
 
-function writeStatus(dir: string, status: AsyncStatus): void {
+function writeStatus(dir: string, status: PersistedRunStatus): void {
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify(status, null, 2), "utf-8");
 }
@@ -44,7 +42,7 @@ function uniqueRunId(prefix: string): string {
 	return `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function newShapeStatus(runId: string): AsyncStatus {
+function newShapeStatus(runId: string): PersistedRunStatus {
 	return {
 		runId,
 		mode: "single",
@@ -80,7 +78,7 @@ function newShapeStatus(runId: string): AsyncStatus {
 	};
 }
 
-function pretendLegacyReader(status: AsyncStatus): { steps: Array<{ live?: Record<string, unknown> } & Record<string, unknown>> } & Record<string, unknown> {
+function pretendLegacyReader(status: PersistedRunStatus): { steps: Array<{ live?: Record<string, unknown> } & Record<string, unknown>> } & Record<string, unknown> {
 	const {
 		runId,
 		parentRunId,
@@ -270,21 +268,20 @@ describe("schema-compat (backward compatible)", () => {
 	it("schema-compat legacy sync status without phase reads with undefined phase", () => {
 		const runId = uniqueRunId("legacy-sync");
 		const runRecordDir = createTempDir("pi-schema-compat-legacy-sync-");
+		const writer = new StatusWriter({ runRecordDir, runId, flushPolicy: "terminal" });
 		try {
-			const legacyStatus: AsyncStatus = {
-				runId,
+			writer.initialize({
 				mode: "single",
 				state: "running",
 				startedAt: 20_000,
-				lastUpdate: 20_100,
+				lastActivityAt: 20_100,
 				runnerHeartbeatAt: 20_100,
 				cwd: "/repo",
 				currentStep: 0,
 				steps: [{ agent: "fixer", status: "running", startedAt: 20_000 }],
-			};
-			writeStatus(runRecordDir, legacyStatus);
+			});
 
-			assert.doesNotThrow(() => writeSyncRunStatusUpdate(runId, { lastUpdate: 20_200, runnerHeartbeatAt: 20_200 }, { flush: true }, runRecordDir));
+			assert.doesNotThrow(() => writer.mergePatch({ lastUpdate: 20_200, runnerHeartbeatAt: 20_200 }, { flush: true }));
 			const status = readStatus(runRecordDir);
 			assert.equal(status.phase, undefined);
 			assert.equal(status.phaseStartedAt, undefined);
@@ -298,8 +295,8 @@ describe("schema-compat (backward compatible)", () => {
 			assert.equal(status.lastUpdate, 20_200);
 			assert.equal(status.runnerHeartbeatAt, 20_200);
 		} finally {
+			writer.dispose();
 			removeTempDir(runRecordDir);
-			removeTempDir(path.join(RUNS_DIR, runId));
 		}
 	});
 

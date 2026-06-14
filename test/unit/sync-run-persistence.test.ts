@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
-import { __setSyncRunStatusUpdateObserverForTest, ensureSyncRunDir, writeSyncRunStatusEnd, writeSyncRunStatusStart, writeSyncRunStatusUpdate } from "../../src/state/sync-run-persistence.ts";
+import { StatusWriter, __setSyncRunStatusUpdateObserverForTest } from "../../src/state/status-writer.ts";
 import { SUBAGENT_CONTROL_EVENT, SUBAGENT_NEEDS_ATTENTION_EVENT } from "../../src/protocol/types.ts";
 
 const restoreFns: Array<() => void> = [];
@@ -126,109 +126,98 @@ function uniqueRunId(prefix: string): string {
 	return `${prefix}-${process.pid}-${Math.random().toString(16).slice(2)}`;
 }
 
-function readStatus(runId: string) {
-	return JSON.parse(fs.readFileSync(path.join(ensureSyncRunDir(runId), "status.json"), "utf-8"));
+// TERMINAL-policy StatusWriter over a temp runRecordDir; the unified writer
+// replaces the deleted writeSyncRunStatus{Start,Update,End} free functions.
+function makeWriter(runIdPrefix: string): StatusWriter {
+	const runRecordDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-run-record-"));
+	return new StatusWriter({ runRecordDir, runId: uniqueRunId(runIdPrefix), flushPolicy: "terminal", throttleMs: 250 });
+}
+
+function readStatus(writer: StatusWriter) {
+	return JSON.parse(fs.readFileSync(path.join(writer.runRecordDir, "status.json"), "utf-8"));
 }
 
 describe("sync run persistence", () => {
 	it("writes start, update, and terminal status", () => {
-		const runId = `sync-persist-${process.pid}-${Date.now()}`;
-		const dir = ensureSyncRunDir(runId);
+		const writer = makeWriter("sync-persist");
 		try {
-			writeSyncRunStatusStart(runId, {
+			writer.initialize({
 				mode: "single",
+				state: "running",
 				startedAt: 100,
+				runnerHeartbeatAt: 100,
 				cwd: "/repo",
 				label: "demo",
 				parentRunId: "parent-a",
-				steps: [{ agent: "fixer", label: "step" }],
+				currentStep: 0,
+				steps: [{ agent: "fixer", label: "step", status: "pending" }],
 			});
-			let status = readStatus(runId);
+			let status = readStatus(writer);
 			assert.equal(status.state, "running");
 			assert.equal(status.parentRunId, "parent-a");
 			assert.equal(status.steps[0].status, "pending");
 
-			writeSyncRunStatusUpdate(runId, { currentTool: "bash", steps: [{ status: "running", currentTool: "bash" }] }, { flush: true });
-			status = readStatus(runId);
+			writer.mergePatch({ currentTool: "bash", steps: [{ status: "running", currentTool: "bash" }] }, { flush: true });
+			status = readStatus(writer);
 			assert.equal(status.currentTool, "bash");
 			assert.equal(status.steps[0].status, "running");
 
-			writeSyncRunStatusEnd(runId, { state: "complete", steps: [{ tokens: { input: 1, output: 2, total: 3 } }] });
-			status = readStatus(runId);
+			writer.finalizeTerminal({ state: "complete", steps: [{ tokens: { input: 1, output: 2, total: 3 } }] });
+			status = readStatus(writer);
 			assert.equal(status.state, "complete");
 			assert.equal(status.steps[0].status, "complete");
 			assert.equal(status.steps[0].tokens.total, 3);
-			assert.ok(fs.existsSync(path.join(dir, "status.json")));
+			assert.ok(fs.existsSync(path.join(writer.runRecordDir, "status.json")));
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 
 	it("clears the live phase chip on terminal end", () => {
 		// A nested sync child that ended mid-`finishing` (submit_result streaming) must not
 		// keep advertising the phase after it completes, or the dashboard row reads
-		// `finishing 19.9s` on a done run. writeSyncRunStatusEnd now mirrors StatusWriter.finalize
+		// `finishing 19.9s` on a done run. finalizeTerminal mirrors StatusWriter.finalize
 		// and resets phase to 'idle'.
-		const runId = `sync-persist-phaseclear-${process.pid}-${Date.now()}`;
-		const dir = ensureSyncRunDir(runId);
+		const writer = makeWriter("sync-persist-phaseclear");
 		try {
-			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "worker" }] });
-			writeSyncRunStatusUpdate(runId, { phase: "finishing", phaseStartedAt: 1000 }, { flush: true });
-			assert.equal(readStatus(runId).phase, "finishing");
-			writeSyncRunStatusEnd(runId, { state: "complete" });
-			assert.equal(readStatus(runId).phase, "idle");
+			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "worker", status: "pending" }] });
+			writer.mergePatch({ phase: "finishing", phaseStartedAt: 1000 }, { flush: true });
+			assert.equal(readStatus(writer).phase, "finishing");
+			writer.finalizeTerminal({ state: "complete" });
+			assert.equal(readStatus(writer).phase, "idle");
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 
 	it("persists live step tokens during the run (pre-finalize)", () => {
 		// The nested-child line / dashboard read step.tokens from the on-disk status.json.
-		// forwardSingleUpdate now threads the live token aggregate into writeSyncRunStatusUpdate
-		// so a still-running sync child shows real tokens, not ~0.
-		const runId = `sync-persist-livetok-${process.pid}-${Date.now()}`;
-		const dir = ensureSyncRunDir(runId);
+		// forwardSingleUpdate threads the live token aggregate through the mirror so a
+		// still-running sync child shows real tokens, not ~0.
+		const writer = makeWriter("sync-persist-livetok");
 		try {
-			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "explorer" }] });
-			writeSyncRunStatusUpdate(runId, {
+			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "explorer", status: "pending" }] });
+			writer.mergePatch({
 				steps: [{ status: "running", tokens: { input: 500, output: 243, total: 743 } }],
 			}, { flush: true });
-			const status = readStatus(runId);
+			const status = readStatus(writer);
 			assert.equal(status.state, "running");
 			assert.equal(status.steps[0].tokens.total, 743);
 			// totalTokens stays absent on a live step patch; the reader sums steps.
 			assert.equal(status.totalTokens, undefined);
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 
 	it("defaults end state to complete", () => {
-		const runId = `sync-persist-default-${process.pid}-${Date.now()}`;
-		const dir = ensureSyncRunDir(runId);
+		const writer = makeWriter("sync-persist-default");
 		try {
-			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "worker" }] });
-			writeSyncRunStatusEnd(runId, {});
-			assert.equal(readStatus(runId).state, "complete");
+			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "worker", status: "pending" }] });
+			writer.finalizeTerminal({});
+			assert.equal(readStatus(writer).state, "complete");
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("also mirrors status.json to runRecordDir when provided", () => {
-		const runId = `sync-persist-mirror-${process.pid}-${Date.now()}`;
-		const dir = ensureSyncRunDir(runId);
-		const runRecordDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-run-record-"));
-		try {
-			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "worker" }] }, runRecordDir);
-			writeSyncRunStatusUpdate(runId, { currentTool: "read" }, { flush: true }, runRecordDir);
-			writeSyncRunStatusEnd(runId, { state: "complete" }, runRecordDir);
-			const mirrored = JSON.parse(fs.readFileSync(path.join(runRecordDir, "status.json"), "utf-8"));
-			assert.equal(mirrored.state, "complete");
-			assert.equal(mirrored.currentTool, undefined);
-		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
-			fs.rmSync(runRecordDir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 });
@@ -236,52 +225,52 @@ describe("sync run persistence", () => {
 describe("phase", () => {
 	it("sync-write-includes-phase", (t) => {
 		t.mock.timers.enable({ apis: ["Date"] });
-		const runId = uniqueRunId("sync-phase-write");
-		const dir = ensureSyncRunDir(runId);
+		const writer = makeWriter("sync-phase-write");
 		try {
-			writeSyncRunStatusStart(runId, { mode: "single", startedAt: Date.now(), steps: [{ agent: "worker" }] });
+			writer.initialize({ mode: "single", state: "running", startedAt: Date.now(), steps: [{ agent: "worker", status: "pending" }] });
 			t.mock.timers.tick(10);
 			const before = Date.now();
-			writeSyncRunStatusUpdate(runId, { phase: "thinking", phaseStartedAt: 5000 }, { flush: true });
+			writer.mergePatch({ phase: "thinking", phaseStartedAt: 5000 }, { flush: true });
 
-			const status = readStatus(runId);
+			const status = readStatus(writer);
 			assert.equal(status.phase, "thinking");
 			assert.equal(status.phaseStartedAt, 5000);
 			assert.ok(status.runnerHeartbeatAt >= before);
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 
 	it("runner-heartbeat-honors-patch", () => {
-		const runId = uniqueRunId("sync-phase-heartbeat");
-		const dir = ensureSyncRunDir(runId);
+		const writer = makeWriter("sync-phase-heartbeat");
 		try {
-			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "worker" }] });
-			writeSyncRunStatusUpdate(runId, { runnerHeartbeatAt: 12345 }, { flush: true });
+			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "worker", status: "pending" }] });
+			writer.mergePatch({ runnerHeartbeatAt: 12345 }, { flush: true });
 
-			assert.equal(readStatus(runId).runnerHeartbeatAt, 12345);
+			assert.equal(readStatus(writer).runnerHeartbeatAt, 12345);
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 
 	it("min-update-interval-floor", (t) => {
+		// Leading-edge throttle is EARLY-RETURN-WITHOUT-APPLY (data-drop): a patch
+		// inside the throttle window never touches the in-memory payload or disk, so
+		// the file remains byte-equal to the prior accepted write.
 		t.mock.timers.enable({ apis: ["Date"] });
-		const runId = uniqueRunId("sync-phase-floor");
-		const dir = ensureSyncRunDir(runId);
+		const writer = makeWriter("sync-phase-floor");
 		try {
-			writeSyncRunStatusStart(runId, { mode: "single", startedAt: Date.now(), steps: [{ agent: "worker" }] });
+			writer.initialize({ mode: "single", state: "running", startedAt: Date.now(), steps: [{ agent: "worker", status: "pending" }] });
 			t.mock.timers.tick(1000);
-			writeSyncRunStatusUpdate(runId, { phase: "thinking", phaseStartedAt: 1000 });
-			const first = readStatus(runId);
+			writer.mergePatch({ phase: "thinking", phaseStartedAt: 1000 });
+			const first = readStatus(writer);
 
 			t.mock.timers.tick(100);
-			writeSyncRunStatusUpdate(runId, { phase: "streaming_text", phaseStartedAt: 1100, currentTool: "read" });
+			writer.mergePatch({ phase: "streaming_text", phaseStartedAt: 1100, currentTool: "read" });
 
-			assert.deepEqual(readStatus(runId), first);
+			assert.deepEqual(readStatus(writer), first);
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 
@@ -345,26 +334,24 @@ describe("phase", () => {
 
 			assert.equal(result.isError, undefined);
 			assert.ok(calls.some((call) => call.patch.phase === "thinking" && typeof call.patch.phaseStartedAt === "number"));
-			for (const call of calls) fs.rmSync(ensureSyncRunDir(call.runId), { recursive: true, force: true });
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
 	});
 
 	it("preservation-across-partial", () => {
-		const runId = uniqueRunId("sync-phase-preserve");
-		const dir = ensureSyncRunDir(runId);
+		const writer = makeWriter("sync-phase-preserve");
 		try {
-			writeSyncRunStatusStart(runId, { mode: "single", steps: [{ agent: "worker" }] });
-			writeSyncRunStatusUpdate(runId, { phase: "thinking", phaseStartedAt: 9000 }, { flush: true });
-			writeSyncRunStatusUpdate(runId, { currentTool: "read" }, { flush: true });
+			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "worker", status: "pending" }] });
+			writer.mergePatch({ phase: "thinking", phaseStartedAt: 9000 }, { flush: true });
+			writer.mergePatch({ currentTool: "read" }, { flush: true });
 
-			const status = readStatus(runId);
+			const status = readStatus(writer);
 			assert.equal(status.phase, "thinking");
 			assert.equal(status.phaseStartedAt, 9000);
 			assert.equal(status.currentTool, "read");
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
 		}
 	});
 });

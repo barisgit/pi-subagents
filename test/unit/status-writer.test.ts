@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { StatusWriter, __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
 import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
-import type { AsyncJobState, AsyncStatus, SubagentState } from "../../src/protocol/types.ts";
+import type { AsyncJobState, SubagentState } from "../../src/protocol/types.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -191,7 +192,7 @@ describe("StatusWriter", () => {
 		// status.totalTokens stays absent on a live step; the reader derives the run
 		// total by summing steps, so the nested-line token count is non-zero.
 		assert.equal(status.totalTokens, undefined);
-		const summary = statusToSummary(dir, status as unknown as AsyncStatus);
+		const summary = statusToSummary(dir, status as unknown as PersistedRunStatus);
 		const derived = summary.totalTokens?.total ?? summary.steps.reduce((s, st) => s + (st.tokens?.total ?? 0), 0);
 		assert.equal(derived, 743_000);
 	});
@@ -285,7 +286,7 @@ describe("phase", () => {
 		assert.equal(live?.phase, "streaming_text");
 		assert.equal(live?.phaseStartedAt, 7000);
 
-		const summary = statusToSummary(dir, status as unknown as AsyncStatus);
+		const summary = statusToSummary(dir, status as unknown as PersistedRunStatus);
 		assert.equal(summary.steps[0]?.phase, "streaming_text");
 		assert.equal(summary.steps[0]?.phaseStartedAt, 7000);
 	});
@@ -327,7 +328,7 @@ describe("phase", () => {
 		const { createAsyncJobTracker } = await import("../../src/surfaces/async-job-tracker.ts");
 
 		const legacyDir = tempDir("pi-status-phase-legacy-");
-		const legacyStatus: AsyncStatus = {
+		const legacyStatus: PersistedRunStatus = {
 			runId: "legacy-run",
 			mode: "single",
 			state: "running",
@@ -348,7 +349,7 @@ describe("phase", () => {
 
 		const rawStatus = JSON.parse(
 			(await import("node:fs")).readFileSync((await import("node:path")).join(dir, "status.json"), "utf-8")
-		) as import("../../src/protocol/types.ts").AsyncStatus;
+		) as import("../../src/protocol/status-types.ts").PersistedRunStatus;
 
 		const summary = statusToSummary(dir, rawStatus);
 		assert.equal(summary.phase, "tool_running");

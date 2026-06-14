@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { inspectSubagentStatus } from "../../src/state/run-status.ts";
 import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
-import type { AsyncStatus } from "../../src/protocol/types.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 const tmpRoots: string[] = [];
 const originalHome = process.env.HOME;
@@ -21,7 +21,7 @@ function tmpRegistry(): string {
 function appendStatusRun(root: string, entry: {
 	runId: string;
 	agentName: string;
-	state: AsyncStatus["state"];
+	state: PersistedRunStatus["state"];
 	startedAt: number;
 	endedAt?: number;
 	parentRunId?: string;
@@ -32,7 +32,7 @@ function appendStatusRun(root: string, entry: {
 }): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
-	const status: AsyncStatus = {
+	const status: PersistedRunStatus = {
 		runId: entry.runId,
 		mode: entry.mode ?? "single",
 		state: entry.state,

@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { type AsyncRunSummary } from "../../src/state/async-status.ts";
 import { buildRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
 import { type ForegroundRunSummary } from "../../src/surfaces/subagents-status.ts";
-import type { AsyncStatus } from "../../src/protocol/types.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 const theme = { fg: (_name: string, text: string) => text, bg: (_name: string, text: string) => text } as never;
 
@@ -26,7 +26,7 @@ function syncRun(id: string, asyncDir: string): ForegroundRunSummary {
 }
 
 function writeRunRecord(dir: string, id: string): void {
-	const status: AsyncStatus = {
+	const status: PersistedRunStatus = {
 		runId: id,
 		mode: "single",
 		state: "running",

@@ -5,11 +5,12 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { statusToSummary } from "../../src/state/async-status.ts";
 import { foregroundRunsFromState } from "../../src/surfaces/subagents-status.ts";
-import { getSubagentIdentityEnv, type AsyncStatus, type SubagentState } from "../../src/protocol/types.ts";
+import { getSubagentIdentityEnv, type SubagentState } from "../../src/protocol/types.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 describe("parent run id plumbing", () => {
-	it("copies parentRunId from AsyncStatus to AsyncRunSummary", () => {
-		const status: AsyncStatus = {
+	it("copies parentRunId from PersistedRunStatus to AsyncRunSummary", () => {
+		const status: PersistedRunStatus = {
 			runId: "child-1",
 			parentRunId: "parent-1",
 			mode: "single",

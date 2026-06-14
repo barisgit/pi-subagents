@@ -5,14 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { readRunTranscript } from "../../src/state/run-transcript.ts";
-import type { AsyncStatus } from "../../src/protocol/types.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 function makeRunDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), `run-transcript-${randomUUID()}-`));
 }
 
-function writeStatus(dir: string, patch: Partial<AsyncStatus> = {}): void {
-	const status: AsyncStatus = {
+function writeStatus(dir: string, patch: Partial<PersistedRunStatus> = {}): void {
+	const status: PersistedRunStatus = {
 		runId: "run-a",
 		mode: "single",
 		state: "complete",
