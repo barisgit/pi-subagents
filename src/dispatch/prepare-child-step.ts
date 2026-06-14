@@ -3,7 +3,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import type { ResolvedSkill } from "../shared/skills.ts";
-import { buildModelCandidates, resolveModelRef } from "./model-fallback.ts";
+import { buildModelCandidates, normalizeAvailableModels, resolveModelRef } from "./model-fallback.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../shared/skills.ts";
 import { appendSubmitResultSystemInstruction } from "../protocol/submit-result.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
@@ -80,7 +80,7 @@ export function prepareChildStep(input: {
 	const modelRefs = buildModelCandidates(
 		input.modelOverride ?? agentConfig.model,
 		agentConfig.fallbackModels,
-		availableModels.map((model) => ({ provider: model.provider, id: model.id, fullId: `${model.provider}/${model.id}` })),
+		normalizeAvailableModels(availableModels),
 		data.ctx.model?.provider,
 	);
 	const primaryModelRef = applyThinkingSuffix(modelRefs[0], agentConfig.thinking);

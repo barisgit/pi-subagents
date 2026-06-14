@@ -8,20 +8,21 @@ import { type AgentConfig, type AgentScope, resolveAgentColor } from "../shared/
 import { ensureArtifactsDir, getArtifactPaths, getArtifactsDir, writeArtifact, writeMetadata } from "../shared/artifacts.ts";
 import { resolveExecutionAgentScope } from "./agent-scope.ts";
 import { handleManagementAction } from "../surfaces/agent-management.ts";
-import { resolveModelCandidate } from "./model-fallback.ts";
+import { normalizeAvailableModels, resolveModelCandidate } from "./model-fallback.ts";
 import { recordRun } from "../state/run-history.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "../shared/skills.ts";
 import { createForkContextResolver } from "./fork-context.ts";
 import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, type StatusPatch, ChildAgentRegistry, dispatchAsyncChild, runChildAgent } from "./in-process-executor.ts";
 import { prepareChildStep } from "./prepare-child-step.ts";
-import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ForegroundControlRef, InternalSubagentParams, ModelInfo, TaskParam } from "./executor-types.ts";
+import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ForegroundControlRef, InternalSubagentParams, TaskParam } from "./executor-types.ts";
 export type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ForegroundControlRef, ModelInfo, TaskParam } from "./executor-types.ts";
 import {
 	addUsageInto,
 	applyForegroundProgress,
 	asyncStartedResult,
 	batchToNotifyPolicy,
+	buildAsyncAggregateCompletePayload,
 	buildParallelModeError,
 	buildParallelWorktreeTaskCwdError,
 	createForegroundControlNotifier,
@@ -36,6 +37,7 @@ import {
 	resolveDispatchRootRunId,
 	resolveDispatchRootSessionId,
 	safeEmit,
+	singleResultToChildAgentResult,
 	sumUsages,
 	tokenUsageFromResult,
 	validationError,
@@ -59,6 +61,7 @@ export {
 	resolveDispatchRootRunId,
 	resolveDispatchRootSessionId,
 	safeEmit,
+	singleResultToChildAgentResult,
 	sumUsages,
 	tokenUsageFromResult,
 	validationError,
@@ -567,11 +570,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 
 	const currentProvider = ctx.model?.provider;
-	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({
-		provider: m.provider,
-		id: m.id,
-		fullId: `${m.provider}/${m.id}`,
-	}));
+	const availableModels = normalizeAvailableModels(ctx.modelRegistry.getAvailable());
 	let task = params.task ?? "";
 	let modelOverride: string | undefined = resolveModelCandidate(
 		(params.model as string | undefined) ?? agentConfig.model,
@@ -1333,30 +1332,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								layer0: { runId: prepared.runId, runRecordDir: prepared.runRecordDir, sessionFile: prepared.sessionFile, rootRunId: groupRootRunId },
 								onLayer0StatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
 							});
-							return {
-								runId: prepared.runId,
-								stepIndex: 0,
-								state: result.interrupted ? "interrupted" : result.exitCode === 0 ? "complete" : "failed",
-								exitCode: result.exitCode === 0 ? 0 : 1,
-								outputText: getSingleResultOutput(result),
-								toolCallCount: result.progressSummary?.toolCount ?? 0,
-								toolResultCount: 0,
-								toolErrorCount: 0,
-								durationMs: result.progressSummary?.durationMs ?? 0,
-								startedAt: Date.now() - (result.progressSummary?.durationMs ?? 0),
-								endedAt: Date.now(),
-								sessionFile: result.sessionFile ?? prepared.sessionFile,
-								...(result.shareUrl ? { shareUrl: result.shareUrl } : {}),
-								...(result.error ? { error: { message: result.error } } : {}),
-								usage: {
-									input: result.usage.input,
-									output: result.usage.output,
-									cacheRead: result.usage.cacheRead ?? 0,
-									cacheWrite: result.usage.cacheWrite ?? 0,
-									cost: result.usage.cost ?? 0,
-									turns: result.usage.turns ?? 0,
-								},
-							};
+							return singleResultToChildAgentResult(result, prepared);
 						},
 						onLifecycle: effectiveAsync ? (event) => {
 							if (event.type === "run.started") {
@@ -1456,26 +1432,27 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						durationMs: r.progressSummary?.durationMs,
 						sessionFile: r.sessionFile,
 					}));
-					safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+					safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, buildAsyncAggregateCompletePayload({
 						id: group.runId,
 						runId: group.runId,
-						...(parentRunId ? { parentRunId } : {}),
+						parentRunId,
 						rootRunId: groupRootRunId,
 						notifyPolicy: "each",
-						kind: "workflow",
 						success,
 						agent: "workflow",
-						agents: ordered.map(({ result }) => result.agent).join(","),
 						summary: summary ?? "",
 						state: success ? "complete" : "failed",
-						timestamp: Date.now(),
 						results: children,
 						children,
 						total: childResults.length,
 						completed: childResults.filter(({ result }) => result.exitCode === 0 && !result.interrupted).length,
 						asyncDir: group.runRecordDir,
 						metadata: undefined,
-					});
+						workflowFields: {
+							kind: "workflow",
+							agents: ordered.map(({ result }) => result.agent).join(","),
+						},
+					}));
 				},
 			};
 		},

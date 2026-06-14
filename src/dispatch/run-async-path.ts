@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type AgentConfig, resolveAgentColor } from "../shared/agents.ts";
-import { resolveModelCandidate } from "./model-fallback.ts";
+import { normalizeAvailableModels, resolveModelCandidate } from "./model-fallback.ts";
 import { normalizeSkillInput } from "../shared/skills.ts";
 import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, dispatchAsyncChild } from "./in-process-executor.ts";
 import { StatusWriter } from "../state/status-writer.ts";
@@ -22,11 +22,12 @@ import {
 	wrapForkTask,
 } from "../protocol/types.ts";
 import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
-import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, ModelInfo, TaskParam } from "./executor-types.ts";
+import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, TaskParam } from "./executor-types.ts";
 import {
 	addUsageInto,
 	asyncStartedResult,
 	batchToNotifyPolicy,
+	buildAsyncAggregateCompletePayload,
 	buildParallelModeError,
 	buildParallelWorktreeTaskCwdError,
 	emitRunAnchor,
@@ -59,7 +60,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 	}
 
 	const runId = data.runId;
-	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({ provider: m.provider, id: m.id, fullId: `${m.provider}/${m.id}` }));
+	const availableModels = normalizeAvailableModels(ctx.modelRegistry.getAvailable());
 	const currentProvider = ctx.model?.provider;
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	const parentRunId = resolveDispatchParentRunId(ctx);
@@ -247,32 +248,33 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						}];
 					})
 					.sort((a, b) => a.stepIndex - b.stepIndex);
-				safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+				safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, buildAsyncAggregateCompletePayload({
 					id: groupRunId,
 					runId: groupRunId,
-					...(parentRunId ? { parentRunId } : {}),
+					parentRunId,
 					rootRunId: groupRootRunId,
 					notifyPolicy,
 					success: finalResult?.state === "complete",
 					agent: steps.map(({ step }) => step.agentName).join(","),
 					summary: finalResult?.outputText ?? "",
-					exitCode: finalResult?.exitCode,
 					state: finalResult?.state,
-					durationMs: finalResult?.durationMs,
-					sessionFile: finalResult?.sessionFile,
-					shareUrl: finalResult?.shareUrl,
-					timestamp: Date.now(),
-					result: finalResult,
 					results: childResults,
 					children: childResults,
-					batch: params.batch === true,
-					...(params.batch === true ? { batchId: groupRunId } : {}),
 					total: childResults.length,
 					completed: childResults.filter((child) => child.state === "complete").length,
-					totalUsage,
 					asyncDir: group.runRecordDir,
 					metadata: params.metadata,
-				});
+					syncFields: {
+						exitCode: finalResult?.exitCode,
+						durationMs: finalResult?.durationMs,
+						sessionFile: finalResult?.sessionFile,
+						shareUrl: finalResult?.shareUrl,
+						result: finalResult,
+						totalUsage,
+						batch: params.batch === true,
+						batchId: groupRunId,
+					},
+				}));
 			} catch (err) {
 				logger.error("finalizeAsync: layer0 parallel threw", err instanceof Error ? err : new Error(String(err)), { runId: groupRunId });
 			} finally {
@@ -418,32 +420,33 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						sessionFile: r.sessionFile,
 					};
 				});
-				safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+				safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, buildAsyncAggregateCompletePayload({
 					id: runId,
 					runId,
-					...(parentRunId ? { parentRunId } : {}),
+					parentRunId,
 					rootRunId,
 					notifyPolicy: batchToNotifyPolicy(params.batch),
 					success: finalResult?.state === "complete",
-				agent: completeAgent,
-				summary: finalResult?.outputText ?? "",
-				exitCode: finalResult?.exitCode,
-				state: finalResult?.state,
-				durationMs: finalResult?.durationMs,
-				sessionFile: finalResult?.sessionFile,
-				shareUrl: finalResult?.shareUrl,
-				timestamp: Date.now(),
-				result: finalResult,
-				results: childResults,
-				children: childResults,
-				batch: params.batch === true,
-				...(params.batch === true ? { batchId: runId } : {}),
-				total: childResults.length,
-				completed: childResults.filter((child) => child.state === "complete").length,
-				totalUsage,
-				asyncDir: runRecordDir,
-				metadata: params.metadata,
-			});
+					agent: completeAgent,
+					summary: finalResult?.outputText ?? "",
+					state: finalResult?.state,
+					results: childResults,
+					children: childResults,
+					total: childResults.length,
+					completed: childResults.filter((child) => child.state === "complete").length,
+					asyncDir: runRecordDir,
+					metadata: params.metadata,
+					syncFields: {
+						exitCode: finalResult?.exitCode,
+						durationMs: finalResult?.durationMs,
+						sessionFile: finalResult?.sessionFile,
+						shareUrl: finalResult?.shareUrl,
+						result: finalResult,
+						totalUsage,
+						batch: params.batch === true,
+						batchId: runId,
+					},
+				}));
 		} catch (err) {
 			logger.error("finalizeAsync: threw", err instanceof Error ? err : new Error(String(err)), { runId });
 		} finally {

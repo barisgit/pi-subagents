@@ -16,6 +16,10 @@ export interface ModelAttemptSummary {
 	usage?: Usage;
 }
 
+export function normalizeAvailableModels(models: Array<{ provider: string; id: string }>): ModelInfo[] {
+	return models.map((model) => ({ provider: model.provider, id: model.id, fullId: `${model.provider}/${model.id}` }));
+}
+
 export function splitThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
 	const colonIdx = model.lastIndexOf(":");
 	if (colonIdx === -1) return { baseModel: model, thinkingSuffix: "" };

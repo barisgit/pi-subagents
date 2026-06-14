@@ -15,6 +15,8 @@ import {
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
 } from "../protocol/types.ts";
 import type { ExecutionContextData, ExecutorDeps, ForegroundControlRef, InternalSubagentParams } from "./executor-types.ts";
+import type { ChildAgentResult } from "../protocol/status-types.ts";
+import { getSingleResultOutput } from "../shared/utils.ts";
 import { resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
 import { formatControlInterruptReason, formatControlIntercomMessage, formatControlNoticeMessage, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
@@ -346,4 +348,103 @@ export function buildParallelWorktreeTaskCwdError(
 	const conflict = findWorktreeTaskCwdConflict(tasks, sharedCwd);
 	if (!conflict) return undefined;
 	return formatWorktreeTaskCwdConflict(conflict, sharedCwd);
+}
+
+export function buildAsyncAggregateCompletePayload(params: {
+	id: string;
+	runId: string;
+	parentRunId?: string;
+	rootRunId: string;
+	notifyPolicy: "rollup" | "each";
+	success: boolean;
+	agent: string;
+	summary: string;
+	state: string | undefined;
+	results: unknown[];
+	children: unknown[];
+	total: number;
+	completed: number;
+	asyncDir: string;
+	metadata: SubagentMetadata | undefined;
+	/** Present only for the A/B aggregate (parallel-group / non-layer0 async) shape. */
+	syncFields?: {
+		exitCode: number | undefined;
+		durationMs: number | undefined;
+		sessionFile: string | undefined;
+		shareUrl: string | undefined;
+		result: unknown;
+		totalUsage: unknown;
+		batch: boolean;
+		batchId: string;
+	};
+	/** Present only for the C (workflow) shape. */
+	workflowFields?: {
+		kind: "workflow";
+		agents: string;
+	};
+}): Record<string, unknown> {
+	const sync = params.syncFields;
+	const workflow = params.workflowFields;
+	return {
+		id: params.id,
+		runId: params.runId,
+		...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
+		rootRunId: params.rootRunId,
+		notifyPolicy: params.notifyPolicy,
+		...(workflow ? { kind: workflow.kind, agents: workflow.agents } : {}),
+		success: params.success,
+		agent: params.agent,
+		summary: params.summary,
+		...(sync
+			? {
+					exitCode: sync.exitCode,
+					durationMs: sync.durationMs,
+					sessionFile: sync.sessionFile,
+					shareUrl: sync.shareUrl,
+				}
+			: {}),
+		state: params.state,
+		timestamp: Date.now(),
+		...(sync ? { result: sync.result } : {}),
+		results: params.results,
+		children: params.children,
+		...(sync
+			? {
+					batch: sync.batch,
+					...(sync.batch ? { batchId: sync.batchId } : {}),
+				}
+			: {}),
+		total: params.total,
+		completed: params.completed,
+		...(sync ? { totalUsage: sync.totalUsage } : {}),
+		asyncDir: params.asyncDir,
+		metadata: params.metadata,
+	};
+}
+
+export function singleResultToChildAgentResult(result: SingleResult, prepared: { runId: string; sessionFile: string }): ChildAgentResult {
+	return {
+		runId: prepared.runId,
+		stepIndex: 0,
+		state: result.interrupted ? "interrupted" : result.exitCode === 0 ? "complete" : "failed",
+		exitCode: result.exitCode === 0 ? 0 : 1,
+		outputText: getSingleResultOutput(result),
+		toolCallCount: result.progressSummary?.toolCount ?? 0,
+		toolResultCount: 0,
+		toolErrorCount: 0,
+		durationMs: result.progressSummary?.durationMs ?? 0,
+		startedAt: Date.now() - (result.progressSummary?.durationMs ?? 0),
+		endedAt: Date.now(),
+		sessionFile: result.sessionFile ?? prepared.sessionFile,
+		...(result.shareUrl ? { shareUrl: result.shareUrl } : {}),
+		...(result.error ? { error: { message: result.error } } : {}),
+		usage: {
+			input: result.usage.input,
+			output: result.usage.output,
+			cacheRead: result.usage.cacheRead ?? 0,
+			cacheWrite: result.usage.cacheWrite ?? 0,
+			cost: result.usage.cost ?? 0,
+			turns: result.usage.turns ?? 0,
+		},
+	};
 }

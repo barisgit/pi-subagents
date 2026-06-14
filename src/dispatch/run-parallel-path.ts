@@ -2,7 +2,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
-import { resolveModelCandidate } from "./model-fallback.ts";
+import { normalizeAvailableModels, resolveModelCandidate } from "./model-fallback.ts";
 import { aggregateParallelOutputs, mapConcurrent } from "./parallel-utils.ts";
 import { recordRun } from "../state/run-history.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
@@ -32,12 +32,13 @@ import {
 	formatWorktreeDiffSummary,
 	type WorktreeSetup,
 } from "./worktree.ts";
-import type { ExecutionContextData, ExecutorDeps, ModelInfo, TaskParam } from "./executor-types.ts";
+import type { ExecutionContextData, ExecutorDeps, TaskParam } from "./executor-types.ts";
 import {
 	buildParallelModeError,
 	buildParallelWorktreeTaskCwdError,
 	createForegroundControlNotifier,
 	resolveDispatchRootSessionId,
+	singleResultToChildAgentResult,
 } from "./executor-helpers.ts";
 import { runInProcessChildStep } from "./child-step-runner.ts";
 
@@ -209,30 +210,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 							progress: mergedProgress,
 						},
 					});
-					return {
-					runId: prepared.runId,
-					stepIndex: 0,
-					state: result.interrupted ? "interrupted" : result.exitCode === 0 ? "complete" : "failed",
-					exitCode: result.exitCode === 0 ? 0 : 1,
-					outputText: getSingleResultOutput(result),
-					toolCallCount: result.progressSummary?.toolCount ?? 0,
-					toolResultCount: 0,
-					toolErrorCount: 0,
-					durationMs: result.progressSummary?.durationMs ?? 0,
-					startedAt: Date.now() - (result.progressSummary?.durationMs ?? 0),
-					endedAt: Date.now(),
-					sessionFile: result.sessionFile ?? prepared.sessionFile,
-					...(result.shareUrl ? { shareUrl: result.shareUrl } : {}),
-					...(result.error ? { error: { message: result.error } } : {}),
-					usage: {
-						input: result.usage.input,
-						output: result.usage.output,
-						cacheRead: result.usage.cacheRead ?? 0,
-						cacheWrite: result.usage.cacheWrite ?? 0,
-						cost: result.usage.cost ?? 0,
-						turns: result.usage.turns ?? 0,
-					},
-							};
+					return singleResultToChildAgentResult(result, prepared);
 						},
 			});
 			await awaitRun(handle);
@@ -298,11 +276,7 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 	}
 
 	const currentProvider = ctx.model?.provider;
-	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({
-		provider: m.provider,
-		id: m.id,
-		fullId: `${m.provider}/${m.id}`,
-	}));
+	const availableModels = normalizeAvailableModels(ctx.modelRegistry.getAvailable());
 	let taskTexts = tasks.map((t) => t.task);
 	const modelOverrides: (string | undefined)[] = tasks.map((t, i) =>
 		resolveModelCandidate(t.model ?? agentConfigs[i]?.model, availableModels, currentProvider),
