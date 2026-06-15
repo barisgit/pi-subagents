@@ -792,9 +792,10 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	// Progress bar: parent-step granularity already computed above as sequenceParentTotal/Ok.
-	// biome-ignore lint/correctness/noConstantCondition: progress bar intentionally disabled (parked behind `false &&`) pending redesign; left in place to preserve the wiring.
+	// Intentionally disabled pending redesign; wiring kept in place behind this flag.
+	const sequenceBarEnabled = false;
 	const sequenceBar =
-		false && sequenceParentTotal > 1
+		sequenceBarEnabled && sequenceParentTotal > 1
 			? buildProgressBar(theme, sequenceParentOk, hasRunning ? 1 : 0, sequenceParentTotal, adaptiveBarWidth())
 			: "";
 	const sequenceBarPrefix = sequenceBar ? `${sequenceBar} ` : "";
