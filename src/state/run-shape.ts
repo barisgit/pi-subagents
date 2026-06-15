@@ -47,9 +47,17 @@ export function describeAgentLabel(
 	if (unique.length === 1) {
 		const name = unique[0]!;
 		const firstColor = agentColors?.find((c): c is string => Boolean(c));
-		return { kind: "uniformParallel", total: agents.length, name, color: firstColor ?? colorByName.get(name) ?? fallbackColor };
+		return {
+			kind: "uniformParallel",
+			total: agents.length,
+			name,
+			color: firstColor ?? colorByName.get(name) ?? fallbackColor,
+		};
 	}
-	return { kind: "mixedParallel", agents: unique.map((name) => ({ name, color: colorByName.get(name) ?? fallbackColor })) };
+	return {
+		kind: "mixedParallel",
+		agents: unique.map((name) => ({ name, color: colorByName.get(name) ?? fallbackColor })),
+	};
 }
 
 export interface ShapeBadgeInput {

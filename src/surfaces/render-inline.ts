@@ -11,7 +11,6 @@ import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.
 import { readAllEntries } from "../state/runs-registry.ts";
 import { formatDuration, formatTokens } from "./formatters.ts";
 
-
 function isTerminalInlineState(state: AsyncRunSummary["state"]): boolean {
 	return state === "complete" || state === "failed" || state === "paused" || state === "lost";
 }
@@ -83,7 +82,7 @@ function childMatchesArgs(child: AsyncRunSummary, args: Record<string, unknown> 
 	// live under run[0], not at the top level. Accept either shape (top-level is used by
 	// some synthetic callers/tests; run[0] is the on-disk dispatch shape).
 	const firstRun = Array.isArray((args as { run?: unknown })?.run)
-		? ((args as { run: Array<Record<string, unknown>> }).run[0])
+		? (args as { run: Array<Record<string, unknown>> }).run[0]
 		: undefined;
 	const agent = argString(args, "agent") ?? argString(firstRun, "agent");
 	const label = argString(args, "label") ?? argString(firstRun, "label");
@@ -92,13 +91,20 @@ function childMatchesArgs(child: AsyncRunSummary, args: Record<string, unknown> 
 	return true;
 }
 
-export function findInlineChildRun(parentRunId: string, args: Record<string, unknown> | undefined, used: Set<string>, spawnedAt?: number): AsyncRunSummary | undefined {
+export function findInlineChildRun(
+	parentRunId: string,
+	args: Record<string, unknown> | undefined,
+	used: Set<string>,
+	spawnedAt?: number,
+): AsyncRunSummary | undefined {
 	const directRunId = argString(args, "runId") ?? argString(args, "id");
 	if (directRunId && !used.has(directRunId)) {
 		const data = readInlineRun(directRunId);
 		if (data?.summary.parentRunId === parentRunId && childMatchesArgs(data.summary, args)) return data.summary;
 	}
-	const candidates = listInlineChildRuns(parentRunId).filter((child) => !used.has(child.id) && childMatchesArgs(child, args));
+	const candidates = listInlineChildRuns(parentRunId).filter(
+		(child) => !used.has(child.id) && childMatchesArgs(child, args),
+	);
 	if (spawnedAt === undefined) return candidates[0];
 	const nearby = candidates
 		.filter((child) => Math.abs(child.startedAt - spawnedAt) <= 60_000)
@@ -107,11 +113,13 @@ export function findInlineChildRun(parentRunId: string, args: Record<string, unk
 }
 
 function inlineRunLabel(summary: AsyncRunSummary, args?: Record<string, unknown>): string {
-	return argString(args, "label")
-		?? summary.label
-		?? summary.steps.find((step) => step.label)?.label
-		?? summary.steps[0]?.agent
-		?? summary.id;
+	return (
+		argString(args, "label") ??
+		summary.label ??
+		summary.steps.find((step) => step.label)?.label ??
+		summary.steps[0]?.agent ??
+		summary.id
+	);
 }
 
 function inlineRunAgent(summary: AsyncRunSummary, args?: Record<string, unknown>): string {
@@ -127,7 +135,9 @@ function inlineTokenCount(summary: AsyncRunSummary): number {
 }
 
 function inlineDuration(summary: AsyncRunSummary): number {
-	const end = isTerminalInlineState(summary.state) ? (summary.endedAt ?? summary.lastUpdate ?? Date.now()) : Date.now();
+	const end = isTerminalInlineState(summary.state)
+		? (summary.endedAt ?? summary.lastUpdate ?? Date.now())
+		: Date.now();
 	return Math.max(0, end - summary.startedAt);
 }
 
@@ -155,14 +165,21 @@ function countCollapsedNested(runId: string): { nested: number; tools: number } 
 	return { nested, tools };
 }
 
-export function renderInlineAsyncToolLine(parentRunId: string, args: Record<string, unknown> | undefined, used = new Set<string>()): string | undefined {
+export function renderInlineAsyncToolLine(
+	parentRunId: string,
+	args: Record<string, unknown> | undefined,
+	used = new Set<string>(),
+): string | undefined {
 	const child = findInlineChildRun(parentRunId, args, used);
 	if (!child) return undefined;
 	used.add(child.id);
 	return `${inlinePrefix(1)} subagent (background): ${inlineRunAgent(child, args)} · ${inlineRunLabel(child, args)} → ${child.id.slice(0, 8)}`;
 }
 
-export function countLiveInlineAsyncChildren(parentRunId: string, tools: Array<{ tool: string; rawArgs?: Record<string, unknown> }>): number {
+export function countLiveInlineAsyncChildren(
+	parentRunId: string,
+	tools: Array<{ tool: string; rawArgs?: Record<string, unknown> }>,
+): number {
 	const used = new Set<string>();
 	let count = 0;
 	for (const tool of tools) {
@@ -180,7 +197,10 @@ export function countLiveInlineAsyncChildren(parentRunId: string, tools: Array<{
  * header to summarise "this parent spawned N sync · M async" without re-expanding
  * each child card (which duplicates info the dashboard already shows).
  */
-export function countInlineChildTally(parentRunId: string, tools: Array<{ tool: string; rawArgs?: Record<string, unknown> }>): { sync: number; async: number } {
+export function countInlineChildTally(
+	parentRunId: string,
+	tools: Array<{ tool: string; rawArgs?: Record<string, unknown> }>,
+): { sync: number; async: number } {
 	const used = new Set<string>();
 	let sync = 0;
 	let async = 0;
@@ -190,7 +210,8 @@ export function countInlineChildTally(parentRunId: string, tools: Array<{ tool: 
 		const child = findInlineChildRun(parentRunId, tool.rawArgs, used);
 		if (!child) continue;
 		used.add(child.id);
-		if (isAsync) async++; else sync++;
+		if (isAsync) async++;
+		else sync++;
 	}
 	return { sync, async };
 }
@@ -210,7 +231,12 @@ export function countInlineChildTally(parentRunId: string, tools: Array<{ tool: 
  * the agent/label, rolled-up tools/tokens/duration, and — while running — what the
  * child is doing now (the phase chip).
  */
-export function renderNestedChild(runId: string, depth = 1, args?: Record<string, unknown>, used = new Set<string>()): string[] {
+export function renderNestedChild(
+	runId: string,
+	depth = 1,
+	args?: Record<string, unknown>,
+	used = new Set<string>(),
+): string[] {
 	const data = readInlineRun(runId);
 	if (!data) return [];
 	const { summary, events } = data;
@@ -227,5 +253,7 @@ export function renderNestedChild(runId: string, depth = 1, args?: Record<string
 	// Running: show the agent and what it's doing now (phase chip), like the async widget.
 	const phase = formatPhase(summary.phase, summary.phaseStartedAt, Date.now(), summary.currentTool);
 	const phasePart = phase ? ` · ${phase}` : "";
-	return [`${inlinePrefix(depth)} ${glyph} ${kind}: ${inlineRunAgent(summary, args)} · ${label} · ${meta}${phasePart}${nestedHint}`];
+	return [
+		`${inlinePrefix(depth)} ${glyph} ${kind}: ${inlineRunAgent(summary, args)} · ${label} · ${meta}${phasePart}${nestedHint}`,
+	];
 }

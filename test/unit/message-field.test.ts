@@ -42,7 +42,11 @@ class FakeAgentSession {
 	}
 
 	async prompt(task: string): Promise<void> {
-		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "done", result: this.getLastAssistantText(), artifacts: [] } });
+		this.messages.push({
+			role: "toolResult",
+			toolName: "submit_result",
+			details: { status: "ok", summary: "done", result: this.getLastAssistantText(), artifacts: [] },
+		});
 		await this.promptImpl(task, this);
 	}
 
@@ -125,7 +129,7 @@ async function execute(cwd: string, params: Record<string, unknown>): Promise<Ex
 
 function text(result: ExecutorResult | null): string {
 	const first = result?.content[0];
-	return first?.type === "text" || first?.text ? first.text ?? "" : "";
+	return first?.type === "text" || first?.text ? (first.text ?? "") : "";
 }
 
 describe("message field", () => {
@@ -167,13 +171,17 @@ describe("message field", () => {
 		assert.deepEqual(seenTasks, ["Shared context for alpha"]);
 	});
 
-
 	it("in-substitution-equals-task resolves {in} like {task}", async () => {
 		const seenTasks: string[] = [];
-		restoreRuntime = installFakeRuntime(["a", "b"].map(() => new FakeAgentSession(async (task, session) => {
-			seenTasks.push(task);
-			session.emit(events.assistantMessage("done") as Record<string, unknown>);
-		})));
+		restoreRuntime = installFakeRuntime(
+			["a", "b"].map(
+				() =>
+					new FakeAgentSession(async (task, session) => {
+						seenTasks.push(task);
+						session.emit(events.assistantMessage("done") as Record<string, unknown>);
+					}),
+			),
+		);
 
 		const result = await execute(tempDir, {
 			run: [

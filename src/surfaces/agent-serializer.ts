@@ -14,10 +14,7 @@ export function serializeAgent(config: AgentConfig): string {
 	lines.push(`name: ${config.name}`);
 	lines.push(`description: ${config.description}`);
 
-	const tools = [
-		...(config.tools ?? []),
-		...(config.mcpDirectTools ?? []).map((tool) => `mcp:${tool}`),
-	];
+	const tools = [...(config.tools ?? []), ...(config.mcpDirectTools ?? []).map((tool) => `mcp:${tool}`)];
 	const toolsValue = joinComma(tools);
 	if (toolsValue) lines.push(`tools: ${toolsValue}`);
 
@@ -44,7 +41,11 @@ export function serializeAgent(config: AgentConfig): string {
 
 	if (config.defaultProgress) lines.push("defaultProgress: true");
 	if (config.interactive) lines.push("interactive: true");
-	if (config.maxSubagentDepth !== undefined && Number.isInteger(config.maxSubagentDepth) && config.maxSubagentDepth >= 0) {
+	if (
+		config.maxSubagentDepth !== undefined &&
+		Number.isInteger(config.maxSubagentDepth) &&
+		config.maxSubagentDepth >= 0
+	) {
 		lines.push(`maxSubagentDepth: ${config.maxSubagentDepth}`);
 	}
 	if (config.disabled !== undefined) lines.push(`disabled: ${config.disabled ? "true" : "false"}`);

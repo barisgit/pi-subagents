@@ -11,7 +11,8 @@ export interface TokenUsage {
 
 function findLatestSessionFile(sessionDir: string): string | null {
 	try {
-		const files = fs.readdirSync(sessionDir)
+		const files = fs
+			.readdirSync(sessionDir)
 			.filter((f) => f.endsWith(".jsonl"))
 			.map((f) => path.join(sessionDir, f));
 		if (files.length === 0) return null;

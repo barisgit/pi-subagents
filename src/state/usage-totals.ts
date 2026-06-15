@@ -20,10 +20,9 @@ function tokenField(value: number | undefined): number {
  */
 export function totalUsageTokens(usage: UsageTokenFields | undefined): number {
 	if (!usage) return 0;
-	return tokenField(usage.input)
-		+ tokenField(usage.output)
-		+ tokenField(usage.cacheRead)
-		+ tokenField(usage.cacheWrite);
+	return (
+		tokenField(usage.input) + tokenField(usage.output) + tokenField(usage.cacheRead) + tokenField(usage.cacheWrite)
+	);
 }
 
 /**
@@ -43,11 +42,13 @@ export function tokenUsageFromUsage(usage: UsageTokenFields | undefined): TokenU
 	const cacheRead = tokenField(usage?.cacheRead);
 	const cacheWrite = tokenField(usage?.cacheWrite);
 	const total = input + output + cacheRead + cacheWrite;
-	return total > 0 ? {
-		input,
-		output,
-		...(cacheRead > 0 ? { cacheRead } : {}),
-		...(cacheWrite > 0 ? { cacheWrite } : {}),
-		total,
-	} : undefined;
+	return total > 0
+		? {
+				input,
+				output,
+				...(cacheRead > 0 ? { cacheRead } : {}),
+				...(cacheWrite > 0 ? { cacheWrite } : {}),
+				total,
+			}
+		: undefined;
 }

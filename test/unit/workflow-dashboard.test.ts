@@ -5,9 +5,18 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatAsyncRunList, readRunViewForEntry } from "../../src/state/async-status.ts";
 import { buildRightLines, buildWorkflowRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
-import { SubagentsStatusComponent, runViewFromRegistryEntry, type LiveRun } from "../../src/surfaces/subagents-status.ts";
+import {
+	SubagentsStatusComponent,
+	runViewFromRegistryEntry,
+	type LiveRun,
+} from "../../src/surfaces/subagents-status.ts";
 import { writeWorkflowScript } from "../../src/workflow/workflow-group-state.ts";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
+import {
+	appendRunEntry,
+	readAllEntries,
+	setRegistryPathForTests,
+	type RunsRegistryEntry,
+} from "../../src/state/runs-registry.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
@@ -56,34 +65,43 @@ function appendNonWorkflowParent(root: string): RunsRegistryEntry {
 	return entry;
 }
 
-function appendWorkflowChild(root: string, entry: {
-	runId: string;
-	parentRunId: string;
-	agentName: string;
-	startedAt: number;
-	phaseIndex: number;
-	phaseTitle: string;
-	parallelGroupId?: string;
-}): RunsRegistryEntry {
+function appendWorkflowChild(
+	root: string,
+	entry: {
+		runId: string;
+		parentRunId: string;
+		agentName: string;
+		startedAt: number;
+		phaseIndex: number;
+		phaseTitle: string;
+		parallelGroupId?: string;
+	},
+): RunsRegistryEntry {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-		runId: entry.runId,
-		mode: "single",
-		state: "complete",
-		startedAt: entry.startedAt,
-		lastUpdate: entry.startedAt + 10,
-		endedAt: entry.startedAt + 10,
-		cwd: root,
-		currentStep: 0,
-		parentRunId: entry.parentRunId,
-		steps: [{
-			agent: entry.agentName,
-			status: "complete",
+	fs.writeFileSync(
+		path.join(runRecordDir, "status.json"),
+		JSON.stringify({
+			runId: entry.runId,
+			mode: "single",
+			state: "complete",
 			startedAt: entry.startedAt,
+			lastUpdate: entry.startedAt + 10,
 			endedAt: entry.startedAt + 10,
-		}],
-	}), "utf8");
+			cwd: root,
+			currentStep: 0,
+			parentRunId: entry.parentRunId,
+			steps: [
+				{
+					agent: entry.agentName,
+					status: "complete",
+					startedAt: entry.startedAt,
+					endedAt: entry.startedAt + 10,
+				},
+			],
+		}),
+		"utf8",
+	);
 	const registryEntry: RunsRegistryEntry = {
 		runId: entry.runId,
 		runRecordDir,
@@ -102,7 +120,11 @@ function appendWorkflowChild(root: string, entry: {
 	return registryEntry;
 }
 
-function setupWorkflowRegistry(): { group: RunsRegistryEntry; children: RunsRegistryEntry[]; entries: RunsRegistryEntry[] } {
+function setupWorkflowRegistry(): {
+	group: RunsRegistryEntry;
+	children: RunsRegistryEntry[];
+	entries: RunsRegistryEntry[];
+} {
 	const root = tmpRegistry();
 	const group = appendWorkflowGroup(root);
 	const children = [
@@ -151,15 +173,20 @@ function stripBorders(line: string): string {
 	return line.replace(/^│/, "").replace(/│$/, "").trim();
 }
 
-function assertWorkflowChildren(actual: Array<{ id: string; phaseIndex?: number; phaseTitle?: string; parallelGroupId?: string }>): void {
+function assertWorkflowChildren(
+	actual: Array<{ id: string; phaseIndex?: number; phaseTitle?: string; parallelGroupId?: string }>,
+): void {
 	const byId = new Map(actual.map((summary) => [summary.id, summary]));
 	assert.deepEqual(
-		["phase-1-a", "phase-1-b", "phase-2-a"].map((id) => byId.get(id) && {
-			id,
-			phaseIndex: byId.get(id)?.phaseIndex,
-			phaseTitle: byId.get(id)?.phaseTitle,
-			parallelGroupId: byId.get(id)?.parallelGroupId,
-		}),
+		["phase-1-a", "phase-1-b", "phase-2-a"].map(
+			(id) =>
+				byId.get(id) && {
+					id,
+					phaseIndex: byId.get(id)?.phaseIndex,
+					phaseTitle: byId.get(id)?.phaseTitle,
+					parallelGroupId: byId.get(id)?.parallelGroupId,
+				},
+		),
 		[
 			{ id: "phase-1-a", phaseIndex: 1, phaseTitle: "inspect", parallelGroupId: "phase-1-parallel" },
 			{ id: "phase-1-b", phaseIndex: 1, phaseTitle: "inspect", parallelGroupId: "phase-1-parallel" },
@@ -190,13 +217,17 @@ describe("workflow dashboard reader overlays", () => {
 		const groupSummary = readRunViewForEntry(group, entries);
 		assert.equal(groupSummary?.workflow, true);
 
-		const childSummaries = children.map((child) => readRunViewForEntry(child, entries)).filter((child): child is NonNullable<typeof child> => Boolean(child));
+		const childSummaries = children
+			.map((child) => readRunViewForEntry(child, entries))
+			.filter((child): child is NonNullable<typeof child> => Boolean(child));
 		assertWorkflowChildren(childSummaries);
 	});
 
 	it("async-status renders workflow groups by phase with bracketed parallel siblings", () => {
 		const { entries } = setupWorkflowRegistry();
-		const summaries = entries.map((entry) => readRunViewForEntry(entry, entries)).filter((summary): summary is NonNullable<typeof summary> => Boolean(summary));
+		const summaries = entries
+			.map((entry) => readRunViewForEntry(entry, entries))
+			.filter((summary): summary is NonNullable<typeof summary> => Boolean(summary));
 
 		const text = formatAsyncRunList(summaries);
 		assert.match(text, /workflow-group \| complete \| workflow \| tasks 3\/3 complete/);
@@ -297,7 +328,10 @@ describe("workflow dashboard reader overlays", () => {
 		writeWorkflowScript(group.runRecordDir, 'const a = await agent("explorer", "inspect");\nreturn a.summary;');
 
 		const groupSummary = runViewFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) }));
+		const runs: LiveRun[] = entries.map((entry) => ({
+			ownership: "foreign",
+			run: runViewFromRegistryEntry(entry, entries),
+		}));
 		const theme = createTestTheme();
 		const lines = buildWorkflowRightLines(theme, groupSummary, 120, runs).join("\n");
 
@@ -327,8 +361,13 @@ describe("workflow dashboard reader overlays", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		writeWorkflowScript(group.runRecordDir, 'await agent("explorer", "x");');
 		const groupSummary = runViewFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) }));
-		const lines = buildRightLines(createTestTheme(), { ownership: "foreign", run: groupSummary }, 120, runs).join("\n");
+		const runs: LiveRun[] = entries.map((entry) => ({
+			ownership: "foreign",
+			run: runViewFromRegistryEntry(entry, entries),
+		}));
+		const lines = buildRightLines(createTestTheme(), { ownership: "foreign", run: groupSummary }, 120, runs).join(
+			"\n",
+		);
 		assert.match(lines, /─ Script ─/, "mutant: buildRightLines must route workflow groups to the workflow pane");
 		assert.match(lines, /─ Steps ─/);
 	});
@@ -349,7 +388,10 @@ describe("workflow dashboard reader overlays", () => {
 	it("workflow group with no script still outlines steps (no transcript fallback noise)", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		const groupSummary = runViewFromRegistryEntry(group, entries);
-		const runs: LiveRun[] = entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) }));
+		const runs: LiveRun[] = entries.map((entry) => ({
+			ownership: "foreign",
+			run: runViewFromRegistryEntry(entry, entries),
+		}));
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, runs).join("\n");
 		assert.doesNotMatch(lines, /─ Script ─/);
 		assert.match(lines, /─ Steps ─/);

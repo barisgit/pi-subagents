@@ -41,15 +41,26 @@ export function loadRunsForAgent(agent: string): RunEntry[] {
 		return [];
 	}
 
-	let lines = raw.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+	let lines = raw
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
 
 	if (lines.length > ROTATE_READ_THRESHOLD) {
 		lines = lines.slice(-ROTATE_KEEP);
-		try { fs.writeFileSync(HISTORY_PATH, `${lines.join("\n")}\n`, "utf-8"); } catch {}
+		try {
+			fs.writeFileSync(HISTORY_PATH, `${lines.join("\n")}\n`, "utf-8");
+		} catch {}
 	}
 
 	return lines
-		.map((line) => { try { return JSON.parse(line) as RunEntry; } catch { return undefined; } })
+		.map((line) => {
+			try {
+				return JSON.parse(line) as RunEntry;
+			} catch {
+				return undefined;
+			}
+		})
 		.filter((entry): entry is RunEntry => entry !== undefined && entry.agent === agent)
 		.reverse();
 }

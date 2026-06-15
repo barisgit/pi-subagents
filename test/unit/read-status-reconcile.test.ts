@@ -7,11 +7,15 @@ import { readStatus } from "../../src/shared/utils.ts";
 
 function createRunDir(status: Record<string, unknown>): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-read-status-reconcile-"));
-	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
-		mode: "single",
-		startedAt: Date.now(),
-		...status,
-	}), "utf-8");
+	fs.writeFileSync(
+		path.join(dir, "status.json"),
+		JSON.stringify({
+			mode: "single",
+			startedAt: Date.now(),
+			...status,
+		}),
+		"utf-8",
+	);
 	return dir;
 }
 

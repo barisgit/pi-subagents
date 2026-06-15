@@ -72,7 +72,9 @@ function taskWithMessage(task: Task, message: string | undefined): Task {
 }
 
 function runTasks(params: SubagentParamsLike): Task[] {
-	return (params.run ?? []).filter((step): step is Task => !Array.isArray(step)).map((task) => taskWithMessage(task, params.message));
+	return (params.run ?? [])
+		.filter((step): step is Task => !Array.isArray(step))
+		.map((task) => taskWithMessage(task, params.message));
 }
 
 function runContext(params: SubagentParamsLike): "fresh" | "fork" | undefined {
@@ -112,25 +114,25 @@ function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<D
 			mode: "single",
 			...(runContext(params) ? { context: runContext(params) } : {}),
 			results: [createPlaceholderResult(agent, task, "running")],
-			progress: [{
-				agent,
-				status: "running",
-				task,
-				recentTools: [],
-				recentOutput: [],
-				toolCount: 0,
-				tokens: 0,
-				durationMs: 0,
-			}],
+			progress: [
+				{
+					agent,
+					status: "running",
+					task,
+					recentTools: [],
+					recentOutput: [],
+					toolCount: 0,
+					tokens: 0,
+					durationMs: 0,
+				},
+			],
 		},
 	};
 }
 
 export function buildSlashInitialResult(requestId: string, params: SubagentParamsLike): SlashMessageDetails {
 	const run = params.run ?? [];
-	const result = run.length > 1
-		? buildParallelInitialResult(params)
-		: buildSingleInitialResult(params);
+	const result = run.length > 1 ? buildParallelInitialResult(params) : buildSingleInitialResult(params);
 	liveSnapshots.set(requestId, { result, version: nextVersion() });
 	finalSnapshots.delete(requestId);
 	return { requestId, result };
@@ -141,9 +143,7 @@ function cloneResultsWithProgress(
 	progress: NonNullable<Details["progress"]> | undefined,
 ): SingleResult[] {
 	return results.map((result, index) => {
-		const nextProgress = progress?.find((entry) => entry.index === index)
-			?? progress?.[index]
-			?? result.progress;
+		const nextProgress = progress?.find((entry) => entry.index === index) ?? progress?.[index] ?? result.progress;
 		return nextProgress ? { ...result, progress: nextProgress } : result;
 	});
 }
@@ -215,9 +215,10 @@ export function resolveSlashMessageDetails(value: unknown): SlashMessageDetails 
 }
 
 export function getSlashRenderableSnapshot(details: SlashMessageDetails): SlashSnapshot {
-	return finalSnapshots.get(details.requestId)
-		?? liveSnapshots.get(details.requestId)
-		?? { result: details.result, version: 0 };
+	return (
+		finalSnapshots.get(details.requestId) ??
+		liveSnapshots.get(details.requestId) ?? { result: details.result, version: 0 }
+	);
 }
 
 export function restoreSlashFinalSnapshots(entries: unknown[]): void {

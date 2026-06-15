@@ -16,24 +16,13 @@ export interface StepOverrides {
 	model?: string;
 }
 
-export function resolveStepBehavior(
-	agentConfig: AgentConfig,
-	stepOverrides: StepOverrides,
-): ResolvedStepBehavior {
-	const output =
-		stepOverrides.output !== undefined
-			? stepOverrides.output
-			: agentConfig.output ?? false;
+export function resolveStepBehavior(agentConfig: AgentConfig, stepOverrides: StepOverrides): ResolvedStepBehavior {
+	const output = stepOverrides.output !== undefined ? stepOverrides.output : (agentConfig.output ?? false);
 
-	const reads =
-		stepOverrides.reads !== undefined
-			? stepOverrides.reads
-			: agentConfig.defaultReads ?? false;
+	const reads = stepOverrides.reads !== undefined ? stepOverrides.reads : (agentConfig.defaultReads ?? false);
 
 	const progress =
-		stepOverrides.progress !== undefined
-			? stepOverrides.progress
-			: agentConfig.defaultProgress ?? false;
+		stepOverrides.progress !== undefined ? stepOverrides.progress : (agentConfig.defaultProgress ?? false);
 
 	let skills: string[] | false;
 	if (stepOverrides.skills === false) {

@@ -8,7 +8,8 @@ const moduleDirs = ["api", "dispatch", "runtime", "state", "surfaces", "workflow
 
 describe("source layout", () => {
 	test("keeps only index.ts at the repository root", () => {
-		const rootTsFiles = fs.readdirSync(repoRoot)
+		const rootTsFiles = fs
+			.readdirSync(repoRoot)
 			.filter((name) => name.endsWith(".ts"))
 			.sort();
 
@@ -17,15 +18,15 @@ describe("source layout", () => {
 
 	test("keeps the expected non-empty src modules", () => {
 		const srcDir = path.join(repoRoot, "src");
-		const actualDirs = fs.readdirSync(srcDir, { withFileTypes: true })
+		const actualDirs = fs
+			.readdirSync(srcDir, { withFileTypes: true })
 			.filter((entry) => entry.isDirectory())
 			.map((entry) => entry.name)
 			.sort();
 
 		assert.deepStrictEqual(actualDirs, [...moduleDirs].sort());
 		for (const dir of moduleDirs) {
-			const tsFiles = fs.readdirSync(path.join(srcDir, dir))
-				.filter((name) => name.endsWith(".ts"));
+			const tsFiles = fs.readdirSync(path.join(srcDir, dir)).filter((name) => name.endsWith(".ts"));
 			assert.ok(tsFiles.length > 0, `${dir} should contain TypeScript files`);
 		}
 	});

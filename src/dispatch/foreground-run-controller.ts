@@ -16,7 +16,12 @@ interface ForegroundRunController {
 	/** Register a step on the control: agent/index identity + interrupt closure. */
 	beginStep(agent: string, index: number, interrupt: (reason?: string) => boolean): void;
 	/** Copy a runner progress snapshot onto the control, then mirror to status. */
-	applyProgress(agent: string, index: number, firstProgress: AgentProgress | undefined, finalOutput: string | undefined): void;
+	applyProgress(
+		agent: string,
+		index: number,
+		firstProgress: AgentProgress | undefined,
+		finalOutput: string | undefined,
+	): void;
 	/** Clear activity when a needs_attention interrupt fires (parallel site). */
 	markNeedsAttention(): void;
 	/** Teardown the active step: clear interrupt and (single only) copy final fields. */

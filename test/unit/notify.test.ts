@@ -3,7 +3,11 @@ import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify from "../../src/surfaces/notify.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_NOTIFY_DELIVERED_EVENT } from "../../src/protocol/types.ts";
+import {
+	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
+	SUBAGENT_NOTIFY_DELIVERED_EVENT,
+} from "../../src/protocol/types.ts";
 
 /**
  * Build a pi.events stand-in whose `on()` returns an unsubscribe function
@@ -137,14 +141,16 @@ describe("registerSubagentNotify", () => {
 			sessionFile: "/tmp/session.jsonl",
 		});
 
-		assert.deepEqual(sent, [{
-			message: {
-				customType: "subagent-notify",
-				content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
-				display: true,
+		assert.deepEqual(sent, [
+			{
+				message: {
+					customType: "subagent-notify",
+					content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
+					display: true,
+				},
+				options: { triggerTurn: true },
 			},
-			options: { triggerTurn: true },
-		}]);
+		]);
 	});
 
 	it("keeps the host notify subscription alive when a child session activates", () => {
@@ -246,7 +252,8 @@ describe("registerSubagentNotify", () => {
 		assert.deepEqual(sent[0], {
 			message: {
 				customType: "subagent-notify",
-				content: "Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
+				content:
+					"Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
 				display: true,
 			},
 			options: { triggerTurn: true },
@@ -299,9 +306,24 @@ describe("registerSubagentNotify", () => {
 	it("batch rollup aggregates time-separated per-run completions by notifyPolicy", () => {
 		const rollup = createPi();
 		for (const child of [
-			{ runId: "00000000-0000-4000-8000-00000000000a", agent: "A", label: "Alpha check", summary: "from child A" },
-			{ runId: "00000000-0000-4000-8000-00000000000b", agent: "B", label: "Bravo check", summary: "from child B" },
-			{ runId: "00000000-0000-4000-8000-00000000000c", agent: "C", label: "Charlie check", summary: "from child C" },
+			{
+				runId: "00000000-0000-4000-8000-00000000000a",
+				agent: "A",
+				label: "Alpha check",
+				summary: "from child A",
+			},
+			{
+				runId: "00000000-0000-4000-8000-00000000000b",
+				agent: "B",
+				label: "Bravo check",
+				summary: "from child B",
+			},
+			{
+				runId: "00000000-0000-4000-8000-00000000000c",
+				agent: "C",
+				label: "Charlie check",
+				summary: "from child C",
+			},
 		]) {
 			rollup.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
 				id: child.runId,
@@ -330,7 +352,15 @@ describe("registerSubagentNotify", () => {
 		});
 
 		assert.equal(rollup.sent.length, 1);
-		const rollupMessage = rollup.sent[0]!.message as { content?: string; details?: { kind?: string; completed?: number; total?: number; children?: Array<{ label?: string; agent?: string; state?: string; runId?: string }> } };
+		const rollupMessage = rollup.sent[0]!.message as {
+			content?: string;
+			details?: {
+				kind?: string;
+				completed?: number;
+				total?: number;
+				children?: Array<{ label?: string; agent?: string; state?: string; runId?: string }>;
+			};
+		};
 		const rollupContent = rollupMessage.content ?? "";
 		assert.ok(rollupContent.startsWith("Background batch completed:"));
 		for (const label of ["Alpha check", "Bravo check", "Charlie check"]) {
@@ -345,7 +375,12 @@ describe("registerSubagentNotify", () => {
 			children: [
 				{ label: "Alpha check", agent: "A", state: "complete", runId: "00000000-0000-4000-8000-00000000000a" },
 				{ label: "Bravo check", agent: "B", state: "complete", runId: "00000000-0000-4000-8000-00000000000b" },
-				{ label: "Charlie check", agent: "C", state: "complete", runId: "00000000-0000-4000-8000-00000000000c" },
+				{
+					label: "Charlie check",
+					agent: "C",
+					state: "complete",
+					runId: "00000000-0000-4000-8000-00000000000c",
+				},
 			],
 		});
 
@@ -365,7 +400,11 @@ describe("registerSubagentNotify", () => {
 			});
 		}
 		assert.equal(each.sent.length, 3);
-		assert.ok(each.sent.every((entry) => ((entry.message as { content?: string }).content ?? "").startsWith("Background task completed:")));
+		assert.ok(
+			each.sent.every((entry) =>
+				((entry.message as { content?: string }).content ?? "").startsWith("Background task completed:"),
+			),
+		);
 
 		const silent = createPi();
 		silent.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
@@ -436,7 +475,10 @@ describe("registerSubagentNotify", () => {
 
 		assert.equal(sent.length, 1, "a workflow completion is exactly one notification");
 		const content = (sent[0].message as { content?: string }).content ?? "";
-		assert.ok(content.includes("**workflow**"), `workflow notification should name the workflow entity, got: ${content}`);
+		assert.ok(
+			content.includes("**workflow**"),
+			`workflow notification should name the workflow entity, got: ${content}`,
+		);
 		assert.ok(content.includes('{ "verified": true }'), "notification must carry the script's return value");
 	});
 
@@ -490,7 +532,11 @@ describe("registerSubagentNotify", () => {
 		// confirmed delivered via message_end before any interrupt.
 		fire("message_end", {
 			type: "message_end",
-			message: { role: "custom", customType: "subagent-notify", content: (sent[0].message as { content?: string }).content },
+			message: {
+				role: "custom",
+				customType: "subagent-notify",
+				content: (sent[0].message as { content?: string }).content,
+			},
 		});
 		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
 

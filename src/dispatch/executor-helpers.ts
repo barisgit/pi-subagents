@@ -14,11 +14,21 @@ import {
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
 } from "../protocol/types.ts";
-import type { ExecutionContextData, ExecutorDeps, ForegroundControlRef, InternalSubagentParams } from "./executor-types.ts";
+import type {
+	ExecutionContextData,
+	ExecutorDeps,
+	ForegroundControlRef,
+	InternalSubagentParams,
+} from "./executor-types.ts";
 import type { ChildAgentResult } from "../protocol/status-types.ts";
 import { getSingleResultOutput } from "../shared/utils.ts";
 import { resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
-import { formatControlInterruptReason, formatControlIntercomMessage, formatControlNoticeMessage, shouldNotifyControlEvent } from "./subagent-control.ts";
+import {
+	formatControlInterruptReason,
+	formatControlIntercomMessage,
+	formatControlNoticeMessage,
+	shouldNotifyControlEvent,
+} from "./subagent-control.ts";
 import { createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import type { RunMode } from "../state/run-shape.ts";
@@ -36,7 +46,9 @@ import { findWorktreeTaskCwdConflict, formatWorktreeTaskCwdConflict } from "./wo
  * legacy/out-of-process callers, but the in-process executor doesn't set env
  * so lineage is the canonical source.
  */
-export function resolveDispatchParentRunId(ctx: { sessionManager?: { getSessionId?: () => string | undefined } }): string | undefined {
+export function resolveDispatchParentRunId(ctx: {
+	sessionManager?: { getSessionId?: () => string | undefined };
+}): string | undefined {
 	const sid = ctx.sessionManager?.getSessionId?.();
 	if (sid) {
 		const lineage = getLineageForSession(sid);
@@ -44,7 +56,10 @@ export function resolveDispatchParentRunId(ctx: { sessionManager?: { getSessionI
 	}
 	return process.env.PI_SUBAGENT_PARENT_RUN_ID;
 }
-export function resolveDispatchRootRunId(ctx: { sessionManager?: { getSessionId?: () => string | undefined } }, runId: string): string {
+export function resolveDispatchRootRunId(
+	ctx: { sessionManager?: { getSessionId?: () => string | undefined } },
+	runId: string,
+): string {
 	const sid = ctx.sessionManager?.getSessionId?.();
 	if (sid) {
 		const lineage = getLineageForSession(sid);
@@ -73,7 +88,13 @@ export function resolveDispatchRootSessionId(
  */
 export function emitRunAnchor(
 	pi: ExtensionAPI,
-	anchor: { runId: string; rootRunId: string; mode: RunMode; source: "sync" | "async"; parentRunId: string | undefined },
+	anchor: {
+		runId: string;
+		rootRunId: string;
+		mode: RunMode;
+		source: "sync" | "async";
+		parentRunId: string | undefined;
+	},
 ): void {
 	if (anchor.parentRunId !== undefined) return;
 	try {
@@ -202,7 +223,11 @@ function emitControlNotification(input: {
 			} satisfies SubagentNeedsAttentionPayload);
 		}
 	}
-	if (input.controlConfig.notifyChannels.includes("intercom") && input.intercomBridge.active && input.intercomBridge.orchestratorTarget) {
+	if (
+		input.controlConfig.notifyChannels.includes("intercom") &&
+		input.intercomBridge.active &&
+		input.intercomBridge.orchestratorTarget
+	) {
 		input.pi.events.emit(SUBAGENT_CONTROL_INTERCOM_EVENT, {
 			...payload,
 			to: input.intercomBridge.orchestratorTarget,
@@ -211,13 +236,17 @@ function emitControlNotification(input: {
 	}
 }
 
-export function createForegroundControlNotifier(data: Pick<ExecutionContextData, "controlConfig" | "intercomBridge">, deps: Pick<ExecutorDeps, "pi">): (event: ControlEvent) => void {
-	return (event) => emitControlNotification({
-		pi: deps.pi,
-		controlConfig: data.controlConfig,
-		intercomBridge: data.intercomBridge,
-		event,
-	});
+export function createForegroundControlNotifier(
+	data: Pick<ExecutionContextData, "controlConfig" | "intercomBridge">,
+	deps: Pick<ExecutorDeps, "pi">,
+): (event: ControlEvent) => void {
+	return (event) =>
+		emitControlNotification({
+			pi: deps.pi,
+			controlConfig: data.controlConfig,
+			intercomBridge: data.intercomBridge,
+			event,
+		});
 }
 
 export function interruptForegroundOnNeedsAttention(
@@ -248,7 +277,12 @@ export function asyncStartedResult(input: {
 	children?: Array<{ runId: string; agent: string; label?: string; stepIndex: number }>;
 }): AgentToolResult<Details> {
 	return {
-		content: [{ type: "text", text: `${input.text}\nState: running\n${formatAsyncStatusHint(input.runId)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
+		content: [
+			{
+				type: "text",
+				text: `${input.text}\nState: running\n${formatAsyncStatusHint(input.runId)}\n${ASYNC_NO_POLL_GUIDANCE}`,
+			},
+		],
 		details: {
 			mode: input.mode,
 			results: [],
@@ -268,7 +302,9 @@ export function buildParallelModeError(message: string): AgentToolResult<Details
 	};
 }
 
-export function tokenUsageFromResult(result: SingleResult): { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number } | undefined {
+export function tokenUsageFromResult(
+	result: SingleResult,
+): { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number } | undefined {
 	return tokenUsageFromUsage(result.usage);
 }
 
@@ -314,7 +350,10 @@ export function sumUsages(...usages: (Usage | undefined)[]): Usage {
 	return total;
 }
 
-export function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
+export function resolveChildTools(
+	agentConfig: AgentConfig,
+	pi: ExtensionAPI,
+): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
 	// Semantics:
 	//   tools frontmatter absent (undefined)  -> no allowlist => session sees ALL tools
 	//   tools frontmatter explicit list       -> allowlist exactly those names
@@ -322,17 +361,17 @@ export function resolveChildTools(agentConfig: AgentConfig, pi: ExtensionAPI): {
 	// Globs/negations were already expanded at registration time via
 	// resolveAgentToolPatterns(discoverAgents(...)) in index.ts, so by the time
 	// we reach here agentConfig.tools is either undefined or a concrete name list.
-	const expanded = agentConfig.tools === undefined
-		? undefined
-		: [...new Set([...agentConfig.tools, SUBMIT_RESULT_TOOL_NAME])];
+	const expanded =
+		agentConfig.tools === undefined ? undefined : [...new Set([...agentConfig.tools, SUBMIT_RESULT_TOOL_NAME])];
 	// A non-delegating agent must never reach a delegation tool, even if its allowlist
 	// (e.g. `*`) expanded to include one. `workflow` spawns child agents exactly like
 	// `subagent`, so both are stripped whenever canDelegate is explicitly false. This is
 	// the process-independent gate for in-process children (the env-based
 	// checkNestedDelegationGuard only covers separate-process dispatch).
-	const activeToolNames = agentConfig.canDelegate === false && expanded !== undefined
-		? expanded.filter((name) => name !== "subagent" && name !== "workflow")
-		: expanded;
+	const activeToolNames =
+		agentConfig.canDelegate === false && expanded !== undefined
+			? expanded.filter((name) => name !== "subagent" && name !== "workflow")
+			: expanded;
 	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
 	const customTools = [
 		...pi.getAllTools().filter((tool) => customToolNames.has(tool.name)),
@@ -422,7 +461,10 @@ export function buildAsyncAggregateCompletePayload(params: {
 	};
 }
 
-export function singleResultToChildAgentResult(result: SingleResult, prepared: { runId: string; sessionFile: string }): ChildAgentResult {
+export function singleResultToChildAgentResult(
+	result: SingleResult,
+	prepared: { runId: string; sessionFile: string },
+): ChildAgentResult {
 	return {
 		runId: prepared.runId,
 		stepIndex: 0,

@@ -1,4 +1,4 @@
-import { AgentSession, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ChildAgentResult, PersistedRunStatus, PersistedRunStep, StatusPatch } from "../protocol/status-types.ts";
 import { applyPatchToStatus } from "../state/status-patch.ts";
 import { statusFromMeta, type StatusMeta } from "../state/status-writer.ts";
@@ -41,7 +41,14 @@ export interface RunViewSeed extends StatusMeta {
 }
 
 function isTerminalState(state: PersistedRunStatus["state"]): boolean {
-	return state === "complete" || state === "failed" || state === "paused" || state === "lost" || state === "interrupted" || state === "skipped";
+	return (
+		state === "complete" ||
+		state === "failed" ||
+		state === "paused" ||
+		state === "lost" ||
+		state === "interrupted" ||
+		state === "skipped"
+	);
 }
 
 export class ChildAgentRegistry {
@@ -50,7 +57,10 @@ export class ChildAgentRegistry {
 	/** In-memory live status mirror, SAME shape as status.json, keyed by runId. */
 	private readonly statuses = new Map<string, PersistedRunStatus & { steps: PersistedRunStep[] }>();
 	/** Hierarchy/dir fields that live on RunView but not PersistedRunStatus. */
-	private readonly viewMeta = new Map<string, { parentSessionId?: string; rootSessionId?: string; asyncDir?: string }>();
+	private readonly viewMeta = new Map<
+		string,
+		{ parentSessionId?: string; rootSessionId?: string; asyncDir?: string }
+	>();
 	/** Terminal-stamp clock per runId; drives the lazy retention sweep. */
 	private readonly terminalAt = new Map<string, number>();
 	private readonly retentionMs: number;
@@ -108,7 +118,7 @@ export class ChildAgentRegistry {
 		if (!controller.signal.aborted) {
 			controller.abort(reason);
 		}
-		await Promise.all([...this.handles.get(runId)?.values() ?? []].map((handle) => handle.abort(reason)));
+		await Promise.all([...(this.handles.get(runId)?.values() ?? [])].map((handle) => handle.abort(reason)));
 	}
 
 	/**

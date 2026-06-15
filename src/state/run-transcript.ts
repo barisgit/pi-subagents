@@ -4,8 +4,24 @@ import type { PersistedRunStatus } from "../protocol/status-types.ts";
 
 export type TranscriptLine =
 	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string; label?: string }
-	| { kind: "tool"; stepIndex: number; toolName: string; argsPreview: string; rawArgs?: Record<string, unknown>; durationMs?: number; ts: number }
-	| { kind: "step-end"; stepIndex: number; agent: string; ts: number; durationMs?: number; tokens?: number; status?: string }
+	| {
+			kind: "tool";
+			stepIndex: number;
+			toolName: string;
+			argsPreview: string;
+			rawArgs?: Record<string, unknown>;
+			durationMs?: number;
+			ts: number;
+	  }
+	| {
+			kind: "step-end";
+			stepIndex: number;
+			agent: string;
+			ts: number;
+			durationMs?: number;
+			tokens?: number;
+			status?: string;
+	  }
 	| { kind: "final-text"; stepIndex: number; agent: string; text: string };
 
 interface CacheFileStat {
@@ -58,12 +74,16 @@ function sameFileStats(a: CacheFileStat[], b: CacheFileStat[]): boolean {
 	for (let i = 0; i < a.length; i++) {
 		const left = a[i]!;
 		const right = b[i]!;
-		if (left.filePath !== right.filePath || left.mtimeMs !== right.mtimeMs || left.size !== right.size) return false;
+		if (left.filePath !== right.filePath || left.mtimeMs !== right.mtimeMs || left.size !== right.size)
+			return false;
 	}
 	return true;
 }
 
-function discoverSessionFiles(runRecordDir: string, status?: PersistedRunStatus): Array<{ stepIndex: number; filePath: string }> {
+function discoverSessionFiles(
+	runRecordDir: string,
+	status?: PersistedRunStatus,
+): Array<{ stepIndex: number; filePath: string }> {
 	// 1. Prefer explicit per-step sessionFile recorded in status.json. This is the
 	//    only correct path when fork-reuse runs share the parent's session file
 	//    (which lives outside <runRecordDir>/run-N/).
@@ -112,11 +132,11 @@ function recordTimestamp(record: Record<string, unknown>): number {
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function rawArgsFrom(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function textFromToolResultContent(value: unknown): string {
@@ -132,15 +152,29 @@ function textFromToolResultContent(value: unknown): string {
 	return texts.join("");
 }
 
-function stepInfo(status: PersistedRunStatus | undefined, stepIndex: number): NonNullable<PersistedRunStatus["steps"]>[number] | undefined {
+function stepInfo(
+	status: PersistedRunStatus | undefined,
+	stepIndex: number,
+): NonNullable<PersistedRunStatus["steps"]>[number] | undefined {
 	return status?.steps?.[stepIndex];
 }
 
 function isTerminalStepStatus(status: string | undefined): boolean {
-	return status === "complete" || status === "completed" || status === "failed" || status === "skipped" || status === "paused" || status === "lost";
+	return (
+		status === "complete" ||
+		status === "completed" ||
+		status === "failed" ||
+		status === "skipped" ||
+		status === "paused" ||
+		status === "lost"
+	);
 }
 
-function parseSessionFile(input: { filePath: string; stepIndex: number; status?: PersistedRunStatus }): TranscriptLine[] {
+function parseSessionFile(input: {
+	filePath: string;
+	stepIndex: number;
+	status?: PersistedRunStatus;
+}): TranscriptLine[] {
 	let raw: string;
 	try {
 		raw = fs.readFileSync(input.filePath, "utf-8");
@@ -183,11 +217,23 @@ function parseSessionFile(input: { filePath: string; stepIndex: number; status?:
 					continue;
 				}
 				if (type === "tool_use" || type === "toolUse" || type === "toolCall") {
-					const id = typeof item.id === "string" ? item.id : typeof item.toolCallId === "string" ? item.toolCallId : "";
+					const id =
+						typeof item.id === "string"
+							? item.id
+							: typeof item.toolCallId === "string"
+								? item.toolCallId
+								: "";
 					const toolName = typeof item.name === "string" ? item.name : "";
 					if (!toolName) continue;
 					const rawArgs = rawArgsFrom(item.input) ?? rawArgsFrom(item.arguments);
-					const entry: TranscriptLine = { kind: "tool", stepIndex: input.stepIndex, toolName, argsPreview: previewArgs(rawArgs), ...(rawArgs ? { rawArgs } : {}), ts };
+					const entry: TranscriptLine = {
+						kind: "tool",
+						stepIndex: input.stepIndex,
+						toolName,
+						argsPreview: previewArgs(rawArgs),
+						...(rawArgs ? { rawArgs } : {}),
+						ts,
+					};
 					out.push(entry);
 					if (id) toolStartIndex.set(id, out.length - 1);
 				}
@@ -201,7 +247,8 @@ function parseSessionFile(input: { filePath: string; stepIndex: number; status?:
 				for (const part of content) {
 					const item = objectRecord(part);
 					if (!item) continue;
-					if (item.type === "text" && typeof item.text === "string" && item.text.trim()) texts.push(item.text);
+					if (item.type === "text" && typeof item.text === "string" && item.text.trim())
+						texts.push(item.text);
 				}
 				if (texts.length > 0) initialPrompt = texts.join("\n\n").trim();
 			}
@@ -210,13 +257,16 @@ function parseSessionFile(input: { filePath: string; stepIndex: number; status?:
 				if (!item) continue;
 				const type = item.type;
 				if (type !== "tool_result" && type !== "toolResult") continue;
-				const id = typeof item.tool_use_id === "string"
-					? item.tool_use_id
-					: typeof item.toolUseId === "string"
-						? item.toolUseId
-						: typeof item.toolCallId === "string"
-							? item.toolCallId
-							: typeof item.id === "string" ? item.id : "";
+				const id =
+					typeof item.tool_use_id === "string"
+						? item.tool_use_id
+						: typeof item.toolUseId === "string"
+							? item.toolUseId
+							: typeof item.toolCallId === "string"
+								? item.toolCallId
+								: typeof item.id === "string"
+									? item.id
+									: "";
 				if (!id) continue;
 				void textFromToolResultContent(item.content);
 				const idx = toolStartIndex.get(id);
@@ -230,16 +280,44 @@ function parseSessionFile(input: { filePath: string; stepIndex: number; status?:
 
 	const step = stepInfo(input.status, input.stepIndex);
 	const agent = step?.agent ?? "";
-	const startTs = step?.startedAt ?? (input.stepIndex === 0 ? input.status?.startedAt : undefined) ?? firstMessageTs ?? 0;
-	const endTs = step?.endedAt ?? (input.stepIndex === 0 ? input.status?.endedAt : undefined) ?? input.status?.lastUpdate ?? Date.now();
+	const startTs =
+		step?.startedAt ?? (input.stepIndex === 0 ? input.status?.startedAt : undefined) ?? firstMessageTs ?? 0;
+	const endTs =
+		step?.endedAt ??
+		(input.stepIndex === 0 ? input.status?.endedAt : undefined) ??
+		input.status?.lastUpdate ??
+		Date.now();
 	const tokens = step?.tokens?.total ?? (input.stepIndex === 0 ? input.status?.totalTokens?.total : undefined);
 	const status = step?.status ?? input.status?.state;
 	const lines: TranscriptLine[] = [
-		{ kind: "step-start", stepIndex: input.stepIndex, agent, ts: startTs, ...(step?.label ? { label: step.label } : input.stepIndex === 0 && input.status?.label ? { label: input.status.label } : {}), ...(initialPrompt ? { task: initialPrompt } : {}) },
+		{
+			kind: "step-start",
+			stepIndex: input.stepIndex,
+			agent,
+			ts: startTs,
+			...(step?.label
+				? { label: step.label }
+				: input.stepIndex === 0 && input.status?.label
+					? { label: input.status.label }
+					: {}),
+			...(initialPrompt ? { task: initialPrompt } : {}),
+		},
 		...out,
 	];
 	if (isTerminalStepStatus(status)) {
-		lines.push({ kind: "step-end", stepIndex: input.stepIndex, agent, ts: endTs, ...(step?.durationMs !== undefined ? { durationMs: step.durationMs } : startTs ? { durationMs: Math.max(0, endTs - startTs) } : {}), ...(tokens !== undefined ? { tokens } : {}), ...(status ? { status } : {}) });
+		lines.push({
+			kind: "step-end",
+			stepIndex: input.stepIndex,
+			agent,
+			ts: endTs,
+			...(step?.durationMs !== undefined
+				? { durationMs: step.durationMs }
+				: startTs
+					? { durationMs: Math.max(0, endTs - startTs) }
+					: {}),
+			...(tokens !== undefined ? { tokens } : {}),
+			...(status ? { status } : {}),
+		});
 	}
 	if (finalText) lines.push({ kind: "final-text", stepIndex: input.stepIndex, agent, text: finalText });
 	return lines;
@@ -251,8 +329,9 @@ export function readRunTranscript(runRecordDir: string): TranscriptLine[] {
 	// outside <runRecordDir>/run-N/ (e.g. fork-reuse sharing the parent's file).
 	const status = readJsonFile<PersistedRunStatus>(statusPath);
 	const sessionFiles = discoverSessionFiles(runRecordDir, status);
-	const stats = [fileStat(statusPath), ...sessionFiles.map((session) => fileStat(session.filePath))]
-		.filter((stat): stat is CacheFileStat => Boolean(stat));
+	const stats = [fileStat(statusPath), ...sessionFiles.map((session) => fileStat(session.filePath))].filter(
+		(stat): stat is CacheFileStat => Boolean(stat),
+	);
 	if (sessionFiles.length === 0) {
 		cache.delete(runRecordDir);
 		return [];

@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
+import {
+	appendRunEntry,
+	readAllEntries,
+	setRegistryPathForTests,
+	type RunsRegistryEntry,
+} from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 
@@ -57,7 +62,10 @@ describe("runs registry", () => {
 		const newer = entry("newer", 200);
 		appendRunEntry(older);
 		appendRunEntry(newer);
-		assert.deepEqual(readAllEntries().map((e) => e.runId), ["newer", "older"]);
+		assert.deepEqual(
+			readAllEntries().map((e) => e.runId),
+			["newer", "older"],
+		);
 	});
 
 	it("skips malformed lines", () => {
@@ -73,6 +81,9 @@ describe("runs registry", () => {
 		appendRunEntry(entry("oldest", 100));
 		appendRunEntry(entry("middle", 200));
 		appendRunEntry(entry("newest", 300));
-		assert.deepEqual(readAllEntries({ limit: 2 }).map((e) => e.runId), ["newest", "middle"]);
+		assert.deepEqual(
+			readAllEntries({ limit: 2 }).map((e) => e.runId),
+			["newest", "middle"],
+		);
 	});
 });

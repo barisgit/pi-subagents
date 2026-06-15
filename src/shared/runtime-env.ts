@@ -30,9 +30,7 @@ export function resolveTempScopeId(options?: {
 	homedir?: (() => string) | undefined;
 }): string {
 	const env = options?.env ?? process.env;
-	const getuid = options && Object.hasOwn(options, "getuid")
-		? options.getuid
-		: process.getuid?.bind(process);
+	const getuid = options && Object.hasOwn(options, "getuid") ? options.getuid : process.getuid?.bind(process);
 	if (typeof getuid === "function") {
 		return `uid-${getuid()}`;
 	}
@@ -42,9 +40,7 @@ export function resolveTempScopeId(options?: {
 		if (value) return `user-${sanitizeTempScopeSegment(value)}`;
 	}
 
-	const userInfo = options && Object.hasOwn(options, "userInfo")
-		? options.userInfo
-		: os.userInfo;
+	const userInfo = options && Object.hasOwn(options, "userInfo") ? options.userInfo : os.userInfo;
 	try {
 		const username = userInfo?.().username;
 		if (username) return `user-${sanitizeTempScopeSegment(username)}`;
@@ -55,9 +51,7 @@ export function resolveTempScopeId(options?: {
 	const homedir = env.USERPROFILE ?? env.HOME;
 	if (homedir) return `home-${sanitizeTempScopeSegment(homedir)}`;
 
-	const resolveHomedir = options && Object.hasOwn(options, "homedir")
-		? options.homedir
-		: os.homedir;
+	const resolveHomedir = options && Object.hasOwn(options, "homedir") ? options.homedir : os.homedir;
 	try {
 		const fallbackHomedir = resolveHomedir?.();
 		if (fallbackHomedir) return `home-${sanitizeTempScopeSegment(fallbackHomedir)}`;
@@ -69,9 +63,11 @@ export function resolveTempScopeId(options?: {
 }
 
 export function resolveCurrentMaxSubagentDepth(configMaxDepth?: number): number {
-	return normalizeMaxSubagentDepth(process.env.PI_SUBAGENT_MAX_DEPTH)
-		?? normalizeMaxSubagentDepth(configMaxDepth)
-		?? DEFAULT_SUBAGENT_MAX_DEPTH;
+	return (
+		normalizeMaxSubagentDepth(process.env.PI_SUBAGENT_MAX_DEPTH) ??
+		normalizeMaxSubagentDepth(configMaxDepth) ??
+		DEFAULT_SUBAGENT_MAX_DEPTH
+	);
 }
 
 export function checkSubagentDepth(configMaxDepth?: number): { blocked: boolean; depth: number; maxDepth: number } {
@@ -130,10 +126,17 @@ export function checkNestedDelegationGuard(requestedAgents: string[]): {
 		};
 	}
 
-	const targets = [...new Set(requestedAgents.map((agent) => normalizeAgentIdentity(agent)).filter((agent): agent is string => Boolean(agent)))];
+	const targets = [
+		...new Set(
+			requestedAgents
+				.map((agent) => normalizeAgentIdentity(agent))
+				.filter((agent): agent is string => Boolean(agent)),
+		),
+	];
 	const explicitAllowedTargets = parseEnvAgentList(process.env.PI_SUBAGENT_ALLOWED_DELEGATE_AGENTS);
-	const allowedTargets = explicitAllowedTargets
-		?? (isNestedOrchestratorAgent(currentAgent) ? [...LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES] : undefined);
+	const allowedTargets =
+		explicitAllowedTargets ??
+		(isNestedOrchestratorAgent(currentAgent) ? [...LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES] : undefined);
 	if (allowedTargets && allowedTargets.length > 0) {
 		const allowedTargetSet = new Set(allowedTargets);
 		const disallowedTargets = targets.filter((agent) => !allowedTargetSet.has(agent));

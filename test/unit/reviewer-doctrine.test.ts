@@ -60,4 +60,4 @@ describe("reviewer doctrine", () => {
 		// must cite key review areas: schema fields, token budget, skill, doctrine
 		assert.match(because, /schema|field|token|skill|doctrine/i);
 	});
-}); 
+});

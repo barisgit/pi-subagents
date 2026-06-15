@@ -5,7 +5,12 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatDuration } from "../../src/surfaces/formatters.ts";
 import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
+import {
+	appendRunEntry,
+	readAllEntries,
+	setRegistryPathForTests,
+	type RunsRegistryEntry,
+} from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 
@@ -33,34 +38,43 @@ function appendGroup(root: string, runId: string, startedAt: number): RunsRegist
 	return entry;
 }
 
-function appendChild(root: string, entry: {
-	runId: string;
-	parentRunId: string;
-	rootRunId: string;
-	agentName: string;
-	state: "running" | "complete" | "failed";
-	startedAt: number;
-	endedAt?: number;
-}): void {
+function appendChild(
+	root: string,
+	entry: {
+		runId: string;
+		parentRunId: string;
+		rootRunId: string;
+		agentName: string;
+		state: "running" | "complete" | "failed";
+		startedAt: number;
+		endedAt?: number;
+	},
+): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-		runId: entry.runId,
-		mode: "single",
-		state: entry.state,
-		startedAt: entry.startedAt,
-		lastUpdate: entry.endedAt ?? entry.startedAt + 1,
-		...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
-		cwd: root,
-		currentStep: 0,
-		parentRunId: entry.parentRunId,
-		steps: [{
-			agent: entry.agentName,
-			status: entry.state,
+	fs.writeFileSync(
+		path.join(runRecordDir, "status.json"),
+		JSON.stringify({
+			runId: entry.runId,
+			mode: "single",
+			state: entry.state,
 			startedAt: entry.startedAt,
+			lastUpdate: entry.endedAt ?? entry.startedAt + 1,
 			...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
-		}],
-	}), "utf8");
+			cwd: root,
+			currentStep: 0,
+			parentRunId: entry.parentRunId,
+			steps: [
+				{
+					agent: entry.agentName,
+					status: entry.state,
+					startedAt: entry.startedAt,
+					...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
+				},
+			],
+		}),
+		"utf8",
+	);
 	appendRunEntry({
 		runId: entry.runId,
 		runRecordDir,

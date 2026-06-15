@@ -16,7 +16,12 @@ function tmpRegistry(): { root: string; registryPath: string } {
 	return { root, registryPath };
 }
 
-function makeRun(root: string, runId: string, startedAt: number, state: "complete" | "running" = "complete"): RunsRegistryEntry {
+function makeRun(
+	root: string,
+	runId: string,
+	startedAt: number,
+	state: "complete" | "running" = "complete",
+): RunsRegistryEntry {
 	const runRecordDir = path.join(root, "runs", runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
 	fs.writeFileSync(

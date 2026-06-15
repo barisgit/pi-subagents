@@ -1,7 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, ChildAgentRegistry, dispatchAsyncChild } from "./in-process-executor.ts";
+import {
+	type ChildAgentHandle,
+	type ChildAgentResult,
+	type ChildAgentStep,
+	type ChildAgentRegistry,
+	dispatchAsyncChild,
+} from "./in-process-executor.ts";
 import { StatusWriter } from "../state/status-writer.ts";
 import { readStatus } from "../shared/utils.ts";
 import { tokenUsageFromTotal } from "../state/usage-totals.ts";
@@ -55,25 +61,29 @@ export interface ResumeTarget {
 export function resolveResumeTarget(runId: string, stepIndex = 0): ResumeTarget {
 	const entry = readAllEntries().find((candidate) => candidate.runId === runId);
 	if (!entry) throw new Error(`Unknown runId '${runId}'.`);
-	if (entry.mode === "parallel") throw new Error(`Run ${runId} is a parallel group; resume an individual child runId instead.`);
+	if (entry.mode === "parallel")
+		throw new Error(`Run ${runId} is a parallel group; resume an individual child runId instead.`);
 	const status = readStatus(entry.runRecordDir);
 	if (!status) throw new Error(`No status.json found for runId '${runId}' at ${entry.runRecordDir}.`);
 	const step = status.steps?.[stepIndex];
 	// Prefer the targeted step's own session file: async parallel status stores the run-level
 	// `sessionFile` as step 0's file, so a non-zero stepIndex must read the per-step file first
 	// or it would silently reopen step 0's session.
-	const sessionFile = step?.sessionFile
-		?? status.sessionFile
-		?? path.join(entry.runRecordDir, `run-${stepIndex}`, "session.jsonl");
-	if (!fs.existsSync(sessionFile)) throw new Error(`Session file for run ${runId} is missing at ${sessionFile}; cannot resume without the original session.`);
-	const agentName = step?.agent ?? entry.agentName ?? entry.agentNames?.[stepIndex] ?? entry.agentNames?.[0] ?? "unknown";
+	const sessionFile =
+		step?.sessionFile ?? status.sessionFile ?? path.join(entry.runRecordDir, `run-${stepIndex}`, "session.jsonl");
+	if (!fs.existsSync(sessionFile))
+		throw new Error(
+			`Session file for run ${runId} is missing at ${sessionFile}; cannot resume without the original session.`,
+		);
+	const agentName =
+		step?.agent ?? entry.agentName ?? entry.agentNames?.[stepIndex] ?? entry.agentNames?.[0] ?? "unknown";
 	return {
 		runId,
 		sessionFile,
 		runRecordDir: entry.runRecordDir,
 		agentName,
 		cwd: status.cwd ?? entry.cwd,
-		...(status.parentRunId ?? entry.parentRunId ? { parentRunId: status.parentRunId ?? entry.parentRunId } : {}),
+		...((status.parentRunId ?? entry.parentRunId) ? { parentRunId: status.parentRunId ?? entry.parentRunId } : {}),
 		rootRunId: entry.rootRunId ?? entry.runId,
 		startedAt: status.startedAt ?? entry.startedAt,
 		state: status.state,
@@ -84,7 +94,9 @@ export function resolveResumeTarget(runId: string, stepIndex = 0): ResumeTarget 
 
 export function assertCompleteResumeTarget(target: Pick<ResumeTarget, "runId" | "state">): void {
 	if (target.state !== "complete") {
-		throw new Error(`Run ${target.runId} is '${target.state}', not complete; disk resume currently supports only completed runs. Wait for it to complete or start a new run.`);
+		throw new Error(
+			`Run ${target.runId} is '${target.state}', not complete; disk resume currently supports only completed runs. Wait for it to complete or start a new run.`,
+		);
 	}
 }
 
@@ -99,9 +111,14 @@ function postResumeMessage(handle: ChildAgentHandle, runId: string, message: str
 		};
 		const post = session.postUserMessage ?? session.enqueueTurn ?? session.prompt;
 		if (typeof post !== "function") return validationError(`Run ${runId} cannot accept resume messages.`);
-		void Promise.resolve(post.call(session, message, { expandPromptTemplates: false, source: "extension" })).catch((error) => {
-			logger.warn("resume action failed after dispatch", { runId, error: error instanceof Error ? error.message : String(error) });
-		});
+		void Promise.resolve(post.call(session, message, { expandPromptTemplates: false, source: "extension" })).catch(
+			(error) => {
+				logger.warn("resume action failed after dispatch", {
+					runId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
+		);
 		return null;
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -109,7 +126,15 @@ function postResumeMessage(handle: ChildAgentHandle, runId: string, message: str
 	}
 }
 
-async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry, runId: string, message: string, asyncMode: boolean | undefined, data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
+async function resumeRun(
+	state: SubagentState,
+	childRegistry: ChildAgentRegistry,
+	runId: string,
+	message: string,
+	asyncMode: boolean | undefined,
+	data: ExecutionContextData,
+	deps: ExecutorDeps,
+): Promise<AgentToolResult<Details>> {
 	const parsed = parseChildRunId(runId);
 	const tracked = state.asyncJobs.get(parsed.dispatchRunId);
 	// Key the in-flight guard by the canonical target (dispatchRunId + step), not the raw caller
@@ -118,15 +143,23 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 	if (resumeInFlight.has(resumeKey)) return validationError(`Resume already in progress for run ${runId}.`);
 	const handles = childRegistry.list().filter((handle) => handle.runId === parsed.dispatchRunId);
 	if (parsed.stepIndex === undefined) {
-		if ((tracked?.mode && tracked.mode !== "single") || handles.length > 1 || (handles.length === 1 && handles[0]!.stepIndex !== 0)) {
+		if (
+			(tracked?.mode && tracked.mode !== "single") ||
+			handles.length > 1 ||
+			(handles.length === 1 && handles[0]!.stepIndex !== 0)
+		) {
 			return validationError("`id` must be a runId, not batchId");
 		}
-	} else if ((tracked?.mode && tracked.mode === "single") || (handles.length === 1 && handles[0]!.stepIndex === 0 && handles[0]!.runId === parsed.dispatchRunId)) {
+	} else if (
+		(tracked?.mode && tracked.mode === "single") ||
+		(handles.length === 1 && handles[0]!.stepIndex === 0 && handles[0]!.runId === parsed.dispatchRunId)
+	) {
 		return validationError(`No resumable run found for '${runId}'.`);
 	}
-	const handle = parsed.stepIndex === undefined
-		? handles[0]
-		: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
+	const handle =
+		parsed.stepIndex === undefined
+			? handles[0]
+			: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
 	if (handle) {
 		const error = postResumeMessage(handle, runId, message);
 		if (error) return error;
@@ -176,7 +209,11 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		forkReuse: undefined,
 		rootRunId: target.rootRunId,
 	};
-	const statusWriter = new StatusWriter({ runRecordDir: target.runRecordDir, runId: target.runId, flushPolicy: asyncMode === false ? "terminal" : "eager" });
+	const statusWriter = new StatusWriter({
+		runRecordDir: target.runRecordDir,
+		runId: target.runId,
+		flushPolicy: asyncMode === false ? "terminal" : "eager",
+	});
 	// Resume reseeds the activity/heartbeat clocks to now so the inactivity
 	// watchdog measures from the resume moment, not the original run's last
 	// activity (startedAt stays immutable for duration semantics).
@@ -203,7 +240,15 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 			...(index === step.stepIndex ? { lastActivityAt: resumedAt } : {}),
 			sessionFile: statusStep.sessionFile ?? (index === step.stepIndex ? target.sessionFile : undefined),
 			...(statusStep.live ? { live: statusStep.live } : {}),
-		})) ?? [{ agent: target.agentName, status: "running", startedAt: target.startedAt, lastActivityAt: resumedAt, sessionFile: target.sessionFile }],
+		})) ?? [
+			{
+				agent: target.agentName,
+				status: "running",
+				startedAt: target.startedAt,
+				lastActivityAt: resumedAt,
+				sessionFile: target.sessionFile,
+			},
+		],
 	});
 	resumeInFlight.add(resumeKey);
 	evictCompletionDedupeForRunId(target.runId);
@@ -232,17 +277,20 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		const fg = createForegroundRunController(foregroundControl, {
 			mirror: (firstProgress, index) => {
 				const resumeLiveTokens = tokenUsageFromTotal(firstProgress?.tokens);
-				const statusStepPatch = target.status.steps?.map((_, stepIdx) => stepIdx === step.stepIndex
-					? {
-						agent: firstProgress?.agent ?? target.agentName,
-						status: firstProgress?.status ?? "running",
-						startedAt: target.status.steps?.[step.stepIndex]?.startedAt ?? target.startedAt,
-						lastActivityAt: firstProgress?.lastActivityAt,
-						currentTool: firstProgress?.currentTool,
-						currentToolStartedAt: firstProgress?.currentToolStartedAt,
-						...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
-					}
-					: {}) ?? [{
+				const statusStepPatch = target.status.steps?.map((_, stepIdx) =>
+					stepIdx === step.stepIndex
+						? {
+								agent: firstProgress?.agent ?? target.agentName,
+								status: firstProgress?.status ?? "running",
+								startedAt: target.status.steps?.[step.stepIndex]?.startedAt ?? target.startedAt,
+								lastActivityAt: firstProgress?.lastActivityAt,
+								currentTool: firstProgress?.currentTool,
+								currentToolStartedAt: firstProgress?.currentToolStartedAt,
+								...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
+							}
+						: {},
+				) ?? [
+					{
 						agent: firstProgress?.agent ?? target.agentName,
 						status: firstProgress?.status ?? "running",
 						startedAt: target.startedAt,
@@ -250,7 +298,8 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 						currentTool: firstProgress?.currentTool,
 						currentToolStartedAt: firstProgress?.currentToolStartedAt,
 						...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
-					}];
+					},
+				];
 				mirrorForegroundProgressToStatus(statusWriter, firstProgress, index, statusStepPatch);
 			},
 		});
@@ -272,7 +321,12 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		const onControlEvent = createForegroundControlNotifier(resumeData, deps);
 		const forwardUpdate = (update: AgentToolResult<Details>) => {
 			const firstProgress = update.details?.progress?.[0];
-			fg.applyProgress(target.agentName, firstProgress?.index ?? step.stepIndex, firstProgress, update.details?.results?.[0]?.finalOutput);
+			fg.applyProgress(
+				target.agentName,
+				firstProgress?.index ?? step.stepIndex,
+				firstProgress,
+				update.details?.results?.[0]?.finalOutput,
+			);
 			data.onUpdate?.(update);
 		};
 		const eventPayload = {
@@ -303,7 +357,12 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 						onControlEvent(event);
 					}
 				},
-				layer0: { runId: target.runId, runRecordDir: target.runRecordDir, sessionFile: target.sessionFile, rootRunId: target.rootRunId },
+				layer0: {
+					runId: target.runId,
+					runRecordDir: target.runRecordDir,
+					sessionFile: target.sessionFile,
+					rootRunId: target.rootRunId,
+				},
 			});
 			emitSyncLifecycleEvent(deps.pi, result.exitCode === 0 ? SUBAGENT_COMPLETED_EVENT : SUBAGENT_FAILED_EVENT, {
 				...eventPayload,
@@ -316,7 +375,11 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 			};
 		} catch (error) {
 			failureMessage = error instanceof Error ? error.message : String(error);
-			emitSyncLifecycleEvent(deps.pi, SUBAGENT_FAILED_EVENT, { ...eventPayload, exitCode: 1, error: failureMessage });
+			emitSyncLifecycleEvent(deps.pi, SUBAGENT_FAILED_EVENT, {
+				...eventPayload,
+				exitCode: 1,
+				error: failureMessage,
+			});
 			return validationError(`Failed to resume run ${runId}: ${failureMessage}`);
 		} finally {
 			statusWriter.finalizeTerminal({
@@ -324,19 +387,23 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 				// Only the resumed step is finalized; siblings echo their existing
 				// fields so finalizeTerminal's force-overrides become no-ops
 				// (a patchless `{}` would flip siblings to the run-level end state).
-				steps: target.status.steps?.map((existingStep, index) => index === step.stepIndex
-					? {
+				steps: target.status.steps?.map((existingStep, index) =>
+					index === step.stepIndex
+						? {
+								status: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
+								tokens: result ? tokenUsageFromResult(result) : undefined,
+								durationMs: result?.progressSummary?.durationMs,
+								error: result?.error ?? failureMessage,
+							}
+						: existingStep,
+				) ?? [
+					{
 						status: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
 						tokens: result ? tokenUsageFromResult(result) : undefined,
 						durationMs: result?.progressSummary?.durationMs,
 						error: result?.error ?? failureMessage,
-					}
-					: existingStep) ?? [{
-					status: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
-					tokens: result ? tokenUsageFromResult(result) : undefined,
-					durationMs: result?.progressSummary?.durationMs,
-					error: result?.error ?? failureMessage,
-				}],
+					},
+				],
 				sessionFile: result?.sessionFile ?? target.sessionFile,
 			});
 			statusWriter.dispose();
@@ -392,8 +459,18 @@ async function resumeRun(state: SubagentState, childRegistry: ChildAgentRegistry
 		asyncDir: target.runRecordDir,
 		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
 	});
-	void completed.catch((error) => logger.warn("disk resume failed after dispatch", { runId, error: error instanceof Error ? error.message : String(error) }));
-	return asyncStartedResult({ mode: "single", runId: target.runId, asyncDir: target.runRecordDir, text: `Async resume: ${target.agentName} [${target.runId}]` });
+	void completed.catch((error) =>
+		logger.warn("disk resume failed after dispatch", {
+			runId,
+			error: error instanceof Error ? error.message : String(error),
+		}),
+	);
+	return asyncStartedResult({
+		mode: "single",
+		runId: target.runId,
+		asyncDir: target.runRecordDir,
+		text: `Async resume: ${target.agentName} [${target.runId}]`,
+	});
 }
 
 export { resumeRun };

@@ -13,21 +13,33 @@ describe("run status guidance", () => {
 		setRegistryPathForTests(path.join(dir, "runs-index.jsonl"));
 		fs.mkdirSync(dir, { recursive: true });
 		try {
-			fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
+			fs.writeFileSync(
+				path.join(dir, "status.json"),
+				JSON.stringify({
+					runId: id,
+					mode: "parallel",
+					state: "running",
+					startedAt: Date.now(),
+					lastUpdate: Date.now(),
+					steps: [
+						{ agent: "review", status: "complete" },
+						{ agent: "review", status: "running" },
+						{ agent: "review", status: "failed" },
+						{ agent: "review", status: "complete" },
+						{ agent: "review", status: "running" },
+					],
+				}),
+				"utf-8",
+			);
+			appendRunEntry({
 				runId: id,
+				runRecordDir: dir,
 				mode: "parallel",
-				state: "running",
+				source: "async",
+				agentNames: ["review"],
+				cwd: process.cwd(),
 				startedAt: Date.now(),
-				lastUpdate: Date.now(),
-				steps: [
-					{ agent: "review", status: "complete" },
-					{ agent: "review", status: "running" },
-					{ agent: "review", status: "failed" },
-					{ agent: "review", status: "complete" },
-					{ agent: "review", status: "running" },
-				],
-			}), "utf-8");
-			appendRunEntry({ runId: id, runRecordDir: dir, mode: "parallel", source: "async", agentNames: ["review"], cwd: process.cwd(), startedAt: Date.now() });
+			});
 
 			const result = inspectSubagentStatus({ id });
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";

@@ -88,7 +88,11 @@ export function parseRunsRegistryEntryLine(line: string): RunsRegistryEntry | un
 	} catch {
 		return undefined;
 	}
-	if (parsed && typeof (parsed as RunsRegistryEntry).runId === "string" && typeof (parsed as RunsRegistryEntry).runRecordDir === "string") {
+	if (
+		parsed &&
+		typeof (parsed as RunsRegistryEntry).runId === "string" &&
+		typeof (parsed as RunsRegistryEntry).runRecordDir === "string"
+	) {
 		return parsed as RunsRegistryEntry;
 	}
 	return undefined;

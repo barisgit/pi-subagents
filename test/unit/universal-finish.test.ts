@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest, runChildAgent, type ChildAgentContext, type ChildAgentStep } from "../../src/dispatch/in-process-executor.ts";
+import {
+	ChildAgentRegistry,
+	__setChildAgentExecutorDepsForTest,
+	runChildAgent,
+	type ChildAgentContext,
+	type ChildAgentStep,
+} from "../../src/dispatch/in-process-executor.ts";
 import { createSubmitResultTool } from "../../src/protocol/submit-result.ts";
 
 const cleanup: string[] = [];
@@ -17,7 +23,9 @@ after(() => {
 	for (const dir of cleanup) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-class FakeResourceLoader { async reload(): Promise<void> {} }
+class FakeResourceLoader {
+	async reload(): Promise<void> {}
+}
 
 class FakeAgentSession {
 	messages: unknown[] = [];
@@ -32,11 +40,16 @@ class FakeAgentSession {
 	async prompt(text: string): Promise<void> {
 		this.prompts.push(text);
 		const envelope = { status: "ok", summary: "structured", result: "structured payload", artifacts: [] };
-		this.messages.push({ role: "assistant", content: [{ type: "toolCall", id: "submit", name: "submit_result", arguments: envelope }] });
+		this.messages.push({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "submit", name: "submit_result", arguments: envelope }],
+		});
 		this.messages.push({ role: "toolResult", toolName: "submit_result", details: envelope });
 	}
 
-	getLastAssistantText(): string { return ""; }
+	getLastAssistantText(): string {
+		return "";
+	}
 	async abort(): Promise<void> {}
 	dispose(): void {}
 	setActiveToolsByName(): void {}
@@ -71,20 +84,34 @@ function makeStep(root: string, session: FakeAgentSession): ChildAgentStep {
 }
 
 function makeContext(): ChildAgentContext {
-	return { extensionCtx: { modelRegistry: {} } as never, abortSignal: new AbortController().signal, registry: new ChildAgentRegistry(), pi: {} as never };
+	return {
+		extensionCtx: { modelRegistry: {} } as never,
+		abortSignal: new AbortController().signal,
+		registry: new ChildAgentRegistry(),
+		pi: {} as never,
+	};
 }
 
 function install(session: FakeAgentSession): void {
-	restoreFns.push(__setChildAgentExecutorDepsForTest({
-		DefaultResourceLoader: FakeResourceLoader as never,
-		getAgentDir: () => "/tmp/pi-agent",
-		SessionManager: { open: () => ({}) as never },
-		createAgentSession: (async (options?: { customTools?: unknown[]; tools?: string[] }) => {
-			assert.equal(options?.customTools?.some((tool) => (tool as { name?: string; execute?: unknown }).name === "submit_result" && typeof (tool as { execute?: unknown }).execute === "function"), true);
-			assert.deepEqual(options?.tools, ["submit_result"]);
-			return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
-		}) as never,
-	}));
+	restoreFns.push(
+		__setChildAgentExecutorDepsForTest({
+			DefaultResourceLoader: FakeResourceLoader as never,
+			getAgentDir: () => "/tmp/pi-agent",
+			SessionManager: { open: () => ({}) as never },
+			createAgentSession: (async (options?: { customTools?: unknown[]; tools?: string[] }) => {
+				assert.equal(
+					options?.customTools?.some(
+						(tool) =>
+							(tool as { name?: string; execute?: unknown }).name === "submit_result" &&
+							typeof (tool as { execute?: unknown }).execute === "function",
+					),
+					true,
+				);
+				assert.deepEqual(options?.tools, ["submit_result"]);
+				return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
+			}) as never,
+		}),
+	);
 }
 
 describe("universal finish", () => {
@@ -99,6 +126,11 @@ describe("universal finish", () => {
 		assert.equal(session.prompts[0], "Do it");
 		assert.doesNotMatch(session.prompts[0] ?? "", /Structured finish/);
 		assert.equal(result.outputText, "structured payload");
-		assert.deepEqual(result.structuredResult, { status: "ok", summary: "structured", result: "structured payload", artifacts: [] });
+		assert.deepEqual(result.structuredResult, {
+			status: "ok",
+			summary: "structured",
+			result: "structured payload",
+			artifacts: [],
+		});
 	});
 });

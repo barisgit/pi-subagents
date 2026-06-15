@@ -32,12 +32,21 @@ describe("subagent control attention state", () => {
 
 	it("suppresses needs-attention while the model is in an engaged phase", () => {
 		for (const phase of ["waiting_model", "thinking", "streaming_text", "retrying"]) {
-			assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000 }), undefined);
+			assert.equal(
+				deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000 }),
+				undefined,
+			);
 		}
 
 		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, now: 1_000 }), "needs_attention");
-		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "idle", now: 1_000 }), "needs_attention");
-		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "paused", now: 1_000 }), "needs_attention");
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "idle", now: 1_000 }),
+			"needs_attention",
+		);
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "paused", now: 1_000 }),
+			"needs_attention",
+		);
 	});
 
 	it("emits only needs-attention transitions", () => {
@@ -137,7 +146,10 @@ describe("subagent control attention state", () => {
 		const event = buildControlEvent({ to: "needs_attention", runId: "run-1", agent: "worker", index: 0 });
 		const seen = new Set<string>();
 
-		assert.equal(controlNotificationKey(event, "subagent-worker-run-1-1"), "subagent-worker-run-1-1:needs_attention");
+		assert.equal(
+			controlNotificationKey(event, "subagent-worker-run-1-1"),
+			"subagent-worker-run-1-1:needs_attention",
+		);
 		assert.equal(claimControlNotification(resolveControlConfig(), event, seen, "subagent-worker-run-1-1"), true);
 		assert.equal(claimControlNotification(resolveControlConfig(), event, seen, "subagent-worker-run-1-1"), false);
 	});

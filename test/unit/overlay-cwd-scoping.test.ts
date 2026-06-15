@@ -41,9 +41,7 @@ function makeRun(
 		lastUpdate: startedAt,
 		cwd,
 		currentStep: 0,
-		steps: [
-			{ agent: "fixer", status: runState, startedAt, lastActivityAt: startedAt },
-		],
+		steps: [{ agent: "fixer", status: runState, startedAt, lastActivityAt: startedAt }],
 		lastActivityAt: startedAt,
 	};
 	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify(statusJson));
@@ -83,10 +81,7 @@ describe("listRunsFromRegistryForOverlay sessionCwd scoping", () => {
 
 		const scoped = listRunsFromRegistryForOverlay(20, { sessionCwd: "/scoped/proj" });
 		assert.equal(scoped.recent.length, 3);
-		assert.deepEqual(
-			scoped.recent.map((r) => r.id).sort(),
-			["scoped-a", "scoped-b", "scoped-c"].sort(),
-		);
+		assert.deepEqual(scoped.recent.map((r) => r.id).sort(), ["scoped-a", "scoped-b", "scoped-c"].sort());
 		assert.equal(scoped.active.length, 0);
 	});
 
@@ -137,10 +132,7 @@ describe("listRunsFromRegistryForOverlay sessionCwd scoping", () => {
 		});
 
 		const scoped = listRunsFromRegistryForOverlay(10, { sessionId: "sess-current" });
-		assert.deepEqual(
-			scoped.recent.map((r) => r.id).sort(),
-			["nested", "top"].sort(),
-		);
+		assert.deepEqual(scoped.recent.map((r) => r.id).sort(), ["nested", "top"].sort());
 	});
 
 	it("falls back to parentSessionId when rootSessionId is missing (legacy entries)", () => {

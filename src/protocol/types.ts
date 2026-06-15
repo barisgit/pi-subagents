@@ -95,7 +95,13 @@ export interface AgentProgress {
 	/** Milliseconds since epoch when the current phase was entered. */
 	phaseStartedAt?: number;
 	lastToolEndAt?: number;
-	recentTools: Array<{ tool: string; args: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
+	recentTools: Array<{
+		tool: string;
+		args: string;
+		rawArgs?: Record<string, unknown>;
+		endMs: number;
+		durationMs?: number;
+	}>;
 	recentOutput: string[];
 	tokenSamples?: Array<{ ts: number; tokens: number }>;
 	thinking?: string;
@@ -117,7 +123,23 @@ export interface ToolCallSummary {
 	expandedText: string;
 }
 
-export interface ProgressSummary extends Partial<Pick<AgentProgress, "status" | "index" | "skills" | "currentTool" | "currentToolStartedAt" | "currentToolArgs" | "phase" | "phaseStartedAt" | "lastActivityAt" | "activityState" | "recentTools" | "recentOutput">> {
+export interface ProgressSummary extends Partial<
+	Pick<
+		AgentProgress,
+		| "status"
+		| "index"
+		| "skills"
+		| "currentTool"
+		| "currentToolStartedAt"
+		| "currentToolArgs"
+		| "phase"
+		| "phaseStartedAt"
+		| "lastActivityAt"
+		| "activityState"
+		| "recentTools"
+		| "recentOutput"
+	>
+> {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
@@ -379,7 +401,13 @@ export interface AsyncJobState {
 	agentColors?: string[];
 	thinking?: string;
 	currentToolArgs?: string;
-	recentTools?: Array<{ tool: string; args?: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
+	recentTools?: Array<{
+		tool: string;
+		args?: string;
+		rawArgs?: Record<string, unknown>;
+		endMs: number;
+		durationMs?: number;
+	}>;
 	tokenSamples?: Array<{ ts: number; tokens: number }>;
 	lastToolEndAt?: number;
 }
@@ -388,39 +416,42 @@ export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
 	asyncJobs: Map<string, AsyncJobState>;
-	foregroundControls: Map<string, {
-		runId: string;
-		asyncDir?: string;
-		// charter nested-subagent-display: sync rows carry hierarchy before disk handoff.
-		parentRunId?: string;
-		mode: "single" | "parallel";
-		startedAt: number;
-		updatedAt: number;
-		/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
-		label?: string;
-		/** Per-step caller-provided labels aligned by index. */
-		agentLabels?: string[];
-		currentAgent?: string;
-		/**
-		 * Theme color token used to tint the sync agent name in /subagents-status
-		 * left pane. Populated from AgentProgress.color (resolveAgentColor()).
-		 */
-		currentAgentColor?: string;
-		currentIndex?: number;
-		currentActivityState?: ActivityState;
-		lastActivityAt?: number;
-		currentTool?: string;
-		currentToolStartedAt?: number;
-		/** Current execution phase for live status rendering. */
-		phase?: RunPhase;
-		/** Milliseconds since epoch when the current phase was entered. */
-		phaseStartedAt?: number;
-		lastToolEndAt?: number;
-		recentTools?: Array<{ tool: string; args?: string; endMs?: number; durationMs?: number }>;
-		recentOutput?: string[];
-		finalOutput?: string;
-		interrupt?: (reason?: string) => boolean;
-	}>;
+	foregroundControls: Map<
+		string,
+		{
+			runId: string;
+			asyncDir?: string;
+			// charter nested-subagent-display: sync rows carry hierarchy before disk handoff.
+			parentRunId?: string;
+			mode: "single" | "parallel";
+			startedAt: number;
+			updatedAt: number;
+			/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
+			label?: string;
+			/** Per-step caller-provided labels aligned by index. */
+			agentLabels?: string[];
+			currentAgent?: string;
+			/**
+			 * Theme color token used to tint the sync agent name in /subagents-status
+			 * left pane. Populated from AgentProgress.color (resolveAgentColor()).
+			 */
+			currentAgentColor?: string;
+			currentIndex?: number;
+			currentActivityState?: ActivityState;
+			lastActivityAt?: number;
+			currentTool?: string;
+			currentToolStartedAt?: number;
+			/** Current execution phase for live status rendering. */
+			phase?: RunPhase;
+			/** Milliseconds since epoch when the current phase was entered. */
+			phaseStartedAt?: number;
+			lastToolEndAt?: number;
+			recentTools?: Array<{ tool: string; args?: string; endMs?: number; durationMs?: number }>;
+			recentOutput?: string[];
+			finalOutput?: string;
+			interrupt?: (reason?: string) => boolean;
+		}
+	>;
 	lastForegroundControlId: string | null;
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
 	lastUiContext: ExtensionContext | null;
@@ -431,8 +462,8 @@ export interface SubagentState {
 // Display
 // ============================================================================
 
-export type DisplayItem = 
-	| { type: "text"; text: string } 
+export type DisplayItem =
+	| { type: "text"; text: string }
 	| { type: "tool"; name: string; args: Record<string, unknown> };
 
 // ============================================================================
@@ -659,9 +690,8 @@ export function resolveTopLevelParallelConcurrency(
 	configValue: unknown,
 	maxValue?: unknown,
 ): number {
-	const requested = normalizeTopLevelParallelValue(override)
-		?? normalizeTopLevelParallelValue(configValue)
-		?? MAX_CONCURRENCY;
+	const requested =
+		normalizeTopLevelParallelValue(override) ?? normalizeTopLevelParallelValue(configValue) ?? MAX_CONCURRENCY;
 	const max = normalizeTopLevelParallelValue(maxValue);
 	return max === undefined ? requested : Math.min(requested, max);
 }
@@ -717,7 +747,13 @@ function normalizeAgentList(value: unknown): string[] | undefined {
 }
 
 const LEGACY_NESTED_DELEGATOR_AGENT_NAMES = new Set(["orchestrator", "delegate"]);
-export const LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES = new Set(["explorer", "librarian", "oracle", "designer", "fixer"]);
+export const LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES = new Set([
+	"explorer",
+	"librarian",
+	"oracle",
+	"designer",
+	"fixer",
+]);
 
 export function isNestedOrchestratorAgent(name: unknown): boolean {
 	const normalized = normalizeAgentIdentity(name);
@@ -732,7 +768,14 @@ export function isAllowedNestedOrchestratorChild(name: unknown): boolean {
 export function getSubagentIdentityEnv(
 	currentAgentName: string,
 	parentAgentName?: string | null,
-	options?: { canDelegate?: boolean; allowedDelegateAgents?: string[]; parentRunId?: string; rootRunId?: string; parentSessionId?: string; rootSessionId?: string },
+	options?: {
+		canDelegate?: boolean;
+		allowedDelegateAgents?: string[];
+		parentRunId?: string;
+		rootRunId?: string;
+		parentSessionId?: string;
+		rootSessionId?: string;
+	},
 ): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		PI_SUBAGENT_CURRENT_AGENT: currentAgentName,

@@ -84,7 +84,10 @@ describe("async status helpers", () => {
 			});
 
 			const overlay = listLegacyOverlay(root, 5);
-			assert.deepEqual(overlay.recent.map((run) => run.id), ["newer-complete", "older-failed"]);
+			assert.deepEqual(
+				overlay.recent.map((run) => run.id),
+				["newer-complete", "older-failed"],
+			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -204,10 +207,7 @@ describe("async status helpers", () => {
 		fs.mkdirSync(dir, { recursive: true });
 		fs.writeFileSync(path.join(dir, "status.json"), "{not-json", "utf-8");
 		try {
-			assert.throws(
-				() => listAsyncRuns(root),
-				/Failed to parse async status file/,
-			);
+			assert.throws(() => listAsyncRuns(root), /Failed to parse async status file/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

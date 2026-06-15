@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { afterEach, describe, it } from "node:test";
-import { ChildAgentRegistry, type ChildAgentHandle, type RunViewSeed } from "../../src/dispatch/child-agent-registry.ts";
+import {
+	ChildAgentRegistry,
+	type ChildAgentHandle,
+	type RunViewSeed,
+} from "../../src/dispatch/child-agent-registry.ts";
 import type { ChildAgentResult, StatusPatch } from "../../src/protocol/status-types.ts";
 
 // The production code reaches disk through `import * as fs from "node:fs"`
@@ -177,7 +181,11 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		// Sweep happens lazily in listRunViews once retention elapses. terminalAt is
 		// stamped at real wall-clock time inside finalizeView, so advance from now.
 		const swept = registry.listRunViews(Date.now() + 5_001);
-		assert.equal(swept.find((v) => v.id === RUN_ID), undefined, "run swept after retention window");
+		assert.equal(
+			swept.find((v) => v.id === RUN_ID),
+			undefined,
+			"run swept after retention window",
+		);
 		assert.equal(registry.getRunView(RUN_ID), undefined, "view gone after sweep");
 	});
 

@@ -9,10 +9,13 @@ import { writeWorkflowScript } from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "../protocol/submit-result.ts";
 import type { AgentProgress, Details, SingleResult } from "../protocol/types.ts";
 
-export const WorkflowParams = Type.Object({
-	script: Type.String(),
-	async: Type.Optional(Type.Boolean()),
-}, { additionalProperties: false });
+export const WorkflowParams = Type.Object(
+	{
+		script: Type.String(),
+		async: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
 
 export interface WorkflowDispatchOutcome {
 	envelope?: SubmitResultEnvelope;
@@ -26,14 +29,25 @@ export type WorkflowDispatchResult = SubmitResultEnvelope | WorkflowDispatchOutc
 export interface WorkflowDispatchTags {
 	parallelGroupId?: string;
 }
-export type WorkflowDispatch = (role: string, task: string, tags?: WorkflowDispatchTags) => Promise<WorkflowDispatchResult>;
+export type WorkflowDispatch = (
+	role: string,
+	task: string,
+	tags?: WorkflowDispatchTags,
+) => Promise<WorkflowDispatchResult>;
 export type WorkflowPhaseEmit = (title: string) => void;
 
 export interface WorkflowGroupHandle {
 	groupRunId: string;
 	async?: boolean;
 	asyncDir?: string;
-	dispatchChild(args: { role: string; task: string; index: number; phaseIndex?: number; phaseTitle?: string; parallelGroupId?: string }): Promise<SingleResult>;
+	dispatchChild(args: {
+		role: string;
+		task: string;
+		index: number;
+		phaseIndex?: number;
+		phaseTitle?: string;
+		parallelGroupId?: string;
+	}): Promise<SingleResult>;
 	finishAsync?(success: boolean, summary?: string): void;
 	failWorkflow?(message: string, tags?: { phaseIndex?: number; phaseTitle?: string }): Promise<void>;
 }
@@ -124,12 +138,10 @@ function handleWorkflowUnhandledRejection(reason: unknown, promise: Promise<unkn
 	// THIS runtime issued (issuedTokens) — not mere key presence, which any code
 	// could spoof to opt a foreign host bug into our swallow path. Token identity
 	// is cross-module-safe (replaces instanceof, which fails across module instances).
-	const rawToken = (reason && typeof reason === "object")
-		? (reason as Record<symbol, unknown>)[WORKFLOW_RUN_TOKEN]
-		: undefined;
-	const token = (typeof rawToken === "object" && rawToken !== null && issuedTokens.has(rawToken))
-		? rawToken
-		: undefined;
+	const rawToken =
+		reason && typeof reason === "object" ? (reason as Record<symbol, unknown>)[WORKFLOW_RUN_TOKEN] : undefined;
+	const token =
+		typeof rawToken === "object" && rawToken !== null && issuedTokens.has(rawToken) ? rawToken : undefined;
 	for (const run of liveRuns) {
 		if ((token !== undefined && token === run.token) || run.owned.has(promise)) {
 			run.floats.set(promise, reason);
@@ -143,7 +155,9 @@ function handleWorkflowUnhandledRejection(reason: unknown, promise: Promise<unkn
 	// mask other extensions' / host bugs. If we are the sole listener, reproduce
 	// Node's default crash (an approximation — exact stack/exit nuance aside).
 	if (process.listenerCount("unhandledRejection") === 1) {
-		setImmediate(() => { throw reason instanceof Error ? reason : new Error(String(reason)); });
+		setImmediate(() => {
+			throw reason instanceof Error ? reason : new Error(String(reason));
+		});
 	}
 }
 
@@ -161,38 +175,50 @@ function ensureWorkflowRejectionListener(): void {
 }
 
 function isSubmitResultEnvelopeLike(value: WorkflowDispatchResult): value is SubmitResultEnvelope {
-	return Boolean(value)
-		&& typeof value === "object"
-		&& "status" in value
-		&& "summary" in value
-		&& "result" in value;
+	return Boolean(value) && typeof value === "object" && "status" in value && "summary" in value && "result" in value;
 }
 
 function dispatchFailureMessage(role: string, outcome: WorkflowDispatchOutcome): string {
 	if (outcome.interrupted) return `agent '${role}' was interrupted`;
 	if (outcome.error) return `agent '${role}' failed: ${outcome.error}`;
-	if (outcome.exitCode !== undefined && outcome.exitCode !== 0) return `agent '${role}' failed with exit code ${outcome.exitCode}`;
+	if (outcome.exitCode !== undefined && outcome.exitCode !== 0)
+		return `agent '${role}' failed with exit code ${outcome.exitCode}`;
 	return `agent '${role}' failed`;
 }
 
 function failureEnvelope(role: string, task: string, outcome: WorkflowDispatchOutcome): SubmitResultEnvelope {
-	return outcome.envelope ?? {
-		status: "failed",
-		summary: dispatchFailureMessage(role, outcome),
-		result: { role, task, exitCode: outcome.exitCode, error: outcome.error, interrupted: outcome.interrupted },
-		artifacts: [],
-	};
+	return (
+		outcome.envelope ?? {
+			status: "failed",
+			summary: dispatchFailureMessage(role, outcome),
+			result: { role, task, exitCode: outcome.exitCode, error: outcome.error, interrupted: outcome.interrupted },
+			artifacts: [],
+		}
+	);
 }
 
-async function agentGlobal(dispatch: WorkflowDispatch, role: string, task: string, tags?: WorkflowDispatchTags): Promise<SubmitResultEnvelope> {
+async function agentGlobal(
+	dispatch: WorkflowDispatch,
+	role: string,
+	task: string,
+	tags?: WorkflowDispatchTags,
+): Promise<SubmitResultEnvelope> {
 	const outcome = await dispatch(role, task, tags);
 	if (isSubmitResultEnvelopeLike(outcome)) return outcome;
-	if (outcome.isError === true || outcome.exitCode !== undefined && outcome.exitCode !== 0 || Boolean(outcome.error) || outcome.interrupted === true) {
+	if (
+		outcome.isError === true ||
+		(outcome.exitCode !== undefined && outcome.exitCode !== 0) ||
+		outcome.error ||
+		outcome.interrupted === true
+	) {
 		const envelope = failureEnvelope(role, task, outcome);
 		throw new WorkflowAgentError(dispatchFailureMessage(role, outcome), envelope);
 	}
 	if (outcome.envelope) return outcome.envelope;
-	throw new WorkflowAgentError(`agent '${role}' returned no submit_result envelope`, failureEnvelope(role, task, { ...outcome, error: "missing submit_result envelope" }));
+	throw new WorkflowAgentError(
+		`agent '${role}' returned no submit_result envelope`,
+		failureEnvelope(role, task, { ...outcome, error: "missing submit_result envelope" }),
+	);
 }
 
 async function parallelGlobal<T>(thunks: Array<() => Promise<T>>): Promise<T[]> {
@@ -226,8 +252,12 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	const runState: WorkflowRunState = { token: {}, owned, floats: new Map<Promise<unknown>, unknown>() };
 	registry.issuedTokens.add(runState.token);
 	class TrackingPromise<T> extends Promise<T> {
-		static get [Symbol.species]() { return TrackingPromise; }
-		constructor(executor: (resolve: (value: T | PromiseLike<T>) => void, reject: (reason?: unknown) => void) => void) {
+		static get [Symbol.species]() {
+			return TrackingPromise;
+		}
+		constructor(
+			executor: (resolve: (value: T | PromiseLike<T>) => void, reject: (reason?: unknown) => void) => void,
+		) {
 			super(executor);
 			owned.add(this as unknown as Promise<unknown>);
 		}
@@ -245,8 +275,15 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 			}
 			throw reason;
 		});
-		settled.push(stamped.then(() => {}, () => {}));
-		return new TrackingPromise<T>((resolve, reject) => { stamped.then(resolve, reject); });
+		settled.push(
+			stamped.then(
+				() => {},
+				() => {},
+			),
+		);
+		return new TrackingPromise<T>((resolve, reject) => {
+			stamped.then(resolve, reject);
+		});
 	};
 
 	const parallelGroupStore = new AsyncLocalStorage<string>();
@@ -300,7 +337,9 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 					// Reaping is best-effort; a render-side throw must never float.
 				}
 			};
-			void Promise.allSettled(memberPromises).then(clear, clear).catch(() => {});
+			void Promise.allSettled(memberPromises)
+				.then(clear, clear)
+				.catch(() => {});
 		}
 		return track(work);
 	};
@@ -367,7 +406,12 @@ export interface CreateWorkflowToolOptions {
 type WorkflowPhaseEmitter = WorkflowPhaseEmit & {
 	phaseIndex(): number;
 	phaseTitle(): string | undefined;
-	childStarted(role: string, task: string, index: number, meta?: { phaseIndex?: number; parallelGroupId?: string }): void;
+	childStarted(
+		role: string,
+		task: string,
+		index: number,
+		meta?: { phaseIndex?: number; parallelGroupId?: string },
+	): void;
 	childSettled(result: SingleResult, index: number): void;
 	// Declares that `size` agents will be dispatched as the parallel group
 	// `groupId`, so the live header denominator counts them before each has
@@ -397,7 +441,10 @@ function makeProgress(role: string, task: string, index: number, status: AgentPr
 	};
 }
 
-export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (partialResult: AgentToolResult<Details>) => void): WorkflowPhaseEmitter {
+export function createWorkflowPhaseEmitter(
+	toolCallId: string,
+	onUpdate?: (partialResult: AgentToolResult<Details>) => void,
+): WorkflowPhaseEmitter {
 	void toolCallId;
 	// Canonical parallel shape (mirrors runForegroundParallelTasks' mergedResults):
 	// ONE SingleResult per agent lives in results[] for the whole run — a running
@@ -418,7 +465,11 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 	// of "1/1". Keyed by groupId so concurrent groups never cross-decrement and a
 	// size-1 group (never recorded) cannot consume another group's pending slot.
 	const pendingByGroup = new Map<string, number>();
-	const pendingParallelTotal = () => { let n = 0; for (const v of pendingByGroup.values()) n += v; return n; };
+	const pendingParallelTotal = () => {
+		let n = 0;
+		for (const v of pendingByGroup.values()) n += v;
+		return n;
+	};
 	// ONE builder for both the live onUpdate frame and the final snapshot() so the
 	// two can never drift in shape.
 	const buildDetails = (): Details => {
@@ -492,14 +543,29 @@ export function createWorkflowPhaseEmitter(toolCallId: string, onUpdate?: (parti
 		}
 		const childPhaseIndex = meta?.phaseIndex ?? phaseIndex;
 		const childPhaseTitle = phaseTitle || undefined;
-		childPhases.set(index, { phaseIndex: childPhaseIndex, ...(childPhaseTitle ? { phaseTitle: childPhaseTitle } : {}), ...(meta?.parallelGroupId ? { parallelGroupId: meta.parallelGroupId } : {}) });
+		childPhases.set(index, {
+			phaseIndex: childPhaseIndex,
+			...(childPhaseTitle ? { phaseTitle: childPhaseTitle } : {}),
+			...(meta?.parallelGroupId ? { parallelGroupId: meta.parallelGroupId } : {}),
+		});
 		const label = childPhaseTitle ? `Phase ${childPhaseIndex}: ${childPhaseTitle}` : undefined;
-		results.set(index, { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, ...(label ? { label } : {}), progress: makeProgress(role, task, index, "running") });
+		results.set(index, {
+			agent: role,
+			task,
+			exitCode: 0,
+			usage: { input: 0, output: 0 },
+			...(label ? { label } : {}),
+			progress: makeProgress(role, task, index, "running"),
+		});
 		emit(label || `${role} working`);
 	};
 	phase.childSettled = (result, index) => {
 		const status: AgentProgress["status"] = result.exitCode === 0 && !result.interrupted ? "completed" : "failed";
-		const progress: AgentProgress = { ...(result.progress ?? makeProgress(result.agent, result.task, index, status)), status, ...(result.error ? { error: result.error } : {}) };
+		const progress: AgentProgress = {
+			...(result.progress ?? makeProgress(result.agent, result.task, index, status)),
+			status,
+			...(result.error ? { error: result.error } : {}),
+		};
 		const childPhase = childPhases.get(index);
 		const label = childPhase?.phaseTitle ? `Phase ${childPhase.phaseIndex}: ${childPhase.phaseTitle}` : undefined;
 		results.set(index, { ...result, ...(label && !result.label ? { label } : {}), progress });
@@ -541,7 +607,13 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 			let emitter: WorkflowPhaseEmitter | undefined;
 			try {
 				const workflowOnUpdate = onUpdate as ((partialResult: AgentToolResult<Details>) => void) | undefined;
-				const workflowContext = { toolCallId: id, signal: signal as AbortSignal, onUpdate: workflowOnUpdate, ctx, requestedAsync: params.async };
+				const workflowContext = {
+					toolCallId: id,
+					signal: signal as AbortSignal,
+					onUpdate: workflowOnUpdate,
+					ctx,
+					requestedAsync: params.async,
+				};
 				group = options.openWorkflowGroup?.(workflowContext);
 				// Persist the script next to the group record so status surfaces can show
 				// WHAT this workflow does, not just its children.
@@ -552,47 +624,68 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 					phaseIndex: emitter!.phaseIndex(),
 					...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
 				});
-				const run = () => runWorkflowScript({
-					dispatch: async (role, task, tags) => {
-						if (group) {
-							const index = childIndex++;
-							emitter!.childStarted(role, task, index, { phaseIndex: emitter!.phaseIndex(), ...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}) });
-							const result = await group.dispatchChild({
-								role,
-								task,
-								index,
-								phaseIndex: emitter!.phaseIndex(),
-								...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
-								...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
-							});
-							emitter!.childSettled(result, index);
-							return {
-								envelope: result.structuredResult,
-								isError: result.exitCode !== 0 || Boolean(result.error) || result.interrupted === true,
-								exitCode: result.exitCode,
-								error: result.error,
-								interrupted: result.interrupted,
-							};
-						}
-						if (!options.dispatch) throw new Error("workflow dispatch is not configured");
-						return options.dispatch(role, task, workflowContext);
-					},
-					onPhase: emitter,
-					onParallelGroup: (groupId, size) => emitter!.expectParallel(groupId, size),
-					onParallelGroupSettled: (groupId) => emitter!.parallelGroupSettled(groupId),
-					script: params.script,
-				});
+				const run = () =>
+					runWorkflowScript({
+						dispatch: async (role, task, tags) => {
+							if (group) {
+								const index = childIndex++;
+								emitter!.childStarted(role, task, index, {
+									phaseIndex: emitter!.phaseIndex(),
+									...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
+								});
+								const result = await group.dispatchChild({
+									role,
+									task,
+									index,
+									phaseIndex: emitter!.phaseIndex(),
+									...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
+									...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
+								});
+								emitter!.childSettled(result, index);
+								return {
+									envelope: result.structuredResult,
+									isError:
+										result.exitCode !== 0 || Boolean(result.error) || result.interrupted === true,
+									exitCode: result.exitCode,
+									error: result.error,
+									interrupted: result.interrupted,
+								};
+							}
+							if (!options.dispatch) throw new Error("workflow dispatch is not configured");
+							return options.dispatch(role, task, workflowContext);
+						},
+						onPhase: emitter,
+						onParallelGroup: (groupId, size) => emitter!.expectParallel(groupId, size),
+						onParallelGroupSettled: (groupId) => emitter!.parallelGroupSettled(groupId),
+						script: params.script,
+					});
 				if (group?.async) {
 					const asyncGroup = group;
-					void run().then((value) => asyncGroup.finishAsync?.(true, value === undefined ? "" : stringifyWorkflowValue(value))).catch(async (error) => {
-						const message = error instanceof Error ? error.message : String(error);
-						await asyncGroup.failWorkflow?.(message, currentPhaseTags());
-						asyncGroup.finishAsync?.(false, message);
-					});
+					void run()
+						.then((value) =>
+							asyncGroup.finishAsync?.(true, value === undefined ? "" : stringifyWorkflowValue(value)),
+						)
+						.catch(async (error) => {
+							const message = error instanceof Error ? error.message : String(error);
+							await asyncGroup.failWorkflow?.(message, currentPhaseTags());
+							asyncGroup.finishAsync?.(false, message);
+						});
 					const asyncDir = asyncGroup.asyncDir ?? "";
 					return {
-						content: [{ type: "text", text: `Workflow running...\nState: running\n${formatAsyncStatusHint(asyncGroup.groupRunId)}\n${ASYNC_NO_POLL_GUIDANCE}` }],
-						details: { mode: "parallel", workflow: true, results: [], runId: asyncGroup.groupRunId, asyncId: asyncGroup.groupRunId, asyncDir },
+						content: [
+							{
+								type: "text",
+								text: `Workflow running...\nState: running\n${formatAsyncStatusHint(asyncGroup.groupRunId)}\n${ASYNC_NO_POLL_GUIDANCE}`,
+							},
+						],
+						details: {
+							mode: "parallel",
+							workflow: true,
+							results: [],
+							runId: asyncGroup.groupRunId,
+							asyncId: asyncGroup.groupRunId,
+							asyncDir,
+						},
 					};
 				}
 				const value = await run();
@@ -605,7 +698,15 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				await group?.failWorkflow?.(message, emitter ? { phaseIndex: emitter.phaseIndex(), ...(emitter.phaseTitle() ? { phaseTitle: emitter.phaseTitle() } : {}) } : undefined);
+				await group?.failWorkflow?.(
+					message,
+					emitter
+						? {
+								phaseIndex: emitter.phaseIndex(),
+								...(emitter.phaseTitle() ? { phaseTitle: emitter.phaseTitle() } : {}),
+							}
+						: undefined,
+				);
 				return {
 					content: [{ type: "text", text: message }],
 					isError: true,

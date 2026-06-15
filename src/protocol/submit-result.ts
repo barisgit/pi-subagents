@@ -19,25 +19,32 @@ const SubmitResultStatusSchema = Type.Unsafe<SubmitResultStatus>({
 });
 
 export function createSubmitResultParameters(resultSchema: TSchema = Type.String()): TSchema {
-	return Type.Object({
-		// Cursor Composer's MCP tool planner handles simple JSON Schema enums reliably,
-		// but repeatedly emitted `{}` for submit_result when this was encoded as an
-		// anyOf of const literals via Type.Union([Type.Literal(...)...]). Keep the
-		// runtime validation equally strict while presenting the provider-friendly shape.
-		status: SubmitResultStatusSchema,
-		summary: Type.String(),
-		result: resultSchema,
-		artifacts: Type.Optional(Type.Array(Type.String())),
-	}, { additionalProperties: false });
+	return Type.Object(
+		{
+			// Cursor Composer's MCP tool planner handles simple JSON Schema enums reliably,
+			// but repeatedly emitted `{}` for submit_result when this was encoded as an
+			// anyOf of const literals via Type.Union([Type.Literal(...)...]). Keep the
+			// runtime validation equally strict while presenting the provider-friendly shape.
+			status: SubmitResultStatusSchema,
+			summary: Type.String(),
+			result: resultSchema,
+			artifacts: Type.Optional(Type.Array(Type.String())),
+		},
+		{ additionalProperties: false },
+	);
 }
 
 export function createSubmitResultTool(resultSchema: TSchema = Type.String()): ToolDefinition {
 	return {
 		name: SUBMIT_RESULT_TOOL_NAME,
 		label: "Submit result",
-		description: "Call this as your final, lone tool call to finish the run. Every run MUST end by calling submit_result \u2014 never stop with prose only. Provide { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }.",
+		description:
+			"Call this as your final, lone tool call to finish the run. Every run MUST end by calling submit_result \u2014 never stop with prose only. Provide { status: 'ok'|'blocked'|'failed', summary: string, result: string, artifacts?: string[] }.",
 		parameters: createSubmitResultParameters(resultSchema),
-		async execute(_toolCallId: string, params: SubmitResultEnvelope): Promise<AgentToolResult<SubmitResultEnvelope>> {
+		async execute(
+			_toolCallId: string,
+			params: SubmitResultEnvelope,
+		): Promise<AgentToolResult<SubmitResultEnvelope>> {
 			return {
 				content: [{ type: "text", text: `submitted: ${params.status}` }],
 				details: params,
@@ -67,7 +74,13 @@ export function isSubmitResultEnvelope(value: unknown): value is SubmitResultEnv
 	if (!(record.status === "ok" || record.status === "blocked" || record.status === "failed")) return false;
 	if (typeof record.summary !== "string") return false;
 	if (!("result" in record)) return false;
-	if (!(record.artifacts === undefined || (Array.isArray(record.artifacts) && record.artifacts.every((artifact) => typeof artifact === "string")))) return false;
+	if (
+		!(
+			record.artifacts === undefined ||
+			(Array.isArray(record.artifacts) && record.artifacts.every((artifact) => typeof artifact === "string"))
+		)
+	)
+		return false;
 	// Reject any key outside the fixed envelope shape: a TypeBox-validated envelope (additionalProperties:false)
 	// never carries extras, so an object that does is not a trustworthy structured result.
 	return Object.keys(record).every((key) => SUBMIT_RESULT_ENVELOPE_KEYS.has(key));
@@ -80,10 +93,12 @@ export function hasSubmitResultToolResult(messages: unknown[]): boolean {
 	return messages.some((message) => {
 		if (!message || typeof message !== "object") return false;
 		const record = message as Record<string, unknown>;
-		return record.role === "toolResult"
-			&& record.toolName === SUBMIT_RESULT_TOOL_NAME
-			&& record.isError !== true
-			&& isSubmitResultEnvelope(record.details);
+		return (
+			record.role === "toolResult" &&
+			record.toolName === SUBMIT_RESULT_TOOL_NAME &&
+			record.isError !== true &&
+			isSubmitResultEnvelope(record.details)
+		);
 	});
 }
 
@@ -95,7 +110,13 @@ export function extractSubmitResultEnvelope(messages: unknown[]): SubmitResultEn
 		const message = messages[index];
 		if (!message || typeof message !== "object") continue;
 		const record = message as Record<string, unknown>;
-		if (record.role === "toolResult" && record.toolName === SUBMIT_RESULT_TOOL_NAME && record.isError !== true && isSubmitResultEnvelope(record.details)) return record.details;
+		if (
+			record.role === "toolResult" &&
+			record.toolName === SUBMIT_RESULT_TOOL_NAME &&
+			record.isError !== true &&
+			isSubmitResultEnvelope(record.details)
+		)
+			return record.details;
 	}
 	return undefined;
 }

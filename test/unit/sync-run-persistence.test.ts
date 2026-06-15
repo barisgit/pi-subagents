@@ -60,16 +60,18 @@ class FakeAgentSession {
 }
 
 function installFakeRuntime(sessions: FakeAgentSession[]): void {
-	restoreFns.push(__setChildAgentExecutorDepsForTest({
-		DefaultResourceLoader: FakeResourceLoader as never,
-		getAgentDir: () => "/tmp/pi-agent",
-		SessionManager: { open: (file: string) => ({ file }) as never },
-		createAgentSession: async () => {
-			const session = sessions.shift();
-			if (!session) throw new Error("No fake session queued");
-			return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
-		},
-	}));
+	restoreFns.push(
+		__setChildAgentExecutorDepsForTest({
+			DefaultResourceLoader: FakeResourceLoader as never,
+			getAgentDir: () => "/tmp/pi-agent",
+			SessionManager: { open: (file: string) => ({ file }) as never },
+			createAgentSession: async () => {
+				const session = sessions.shift();
+				if (!session) throw new Error("No fake session queued");
+				return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
+			},
+		}),
+	);
 }
 
 function makeExecutor(cwd: string, emit: (event: string, payload: unknown) => void = () => {}) {
@@ -96,15 +98,17 @@ function makeExecutor(cwd: string, emit: (event: string, payload: unknown) => vo
 		childRegistry: new ChildAgentRegistry(),
 		expandTilde: (value: string) => value,
 		discoverAgents: () => ({
-			agents: [{
-				name: "phase-tester",
-				description: "Phase tester",
-				systemPrompt: "",
-				systemPromptMode: "replace",
-				inheritProjectContext: false,
-				inheritSkills: false,
-				model: "test/model-a",
-			}],
+			agents: [
+				{
+					name: "phase-tester",
+					description: "Phase tester",
+					systemPrompt: "",
+					systemPromptMode: "replace",
+					inheritProjectContext: false,
+					inheritSkills: false,
+					model: "test/model-a",
+				},
+			],
 		}),
 	} as never);
 }
@@ -130,7 +134,12 @@ function uniqueRunId(prefix: string): string {
 // replaces the deleted writeSyncRunStatus{Start,Update,End} free functions.
 function makeWriter(runIdPrefix: string): StatusWriter {
 	const runRecordDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-run-record-"));
-	return new StatusWriter({ runRecordDir, runId: uniqueRunId(runIdPrefix), flushPolicy: "terminal", throttleMs: 250 });
+	return new StatusWriter({
+		runRecordDir,
+		runId: uniqueRunId(runIdPrefix),
+		flushPolicy: "terminal",
+		throttleMs: 250,
+	});
 }
 
 function readStatus(writer: StatusWriter) {
@@ -157,7 +166,10 @@ describe("sync run persistence", () => {
 			assert.equal(status.parentRunId, "parent-a");
 			assert.equal(status.steps[0].status, "pending");
 
-			writer.mergePatch({ currentTool: "bash", steps: [{ status: "running", currentTool: "bash" }] }, { flush: true });
+			writer.mergePatch(
+				{ currentTool: "bash", steps: [{ status: "running", currentTool: "bash" }] },
+				{ flush: true },
+			);
 			status = readStatus(writer);
 			assert.equal(status.currentTool, "bash");
 			assert.equal(status.steps[0].status, "running");
@@ -197,9 +209,12 @@ describe("sync run persistence", () => {
 		const writer = makeWriter("sync-persist-livetok");
 		try {
 			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "explorer", status: "pending" }] });
-			writer.mergePatch({
-				steps: [{ status: "running", tokens: { input: 500, output: 243, total: 743 } }],
-			}, { flush: true });
+			writer.mergePatch(
+				{
+					steps: [{ status: "running", tokens: { input: 500, output: 243, total: 743 } }],
+				},
+				{ flush: true },
+			);
 			const status = readStatus(writer);
 			assert.equal(status.state, "running");
 			assert.equal(status.steps[0].tokens.total, 743);
@@ -227,7 +242,12 @@ describe("phase", () => {
 		t.mock.timers.enable({ apis: ["Date"] });
 		const writer = makeWriter("sync-phase-write");
 		try {
-			writer.initialize({ mode: "single", state: "running", startedAt: Date.now(), steps: [{ agent: "worker", status: "pending" }] });
+			writer.initialize({
+				mode: "single",
+				state: "running",
+				startedAt: Date.now(),
+				steps: [{ agent: "worker", status: "pending" }],
+			});
 			t.mock.timers.tick(10);
 			const before = Date.now();
 			writer.mergePatch({ phase: "thinking", phaseStartedAt: 5000 }, { flush: true });
@@ -260,7 +280,12 @@ describe("phase", () => {
 		t.mock.timers.enable({ apis: ["Date"] });
 		const writer = makeWriter("sync-phase-floor");
 		try {
-			writer.initialize({ mode: "single", state: "running", startedAt: Date.now(), steps: [{ agent: "worker", status: "pending" }] });
+			writer.initialize({
+				mode: "single",
+				state: "running",
+				startedAt: Date.now(),
+				steps: [{ agent: "worker", status: "pending" }],
+			});
 			t.mock.timers.tick(1000);
 			writer.mergePatch({ phase: "thinking", phaseStartedAt: 1000 });
 			const first = readStatus(writer);
@@ -290,7 +315,13 @@ describe("phase", () => {
 		try {
 			const run = makeExecutor(tempDir, (event) => emitted.push(event)).executeInternal(
 				"id",
-				{ agent: "phase-tester", task: "stall", sessionDir: tempDir, control: { needsAttentionAfterMs: 10 }, includeProgress: true },
+				{
+					agent: "phase-tester",
+					task: "stall",
+					sessionDir: tempDir,
+					control: { needsAttentionAfterMs: 10 },
+					includeProgress: true,
+				},
 				new AbortController().signal,
 				undefined,
 				makeCtx(tempDir) as never,
@@ -315,9 +346,11 @@ describe("phase", () => {
 	it("caller-forwards-phase", async () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sync-phase-caller-"));
 		const calls: Array<{ runId: string; patch: Record<string, unknown> }> = [];
-		restoreFns.push(__setSyncRunStatusUpdateObserverForTest((runId, patch) => {
-			calls.push({ runId, patch: patch as Record<string, unknown> });
-		}));
+		restoreFns.push(
+			__setSyncRunStatusUpdateObserverForTest((runId, patch) => {
+				calls.push({ runId, patch: patch as Record<string, unknown> });
+			}),
+		);
 		const session = new FakeAgentSession(async (self) => {
 			self.emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
 			self.emit({ type: "text_delta", delta: "done" });
@@ -333,7 +366,9 @@ describe("phase", () => {
 			);
 
 			assert.equal(result.isError, undefined);
-			assert.ok(calls.some((call) => call.patch.phase === "thinking" && typeof call.patch.phaseStartedAt === "number"));
+			assert.ok(
+				calls.some((call) => call.patch.phase === "thinking" && typeof call.patch.phaseStartedAt === "number"),
+			);
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}

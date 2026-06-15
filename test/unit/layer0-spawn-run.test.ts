@@ -50,12 +50,17 @@ describe("Layer-0 spawnRun", () => {
 		const root = setupTempHome("layer0-spawn-run-test-");
 		const runAgent: Layer0RunAgent = async (step) => resultFor(step);
 
-		const handles = ["fixer", "qa", "review"].map((agentName) => spawnRun({ agentName, task: `do ${agentName}`, cwd: root }, {
-			rootRunId: "root-run",
-			notifyPolicy: "silent",
-			runAgent,
-			defaultSessionDir: path.join(root, "runs"),
-		}));
+		const handles = ["fixer", "qa", "review"].map((agentName) =>
+			spawnRun(
+				{ agentName, task: `do ${agentName}`, cwd: root },
+				{
+					rootRunId: "root-run",
+					notifyPolicy: "silent",
+					runAgent,
+					defaultSessionDir: path.join(root, "runs"),
+				},
+			),
+		);
 
 		assert.equal(new Set(handles.map((handle) => handle.runId)).size, handles.length);
 		assert.equal(new Set(handles.map((handle) => handle.runRecordDir)).size, handles.length);

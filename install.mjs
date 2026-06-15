@@ -2,7 +2,7 @@
 
 /**
  * pi-subagents installer
- * 
+ *
  * Usage:
  *   npx pi-subagents          # Install to ~/.pi/agent/extensions/subagent
  *   npx pi-subagents --remove # Remove the extension

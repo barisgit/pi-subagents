@@ -37,7 +37,10 @@ describe("skill progressive", () => {
 	});
 
 	it("references-folder-has-5", () => {
-		const files = fs.readdirSync(referencesDir).filter((file) => file.endsWith(".md")).sort();
+		const files = fs
+			.readdirSync(referencesDir)
+			.filter((file) => file.endsWith(".md"))
+			.sort();
 
 		assert.deepEqual(files, [...referenceFiles].sort());
 	});

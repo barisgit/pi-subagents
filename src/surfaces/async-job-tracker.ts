@@ -59,7 +59,11 @@ function asyncAgentName(job: AsyncJobState): string {
 	return job.currentAgent ?? job.agents?.[job.currentStep ?? 0] ?? job.agents?.[0] ?? "unknown";
 }
 
-function deriveAsyncJobActivityState(job: AsyncJobState, config: ResolvedControlConfig, now = Date.now()): ActivityState | undefined {
+function deriveAsyncJobActivityState(
+	job: AsyncJobState,
+	config: ResolvedControlConfig,
+	now = Date.now(),
+): ActivityState | undefined {
 	if (isTerminalAsyncStatus(job.status)) return undefined;
 	return deriveActivityState({
 		config,
@@ -70,7 +74,11 @@ function deriveAsyncJobActivityState(job: AsyncJobState, config: ResolvedControl
 	});
 }
 
-function emitAsyncControlNotification(pi: Pick<ExtensionAPI, "events">, config: ResolvedControlConfig, event: ControlEvent): void {
+function emitAsyncControlNotification(
+	pi: Pick<ExtensionAPI, "events">,
+	config: ResolvedControlConfig,
+	event: ControlEvent,
+): void {
 	if (!shouldNotifyControlEvent(config, event)) return;
 	const payload = {
 		event,
@@ -91,7 +99,11 @@ function emitAsyncControlNotification(pi: Pick<ExtensionAPI, "events">, config: 
 	}
 }
 
-export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: SubagentState, options: AsyncJobTrackerOptions = {}): {
+export function createAsyncJobTracker(
+	pi: Pick<ExtensionAPI, "events">,
+	state: SubagentState,
+	options: AsyncJobTrackerOptions = {},
+): {
 	ensurePoller: () => void;
 	handleStarted: (data: unknown) => void;
 	handleComplete: (data: unknown) => void;
@@ -134,14 +146,18 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		const current = deriveAsyncJobActivityState(job, config);
 		job.activityState = current;
 		if (shouldEmitControlEvent(config, previous, current) && current) {
-			emitAsyncControlNotification(pi, config, buildControlEvent({
-				from: previous,
-				to: current,
-				runId: job.asyncId,
-				agent: asyncAgentName(job),
-				index: job.currentStep,
-				lastActivityAt: job.lastActivityAt,
-			}));
+			emitAsyncControlNotification(
+				pi,
+				config,
+				buildControlEvent({
+					from: previous,
+					to: current,
+					runId: job.asyncId,
+					agent: asyncAgentName(job),
+					index: job.currentStep,
+					lastActivityAt: job.lastActivityAt,
+				}),
+			);
 		}
 		if (current === undefined) lastActivityStateByRunId.delete(job.asyncId);
 		else lastActivityStateByRunId.set(job.asyncId, current);
@@ -170,7 +186,9 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					if (job.kind === "workflow") {
 						if (previousStatusWasTerminal) continue;
 						const lifecycle = readWorkflowGroupState(job.asyncDir);
-						const children = [...state.asyncJobs.values()].filter((child) => child.parentRunId === job.asyncId);
+						const children = [...state.asyncJobs.values()].filter(
+							(child) => child.parentRunId === job.asyncId,
+						);
 						if (lifecycle === "complete" || lifecycle === "failed") {
 							job.status = lifecycle;
 							job.displayState = undefined;
@@ -203,7 +221,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						}
 						// Liveliest child wins the group's display state.
 						job.displayState = children.reduce<AsyncJobState["displayState"]>(
-							(best, child) => (displayStatePriority(child.displayState) < displayStatePriority(best) ? child.displayState : best),
+							(best, child) =>
+								displayStatePriority(child.displayState) < displayStatePriority(best)
+									? child.displayState
+									: best,
 							undefined,
 						);
 						continue;
@@ -214,9 +235,17 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						if (!previousStatusWasTerminal || isTerminalAsyncStatus(status.state)) {
 							job.status = status.state;
 						}
-						job.lastActivityAt = status.lastActivityAt ?? currentStepRecord?.lastActivityAt ?? currentStepRecord?.startedAt ?? job.lastActivityAt;
-						job.currentTool = isTerminalAsyncStatus(job.status) ? undefined : (status.currentTool ?? job.currentTool);
-						job.currentToolStartedAt = isTerminalAsyncStatus(job.status) ? undefined : (status.currentToolStartedAt ?? job.currentToolStartedAt);
+						job.lastActivityAt =
+							status.lastActivityAt ??
+							currentStepRecord?.lastActivityAt ??
+							currentStepRecord?.startedAt ??
+							job.lastActivityAt;
+						job.currentTool = isTerminalAsyncStatus(job.status)
+							? undefined
+							: (status.currentTool ?? job.currentTool);
+						job.currentToolStartedAt = isTerminalAsyncStatus(job.status)
+							? undefined
+							: (status.currentToolStartedAt ?? job.currentToolStartedAt);
 						job.mode = status.mode;
 						// charter nested-subagent-display: mirror parent id for widget hierarchy.
 						job.parentRunId = status.parentRunId;
@@ -338,7 +367,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		logger.info("handleStarted: FIRED", { id: info.id, agent: info.agent, hasUi: !!state.lastUiContext });
 		if (!info.id) return;
 		const now = Date.now();
-		const asyncDir = info.asyncDir ?? readAllEntries({ limit: 1 }).find((entry) => entry.runId === info.id)?.runRecordDir;
+		const asyncDir =
+			info.asyncDir ?? readAllEntries({ limit: 1 }).find((entry) => entry.runId === info.id)?.runRecordDir;
 		if (!asyncDir) {
 			logger.warn("handleStarted: no asyncDir for runId", { id: info.id });
 			return;
@@ -372,7 +402,12 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	const handleComplete = (data: unknown) => {
 		const result = data as { id?: string; success?: boolean; asyncDir?: string };
 		const asyncId = result.id;
-		logger.info("handleComplete: FIRED", { id: asyncId, success: result.success, inMap: asyncId ? state.asyncJobs.has(asyncId) : false, hasUi: !!state.lastUiContext });
+		logger.info("handleComplete: FIRED", {
+			id: asyncId,
+			success: result.success,
+			inMap: asyncId ? state.asyncJobs.has(asyncId) : false,
+			hasUi: !!state.lastUiContext,
+		});
 		if (!asyncId) return;
 		const job = state.asyncJobs.get(asyncId);
 		if (job) {
@@ -400,7 +435,9 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 
 	const handleDelivered = (data: unknown) => {
 		const info = data as { runIds?: unknown };
-		const runIds = Array.isArray(info?.runIds) ? info.runIds.filter((id): id is string => typeof id === "string") : [];
+		const runIds = Array.isArray(info?.runIds)
+			? info.runIds.filter((id): id is string => typeof id === "string")
+			: [];
 		if (runIds.length === 0) return;
 		let changed = false;
 		for (const runId of runIds) {
@@ -440,7 +477,13 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	// and the bus are notified; state.asyncJobs is still populated by the caller
 	// (this tracker's own handleStarted listener tolerates the self-emitted
 	// event — it overwrites the same runId key and the poller corrects status).
-	const announceReclaimed = (runId: string, asyncDir: string, agent?: string, parentRunId?: string, kind?: string): void => {
+	const announceReclaimed = (
+		runId: string,
+		asyncDir: string,
+		agent?: string,
+		parentRunId?: string,
+		kind?: string,
+	): void => {
 		idleTracker?.onAsyncStarted(runId);
 		try {
 			pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {

@@ -7,7 +7,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { formatToolCall } from "./formatting.ts";
-import { type AgentProgress, type Details, type DisplayItem, type ErrorInfo, type SingleResult, type ToolCallSummary } from "../protocol/types.ts";
+import type {
+	AgentProgress,
+	Details,
+	DisplayItem,
+	ErrorInfo,
+	SingleResult,
+	ToolCallSummary,
+} from "../protocol/types.ts";
 import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
 
 // ============================================================================
@@ -27,10 +34,12 @@ export function resolveChildCwd(baseCwd: string, childCwd: string | undefined): 
 }
 
 function isNotFoundError(error: unknown): boolean {
-	return typeof error === "object"
-		&& error !== null
-		&& "code" in error
-		&& (error as NodeJS.ErrnoException).code === "ENOENT";
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as NodeJS.ErrnoException).code === "ENOENT"
+	);
 }
 
 function reconcileStatus(status: PersistedRunStatus, mtimeMs: number): PersistedRunStatus {
@@ -137,7 +146,7 @@ export function getOutputTail(outputFile: string | undefined, maxLines: number =
 /**
  * Get human-readable last activity time for a file
  */
-	export function getLastActivity(outputFile: string | undefined): string {
+export function getLastActivity(outputFile: string | undefined): string {
 	if (!outputFile) return "";
 	try {
 		const stat = fs.statSync(outputFile);
@@ -170,7 +179,8 @@ export function findByPrefix(dir: string, prefix: string, suffix?: string): stri
  */
 export function findLatestSessionFile(sessionDir: string): string | null {
 	if (!fs.existsSync(sessionDir)) return null;
-	const files = fs.readdirSync(sessionDir)
+	const files = fs
+		.readdirSync(sessionDir)
 		.filter((f) => f.endsWith(".jsonl"))
 		.map((f) => {
 			const filePath = path.join(sessionDir, f);
@@ -213,7 +223,9 @@ function buildStripRegex(tags: string[]): RegExp {
  * Pass `false` or `{ enabled: false }` to disable.
  * Pass `{ tags: [...] }` to customize which tags are stripped.
  */
-export function configureXmlStripping(config: import("../protocol/types.ts").StripXmlTagsConfig | boolean | undefined): void {
+export function configureXmlStripping(
+	config: import("../protocol/types.ts").StripXmlTagsConfig | boolean | undefined,
+): void {
 	if (config === false) {
 		stripRe = null;
 		return;
@@ -305,9 +317,10 @@ export function extractToolCallSummaries(messages: Message[] | undefined): ToolC
 		if (msg.role !== "assistant") continue;
 		for (const part of msg.content) {
 			if (part.type !== "toolCall") continue;
-			const args = typeof part.arguments === "object" && part.arguments !== null && !Array.isArray(part.arguments)
-				? part.arguments
-				: {};
+			const args =
+				typeof part.arguments === "object" && part.arguments !== null && !Array.isArray(part.arguments)
+					? part.arguments
+					: {};
 			summaries.push({
 				text: formatToolCall(part.name, args),
 				expandedText: formatToolCall(part.name, args, true),
@@ -323,9 +336,7 @@ export function compactForegroundResult(result: SingleResult): SingleResult {
 	// Preserve a slim progress snapshot so post-completion rendering still has
 	// agent color, tokenSamples (sparkline), and recentTools available. Drop only
 	// the heaviest fields (recentOutput) -- everything else is cheap.
-	const slimProgress = result.progress
-		? { ...result.progress, recentOutput: [] as string[] }
-		: undefined;
+	const slimProgress = result.progress ? { ...result.progress, recentOutput: [] as string[] } : undefined;
 	return {
 		...result,
 		messages: undefined,
@@ -340,9 +351,7 @@ export function compactForegroundDetails(details: Details): Details {
 		...details,
 		results: compactedResults,
 		totalUsage: details.totalUsage ?? computeDetailsTotalUsage(compactedResults),
-		progress: details.progress
-			? details.progress.map(compactCompletedProgress)
-			: undefined,
+		progress: details.progress ? details.progress.map(compactCompletedProgress) : undefined,
 	};
 }
 
@@ -356,7 +365,18 @@ export function compactForegroundDetails(details: Details): Details {
  * + descendant usage bubbled in via the child-run onEvent path, so summing here
  * is by construction the whole tree.
  */
-export function computeDetailsTotalUsage(results: { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number } }[]): { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number } {
+export function computeDetailsTotalUsage(
+	results: {
+		usage?: {
+			input?: number;
+			output?: number;
+			cacheRead?: number;
+			cacheWrite?: number;
+			cost?: number;
+			turns?: number;
+		};
+	}[],
+): { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number } {
 	const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 	for (const r of results) {
 		const u = r.usage;
@@ -379,9 +399,11 @@ export function detectSubagentError(messages: Message[]): ErrorInfo {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
-			const hasText = Array.isArray(msg.content) && msg.content.some(
-				(c) => c.type === "text" && "text" in c && typeof c.text === "string" && c.text.trim().length > 0,
-			);
+			const hasText =
+				Array.isArray(msg.content) &&
+				msg.content.some(
+					(c) => c.type === "text" && "text" in c && typeof c.text === "string" && c.text.trim().length > 0,
+				);
 			if (hasText) {
 				lastAssistantTextIndex = i;
 				break;
@@ -477,7 +499,8 @@ export function extractToolArgsPreview(args: Record<string, unknown>): string {
 	const queriesPreview = previewArray(args.queries);
 	if (queriesPreview) return truncatePreview(queriesPreview, 60);
 	if (typeof args.query === "string" && args.query.trim().length > 0) return truncatePreview(args.query, 60);
-	if (typeof args.workflow === "string" && args.workflow.trim().length > 0) return `workflow=${truncatePreview(args.workflow, 48)}`;
+	if (typeof args.workflow === "string" && args.workflow.trim().length > 0)
+		return `workflow=${truncatePreview(args.workflow, 48)}`;
 
 	if (typeof args.url === "string" && args.url.trim().length > 0) return truncatePreview(args.url, 60);
 	const urlsPreview = previewArray(args.urls);
@@ -488,26 +511,31 @@ export function extractToolArgsPreview(args: Record<string, unknown>): string {
 	// repeated greps in the same directory don't all look identical.
 	if (typeof args.pattern === "string" && args.pattern.trim().length > 0) {
 		const pat = truncatePreview(args.pattern, 80);
-		const loc = typeof args.path === "string" && args.path.trim().length > 0
-			? args.path
-			: typeof args.glob === "string" && args.glob.trim().length > 0
-				? args.glob
-				: undefined;
+		const loc =
+			typeof args.path === "string" && args.path.trim().length > 0
+				? args.path
+				: typeof args.glob === "string" && args.glob.trim().length > 0
+					? args.glob
+					: undefined;
 		return loc ? `${pat} in ${truncatePreview(loc, 120)}` : pat;
 	}
 
 	// Read calls: append offset/limit so back-to-back reads of the same file look different.
-	if ((typeof args.file_path === "string" || typeof args.path === "string") && (typeof args.offset === "number" || typeof args.limit === "number")) {
+	if (
+		(typeof args.file_path === "string" || typeof args.path === "string") &&
+		(typeof args.offset === "number" || typeof args.limit === "number")
+	) {
 		const p = (args.file_path ?? args.path) as string;
 		const off = typeof args.offset === "number" ? args.offset : undefined;
 		const lim = typeof args.limit === "number" ? args.limit : undefined;
-		const suffix = off !== undefined && lim !== undefined
-			? ` (L${off}-${off + lim})`
-			: off !== undefined
-				? ` (from L${off})`
-				: lim !== undefined
-					? ` (${lim} lines)`
-					: "";
+		const suffix =
+			off !== undefined && lim !== undefined
+				? ` (L${off}-${off + lim})`
+				: off !== undefined
+					? ` (from L${off})`
+					: lim !== undefined
+						? ` (${lim} lines)`
+						: "";
 		return `${truncatePreview(p, 180)}${suffix}`;
 	}
 
@@ -520,7 +548,7 @@ export function extractToolArgsPreview(args: Record<string, unknown>): string {
 			return truncatePreview(value, 200);
 		}
 	}
-	
+
 	// Fallback: show first string value found
 	for (const [key, value] of Object.entries(args)) {
 		const arrayPreview = previewArray(value);
@@ -562,5 +590,3 @@ export function extractTextFromContent(content: unknown): string {
 	}
 	return texts.join("\n");
 }
-
-

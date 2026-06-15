@@ -11,10 +11,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { after, afterEach, describe, it } from "node:test";
 import { createAsyncJobTracker } from "../../src/surfaces/async-job-tracker.ts";
-import {
-	createActivityTicker,
-	DEFAULT_CONTROL_CONFIG,
-} from "../../src/dispatch/subagent-control.ts";
+import { createActivityTicker, DEFAULT_CONTROL_CONFIG } from "../../src/dispatch/subagent-control.ts";
 import {
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
@@ -26,16 +23,26 @@ import {
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 function makeEventsBus() {
 	const calls: Array<{ event: string; payload: unknown }> = [];
 	return {
-		emit(event: string, payload: unknown) { calls.push({ event, payload }); },
+		emit(event: string, payload: unknown) {
+			calls.push({ event, payload });
+		},
 		calls,
-		countOf(event: string) { return calls.filter((call) => call.event === event).length; },
-		payloadsFor(event: string) { return calls.filter((call) => call.event === event).map((call) => call.payload); },
+		countOf(event: string) {
+			return calls.filter((call) => call.event === event).length;
+		},
+		payloadsFor(event: string) {
+			return calls.filter((call) => call.event === event).map((call) => call.payload);
+		},
 	};
 }
 
@@ -68,20 +75,25 @@ function makeState(asyncDir: string, config: ResolvedControlConfig): SubagentSta
 	return {
 		baseCwd: process.cwd(),
 		currentSessionId: null,
-		asyncJobs: new Map([["async-r1", {
-			asyncId: "async-r1",
-			asyncDir,
-			status: "running",
-			displayState: "quiet",
-			mode: "single",
-			agents: ["worker"],
-			currentStep: 0,
-			stepsTotal: 1,
-			startedAt: 0,
-			updatedAt: 0,
-			lastActivityAt: 0,
-			controlConfig: config,
-		}]]),
+		asyncJobs: new Map([
+			[
+				"async-r1",
+				{
+					asyncId: "async-r1",
+					asyncDir,
+					status: "running",
+					displayState: "quiet",
+					mode: "single",
+					agents: ["worker"],
+					currentStep: 0,
+					stepsTotal: 1,
+					startedAt: 0,
+					updatedAt: 0,
+					lastActivityAt: 0,
+					controlConfig: config,
+				},
+			],
+		]),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
 		cleanupTimers: new Map(),
@@ -144,16 +156,20 @@ describe("needs-attention reaches parent", () => {
 		const config = { ...DEFAULT_CONTROL_CONFIG, needsAttentionAfterMs: 10_000 };
 		const state = makeState(tmp, config);
 		try {
-			writeStatus(tmp, {
-				runId: "async-r1",
-				mode: "single",
-				state: "running",
-				startedAt: 0,
-				lastUpdate: 0,
-				lastActivityAt: 0,
-				currentStep: 0,
-				steps: [{ agent: "worker", status: "running", startedAt: 0, lastActivityAt: 0 }],
-			}, 0);
+			writeStatus(
+				tmp,
+				{
+					runId: "async-r1",
+					mode: "single",
+					state: "running",
+					startedAt: 0,
+					lastUpdate: 0,
+					lastActivityAt: 0,
+					currentStep: 0,
+					steps: [{ agent: "worker", status: "running", startedAt: 0, lastActivityAt: 0 }],
+				},
+				0,
+			);
 			const tracker = createAsyncJobTracker({ events: bus } as never, state, { pollIntervalMs: 5_000 });
 			tracker.ensurePoller();
 
@@ -165,7 +181,11 @@ describe("needs-attention reaches parent", () => {
 			assert.equal(bus.countOf(SUBAGENT_NEEDS_ATTENTION_EVENT), 1);
 
 			t.mock.timers.tick(10_000);
-			assert.equal(bus.countOf(SUBAGENT_CONTROL_EVENT), 1, "same needs_attention state is deduped by edge detection");
+			assert.equal(
+				bus.countOf(SUBAGENT_CONTROL_EVENT),
+				1,
+				"same needs_attention state is deduped by edge detection",
+			);
 
 			const payload = bus.payloadsFor(SUBAGENT_CONTROL_EVENT)[0] as { event: ControlEvent; source: string };
 			assert.equal(payload.source, "async");

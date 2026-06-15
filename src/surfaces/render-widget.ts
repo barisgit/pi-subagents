@@ -4,16 +4,24 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Component, type TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { type AsyncJobState, MAX_WIDGET_JOBS, WIDGET_KEY } from "../protocol/types.ts";
 import { formatDuration } from "./formatters.ts";
 import { compareRunsForDisplay } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
 import { colorForAgentName } from "../shared/agents.ts";
-import { getTermWidth, multiSpinnerFrame, themeBold, tintAgentName, truncLine, WIDGET_ANIMATION_MS, formatTokenStat, type Theme } from "./render-shared.ts";
+import {
+	getTermWidth,
+	multiSpinnerFrame,
+	themeBold,
+	tintAgentName,
+	truncLine,
+	WIDGET_ANIMATION_MS,
+	formatTokenStat,
+	type Theme,
+} from "./render-shared.ts";
 import type { UtilsClient } from "pi-extension-utils";
-
 
 let widgetTimer: ReturnType<typeof setInterval> | undefined;
 let latestWidgetCtx: ExtensionContext | undefined;
@@ -30,7 +38,8 @@ function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
 	// still lingers in status.json (e.g. a force-killed run stuck mid 'streaming_text').
 	// Honor displayState directly so a dead run stops rendering as a live spinner (f5).
 	if (job.status === "lost" || job.displayState === "lost") return theme.fg("error", "!");
-	if (job.displayState === "needs_attention" || job.activityState === "needs_attention") return theme.fg("warning", "!");
+	if (job.displayState === "needs_attention" || job.activityState === "needs_attention")
+		return theme.fg("warning", "!");
 	if (job.status === "running") return theme.fg("accent", multiSpinnerFrame());
 	if (job.status === "queued") return theme.fg("dim", "·");
 	if (job.status === "paused") return theme.fg("warning", "⏸");
@@ -101,7 +110,9 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 		return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
 	}
 	const stepsTotal = job.stepsTotal ?? job.agents?.length ?? 1;
-	const completedParallelSteps = job.stepStatuses?.filter((status) => status === "complete" || status === "failed" || status === "skipped").length;
+	const completedParallelSteps = job.stepStatuses?.filter(
+		(status) => status === "complete" || status === "failed" || status === "skipped",
+	).length;
 	// Label distinguishes sequence (sequential multi-step) from parallel (concurrent children).
 	const badge = formatShapeBadge({
 		mode: job.mode ?? "single",
@@ -112,7 +123,8 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	// Suppress phase chip for terminal runs so finished jobs don't keep
 	// ticking `streaming Xs` / `tool: bash Xs` (stale phase from status.json
 	// written before the finalize phase-clear lands).
-	const phaseAllowed = job.status !== "complete" && job.status !== "failed" && job.status !== "lost" && job.displayState !== "lost";
+	const phaseAllowed =
+		job.status !== "complete" && job.status !== "failed" && job.status !== "lost" && job.displayState !== "lost";
 	const phaseLabel = phaseAllowed ? formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool) : "";
 	if (phaseLabel) parts.push(phaseLabel);
 	else if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
@@ -185,9 +197,16 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	if (workflowIds.size > 0) {
 		jobs = jobs.filter((job) => !(job.parentRunId && workflowIds.has(job.parentRunId)));
 	}
-	const nonWorkflowContainerIds = new Set(jobs
-		.filter((job) => job.kind !== "workflow" && job.mode === "parallel" && jobs.some((other) => other.parentRunId === job.asyncId))
-		.map((job) => job.asyncId));
+	const nonWorkflowContainerIds = new Set(
+		jobs
+			.filter(
+				(job) =>
+					job.kind !== "workflow" &&
+					job.mode === "parallel" &&
+					jobs.some((other) => other.parentRunId === job.asyncId),
+			)
+			.map((job) => job.asyncId),
+	);
 	if (nonWorkflowContainerIds.size > 0) {
 		jobs = jobs.filter((job) => !nonWorkflowContainerIds.has(job.asyncId));
 	}
@@ -213,9 +232,8 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 		const job = visible[i]!;
 		const isLast = i === visible.length - 1 && overflow === 0;
 		const depth = depthMap.get(job.asyncId) ?? 0;
-		const branchGlyph = depth > 0
-			? `${"  ".repeat(Math.max(0, depth - 1))}${isLast ? "└─" : "├─"}`
-			: (isLast ? "└─" : "├─");
+		const branchGlyph =
+			depth > 0 ? `${"  ".repeat(Math.max(0, depth - 1))}${isLast ? "└─" : "├─"}` : isLast ? "└─" : "├─";
 		const branch = theme.fg("dim", branchGlyph);
 		const glyph = widgetJobGlyph(job, theme);
 		const name = widgetJobName(job, theme);
@@ -239,7 +257,9 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 function buildWidgetComponent(theme: Theme): Component {
 	return {
 		render: (width: number) => buildWidgetLines(latestWidgetJobs, theme, width),
-		invalidate: () => { /* no cached state */ },
+		invalidate: () => {
+			/* no cached state */
+		},
 	};
 }
 

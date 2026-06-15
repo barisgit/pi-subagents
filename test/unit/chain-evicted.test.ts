@@ -12,14 +12,19 @@ function read(rel: string): string {
 
 describe("chain eviction", () => {
 	it("deletes chain-only implementation files", () => {
-		for (const rel of ["chain-clarify.ts", "chain-execution.ts", "chain-serializer.ts", "agent-manager-chain-detail.ts"]) {
+		for (const rel of [
+			"chain-clarify.ts",
+			"chain-execution.ts",
+			"chain-serializer.ts",
+			"agent-manager-chain-detail.ts",
+		]) {
 			assert.equal(fs.existsSync(path.join(root, rel)), false, `${rel} must not exist`);
 		}
 	});
 
 	it("removes chain from the subagent schema and description", () => {
 		const props = (SubagentParams as { properties?: Record<string, unknown> }).properties ?? {};
-		assert.equal(Object.prototype.hasOwnProperty.call(props, "chain"), false);
+		assert.equal(Object.hasOwn(props, "chain"), false);
 		const index = read("src/dispatch/subagent-tool.ts");
 		const start = index.indexOf("description: `Delegate a bounded task");
 		const end = index.indexOf("parameters: SubagentParams", start);

@@ -136,7 +136,12 @@ describe("overlay incremental leaf-summary cache", () => {
 		assert.equal(s1.state, "complete");
 
 		// Rewrite to a failed terminal state with a later mtime + different size.
-		const later = { ...terminalStatus("evolve-1", 2000), state: "failed", endedAt: 2000, extraPaddingField: "x".repeat(40) };
+		const later = {
+			...terminalStatus("evolve-1", 2000),
+			state: "failed",
+			endedAt: 2000,
+			extraPaddingField: "x".repeat(40),
+		};
 		writeStatus(dir, later);
 
 		const s2 = readLeafRunViewCached(dir);

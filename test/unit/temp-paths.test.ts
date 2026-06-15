@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { resolveTempScopeId } from "../../src/shared/runtime-env.ts";
-import {
-	RUNS_DIR,
-	TEMP_ARTIFACTS_DIR,
-	BASE_TEMP_DIR,
-} from "../../src/shared/runtime-paths.ts";
+import { RUNS_DIR, TEMP_ARTIFACTS_DIR, BASE_TEMP_DIR } from "../../src/shared/runtime-paths.ts";
 
 describe("resolveTempScopeId", () => {
 	it("prefers uid when available", () => {

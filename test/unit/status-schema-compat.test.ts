@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { statusToRunView } from "../../src/state/async-status.ts";
 import { StatusWriter } from "../../src/state/status-writer.ts";
-import { type PersistedRunStatus } from "../../src/protocol/status-types.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 function createTempDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -57,28 +57,32 @@ function newShapeStatus(runId: string): PersistedRunStatus {
 		currentStep: 0,
 		currentTool: "read",
 		currentToolStartedAt: 10_150,
-		steps: [{
-			agent: "fixer",
-			label: "write tests",
-			status: "running",
-			lastActivityAt: 10_200,
-			currentTool: "read",
-			currentToolStartedAt: 10_150,
-			live: {
-				color: "cyan",
-				thinking: "checking schema",
-				phase: "thinking",
-				phaseStartedAt: 10_100,
-				toolCount: 1,
-				tokens: 42,
+		steps: [
+			{
+				agent: "fixer",
+				label: "write tests",
+				status: "running",
+				lastActivityAt: 10_200,
+				currentTool: "read",
+				currentToolStartedAt: 10_150,
+				live: {
+					color: "cyan",
+					thinking: "checking schema",
+					phase: "thinking",
+					phaseStartedAt: 10_100,
+					toolCount: 1,
+					tokens: 42,
+				},
 			},
-		}],
+		],
 		sessionFile: "session.jsonl",
 		totalTokens: { input: 2, output: 3, total: 5 },
 	};
 }
 
-function pretendLegacyReader(status: PersistedRunStatus): { steps: Array<{ live?: Record<string, unknown> } & Record<string, unknown>> } & Record<string, unknown> {
+function pretendLegacyReader(
+	status: PersistedRunStatus,
+): { steps: Array<{ live?: Record<string, unknown> } & Record<string, unknown>> } & Record<string, unknown> {
 	const {
 		runId,
 		parentRunId,
@@ -144,15 +148,15 @@ function pretendLegacyReader(status: PersistedRunStatus): { steps: Array<{ live?
 			} = step;
 			const legacyLive = live
 				? {
-					color: live.color,
-					thinking: live.thinking,
-					currentToolArgs: live.currentToolArgs,
-					recentTools: live.recentTools,
-					tokenSamples: live.tokenSamples,
-					lastToolEndAt: live.lastToolEndAt,
-					toolCount: live.toolCount,
-					tokens: live.tokens,
-				}
+						color: live.color,
+						thinking: live.thinking,
+						currentToolArgs: live.currentToolArgs,
+						recentTools: live.recentTools,
+						tokenSamples: live.tokenSamples,
+						lastToolEndAt: live.lastToolEndAt,
+						toolCount: live.toolCount,
+						tokens: live.tokens,
+					}
 				: undefined;
 			return {
 				agent,
@@ -281,7 +285,9 @@ describe("schema-compat (backward compatible)", () => {
 				steps: [{ agent: "fixer", status: "running", startedAt: 20_000 }],
 			});
 
-			assert.doesNotThrow(() => writer.mergePatch({ lastUpdate: 20_200, runnerHeartbeatAt: 20_200 }, { flush: true }));
+			assert.doesNotThrow(() =>
+				writer.mergePatch({ lastUpdate: 20_200, runnerHeartbeatAt: 20_200 }, { flush: true }),
+			);
 			const status = readStatus(runRecordDir);
 			assert.equal(status.phase, undefined);
 			assert.equal(status.phaseStartedAt, undefined);

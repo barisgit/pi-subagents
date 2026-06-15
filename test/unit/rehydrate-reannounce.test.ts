@@ -40,17 +40,21 @@ function createPi(emitted: Array<{ channel: string; data: unknown }>) {
 function seedRunningRun(root: string, runId: string, rootSessionId: string): void {
 	const runRecordDir = path.join(root, "runs", runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-		runId,
-		mode: "single",
-		state: "running",
-		startedAt: Date.now() - 1000,
-		lastUpdate: Date.now(),
-		runnerHeartbeatAt: Date.now(),
-		cwd: root,
-		currentStep: 0,
-		steps: [{ agent: "explorer", status: "running", startedAt: Date.now() - 1000 }],
-	}), "utf8");
+	fs.writeFileSync(
+		path.join(runRecordDir, "status.json"),
+		JSON.stringify({
+			runId,
+			mode: "single",
+			state: "running",
+			startedAt: Date.now() - 1000,
+			lastUpdate: Date.now(),
+			runnerHeartbeatAt: Date.now(),
+			cwd: root,
+			currentStep: 0,
+			steps: [{ agent: "explorer", status: "running", startedAt: Date.now() - 1000 }],
+		}),
+		"utf8",
+	);
 	appendRunEntry({
 		runId,
 		runRecordDir,
@@ -97,7 +101,12 @@ describe("rehydrate re-announce", () => {
 
 			const started = emitted.filter((e) => e.channel === SUBAGENT_ASYNC_STARTED_EVENT);
 			assert.equal(started.length, 1);
-			const payload = started[0]!.data as { runId?: string; reclaimed?: boolean; asyncDir?: string; agent?: string };
+			const payload = started[0]!.data as {
+				runId?: string;
+				reclaimed?: boolean;
+				asyncDir?: string;
+				agent?: string;
+			};
 			assert.equal(payload.runId, "reclaimed-run");
 			assert.equal(payload.reclaimed, true);
 			assert.equal(payload.agent, "explorer");

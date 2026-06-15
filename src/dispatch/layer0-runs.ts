@@ -33,7 +33,15 @@ export type NotifyPolicy = "rollup" | "each" | "silent";
 
 export type RunLifecycleEvent =
 	| { type: "run.started"; runId: string; runRecordDir: string; sessionFile: string; timestamp: number }
-	| { type: "run.completed"; runId: string; runRecordDir: string; sessionFile: string; timestamp: number; result?: ChildAgentResult; error?: unknown };
+	| {
+			type: "run.completed";
+			runId: string;
+			runRecordDir: string;
+			sessionFile: string;
+			timestamp: number;
+			result?: ChildAgentResult;
+			error?: unknown;
+	  };
 
 export type RunLifecycleSink = (event: RunLifecycleEvent) => void;
 
@@ -129,25 +137,39 @@ export interface OpenRunHandle {
 
 export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): OpenRunHandle {
 	const runId = opts.runId ?? randomUUID();
-	const paths = (opts.runRecordDir && opts.sessionFile)
-		? { runRecordDir: opts.runRecordDir, sessionFile: opts.sessionFile, sessionRoot: opts.runRecordDir }
-		: resolveChildSessionFile({
-			parentCwd: step.cwd,
-			parentSessionFile: opts.parentSessionFile ?? null,
-			runId,
-			stepIndex: 0,
-			...(opts.sessionDir ? { sessionDirOverride: opts.sessionDir } : {}),
-			...(opts.defaultSessionDir ? { defaultSessionDir: opts.defaultSessionDir } : {}),
-		});
+	const paths =
+		opts.runRecordDir && opts.sessionFile
+			? { runRecordDir: opts.runRecordDir, sessionFile: opts.sessionFile, sessionRoot: opts.runRecordDir }
+			: resolveChildSessionFile({
+					parentCwd: step.cwd,
+					parentSessionFile: opts.parentSessionFile ?? null,
+					runId,
+					stepIndex: 0,
+					...(opts.sessionDir ? { sessionDirOverride: opts.sessionDir } : {}),
+					...(opts.defaultSessionDir ? { defaultSessionDir: opts.defaultSessionDir } : {}),
+				});
 	const startedAt = opts.initialize.startedAt ?? Date.now();
 	const flushPolicy: "terminal" | "eager" = opts.variant === "sync-foreground" ? "terminal" : "eager";
 	const state = opts.variant === "async-detached" ? "queued" : "running";
 	// eager OMITS the flushPolicy field to byte-match today's spawnRun (no flushPolicy) + async (default).
-	const statusWriter = new StatusWriter({ runRecordDir: paths.runRecordDir, runId, ...(flushPolicy === "terminal" ? { flushPolicy: "terminal" } : {}) });
+	const statusWriter = new StatusWriter({
+		runRecordDir: paths.runRecordDir,
+		runId,
+		...(flushPolicy === "terminal" ? { flushPolicy: "terminal" } : {}),
+	});
 	// group-child: if initialize.steps empty, synthesize spawnRun's single running step with resolved sessionFile.
-	const initSteps = (opts.variant === "group-child" && (!opts.initialize.steps || opts.initialize.steps.length === 0))
-		? [{ agent: step.agentName, label: step.label, status: "running", startedAt, sessionFile: paths.sessionFile }]
-		: opts.initialize.steps;
+	const initSteps =
+		opts.variant === "group-child" && (!opts.initialize.steps || opts.initialize.steps.length === 0)
+			? [
+					{
+						agent: step.agentName,
+						label: step.label,
+						status: "running",
+						startedAt,
+						sessionFile: paths.sessionFile,
+					},
+				]
+			: opts.initialize.steps;
 	// Router, not normalizer: only group-child relied on the resolved-path default
 	// (its recompose passes no sessionFile because the path is minted inside the
 	// funnel). sync-foreground passes neither top-level field today and MUST keep
@@ -179,21 +201,44 @@ export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): Ope
 		cwd: step.cwd,
 		startedAt,
 	});
-	return { runId, runRecordDir: paths.runRecordDir, sessionFile: paths.sessionFile, startedAt, statusWriter, variant: opts.variant };
+	return {
+		runId,
+		runRecordDir: paths.runRecordDir,
+		sessionFile: paths.sessionFile,
+		startedAt,
+		statusWriter,
+		variant: opts.variant,
+	};
 }
 
 export type FinalizeRunPayload =
 	| { via: "result"; result: ChildAgentResult; totalUsage?: Usage }
-	| { via: "terminal"; state: "complete" | "failed"; steps: Array<Partial<PersistedRunStep>>; totalTokens?: TokenUsage };
+	| {
+			via: "terminal";
+			state: "complete" | "failed";
+			steps: Array<Partial<PersistedRunStep>>;
+			totalTokens?: TokenUsage;
+	  };
 
 // finalize ONLY; dispose stays at call sites.
 export function finalizeRun(handle: OpenRunHandle, payload: FinalizeRunPayload): void {
 	if (payload.via === "terminal") {
-		if (handle.variant !== "sync-foreground") throw new Error(`finalizeRun: 'terminal' payload requires sync-foreground variant, got ${handle.variant}`);
-		handle.statusWriter.finalizeTerminal({ state: payload.state, steps: payload.steps, ...(payload.totalTokens !== undefined ? { totalTokens: payload.totalTokens } : {}) });
+		if (handle.variant !== "sync-foreground")
+			throw new Error(`finalizeRun: 'terminal' payload requires sync-foreground variant, got ${handle.variant}`);
+		handle.statusWriter.finalizeTerminal({
+			state: payload.state,
+			steps: payload.steps,
+			...(payload.totalTokens !== undefined ? { totalTokens: payload.totalTokens } : {}),
+		});
 	} else {
-		if (handle.variant === "sync-foreground") throw new Error(`finalizeRun: 'result' payload requires group-child or async-detached variant, got ${handle.variant}`);
-		void handle.statusWriter.finalize(payload.result, payload.totalUsage !== undefined ? { totalUsage: payload.totalUsage } : undefined);
+		if (handle.variant === "sync-foreground")
+			throw new Error(
+				`finalizeRun: 'result' payload requires group-child or async-detached variant, got ${handle.variant}`,
+			);
+		void handle.statusWriter.finalize(
+			payload.result,
+			payload.totalUsage !== undefined ? { totalUsage: payload.totalUsage } : undefined,
+		);
 	}
 }
 
@@ -233,16 +278,40 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 		runRecordDir: handle.runRecordDir,
 		sessionFile: handle.sessionFile,
 	};
-	opts.onLifecycle?.({ type: "run.started", runId, runRecordDir: handle.runRecordDir, sessionFile: handle.sessionFile, timestamp: startedAt });
-	const completed = opts.runAgent(preparedStep, { abortSignal: controller.signal, statusWriter: handle.statusWriter })
-		.then(async (result) => {
-			opts.onLifecycle?.({ type: "run.completed", runId, runRecordDir: handle.runRecordDir, sessionFile: handle.sessionFile, timestamp: Date.now(), result });
-			finalizeRun(handle, { via: "result", result });
-			return result;
-		}, (error: unknown) => {
-			opts.onLifecycle?.({ type: "run.completed", runId, runRecordDir: handle.runRecordDir, sessionFile: handle.sessionFile, timestamp: Date.now(), error });
-			throw error;
-		})
+	opts.onLifecycle?.({
+		type: "run.started",
+		runId,
+		runRecordDir: handle.runRecordDir,
+		sessionFile: handle.sessionFile,
+		timestamp: startedAt,
+	});
+	const completed = opts
+		.runAgent(preparedStep, { abortSignal: controller.signal, statusWriter: handle.statusWriter })
+		.then(
+			async (result) => {
+				opts.onLifecycle?.({
+					type: "run.completed",
+					runId,
+					runRecordDir: handle.runRecordDir,
+					sessionFile: handle.sessionFile,
+					timestamp: Date.now(),
+					result,
+				});
+				finalizeRun(handle, { via: "result", result });
+				return result;
+			},
+			(error: unknown) => {
+				opts.onLifecycle?.({
+					type: "run.completed",
+					runId,
+					runRecordDir: handle.runRecordDir,
+					sessionFile: handle.sessionFile,
+					timestamp: Date.now(),
+					error,
+				});
+				throw error;
+			},
+		)
 		.finally(() => {
 			controllersByRunId.delete(runId);
 			handle.statusWriter.dispose();

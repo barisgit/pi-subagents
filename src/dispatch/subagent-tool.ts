@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { Details } from "../protocol/types.ts";
 import { SubagentParams } from "../protocol/schemas.ts";
@@ -7,9 +7,7 @@ import { createWorkflowTool } from "../workflow/workflow.ts";
 import { renderSubagentResult, syncResultAnimation } from "../surfaces/render-result.ts";
 import type { createSubagentExecutor } from "./subagent-executor.ts";
 
-export function createSubagentToolDefinitions(deps: {
-	executor: ReturnType<typeof createSubagentExecutor>;
-}): {
+export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeof createSubagentExecutor> }): {
 	tool: ToolDefinition<typeof SubagentParams, Details>;
 	workflowTool: ReturnType<typeof createWorkflowTool>;
 } {
@@ -43,7 +41,13 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
-			return executor.execute(id, params as unknown as Parameters<typeof executor.execute>[1], signal as AbortSignal, onUpdate, ctx);
+			return executor.execute(
+				id,
+				params as unknown as Parameters<typeof executor.execute>[1],
+				signal as AbortSignal,
+				onUpdate,
+				ctx,
+			);
 		},
 
 		renderCall(args, theme) {
@@ -51,7 +55,8 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 				const target = args.id || "";
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
-					0, 0,
+					0,
+					0,
 				);
 			}
 			const run = args.run ?? [];
@@ -75,7 +80,6 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 			syncResultAnimation(result, context);
 			return renderSubagentResult(result, options, theme);
 		},
-
 	};
 
 	const workflowTool = createWorkflowTool({

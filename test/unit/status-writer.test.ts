@@ -50,7 +50,11 @@ function countStatusWrites(): { get count(): number } {
 		fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf-8");
 	});
 	restoreFns.push(restore);
-	return { get count() { return count; } };
+	return {
+		get count() {
+			return count;
+		},
+	};
 }
 
 function result(overrides: Partial<ChildAgentResult> = {}): ChildAgentResult {
@@ -110,8 +114,14 @@ describe("StatusWriter", () => {
 		assert.equal(writes.count, initialWrites + 1);
 		const status = readStatus(dir);
 		assert.equal(status.state, "running");
-		assert.equal(((status.steps as Array<{ live?: { outputText?: string; toolCallCount?: number } }>)[0]!.live?.outputText), "abc");
-		assert.equal(((status.steps as Array<{ live?: { outputText?: string; toolCallCount?: number } }>)[0]!.live?.toolCallCount), 1);
+		assert.equal(
+			(status.steps as Array<{ live?: { outputText?: string; toolCallCount?: number } }>)[0]!.live?.outputText,
+			"abc",
+		);
+		assert.equal(
+			(status.steps as Array<{ live?: { outputText?: string; toolCallCount?: number } }>)[0]!.live?.toolCallCount,
+			1,
+		);
 	});
 
 	it("finalize flushes synchronously and clears a pending debounce timer", async () => {
@@ -165,14 +175,28 @@ describe("StatusWriter", () => {
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 50 });
 		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "fixer", status: "running" }] });
 
-		await writer.finalize(result({
-			usage: { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, cost: 0, turns: 1 },
-		}));
+		await writer.finalize(
+			result({
+				usage: { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, cost: 0, turns: 1 },
+			}),
+		);
 		const status = readStatus(dir);
 
-		assert.deepEqual(status.totalTokens, { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, total: 260_000 });
+		assert.deepEqual(status.totalTokens, {
+			input: 74_000,
+			output: 2_000,
+			cacheRead: 180_000,
+			cacheWrite: 4_000,
+			total: 260_000,
+		});
 		const step = (status.steps as Array<Record<string, unknown>>)[0]!;
-		assert.deepEqual(step.tokens, { input: 74_000, output: 2_000, cacheRead: 180_000, cacheWrite: 4_000, total: 260_000 });
+		assert.deepEqual(step.tokens, {
+			input: 74_000,
+			output: 2_000,
+			cacheRead: 180_000,
+			cacheWrite: 4_000,
+			total: 260_000,
+		});
 	});
 
 	it("persists live token usage on a running (pre-finalize) patch so nested readers see non-zero tokens", async () => {
@@ -182,7 +206,12 @@ describe("StatusWriter", () => {
 		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "explorer", status: "running" }] });
 
 		// A running child emits live token usage before it finalizes.
-		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", tokens: { input: 740_000, output: 3_000, total: 743_000 } });
+		writer.enqueue({
+			runId: "run-1",
+			stepIndex: 0,
+			state: "running",
+			tokens: { input: 740_000, output: 3_000, total: 743_000 },
+		});
 		await delay(30);
 
 		const status = readStatus(dir);
@@ -202,12 +231,14 @@ describe("StatusWriter", () => {
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 50 });
 		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "fixer", status: "running" }] });
 
-		await writer.finalize(result({
-			state: "interrupted",
-			exitCode: 1,
-			outputText: "partial",
-			error: { message: "Child agent interrupted: session-reload", reason: "session-reload" },
-		}));
+		await writer.finalize(
+			result({
+				state: "interrupted",
+				exitCode: 1,
+				outputText: "partial",
+				error: { message: "Child agent interrupted: session-reload", reason: "session-reload" },
+			}),
+		);
 		const status = readStatus(dir);
 
 		assert.equal(status.state, "interrupted");
@@ -277,7 +308,13 @@ describe("phase", () => {
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 20 });
 		writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "fixer", status: "queued" }] });
 
-		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", phase: "streaming_text", phaseStartedAt: 7000 });
+		writer.enqueue({
+			runId: "run-1",
+			stepIndex: 0,
+			state: "running",
+			phase: "streaming_text",
+			phaseStartedAt: 7000,
+		});
 		await delay(60);
 
 		const status = readStatus(dir);
@@ -308,8 +345,14 @@ describe("phase", () => {
 		let status = readStatus(dir);
 		assert.equal(status.phase, "thinking");
 		assert.equal(status.phaseStartedAt, 9000);
-		assert.equal(((status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phase), "thinking");
-		assert.equal(((status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phaseStartedAt), 9000);
+		assert.equal(
+			(status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phase,
+			"thinking",
+		);
+		assert.equal(
+			(status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phaseStartedAt,
+			9000,
+		);
 		assert.ok((status.runnerHeartbeatAt as number) >= firstHeartbeat);
 
 		// Third patch changes only phase; phaseStartedAt is independently preserved when omitted.
@@ -319,8 +362,14 @@ describe("phase", () => {
 		status = readStatus(dir);
 		assert.equal(status.phase, "streaming_text");
 		assert.equal(status.phaseStartedAt, 9000);
-		assert.equal(((status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phase), "streaming_text");
-		assert.equal(((status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phaseStartedAt), 9000);
+		assert.equal(
+			(status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phase,
+			"streaming_text",
+		);
+		assert.equal(
+			(status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phaseStartedAt,
+			9000,
+		);
 	});
 
 	it("backward-compat-reader", async () => {
@@ -344,11 +393,17 @@ describe("phase", () => {
 		const dir = tempDir("pi-status-phase-compat-");
 		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-async-1", debounceMs: 20 });
 		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "fixer", status: "running" }] });
-		writer.enqueue({ runId: "run-async-1", stepIndex: 0, phase: "tool_running", phaseStartedAt: 3000, runnerHeartbeatAt: Date.now() });
+		writer.enqueue({
+			runId: "run-async-1",
+			stepIndex: 0,
+			phase: "tool_running",
+			phaseStartedAt: 3000,
+			runnerHeartbeatAt: Date.now(),
+		});
 		await delay(60);
 
 		const rawStatus = JSON.parse(
-			(await import("node:fs")).readFileSync((await import("node:path")).join(dir, "status.json"), "utf-8")
+			(await import("node:fs")).readFileSync((await import("node:path")).join(dir, "status.json"), "utf-8"),
 		) as import("../../src/protocol/status-types.ts").PersistedRunStatus;
 
 		const summary = statusToRunView(dir, rawStatus);
@@ -365,7 +420,9 @@ describe("phase", () => {
 			updatedAt: Date.now(),
 		};
 		state.asyncJobs.set("run-async-1", job);
-		const tracker = createAsyncJobTracker({ events: { on: () => () => {}, emit: () => {} } }, state, { pollIntervalMs: 10 });
+		const tracker = createAsyncJobTracker({ events: { on: () => () => {}, emit: () => {} } }, state, {
+			pollIntervalMs: 10,
+		});
 		try {
 			tracker.ensurePoller();
 			await delay(40);
@@ -390,7 +447,13 @@ describe("phase", () => {
 		const status = readStatus(dir);
 		assert.equal(status.phase, "idle");
 		assert.equal(status.phaseStartedAt, 2000);
-		assert.equal(((status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phase), "idle");
-		assert.equal(((status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phaseStartedAt), 2000);
+		assert.equal(
+			(status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phase,
+			"idle",
+		);
+		assert.equal(
+			(status.steps as Array<{ live?: { phase?: string; phaseStartedAt?: number } }>)[0]!.live?.phaseStartedAt,
+			2000,
+		);
 	});
 });

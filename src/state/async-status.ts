@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ASYNC_NO_POLL_GUIDANCE, formatDuration, formatTokens, shortenPath } from "../shared/formatting.ts";
-import { type ActivityState, type RunDisplayState, type TokenUsage } from "../protocol/types.ts";
+import type { ActivityState, RunDisplayState, TokenUsage } from "../protocol/types.ts";
 import type { PersistedRunStatus } from "../protocol/status-types.ts";
 import type { RunPhase } from "./run-phase.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "../shared/control-policy.ts";
@@ -34,10 +34,12 @@ function getErrorMessage(error: unknown): string {
 }
 
 function isNotFoundError(error: unknown): boolean {
-	return typeof error === "object"
-		&& error !== null
-		&& "code" in error
-		&& (error as NodeJS.ErrnoException).code === "ENOENT";
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as NodeJS.ErrnoException).code === "ENOENT"
+	);
 }
 
 function isAsyncRunDir(root: string, entry: string): boolean {
@@ -61,19 +63,34 @@ function outputFileMtime(outputFile: string | undefined): number | undefined {
 	}
 }
 
-function deriveAsyncActivityState(asyncDir: string, status: PersistedRunStatus): { activityState?: ActivityState; lastActivityAt?: number } {
-	if (status.state !== "running") return { activityState: status.activityState, lastActivityAt: status.lastActivityAt };
-	const outputPath = status.outputFile ? (path.isAbsolute(status.outputFile) ? status.outputFile : path.join(asyncDir, status.outputFile)) : undefined;
+function deriveAsyncActivityState(
+	asyncDir: string,
+	status: PersistedRunStatus,
+): { activityState?: ActivityState; lastActivityAt?: number } {
+	if (status.state !== "running")
+		return { activityState: status.activityState, lastActivityAt: status.lastActivityAt };
+	const outputPath = status.outputFile
+		? path.isAbsolute(status.outputFile)
+			? status.outputFile
+			: path.join(asyncDir, status.outputFile)
+		: undefined;
 	const currentStep = typeof status.currentStep === "number" ? status.steps?.[status.currentStep] : undefined;
-	const lastActivityAt = status.lastActivityAt ?? outputFileMtime(outputPath) ?? currentStep?.lastActivityAt ?? currentStep?.startedAt ?? status.startedAt;
+	const lastActivityAt =
+		status.lastActivityAt ??
+		outputFileMtime(outputPath) ??
+		currentStep?.lastActivityAt ??
+		currentStep?.startedAt ??
+		status.startedAt;
 	return {
 		lastActivityAt,
-		activityState: status.activityState ?? deriveActivityState({
-			config: DEFAULT_CONTROL_CONFIG,
-			startedAt: status.startedAt,
-			lastActivityAt,
-			phase: status.phase,
-		}),
+		activityState:
+			status.activityState ??
+			deriveActivityState({
+				config: DEFAULT_CONTROL_CONFIG,
+				startedAt: status.startedAt,
+				lastActivityAt,
+				phase: status.phase,
+			}),
 	};
 }
 
@@ -117,19 +134,21 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 			const stepActivityState = step.activityState ?? (step.status === "running" ? activityState : undefined);
 			const stepLastActivityAt = step.lastActivityAt ?? (step.status === "running" ? lastActivityAt : undefined);
 			const stepPhase = step.live?.phase ?? (index === status.currentStep ? status.phase : undefined);
-			const stepPhaseStartedAt = step.live?.phaseStartedAt ?? (index === status.currentStep ? status.phaseStartedAt : undefined);
-			const stepDisplayState = displayState === "lost" && step.status === "running"
-				? "lost"
-				: deriveRunDisplayState({
-					state: step.status,
-					activityState: stepActivityState,
-					currentTool: step.currentTool,
-					phase: stepPhase,
-					phaseStartedAt: stepPhaseStartedAt,
-					lastActivityAt: stepLastActivityAt,
-					lastUpdate: status.lastUpdate,
-					runnerHeartbeatAt: status.runnerHeartbeatAt,
-				});
+			const stepPhaseStartedAt =
+				step.live?.phaseStartedAt ?? (index === status.currentStep ? status.phaseStartedAt : undefined);
+			const stepDisplayState =
+				displayState === "lost" && step.status === "running"
+					? "lost"
+					: deriveRunDisplayState({
+							state: step.status,
+							activityState: stepActivityState,
+							currentTool: step.currentTool,
+							phase: stepPhase,
+							phaseStartedAt: stepPhaseStartedAt,
+							lastActivityAt: stepLastActivityAt,
+							lastUpdate: status.lastUpdate,
+							runnerHeartbeatAt: status.runnerHeartbeatAt,
+						});
 			return {
 				index,
 				agent: step.agent ?? "",
@@ -161,13 +180,20 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 export function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
 	const rank = (state: AsyncRunSummary["state"]): number => {
 		switch (state) {
-			case "running": return 0;
-			case "queued": return 1;
-		case "lost": return 2;
-		case "failed": return 2;
-		case "paused": return 2;
-		case "complete": return 3;
-		default: return 4;
+			case "running":
+				return 0;
+			case "queued":
+				return 1;
+			case "lost":
+				return 2;
+			case "failed":
+				return 2;
+			case "paused":
+				return 2;
+			case "complete":
+				return 3;
+			default:
+				return 4;
 		}
 	};
 	return [...runs].sort((a, b) => {
@@ -209,7 +235,14 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 // Registry-backed reader. Single source of truth for run discovery: enumerates
 // the runs-index.jsonl registry instead of scanning a temp dir. Both sync and
 // async runs appear as equal first-class entries.
-export function listRunsFromRegistry(options: { states?: AsyncRunSummary["state"][]; limit?: number; entries?: RunsRegistryEntry[]; ownedViews?: Map<string, AsyncRunSummary> } = {}): AsyncRunSummary[] {
+export function listRunsFromRegistry(
+	options: {
+		states?: AsyncRunSummary["state"][];
+		limit?: number;
+		entries?: RunsRegistryEntry[];
+		ownedViews?: Map<string, AsyncRunSummary>;
+	} = {},
+): AsyncRunSummary[] {
 	const entries = options.entries ?? readAllEntries();
 	const allowedStates = options.states ? new Set(options.states) : undefined;
 	const runs: AsyncRunSummary[] = [];
@@ -258,7 +291,14 @@ export function listRunsFromRegistryForOverlay(
 		scoped = scoped.filter((run) => !run.cwd || run.cwd === options.sessionCwd);
 	}
 	const sortedTerminal = scoped
-		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused" || run.state === "interrupted" || run.state === "skipped")
+		.filter(
+			(run) =>
+				run.state === "complete" ||
+				run.state === "failed" ||
+				run.state === "paused" ||
+				run.state === "interrupted" ||
+				run.state === "skipped",
+		)
 		.sort((a, b) => b.startedAt - a.startedAt);
 	const recent = recentLimit === undefined ? sortedTerminal : sortedTerminal.slice(0, recentLimit);
 	return {
@@ -275,7 +315,9 @@ export function listRunsFromRegistryForOverlay(
 // the `subagent({ action: "status" })` wall the user hit.
 const QUEUED_STUB_MAX_AGE_MS = 60_000;
 
-function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
+function registryWorkflowFields(
+	entry: RunsRegistryEntry,
+): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
 	return {
 		...(entry.kind === "workflow" ? { workflow: true } : {}),
 		...(entry.phaseIndex !== undefined ? { phaseIndex: entry.phaseIndex } : {}),
@@ -403,7 +445,11 @@ export function buildGroupSummary(
 	};
 }
 
-export function readRunViewForEntry(entry: RunsRegistryEntry, entries: RunsRegistryEntry[] = readAllEntries(), ownedViews?: Map<string, AsyncRunSummary>): AsyncRunSummary | null {
+export function readRunViewForEntry(
+	entry: RunsRegistryEntry,
+	entries: RunsRegistryEntry[] = readAllEntries(),
+	ownedViews?: Map<string, AsyncRunSummary>,
+): AsyncRunSummary | null {
 	// Owned in-process runs resolve their leaf from the registry memory mirror;
 	// everything else hydrates from status.json (the post-reload / foreign source).
 	const leaf = ownedViews?.get(entry.runId) ?? readLeafRunViewCached(entry.runRecordDir);
@@ -413,7 +459,7 @@ export function readRunViewForEntry(entry: RunsRegistryEntry, entries: RunsRegis
 	};
 	if (leaf) return { ...leaf, ...sessionLineage, ...registryWorkflowFields(entry) };
 	const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
-	const isGroup = entry.mode === "parallel" && (!entry.agentName && !entry.agentNames || children.length > 0);
+	const isGroup = entry.mode === "parallel" && ((!entry.agentName && !entry.agentNames) || children.length > 0);
 	if (isGroup) {
 		const childSummaries = children
 			.map((child) => {
@@ -447,15 +493,24 @@ export function readRunViewForEntry(entry: RunsRegistryEntry, entries: RunsRegis
 	};
 }
 
-function formatActivityFacts(input: { activityState?: ActivityState; lastActivityAt?: number; currentTool?: string; currentToolStartedAt?: number }): string | undefined {
-	if (input.currentTool && input.currentToolStartedAt) return `tool ${input.currentTool} ${formatDuration(Math.max(0, Date.now() - input.currentToolStartedAt))}`;
+function formatActivityFacts(input: {
+	activityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
+}): string | undefined {
+	if (input.currentTool && input.currentToolStartedAt)
+		return `tool ${input.currentTool} ${formatDuration(Math.max(0, Date.now() - input.currentToolStartedAt))}`;
 	if (!input.lastActivityAt) return input.activityState === "needs_attention" ? "needs attention" : undefined;
 	const elapsed = formatDuration(Math.max(0, Date.now() - input.lastActivityAt));
 	return input.activityState === "needs_attention" ? `no activity for ${elapsed}` : `active ${elapsed} ago`;
 }
 
 function formatStepLine(step: AsyncRunStepSummary): string {
-	const parts = [`${step.index + 1}. ${step.agent}`, step.displayState ? `${step.status}/${step.displayState}` : step.status];
+	const parts = [
+		`${step.index + 1}. ${step.agent}`,
+		step.displayState ? `${step.status}/${step.displayState}` : step.status,
+	];
 	const activity = formatActivityFacts(step);
 	if (activity) parts.push(activity);
 	if (step.model) parts.push(step.model);
@@ -465,7 +520,13 @@ function formatStepLine(step: AsyncRunStepSummary): string {
 }
 
 function isTerminalState(state: string): boolean {
-	return state === "complete" || state === "failed" || state === "interrupted" || state === "skipped" || state === "paused";
+	return (
+		state === "complete" ||
+		state === "failed" ||
+		state === "interrupted" ||
+		state === "skipped" ||
+		state === "paused"
+	);
 }
 
 function formatRunHeader(run: AsyncRunSummary, children: AsyncRunSummary[] = []): string {
@@ -474,10 +535,15 @@ function formatRunHeader(run: AsyncRunSummary, children: AsyncRunSummary[] = [])
 	const stepCount = isParallelGroup ? children.length : run.steps.length || 1;
 	const completedParallelSteps = isParallelGroup
 		? children.filter((child) => isTerminalState(child.state)).length
-		: run.steps.filter((step) => step.status === "complete" || step.status === "failed" || step.status === "skipped").length;
-	const stepLabel = run.mode === "parallel"
-		? `tasks ${completedParallelSteps}/${stepCount} complete`
-		: run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
+		: run.steps.filter(
+				(step) => step.status === "complete" || step.status === "failed" || step.status === "skipped",
+			).length;
+	const stepLabel =
+		run.mode === "parallel"
+			? `tasks ${completedParallelSteps}/${stepCount} complete`
+			: run.currentStep !== undefined
+				? `step ${run.currentStep + 1}/${stepCount}`
+				: `steps ${stepCount}`;
 	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir ?? "");
 	const activity = formatActivityFacts(run);
 	const state = run.displayState ? `${run.state}/${run.displayState}` : run.state;
@@ -567,7 +633,9 @@ export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Subagent 
 	const childIds = new Set<string>();
 	for (const [parentId, children] of childrenByParent.entries()) {
 		const parent = runs.find((run) => run.id === parentId);
-		const ordered = parent?.workflow ? sortedWorkflowChildren(children) : [...children].sort((a, b) => b.startedAt - a.startedAt);
+		const ordered = parent?.workflow
+			? sortedWorkflowChildren(children)
+			: [...children].sort((a, b) => b.startedAt - a.startedAt);
 		children.splice(0, children.length, ...ordered);
 		for (const child of children) childIds.add(child.id);
 	}

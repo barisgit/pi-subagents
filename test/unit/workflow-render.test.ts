@@ -5,7 +5,13 @@ import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 import { renderSubagentResult, syncResultAnimation } from "../../src/surfaces/render-result.ts";
 import type { Details, SingleResult } from "../../src/protocol/types.ts";
 
-function result(agent: string, task: string, exitCode = 0, index = agent === "A" ? 0 : 1, label?: string): SingleResult {
+function result(
+	agent: string,
+	task: string,
+	exitCode = 0,
+	index = agent === "A" ? 0 : 1,
+	label?: string,
+): SingleResult {
 	return {
 		agent,
 		task,
@@ -14,13 +20,31 @@ function result(agent: string, task: string, exitCode = 0, index = agent === "A"
 		messages: [],
 		usage: { input: 0, output: 0 },
 		structuredResult: { status: exitCode === 0 ? "ok" : "failed", summary: task, result: task, artifacts: [] },
-		progress: { index, agent, task, status: exitCode === 0 ? "completed" : "failed", recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0 },
+		progress: {
+			index,
+			agent,
+			task,
+			status: exitCode === 0 ? "completed" : "failed",
+			recentTools: [],
+			recentOutput: [],
+			toolCount: 0,
+			tokens: 0,
+			durationMs: 0,
+		},
 	};
 }
 
 function renderText(details: Details, expanded: boolean): string {
-	const theme = { fg: (_t: string, s: string) => s, bg: (_t: string, s: string) => s, bold: (s: string) => s } as never;
-	const widget = renderSubagentResult({ content: [{ type: "text", text: "workflow output" }], details }, { expanded }, theme);
+	const theme = {
+		fg: (_t: string, s: string) => s,
+		bg: (_t: string, s: string) => s,
+		bold: (s: string) => s,
+	} as never;
+	const widget = renderSubagentResult(
+		{ content: [{ type: "text", text: "workflow output" }], details },
+		{ expanded },
+		theme,
+	);
 	return widget.render(160).join("\n");
 }
 
@@ -48,8 +72,22 @@ describe("workflow final result rendering does not throw on non-Details payloads
 		// hasRenderableResults pre-check, so it reaches the structured body; the body's
 		// try/catch must still fall back to text rather than crash the host TUI when an
 		// element omits a field the renderer derefs without optional workflowing.
-		["fully-shaped result but non-array top-level progress", { mode: "parallel", progress: "x", results: [{ agent: "A", task: "t", exitCode: 0, usage: { input: 0, output: 0 } }] }],
-		["result element with malformed messages", { results: [{ agent: "A", task: "t", exitCode: 0, usage: { input: 0, output: 0 }, messages: { length: 1 } }] }],
+		[
+			"fully-shaped result but non-array top-level progress",
+			{
+				mode: "parallel",
+				progress: "x",
+				results: [{ agent: "A", task: "t", exitCode: 0, usage: { input: 0, output: 0 } }],
+			},
+		],
+		[
+			"result element with malformed messages",
+			{
+				results: [
+					{ agent: "A", task: "t", exitCode: 0, usage: { input: 0, output: 0 }, messages: { length: 1 } },
+				],
+			},
+		],
 	] as Array<[string, unknown]>) {
 		it(`renders a ${label} as text without throwing`, () => {
 			const result = { content: [{ type: "text", text: "workflow output" }], details } as never;
@@ -65,7 +103,12 @@ describe("workflow final result rendering does not throw on non-Details payloads
 	// (2) the inner catch's own error formatting throws via a poison toString, and
 	// (3) the text fallback reads d.context.
 	it("fails closed (no throw) on a poison `progress` getter via syncResultAnimation", () => {
-		const details = { results: [] as unknown[], get progress(): unknown { throw new Error("progress poison"); } };
+		const details = {
+			results: [] as unknown[],
+			get progress(): unknown {
+				throw new Error("progress poison");
+			},
+		};
 		const result = { content: [{ type: "text", text: "workflow output" }], details } as never;
 		assert.doesNotThrow(() => syncResultAnimation(result, animCtx));
 		assert.doesNotThrow(() => renderSubagentResult(result, { expanded: true }, theme));
@@ -73,12 +116,27 @@ describe("workflow final result rendering does not throw on non-Details payloads
 
 	it("survives a structured-render error whose message itself throws (poison toString) and still shows real text", () => {
 		const details = {
-			results: [{ agent: "A", exitCode: 0, usage: { input: 0, output: 0 }, messages: [],
-				get task(): string { throw { toString() { throw new Error("toString poison"); } }; } }],
+			results: [
+				{
+					agent: "A",
+					exitCode: 0,
+					usage: { input: 0, output: 0 },
+					messages: [],
+					get task(): string {
+						throw {
+							toString() {
+								throw new Error("toString poison");
+							},
+						};
+					},
+				},
+			],
 		};
 		const result = { content: [{ type: "text", text: "workflow output" }], details } as never;
 		let widget!: ReturnType<typeof renderSubagentResult>;
-		assert.doesNotThrow(() => { widget = renderSubagentResult(result, { expanded: true }, theme); });
+		assert.doesNotThrow(() => {
+			widget = renderSubagentResult(result, { expanded: true }, theme);
+		});
 		// safeErrorMessage keeps the inner catch's logging from throwing, so the inner
 		// fallback fires and the user sees their REAL output — not the outer last-resort
 		// constant. Without it the outer boundary catches and degrades to a useless stub.
@@ -88,7 +146,13 @@ describe("workflow final result rendering does not throw on non-Details payloads
 	});
 
 	it("fails closed on a poison `context` getter in the text fallback path", () => {
-		const details = { progress: [] as unknown[], results: [] as unknown[], get context(): string { throw new Error("context poison"); } };
+		const details = {
+			progress: [] as unknown[],
+			results: [] as unknown[],
+			get context(): string {
+				throw new Error("context poison");
+			},
+		};
 		const result = { content: [{ type: "text", text: "workflow output" }], details } as never;
 		assert.doesNotThrow(() => syncResultAnimation(result, animCtx));
 		assert.doesNotThrow(() => renderSubagentResult(result, { expanded: true }, theme));
@@ -118,22 +182,37 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		const phaseUpdate = updates.find((update) => update.details?.label);
 		assert.equal(phaseUpdate?.details?.mode, "parallel");
 		assert.match(String(phaseUpdate?.details?.label), /^Phase \d+: inventory/);
-		const runningA = updates.find((update) => update.details?.progress?.some((progress) => progress.agent === "A" && progress.status === "running"));
+		const runningA = updates.find((update) =>
+			update.details?.progress?.some((progress) => progress.agent === "A" && progress.status === "running"),
+		);
 		assert.ok(runningA, "expected running progress for A");
 		// Canonical parallel shape: a running agent must ALSO be present in results[]
 		// (the renderer iterates results[] for body rows and uses results.length as the
 		// denominator). When A is running it must already have a results[] placeholder.
 		const aRunningUpdate = updates.find((update) =>
-			update.details?.results?.some((r) => r.agent === "A" && r.progress?.status === "running"));
+			update.details?.results?.some((r) => r.agent === "A" && r.progress?.status === "running"),
+		);
 		assert.ok(aRunningUpdate, "expected A to have a running placeholder in results[] while in-flight");
 		const final = updates.at(-1)?.details;
 		assert.equal(final?.mode, "parallel");
 		assert.equal(final?.workflow, true);
 		assert.equal(final?.progress?.length, 2);
-		assert.deepEqual(final?.progress?.map((progress) => [progress.agent, progress.status]), [["A", "completed"], ["B", "completed"]]);
+		assert.deepEqual(
+			final?.progress?.map((progress) => [progress.agent, progress.status]),
+			[
+				["A", "completed"],
+				["B", "completed"],
+			],
+		);
 		assert.equal(final?.results.length, 2);
 		// results[] and progress[] stay aligned one-per-agent so header/body/denominator agree.
-		assert.deepEqual(final?.results.map((r) => [r.agent, r.progress?.status]), [["A", "completed"], ["B", "completed"]]);
+		assert.deepEqual(
+			final?.results.map((r) => [r.agent, r.progress?.status]),
+			[
+				["A", "completed"],
+				["B", "completed"],
+			],
+		);
 		assert.deepEqual(final?.agentGroups, ["A", "B"]);
 		assert.equal(final?.totalSteps, 2);
 	});
@@ -148,23 +227,23 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			}),
 		});
 
-		const serial = await tool.execute?.(
+		const serial = (await tool.execute?.(
 			"wf-serial",
 			{ script: "phase('same phase');\nawait agent('A', 'alpha');\nawait agent('B', 'bravo');" },
 			new AbortController().signal,
 			undefined,
 			{} as never,
-		) as AgentToolResult<Details> | undefined;
+		)) as AgentToolResult<Details> | undefined;
 		assert.deepEqual(serial?.details?.agentGroups, ["A", "B"]);
 		assert.equal(serial?.details?.totalSteps, 2);
 
-		const parallel = await tool.execute?.(
+		const parallel = (await tool.execute?.(
 			"wf-parallel",
 			{ script: "phase('same phase');\nawait parallel([() => agent('A', 'alpha'), () => agent('B', 'bravo')]);" },
 			new AbortController().signal,
 			undefined,
 			{} as never,
-		) as AgentToolResult<Details> | undefined;
+		)) as AgentToolResult<Details> | undefined;
 		assert.deepEqual(parallel?.details?.agentGroups, ["[A+B]"]);
 		assert.equal(parallel?.details?.totalSteps, 1);
 	});
@@ -179,13 +258,15 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			}),
 		});
 
-		const parallel = await tool.execute?.(
+		const parallel = (await tool.execute?.(
 			"wf-parallel-delayed",
-			{ script: "phase('same phase');\nawait parallel([async () => { await Promise.resolve(); return agent('A', 'alpha'); }, async () => { await Promise.resolve(); return agent('B', 'bravo'); }]);" },
+			{
+				script: "phase('same phase');\nawait parallel([async () => { await Promise.resolve(); return agent('A', 'alpha'); }, async () => { await Promise.resolve(); return agent('B', 'bravo'); }]);",
+			},
 			new AbortController().signal,
 			undefined,
 			{} as never,
-		) as AgentToolResult<Details> | undefined;
+		)) as AgentToolResult<Details> | undefined;
 		assert.deepEqual(parallel?.details?.agentGroups, ["[A+B]"]);
 		assert.equal(parallel?.details?.totalSteps, 1);
 	});
@@ -288,13 +369,15 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			}),
 		});
 
-		const executed = await tool.execute?.(
+		const executed = (await tool.execute?.(
 			"wf",
-			{ script: "phase('inventory');\nawait parallel([() => agent('explorer', 'alpha'), () => agent('explorer', 'bravo')]);\nphase('synthesis');\nawait agent('synth', 'charlie');" },
+			{
+				script: "phase('inventory');\nawait parallel([() => agent('explorer', 'alpha'), () => agent('explorer', 'bravo')]);\nphase('synthesis');\nawait agent('synth', 'charlie');",
+			},
 			new AbortController().signal,
 			(update) => updates.push(update as AgentToolResult<Details>),
 			{} as never,
-		) as AgentToolResult<Details> | undefined;
+		)) as AgentToolResult<Details> | undefined;
 
 		const final = executed?.details;
 		assert.deepEqual(final?.agentGroups, ["[explorer+explorer]", "synth"]);
@@ -333,7 +416,9 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 
 		await tool.execute?.(
 			"wf",
-			{ script: "phase('inventory');\nawait parallel([() => agent('explorer', 'alpha'), () => agent('explorer', 'bravo')]);" },
+			{
+				script: "phase('inventory');\nawait parallel([() => agent('explorer', 'alpha'), () => agent('explorer', 'bravo')]);",
+			},
 			new AbortController().signal,
 			(update) => updates.push(update as AgentToolResult<Details>),
 			{} as never,
@@ -392,7 +477,11 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		// no widened denominator.
 		assert.equal(final?.expectedAgents, undefined, "settled mixed-thunk frame must omit expectedAgents");
 		assert.equal(final?.results?.length, 1, "only one thunk dispatched an agent");
-		assert.doesNotMatch(renderText(final!, false), /agent 1\/2/, "completed frame must not show an inflated 'agent 1/2'");
+		assert.doesNotMatch(
+			renderText(final!, false),
+			/agent 1\/2/,
+			"completed frame must not show an inflated 'agent 1/2'",
+		);
 	});
 
 	it("reaps the phantom slot when a parallel thunk throws synchronously", async () => {
@@ -414,8 +503,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		await tool.execute?.(
 			"wf",
 			{
-				script:
-					"phase('sync throw');\ntry { await parallel([() => agent('explorer', 'alpha'), () => { throw new Error('sync boom'); }]); } catch {}\nreturn 'ok';",
+				script: "phase('sync throw');\ntry { await parallel([() => agent('explorer', 'alpha'), () => { throw new Error('sync boom'); }]); } catch {}\nreturn 'ok';",
 			},
 			new AbortController().signal,
 			(update) => updates.push(update as AgentToolResult<Details>),
@@ -425,6 +513,10 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		const final = updates.at(-1)?.details;
 		assert.equal(final?.expectedAgents, undefined, "settled sync-throw frame must omit expectedAgents");
 		assert.equal(final?.results?.length, 1, "only one thunk dispatched an agent");
-		assert.doesNotMatch(renderText(final!, false), /agent 1\/2/, "completed frame must not show an inflated 'agent 1/2'");
+		assert.doesNotMatch(
+			renderText(final!, false),
+			/agent 1\/2/,
+			"completed frame must not show an inflated 'agent 1/2'",
+		);
 	});
 });

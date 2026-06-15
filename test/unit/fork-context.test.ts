@@ -20,11 +20,21 @@ describe("resolveSubagentContext", () => {
 describe("createForkContextResolver", () => {
 	it("fresh mode never calls createBranchedSession", () => {
 		let calls = 0;
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "leaf-123",
-			constructor: { open: () => ({ createBranchedSession: () => { calls++; return "/tmp/child.jsonl"; } }) },
-		}), "fresh");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-123",
+				constructor: {
+					open: () => ({
+						createBranchedSession: () => {
+							calls++;
+							return "/tmp/child.jsonl";
+						},
+					}),
+				},
+			}),
+			"fresh",
+		);
 
 		assert.equal(resolver.sessionFileForIndex(0), undefined);
 		assert.equal(calls, 0);
@@ -32,22 +42,30 @@ describe("createForkContextResolver", () => {
 
 	it("fails fast when parent session file is missing", () => {
 		assert.throws(
-			() => createForkContextResolver(manager({
-				getSessionFile: () => undefined,
-				getLeafId: () => "leaf-123",
-				constructor: { open: () => ({ createBranchedSession: () => "/tmp/child.jsonl" }) },
-			}), "fork"),
+			() =>
+				createForkContextResolver(
+					manager({
+						getSessionFile: () => undefined,
+						getLeafId: () => "leaf-123",
+						constructor: { open: () => ({ createBranchedSession: () => "/tmp/child.jsonl" }) },
+					}),
+					"fork",
+				),
 			/Forked subagent context requires a persisted parent session\./,
 		);
 	});
 
 	it("fails fast when leaf id is missing", () => {
 		assert.throws(
-			() => createForkContextResolver(manager({
-				getSessionFile: () => "/tmp/parent.jsonl",
-				getLeafId: () => null,
-				constructor: { open: () => ({ createBranchedSession: () => "/tmp/child.jsonl" }) },
-			}), "fork"),
+			() =>
+				createForkContextResolver(
+					manager({
+						getSessionFile: () => "/tmp/parent.jsonl",
+						getLeafId: () => null,
+						constructor: { open: () => ({ createBranchedSession: () => "/tmp/child.jsonl" }) },
+					}),
+					"fork",
+				),
 			/Forked subagent context requires a current leaf to fork from\./,
 		);
 	});
@@ -55,17 +73,27 @@ describe("createForkContextResolver", () => {
 	it("opens a throwaway manager from the persisted parent session file", () => {
 		const openedPaths: string[] = [];
 		const seenLeafIds: string[] = [];
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "leaf-xyz",
-			createBranchedSession: () => { throw new Error("live manager should not branch"); },
-			constructor: {
-				open: (sessionFile: string) => {
-					openedPaths.push(sessionFile);
-					return { createBranchedSession: (leafId: string) => { seenLeafIds.push(leafId); return `/tmp/child-${seenLeafIds.length}.jsonl`; } };
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-xyz",
+				createBranchedSession: () => {
+					throw new Error("live manager should not branch");
 				},
-			},
-		}), "fork");
+				constructor: {
+					open: (sessionFile: string) => {
+						openedPaths.push(sessionFile);
+						return {
+							createBranchedSession: (leafId: string) => {
+								seenLeafIds.push(leafId);
+								return `/tmp/child-${seenLeafIds.length}.jsonl`;
+							},
+						};
+					},
+				},
+			}),
+			"fork",
+		);
 
 		resolver.sessionFileForIndex(0);
 		resolver.sessionFileForIndex(1);
@@ -77,11 +105,21 @@ describe("createForkContextResolver", () => {
 
 	it("creates isolated branched sessions per index", () => {
 		let count = 0;
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "leaf-abc",
-			constructor: { open: () => ({ createBranchedSession: () => { count++; return `/tmp/fork-${count}.jsonl`; } }) },
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-abc",
+				constructor: {
+					open: () => ({
+						createBranchedSession: () => {
+							count++;
+							return `/tmp/fork-${count}.jsonl`;
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		const singleSession = resolver.sessionFileForIndex(0);
 		const parallelSessions = [resolver.sessionFileForIndex(1), resolver.sessionFileForIndex(2)];
@@ -95,11 +133,21 @@ describe("createForkContextResolver", () => {
 
 	it("memoizes per index to keep behavior deterministic", () => {
 		let calls = 0;
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "leaf-abc",
-			constructor: { open: () => ({ createBranchedSession: () => { calls++; return `/tmp/fork-${calls}.jsonl`; } }) },
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-abc",
+				constructor: {
+					open: () => ({
+						createBranchedSession: () => {
+							calls++;
+							return `/tmp/fork-${calls}.jsonl`;
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		const first = resolver.sessionFileForIndex(7);
 		const second = resolver.sessionFileForIndex(7);
@@ -108,11 +156,14 @@ describe("createForkContextResolver", () => {
 	});
 
 	it("does not silently fallback to fresh when branch extraction fails", () => {
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "leaf-abc",
-			constructor: { open: () => ({ createBranchedSession: () => undefined }) },
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-abc",
+				constructor: { open: () => ({ createBranchedSession: () => undefined }) },
+			}),
+			"fork",
+		);
 
 		assert.throws(
 			() => resolver.sessionFileForIndex(0),
@@ -142,19 +193,22 @@ describe("createForkContextResolver", () => {
 				message: { role: "user", content: [{ type: "text", text: "go" }] },
 			},
 		} as const;
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "assistant-leaf",
-			getEntry: (id: string) => entries[id as keyof typeof entries],
-			constructor: {
-				open: () => ({
-					createBranchedSession: (leafId: string) => {
-						seenLeafIds.push(leafId);
-						return `/tmp/child-${seenLeafIds.length}.jsonl`;
-					},
-				}),
-			},
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "assistant-leaf",
+				getEntry: (id: string) => entries[id as keyof typeof entries],
+				constructor: {
+					open: () => ({
+						createBranchedSession: (leafId: string) => {
+							seenLeafIds.push(leafId);
+							return `/tmp/child-${seenLeafIds.length}.jsonl`;
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		resolver.sessionFileForIndex(0);
 		assert.deepEqual(seenLeafIds, ["user-prompt"]);
@@ -176,19 +230,22 @@ describe("createForkContextResolver", () => {
 				},
 			},
 		} as const;
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "assistant-leaf",
-			getEntry: (id: string) => entries[id as keyof typeof entries],
-			constructor: {
-				open: () => ({
-					createBranchedSession: (leafId: string) => {
-						seenLeafIds.push(leafId);
-						return "/tmp/child.jsonl";
-					},
-				}),
-			},
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "assistant-leaf",
+				getEntry: (id: string) => entries[id as keyof typeof entries],
+				constructor: {
+					open: () => ({
+						createBranchedSession: (leafId: string) => {
+							seenLeafIds.push(leafId);
+							return "/tmp/child.jsonl";
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		resolver.sessionFileForIndex(0);
 		assert.deepEqual(seenLeafIds, ["assistant-leaf"]);
@@ -204,19 +261,22 @@ describe("createForkContextResolver", () => {
 				message: { role: "user", content: [{ type: "text", text: "go" }] },
 			},
 		} as const;
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "user-leaf",
-			getEntry: (id: string) => entries[id as keyof typeof entries],
-			constructor: {
-				open: () => ({
-					createBranchedSession: (leafId: string) => {
-						seenLeafIds.push(leafId);
-						return "/tmp/child.jsonl";
-					},
-				}),
-			},
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "user-leaf",
+				getEntry: (id: string) => entries[id as keyof typeof entries],
+				constructor: {
+					open: () => ({
+						createBranchedSession: (leafId: string) => {
+							seenLeafIds.push(leafId);
+							return "/tmp/child.jsonl";
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		resolver.sessionFileForIndex(0);
 		assert.deepEqual(seenLeafIds, ["user-leaf"]);
@@ -224,18 +284,21 @@ describe("createForkContextResolver", () => {
 
 	it("falls back to original leafId when getEntry is unavailable", () => {
 		const seenLeafIds: string[] = [];
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "leaf-xyz",
-			constructor: {
-				open: () => ({
-					createBranchedSession: (leafId: string) => {
-						seenLeafIds.push(leafId);
-						return "/tmp/child.jsonl";
-					},
-				}),
-			},
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-xyz",
+				constructor: {
+					open: () => ({
+						createBranchedSession: (leafId: string) => {
+							seenLeafIds.push(leafId);
+							return "/tmp/child.jsonl";
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		resolver.sessionFileForIndex(0);
 		assert.deepEqual(seenLeafIds, ["leaf-xyz"]);
@@ -243,19 +306,24 @@ describe("createForkContextResolver", () => {
 
 	it("falls back to original leafId when getEntry throws", () => {
 		const seenLeafIds: string[] = [];
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "leaf-xyz",
-			getEntry: () => { throw new Error("boom"); },
-			constructor: {
-				open: () => ({
-					createBranchedSession: (leafId: string) => {
-						seenLeafIds.push(leafId);
-						return "/tmp/child.jsonl";
-					},
-				}),
-			},
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-xyz",
+				getEntry: () => {
+					throw new Error("boom");
+				},
+				constructor: {
+					open: () => ({
+						createBranchedSession: (leafId: string) => {
+							seenLeafIds.push(leafId);
+							return "/tmp/child.jsonl";
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		resolver.sessionFileForIndex(0);
 		assert.deepEqual(seenLeafIds, ["leaf-xyz"]);
@@ -274,19 +342,22 @@ describe("createForkContextResolver", () => {
 				},
 			},
 		} as const;
-		const resolver = createForkContextResolver(manager({
-			getSessionFile: () => "/tmp/parent.jsonl",
-			getLeafId: () => "assistant-leaf",
-			getEntry: (id: string) => entries[id as keyof typeof entries],
-			constructor: {
-				open: () => ({
-					createBranchedSession: (leafId: string) => {
-						seenLeafIds.push(leafId);
-						return "/tmp/child.jsonl";
-					},
-				}),
-			},
-		}), "fork");
+		const resolver = createForkContextResolver(
+			manager({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "assistant-leaf",
+				getEntry: (id: string) => entries[id as keyof typeof entries],
+				constructor: {
+					open: () => ({
+						createBranchedSession: (leafId: string) => {
+							seenLeafIds.push(leafId);
+							return "/tmp/child.jsonl";
+						},
+					}),
+				},
+			}),
+			"fork",
+		);
 
 		resolver.sessionFileForIndex(0);
 		assert.deepEqual(seenLeafIds, ["assistant-leaf"]);

@@ -128,7 +128,11 @@ describe("builtin agent overrides", () => {
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
 			subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4" } } },
 		});
-		writeProjectAgent(tempProject, "reviewer", `---\nname: reviewer\ndescription: Project reviewer\nmodel: google/gemini-3-pro\n---\n\nUse the project reviewer.\n`);
+		writeProjectAgent(
+			tempProject,
+			"reviewer",
+			`---\nname: reviewer\ndescription: Project reviewer\nmodel: google/gemini-3-pro\n---\n\nUse the project reviewer.\n`,
+		);
 
 		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
 		assert.ok(reviewer);
@@ -151,9 +155,10 @@ describe("builtin agent overrides", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("Failed to parse settings file"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("Failed to parse settings file"),
 		);
 	});
 
@@ -163,9 +168,10 @@ describe("builtin agent overrides", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("Failed to read settings file"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("Failed to read settings file"),
 		);
 	});
 
@@ -183,10 +189,11 @@ describe("builtin agent overrides", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("reviewer")
-				&& error.message.includes("inheritProjectContext"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("reviewer") &&
+				error.message.includes("inheritProjectContext"),
 		);
 	});
 

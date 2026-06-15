@@ -9,26 +9,32 @@ describe("foreground tool-call compaction", () => {
 			agent: "tester",
 			task: "run checks",
 			exitCode: 0,
-			messages: [{
-				role: "assistant",
-				content: [{
-					type: "toolCall",
-					id: "tool-1",
-					name: "write",
-					arguments: {
-						path: "/tmp/report.md",
-						content: "x".repeat(50_000),
-					},
-				}],
-			}],
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "tool-1",
+							name: "write",
+							arguments: {
+								path: "/tmp/report.md",
+								content: "x".repeat(50_000),
+							},
+						},
+					],
+				},
+			],
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
 		} as unknown as Parameters<typeof compactForegroundResult>[0]);
 
 		assert.equal(result.messages, undefined);
-		assert.deepEqual(result.toolCalls, [{
-			text: "write /tmp/report.md",
-			expandedText: "write /tmp/report.md",
-		}]);
+		assert.deepEqual(result.toolCalls, [
+			{
+				text: "write /tmp/report.md",
+				expandedText: "write /tmp/report.md",
+			},
+		]);
 	});
 
 	it("keeps expanded generic tool-call previews bounded", () => {
@@ -64,16 +70,16 @@ describe("foreground tool-call compaction", () => {
 	it("formats fetch_content urls clearly", () => {
 		assert.equal(
 			extractToolArgsPreview({
-				urls: ["https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging", "https://example.com/backup"],
+				urls: [
+					"https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging",
+					"https://example.com/backup",
+				],
 			}),
 			"https://developer.chrome.com/docs/extensions/develop/concep…",
 		);
 	});
 
 	it("falls back to generic array previews", () => {
-		assert.equal(
-			extractToolArgsPreview({ ids: ["run-a", "run-b", "run-c"] }),
-			"ids=run-a (+2 more)",
-		);
+		assert.equal(extractToolArgsPreview({ ids: ["run-a", "run-b", "run-c"] }), "ids=run-a (+2 more)");
 	});
 });

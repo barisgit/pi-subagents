@@ -26,16 +26,31 @@ function normalizeListScope(scope: unknown): AgentScope | undefined {
 
 export function handleList(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	const scope = normalizeListScope(params.agentScope) ?? "both";
-	const agentDiscovery = discoverAgents(ctx.cwd, "both", { preset: params.preset, surface: "subagent", includeInternal: params.includeInternal === true });
+	const agentDiscovery = discoverAgents(ctx.cwd, "both", {
+		preset: params.preset,
+		surface: "subagent",
+		includeInternal: params.includeInternal === true,
+	});
 	const agents = agentDiscovery.agents
 		.filter((a) => scope === "both" || a.source === "builtin" || a.source === scope)
 		.sort((a, b) => a.name.localeCompare(b.name));
-	return result(["Executable agents:", ...(agents.length ? agents.map((a) => `- ${a.name} (${a.source}): ${a.description}`) : ["- (none)"])].join("\n"));
+	return result(
+		[
+			"Executable agents:",
+			...(agents.length ? agents.map((a) => `- ${a.name} (${a.source}): ${a.description}`) : ["- (none)"]),
+		].join("\n"),
+	);
 }
 
-export function handleManagementAction(action: string, params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
+export function handleManagementAction(
+	action: string,
+	params: ManagementParams,
+	ctx: ManagementContext,
+): AgentToolResult<Details> {
 	switch (action as ManagementAction) {
-		case "list": return handleList(params, ctx);
-		default: return result(`Unknown action: ${action}`, true);
+		case "list":
+			return handleList(params, ctx);
+		default:
+			return result(`Unknown action: ${action}`, true);
 	}
 }

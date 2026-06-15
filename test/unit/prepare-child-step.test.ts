@@ -35,7 +35,8 @@ function makeData(cwd: string, overrides: Record<string, unknown> = {}) {
 			model: { provider: "anthropic" },
 			modelRegistry: {
 				getAvailable: () => AVAILABLE_MODELS,
-				find: (provider: string, id: string) => AVAILABLE_MODELS.find((m) => m.provider === provider && m.id === id),
+				find: (provider: string, id: string) =>
+					AVAILABLE_MODELS.find((m) => m.provider === provider && m.id === id),
 			},
 			sessionManager: {
 				getSessionId: () => "session-host",

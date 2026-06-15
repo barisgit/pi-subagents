@@ -73,9 +73,7 @@ export async function mapConcurrent<T, R>(
 		}
 	}
 
-	await Promise.all(
-		Array.from({ length: Math.min(safeLimit, items.length) }, (_, wi) => worker(wi)),
-	);
+	await Promise.all(Array.from({ length: Math.min(safeLimit, items.length) }, (_, wi) => worker(wi)));
 	return results;
 }
 
@@ -93,8 +91,7 @@ export interface ParallelTaskResult {
 
 export function aggregateParallelOutputs(
 	results: ParallelTaskResult[],
-	headerFormat: (index: number, agent: string) => string = (i, agent) =>
-		`=== Parallel Task ${i + 1} (${agent}) ===`,
+	headerFormat: (index: number, agent: string) => string = (i, agent) => `=== Parallel Task ${i + 1} (${agent}) ===`,
 ): string {
 	return results
 		.map((r, i) => {
@@ -111,7 +108,7 @@ export function aggregateParallelOutputs(
 								? `EMPTY OUTPUT (expected output file missing: ${r.outputTargetPath})`
 								: !hasOutput && !r.outputTargetPath
 									? "EMPTY OUTPUT (no textual response returned)"
-							: "";
+									: "";
 			const body = status ? (hasOutput ? `${status}\n${r.output}` : status) : r.output;
 			return `${header}\n${body}`;
 		})

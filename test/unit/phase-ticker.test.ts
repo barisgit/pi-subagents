@@ -60,8 +60,12 @@ function baseOpts(
 }
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 describe("phase ticker fallback", () => {
 	it("quiet-tick-emits-after-4s", (t) => {
@@ -124,12 +128,21 @@ describe("phase ticker fallback", () => {
 
 		for (let tickAt = 5_000; tickAt <= 35_000; tickAt += 5_000) {
 			t.mock.timers.tick(4_900);
-			phaseRef.handle(event({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }), tickAt - 100);
+			phaseRef.handle(
+				event({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }),
+				tickAt - 100,
+			);
 			t.mock.timers.tick(100);
 		}
 
-		assert.deepEqual(patches.map((patch) => patch.runnerHeartbeatAt), [5_000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000]);
-		assert.equal(patches.every((patch) => patch.phase === undefined), true);
+		assert.deepEqual(
+			patches.map((patch) => patch.runnerHeartbeatAt),
+			[5_000, 10_000, 15_000, 20_000, 25_000, 30_000, 35_000],
+		);
+		assert.equal(
+			patches.every((patch) => patch.phase === undefined),
+			true,
+		);
 		ticker.stop();
 	});
 
@@ -190,11 +203,13 @@ describe("phase ticker fallback", () => {
 		const patches: StatusPatch[] = [];
 		let calls = 0;
 		const phaseRef = makePhaseRef();
-		const ticker = createPhaseTicker(baseOpts(phaseRef, (patch) => {
-			calls++;
-			if (calls === 1) throw new Error("boom");
-			patches.push(patch);
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, (patch) => {
+				calls++;
+				if (calls === 1) throw new Error("boom");
+				patches.push(patch);
+			}),
+		);
 
 		assert.doesNotThrow(() => t.mock.timers.tick(5_000));
 		assert.equal(calls, 1);

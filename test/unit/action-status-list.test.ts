@@ -18,18 +18,21 @@ function tmpRegistry(): string {
 	return root;
 }
 
-function appendStatusRun(root: string, entry: {
-	runId: string;
-	agentName: string;
-	state: PersistedRunStatus["state"];
-	startedAt: number;
-	endedAt?: number;
-	parentRunId?: string;
-	rootRunId?: string;
-	label?: string;
-	mode?: "single" | "parallel";
-	tokens?: number;
-}): void {
+function appendStatusRun(
+	root: string,
+	entry: {
+		runId: string;
+		agentName: string;
+		state: PersistedRunStatus["state"];
+		startedAt: number;
+		endedAt?: number;
+		parentRunId?: string;
+		rootRunId?: string;
+		label?: string;
+		mode?: "single" | "parallel";
+		tokens?: number;
+	},
+): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
 	const status: PersistedRunStatus = {
@@ -44,13 +47,19 @@ function appendStatusRun(root: string, entry: {
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 		...(entry.label ? { label: entry.label } : {}),
 		...(entry.tokens !== undefined ? { totalTokens: { input: 0, output: entry.tokens, total: entry.tokens } } : {}),
-		steps: [{
-			agent: entry.agentName,
-			status: entry.state,
-			startedAt: entry.startedAt,
-			...(entry.endedAt !== undefined ? { endedAt: entry.endedAt, durationMs: entry.endedAt - entry.startedAt } : {}),
-			...(entry.tokens !== undefined ? { tokens: { input: 0, output: entry.tokens, total: entry.tokens } } : {}),
-		}],
+		steps: [
+			{
+				agent: entry.agentName,
+				status: entry.state,
+				startedAt: entry.startedAt,
+				...(entry.endedAt !== undefined
+					? { endedAt: entry.endedAt, durationMs: entry.endedAt - entry.startedAt }
+					: {}),
+				...(entry.tokens !== undefined
+					? { tokens: { input: 0, output: entry.tokens, total: entry.tokens } }
+					: {}),
+			},
+		],
 	};
 	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify(status), "utf8");
 	appendRunEntry({
@@ -85,7 +94,7 @@ function appendGroup(root: string, entry: Omit<RunsRegistryEntry, "runRecordDir"
 function statusText(params: Parameters<typeof inspectSubagentStatus>[0]): string {
 	const result = inspectSubagentStatus(params);
 	assert.equal(result.isError, undefined);
-	return result.content.map((item) => "text" in item ? item.text : "").join("\n");
+	return result.content.map((item) => ("text" in item ? item.text : "")).join("\n");
 }
 
 afterEach(() => {
@@ -98,7 +107,13 @@ afterEach(() => {
 describe("action status list", () => {
 	it("includes completed runs by default and excludes them when includeCompleted is false", () => {
 		const root = tmpRegistry();
-		appendStatusRun(root, { runId: "done-run", agentName: "fixer", state: "complete", startedAt: 1000, endedAt: 2000 });
+		appendStatusRun(root, {
+			runId: "done-run",
+			agentName: "fixer",
+			state: "complete",
+			startedAt: 1000,
+			endedAt: 2000,
+		});
 		appendStatusRun(root, { runId: "live-run", agentName: "qa", state: "running", startedAt: 3000 });
 
 		const defaultText = statusText({ sessionCwd: root });
@@ -116,9 +131,39 @@ describe("action status list", () => {
 		const root = tmpRegistry();
 		const groupId = "parallel-group";
 		appendGroup(root, { runId: groupId, label: "parallel fanout", rootRunId: groupId, startedAt: 1000 });
-		appendStatusRun(root, { runId: "child-fixer", agentName: "fixer", label: "patch", state: "complete", startedAt: 2000, endedAt: 6000, parentRunId: groupId, rootRunId: groupId, tokens: 11 });
-		appendStatusRun(root, { runId: "child-review", agentName: "review", label: "review", state: "complete", startedAt: 3000, endedAt: 7000, parentRunId: groupId, rootRunId: groupId, tokens: 12 });
-		appendStatusRun(root, { runId: "child-qa", agentName: "qa", label: "verify", state: "failed", startedAt: 4000, endedAt: 8000, parentRunId: groupId, rootRunId: groupId, tokens: 13 });
+		appendStatusRun(root, {
+			runId: "child-fixer",
+			agentName: "fixer",
+			label: "patch",
+			state: "complete",
+			startedAt: 2000,
+			endedAt: 6000,
+			parentRunId: groupId,
+			rootRunId: groupId,
+			tokens: 11,
+		});
+		appendStatusRun(root, {
+			runId: "child-review",
+			agentName: "review",
+			label: "review",
+			state: "complete",
+			startedAt: 3000,
+			endedAt: 7000,
+			parentRunId: groupId,
+			rootRunId: groupId,
+			tokens: 12,
+		});
+		appendStatusRun(root, {
+			runId: "child-qa",
+			agentName: "qa",
+			label: "verify",
+			state: "failed",
+			startedAt: 4000,
+			endedAt: 8000,
+			parentRunId: groupId,
+			rootRunId: groupId,
+			tokens: 13,
+		});
 
 		const text = statusText({ sessionCwd: root });
 		const lines = text.split("\n");
@@ -127,7 +172,10 @@ describe("action status list", () => {
 		assert.match(lines[groupIndex], /tasks 3\/3 complete/);
 		assert.doesNotMatch(lines[groupIndex], /tasks 0\/1 complete/);
 		const childLines = lines.slice(groupIndex + 1, groupIndex + 4);
-		assert.deepEqual(childLines.map((line) => line.startsWith("  - ")), [true, true, true]);
+		assert.deepEqual(
+			childLines.map((line) => line.startsWith("  - ")),
+			[true, true, true],
+		);
 		assert.match(childLines.join("\n"), /child-fixer \| fixer \| patch \| complete/);
 		assert.match(childLines.join("\n"), /child-review \| review \| review \| complete/);
 		assert.match(childLines.join("\n"), /child-qa \| qa \| verify \| failed/);
@@ -139,9 +187,21 @@ describe("action status list", () => {
 
 	it("orders the no-id list by most recent started or ended time first", () => {
 		const root = tmpRegistry();
-		appendStatusRun(root, { runId: "older-ended-later", agentName: "fixer", state: "complete", startedAt: 1000, endedAt: 9000 });
+		appendStatusRun(root, {
+			runId: "older-ended-later",
+			agentName: "fixer",
+			state: "complete",
+			startedAt: 1000,
+			endedAt: 9000,
+		});
 		appendStatusRun(root, { runId: "newer-started", agentName: "qa", state: "running", startedAt: 8000 });
-		appendStatusRun(root, { runId: "oldest", agentName: "review", state: "complete", startedAt: 100, endedAt: 200 });
+		appendStatusRun(root, {
+			runId: "oldest",
+			agentName: "review",
+			state: "complete",
+			startedAt: 100,
+			endedAt: 200,
+		});
 
 		const text = statusText({ sessionCwd: root });
 		assert.ok(text.indexOf("older-ended-later") < text.indexOf("newer-started"));

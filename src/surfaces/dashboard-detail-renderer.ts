@@ -15,22 +15,35 @@ import { previewArgs, readRunTranscript } from "../state/run-transcript.ts";
 import { formatDuration, formatTokens } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { multiSpinnerFrame, tintAgentName } from "./render-shared.ts";
-import { type ActivityState, type RunDisplayState } from "../protocol/types.ts";
+import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
 import { parentRunIdOf } from "./dashboard-row-model.ts";
 import type { LiveRun } from "../state/run-view.ts";
 
-export function statusGlyph(theme: Theme, state: AsyncRunSummary["state"], activity: ActivityState | undefined, displayState?: RunDisplayState): string {
+export function statusGlyph(
+	theme: Theme,
+	state: AsyncRunSummary["state"],
+	activity: ActivityState | undefined,
+	displayState?: RunDisplayState,
+): string {
 	if (displayState === "lost") return theme.fg("error", "!");
 	if (displayState === "needs_attention" || activity === "needs_attention") return theme.fg("warning", "!");
 	switch (state) {
-		case "running": return theme.fg("accent", multiSpinnerFrame());
-		case "queued": return theme.fg("dim", "○");
-		case "paused": return theme.fg("warning", "⏸");
-		case "complete": return theme.fg("success", "✓");
-		case "failed": return theme.fg("error", "✗");
-		case "interrupted": return theme.fg("warning", "■");
-		case "skipped": return theme.fg("dim", "·");
-		case "lost": return theme.fg("error", "!");
+		case "running":
+			return theme.fg("accent", multiSpinnerFrame());
+		case "queued":
+			return theme.fg("dim", "○");
+		case "paused":
+			return theme.fg("warning", "⏸");
+		case "complete":
+			return theme.fg("success", "✓");
+		case "failed":
+			return theme.fg("error", "✗");
+		case "interrupted":
+			return theme.fg("warning", "■");
+		case "skipped":
+			return theme.fg("dim", "·");
+		case "lost":
+			return theme.fg("error", "!");
 	}
 	return theme.fg("dim", "·");
 }
@@ -74,7 +87,9 @@ function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs:
 	if (children.length === 0) return [];
 	// Field priority preserved: currentAgent (live-only) wins, else first step's
 	// agent (foreign carries steps; live carries steps:[]), else mode.
-	const agents = children.map((child) => child.run.currentAgent ?? child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode);
+	const agents = children.map(
+		(child) => child.run.currentAgent ?? child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode,
+	);
 	const uniqueAgents = Array.from(new Set(agents.filter(Boolean)));
 	const agentWord = children.length === 1 ? "agent" : "agents";
 	const suffix = uniqueAgents.length > 0 ? `: ${uniqueAgents.join(", ")}` : "";
@@ -113,9 +128,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 	// Children are selected by structural parent linkage (parentRunId), NOT
 	// provenance: an owned-async run's children (now ownership:'live') must still
 	// appear in the right-pane Steps list.
-	const children = runs
-		.filter((candidate) => candidate.run.parentRunId === run.id)
-		.map((candidate) => candidate.run);
+	const children = runs.filter((candidate) => candidate.run.parentRunId === run.id).map((candidate) => candidate.run);
 	if (children.length > 0) {
 		if (out.length > 0) out.push("");
 		out.push(theme.fg("accent", truncateToWidth("─── Steps ───", width)));
@@ -163,7 +176,16 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	// Parallel runs share one run record with N session transcripts, one per step.
 	// Render order chronological-within-step
 	// so each step reads as a coherent block instead of interleaved noise.
-	type Step = { index: number; agent: string; startTs?: number; lines: string[]; final?: string; ended?: boolean; task?: string; label?: string };
+	type Step = {
+		index: number;
+		agent: string;
+		startTs?: number;
+		lines: string[];
+		final?: string;
+		ended?: boolean;
+		task?: string;
+		label?: string;
+	};
 	const steps = new Map<number, Step>();
 	const ensureStep = (index: number, agent: string): Step => {
 		let s = steps.get(index);
@@ -229,7 +251,6 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 		if (event.kind === "final-text") {
 			const step = ensureStep(event.stepIndex, event.agent);
 			step.final = event.text;
-			continue;
 		}
 	}
 
@@ -242,7 +263,12 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	// right pane reads correctly for tasks: [...] async runs.
 	const stepWord = run.run.steps.length > 0 && run.run.mode === "parallel" ? "Task" : "Step";
 	for (const step of ordered) {
-		out.push(theme.fg("accent", truncateToWidth(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
+		out.push(
+			theme.fg(
+				"accent",
+				truncateToWidth(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width),
+			),
+		);
 		if (step.label) {
 			out.push(theme.fg("muted", truncateToWidth(`Label: ${step.label}`, width)));
 		}

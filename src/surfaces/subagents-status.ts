@@ -16,16 +16,29 @@ import {
 	type PaneOverlayComponent,
 	type PaneOverlayContext,
 } from "pi-extension-utils";
-import { type AsyncRunOverlayData, type AsyncRunSummary, buildGroupSummary, dedupePhaseTitle, listRunsFromRegistryForOverlay, readLeafRunViewCached, sortRuns } from "../state/async-status.ts";
+import {
+	type AsyncRunOverlayData,
+	type AsyncRunSummary,
+	buildGroupSummary,
+	dedupePhaseTitle,
+	listRunsFromRegistryForOverlay,
+	readLeafRunViewCached,
+	sortRuns,
+} from "../state/async-status.ts";
 import { formatDuration } from "./formatters.ts";
 import { tintAgentName } from "./render-shared.ts";
 import { buildRightLines, statusGlyph } from "./dashboard-detail-renderer.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
-import { type SubagentState } from "../protocol/types.ts";
+import type { SubagentState } from "../protocol/types.ts";
 import type { LiveRun, RunView } from "../state/run-view.ts";
-import { listRunsByRootRunIds, readAllEntries, readShardEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
+import {
+	listRunsByRootRunIds,
+	readAllEntries,
+	readShardEntries,
+	type RunsRegistryEntry,
+} from "../state/runs-registry.ts";
 import {
 	containerRowInfo as deriveContainerRowInfo,
 	countAgentRows as deriveCountAgentRows,
@@ -99,7 +112,10 @@ interface StatusOverlayDeps {
 	getOwnedRunViews?: () => Map<string, AsyncRunSummary>;
 }
 
-function entryMatchesOverlayScope(entry: RunsRegistryEntry, scope: { sessionCwd?: string; sessionId?: string }): boolean {
+function entryMatchesOverlayScope(
+	entry: RunsRegistryEntry,
+	scope: { sessionCwd?: string; sessionId?: string },
+): boolean {
 	if (scope.sessionId) {
 		const tag = entry.rootSessionId ?? entry.parentSessionId;
 		return !tag || tag === scope.sessionId;
@@ -108,7 +124,9 @@ function entryMatchesOverlayScope(entry: RunsRegistryEntry, scope: { sessionCwd?
 	return true;
 }
 
-function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
+function registryWorkflowFields(
+	entry: RunsRegistryEntry,
+): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
 	return {
 		...(entry.kind === "workflow" ? { workflow: true } : {}),
 		...(entry.phaseIndex !== undefined ? { phaseIndex: entry.phaseIndex } : {}),
@@ -117,7 +135,11 @@ function registryWorkflowFields(entry: RunsRegistryEntry): Pick<AsyncRunSummary,
 	};
 }
 
-export function runViewFromRegistryEntry(entry: RunsRegistryEntry, registryEntries?: RunsRegistryEntry[], ownedViews?: Map<string, AsyncRunSummary>): AsyncRunSummary {
+export function runViewFromRegistryEntry(
+	entry: RunsRegistryEntry,
+	registryEntries?: RunsRegistryEntry[],
+	ownedViews?: Map<string, AsyncRunSummary>,
+): AsyncRunSummary {
 	// Owned in-process runs resolve their leaf from the registry memory mirror;
 	// non-owned entries reuse the shared terminal-summary cache with
 	// readRunViewForEntry: terminal leaves are reused by status.json mtime+size;
@@ -138,7 +160,10 @@ export function runViewFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 	if (!entry.agentName && !entry.agentNames) {
 		const entries = registryEntries ?? readAllEntries();
 		const children = entries.filter((candidate) => candidate.parentRunId === entry.runId);
-		const childSummaries = children.map((child) => ({ ...runViewFromRegistryEntry(child, entries, ownedViews), ...registryWorkflowFields(child) }));
+		const childSummaries = children.map((child) => ({
+			...runViewFromRegistryEntry(child, entries, ownedViews),
+			...registryWorkflowFields(child),
+		}));
 		// Shared group-synthesis seam (state + workflow override + endedAt + group
 		// object). The overlay carries currentStep:0 + lastUpdate, so pass extras.
 		return buildGroupSummary(entry, childSummaries, { extras: true });
@@ -160,7 +185,11 @@ export function runViewFromRegistryEntry(entry: RunsRegistryEntry, registryEntri
 	};
 }
 
-export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { sessionCwd?: string; sessionId?: string }, ownedViews?: Map<string, AsyncRunSummary>): AsyncRunOverlayData {
+export function expandOverlayByRootRunId(
+	seed: AsyncRunOverlayData,
+	scope: { sessionCwd?: string; sessionId?: string },
+	ownedViews?: Map<string, AsyncRunSummary>,
+): AsyncRunOverlayData {
 	const seedIds = new Set([...seed.active, ...seed.recent].map((run) => run.id));
 	if (seedIds.size === 0) return seed;
 
@@ -187,11 +216,20 @@ export function expandOverlayByRootRunId(seed: AsyncRunOverlayData, scope: { ses
 	const all = [...byId.values()];
 	return {
 		active: all.filter((run) => run.state === "queued" || run.state === "running" || run.state === "lost"),
-		recent: all.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused" || run.state === "interrupted" || run.state === "skipped"),
+		recent: all.filter(
+			(run) =>
+				run.state === "complete" ||
+				run.state === "failed" ||
+				run.state === "paused" ||
+				run.state === "interrupted" ||
+				run.state === "skipped",
+		),
 	};
 }
 
-export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundControls"> & { baseCwd?: string }): ForegroundRunSummary[] {
+export function foregroundRunsFromState(
+	state: Pick<SubagentState, "foregroundControls"> & { baseCwd?: string },
+): ForegroundRunSummary[] {
 	return Array.from(state.foregroundControls.values())
 		.map((control: ForegroundControl) => {
 			const displayState = deriveRunDisplayState({
@@ -203,30 +241,32 @@ export function foregroundRunsFromState(state: Pick<SubagentState, "foregroundCo
 				lastActivityAt: control.lastActivityAt,
 				lastUpdate: control.updatedAt,
 			});
-		return {
+			return {
 				id: control.runId,
-			steps: [],
-			...(control.asyncDir ? { asyncDir: control.asyncDir } : {}),
+				steps: [],
+				...(control.asyncDir ? { asyncDir: control.asyncDir } : {}),
 				...(control.parentRunId ? { parentRunId: control.parentRunId } : {}),
 				state: "running" as const,
 				...(control.currentActivityState ? { activityState: control.currentActivityState } : {}),
 				...(displayState ? { displayState } : {}),
-			...(control.lastActivityAt !== undefined ? { lastActivityAt: control.lastActivityAt } : {}),
-			...(control.currentTool ? { currentTool: control.currentTool } : {}),
-			...(control.currentToolStartedAt !== undefined ? { currentToolStartedAt: control.currentToolStartedAt } : {}),
-			...(control.phase !== undefined ? { phase: control.phase } : {}),
-			...(control.phaseStartedAt !== undefined ? { phaseStartedAt: control.phaseStartedAt } : {}),
-			mode: control.mode,
-			...(state.baseCwd ? { cwd: state.baseCwd } : {}),
-			startedAt: control.startedAt,
-			lastUpdate: control.updatedAt,
-			...(control.label ? { label: control.label } : {}),
-			...(control.agentLabels ? { agentLabels: control.agentLabels } : {}),
-			...(control.currentAgent ? { currentAgent: control.currentAgent } : {}),
-			...(control.currentAgentColor ? { currentAgentColor: control.currentAgentColor } : {}),
-			...(control.currentIndex !== undefined ? { currentIndex: control.currentIndex } : {}),
-			...(control.recentTools ? { recentTools: control.recentTools } : {}),
-			...(control.recentOutput ? { recentOutput: control.recentOutput } : {}),
+				...(control.lastActivityAt !== undefined ? { lastActivityAt: control.lastActivityAt } : {}),
+				...(control.currentTool ? { currentTool: control.currentTool } : {}),
+				...(control.currentToolStartedAt !== undefined
+					? { currentToolStartedAt: control.currentToolStartedAt }
+					: {}),
+				...(control.phase !== undefined ? { phase: control.phase } : {}),
+				...(control.phaseStartedAt !== undefined ? { phaseStartedAt: control.phaseStartedAt } : {}),
+				mode: control.mode,
+				...(state.baseCwd ? { cwd: state.baseCwd } : {}),
+				startedAt: control.startedAt,
+				lastUpdate: control.updatedAt,
+				...(control.label ? { label: control.label } : {}),
+				...(control.agentLabels ? { agentLabels: control.agentLabels } : {}),
+				...(control.currentAgent ? { currentAgent: control.currentAgent } : {}),
+				...(control.currentAgentColor ? { currentAgentColor: control.currentAgentColor } : {}),
+				...(control.currentIndex !== undefined ? { currentIndex: control.currentIndex } : {}),
+				...(control.recentTools ? { recentTools: control.recentTools } : {}),
+				...(control.recentOutput ? { recentOutput: control.recentOutput } : {}),
 				...(control.finalOutput ? { finalOutput: control.finalOutput } : {}),
 			};
 		})
@@ -257,9 +297,7 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 	}
 	if (run.run.workflow) return tintAgentName("workflow", colorForAgentName("workflow"));
 	const mode = run.run.mode ?? "single";
-	const steps = (mode === "parallel"
-		? run.run.steps.filter((s) => s.agent)
-		: run.run.steps).filter((s) => s.agent);
+	const steps = (mode === "parallel" ? run.run.steps.filter((s) => s.agent) : run.run.steps).filter((s) => s.agent);
 	const running = run.run.steps.find((step) => step.status === "running");
 	const fallbackName = running?.agent ?? run.run.steps.find((step) => step.agent)?.agent ?? mode;
 	// Per-step disk-persisted color falls back to the live name -> color map so completed
@@ -296,9 +334,11 @@ function runShapeBadge(run: LiveRun): string {
 	// undefined => ""; no provenance branch needed.
 	const total = run.run.steps.length;
 	// Parallel progress uses done-count.
-	const current = run.run.mode === "parallel"
-		? run.run.steps.filter((s) => s.status === "complete" || s.status === "failed" || s.status === "skipped").length
-		: (run.run.currentStep ?? 0) + 1;
+	const current =
+		run.run.mode === "parallel"
+			? run.run.steps.filter((s) => s.status === "complete" || s.status === "failed" || s.status === "skipped")
+					.length
+			: (run.run.currentStep ?? 0) + 1;
 	return formatShapeBadge({ mode: run.run.mode ?? "single", total, current }) ?? "";
 }
 
@@ -313,7 +353,8 @@ function runHasLiveLabel(run: LiveRun): boolean {
 	// terminal/lost run freezes its label regardless of whether this process owns
 	// it. Foreground runs are always state:'running' => not terminal => live.
 	const s = run.run.state;
-	if (s === "complete" || s === "failed" || s === "interrupted" || s === "skipped" || s === "lost" || s === "paused") return false;
+	if (s === "complete" || s === "failed" || s === "interrupted" || s === "skipped" || s === "lost" || s === "paused")
+		return false;
 	if (run.run.displayState === "lost") return false;
 	return true;
 }
@@ -324,14 +365,20 @@ function runHasLiveLabel(run: LiveRun): boolean {
 // changes the painted rows: identity, order, state, derived liveness, current
 // tool, phase, and step progress. The render-on-diff gate fires a repaint when
 // this changes; the coarse-tick path separately keeps live labels advancing.
-export function overlayRunsSignature(runs: LiveRun[], selectedId: string | undefined, errorMessage: string | undefined): string {
+export function overlayRunsSignature(
+	runs: LiveRun[],
+	selectedId: string | undefined,
+	errorMessage: string | undefined,
+): string {
 	const parts: string[] = [`sel:${selectedId ?? ""}`, `err:${errorMessage ? 1 : 0}`];
 	for (const run of runs) {
 		// Provenance-free signature: include every present live-data field so the
 		// dashboard repaints whenever an owned-async child advances (step/phase/
 		// displayState/tool/activity), exactly as it does for a foreign disk run.
 		const r = run.run;
-		parts.push(`run:${r.id}:${r.state}:${r.displayState ?? ""}:${r.currentTool ?? ""}:${r.phase ?? ""}:${r.currentStep ?? ""}:${r.steps?.length ?? 0}:${r.currentIndex ?? ""}:${r.lastActivityAt ?? ""}`);
+		parts.push(
+			`run:${r.id}:${r.state}:${r.displayState ?? ""}:${r.currentTool ?? ""}:${r.phase ?? ""}:${r.currentStep ?? ""}:${r.steps?.length ?? 0}:${r.currentIndex ?? ""}:${r.lastActivityAt ?? ""}`,
+		);
 	}
 	return parts.join("|");
 }
@@ -347,7 +394,15 @@ export function runElapsed(run: LiveRun, now: number): string {
 	// A force-killed run keeps state==='running' on disk but goes displayState==='lost'
 	// once its runner heartbeat is stale — freeze the timer on that too, not just on a
 	// terminal state, otherwise a dead run keeps ticking.
-	if (run.run.state === "lost" || run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || run.run.displayState === "lost") {
+	if (
+		run.run.state === "lost" ||
+		run.run.state === "complete" ||
+		run.run.state === "failed" ||
+		run.run.state === "interrupted" ||
+		run.run.state === "skipped" ||
+		run.run.state === "paused" ||
+		run.run.displayState === "lost"
+	) {
 		const frozen = run.run.lastUpdate ?? run.run.startedAt;
 		return formatDuration(Math.max(0, frozen - legStartedAt));
 	}
@@ -362,19 +417,34 @@ export function runIdentityAge(run: LiveRun, now: number): string | undefined {
 	const isLost = run.run.state === "lost" || run.run.displayState === "lost";
 	// Freeze on terminal data, not provenance: a completed owned-async run
 	// (ownership:'live') must stop aging at endedAt/lastUpdate like a foreign one.
-	const frozenEnd = run.run.endedAt ?? (run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "paused" || isLost ? run.run.lastUpdate : undefined);
+	const frozenEnd =
+		run.run.endedAt ??
+		(run.run.state === "complete" ||
+		run.run.state === "failed" ||
+		run.run.state === "interrupted" ||
+		run.run.state === "skipped" ||
+		run.run.state === "paused" ||
+		isLost
+			? run.run.lastUpdate
+			: undefined);
 	const end = frozenEnd ?? now;
 	return formatDuration(Math.max(0, end - run.run.startedAt));
 }
 
 function stateBucket(state: AsyncRunSummary["state"]): number {
 	switch (state) {
-		case "running": return 0;
-		case "queued": return 1;
-		case "paused": return 2;
-		case "failed": return 3;
-		case "complete": return 4;
-		default: return 5;
+		case "running":
+			return 0;
+		case "queued":
+			return 1;
+		case "paused":
+			return 2;
+		case "failed":
+			return 3;
+		case "complete":
+			return 4;
+		default:
+			return 5;
 	}
 }
 
@@ -406,9 +476,8 @@ export function runEndedStamp(run: LiveRun): string {
 	if (typeof ended !== "number" || !Number.isFinite(ended)) return "";
 	const d = new Date(ended);
 	const now = new Date();
-	const sameDay = d.getFullYear() === now.getFullYear()
-		&& d.getMonth() === now.getMonth()
-		&& d.getDate() === now.getDate();
+	const sameDay =
+		d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
 	const hh = String(d.getHours()).padStart(2, "0");
 	const mm = String(d.getMinutes()).padStart(2, "0");
 	if (sameDay) return `${hh}:${mm}`;
@@ -419,7 +488,12 @@ export function runEndedStamp(run: LiveRun): string {
 
 type OverlayDisplayRow = DisplayRow | { kind: "empty"; id: "empty" };
 
-export function buildPhaseLine(theme: Theme, row: Extract<DisplayRow, { kind: "phase" }>, selected: boolean, width: number): string {
+export function buildPhaseLine(
+	theme: Theme,
+	row: Extract<DisplayRow, { kind: "phase" }>,
+	selected: boolean,
+	width: number,
+): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
 	const indent = row.depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, row.depth - 1))}└─`) : "";
 	const glyph = theme.fg(row.running ? "accent" : "dim", row.collapsed ? "▸" : "▾");
@@ -428,7 +502,19 @@ export function buildPhaseLine(theme: Theme, row: Extract<DisplayRow, { kind: "p
 	return truncateToWidth(text, width, "");
 }
 
-export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now: number, width: number, depth = 0, showCwd = false, containerInfo?: ContainerRowInfo, pendingDelivery = false, suppressPhaseChip = false, parallelMarker = false): string {
+export function buildLeftLine(
+	theme: Theme,
+	run: LiveRun,
+	selected: boolean,
+	now: number,
+	width: number,
+	depth = 0,
+	showCwd = false,
+	containerInfo?: ContainerRowInfo,
+	pendingDelivery = false,
+	suppressPhaseChip = false,
+	parallelMarker = false,
+): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
 	// charter nested-subagent-display: indent between cursor and glyph keeps cursor aligned.
 	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
@@ -451,8 +537,17 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// status-writer finalize phase-clear may still carry stale phase fields;
 	// suppress here so the seconds counter doesn't keep ticking after
 	// `complete`/`failed`/`lost`.
-	const isTerminal = run.run.state === "complete" || run.run.state === "failed" || run.run.state === "interrupted" || run.run.state === "skipped" || run.run.state === "lost" || run.run.displayState === "lost";
-	const phase = containerInfo?.phaseChip || (suppressPhaseChip ? "" : workflowPhaseChip(run)) || (isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool));
+	const isTerminal =
+		run.run.state === "complete" ||
+		run.run.state === "failed" ||
+		run.run.state === "interrupted" ||
+		run.run.state === "skipped" ||
+		run.run.state === "lost" ||
+		run.run.displayState === "lost";
+	const phase =
+		containerInfo?.phaseChip ||
+		(suppressPhaseChip ? "" : workflowPhaseChip(run)) ||
+		(isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool));
 	// A 'lost' displayState is authoritative over the stale on-disk state: show just
 	// 'lost' rather than the confusing 'running/lost' a force-killed run would produce.
 	// When an active phase chip is present (`finishing`, `writing`, `tool: bash`), it
@@ -462,11 +557,14 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// Suppress the discriminant in that case; keep bare `state/displayState` when there's
 	// no phase chip (there displayState is the only live-activity signal), and keep `lost`
 	// authoritative always.
-	const status = run.run.displayState === "lost"
-		? "lost"
-		: phase && run.run.displayState
-			? run.run.state
-			: run.run.displayState ? `${run.run.state}/${run.run.displayState}` : run.run.state;
+	const status =
+		run.run.displayState === "lost"
+			? "lost"
+			: phase && run.run.displayState
+				? run.run.state
+				: run.run.displayState
+					? `${run.run.state}/${run.run.displayState}`
+					: run.run.state;
 	const elapsed = runElapsed(run, now);
 	const identityAge = runIdentityAge(run, now);
 	const dateStamp = runEndedStamp(run);
@@ -478,13 +576,12 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// Don't pre-truncate the label here — the final `truncateToWidth(text, width)`
 	// below clips the whole row once at the right edge. Pre-truncating produced
 	// `tally-v4-showcase ... ...` style double-ellipsis noise.
-	const labelPart = run.run.label
-		? ` · ${theme.fg("muted", run.run.label)}`
-		: "";
+	const labelPart = run.run.label ? ` · ${theme.fg("muted", run.run.label)}` : "";
 	// Collapsed containers summarize their hidden children inline.
-	const collapsedPart = containerInfo?.collapsed && containerInfo.agentsSummary
-		? ` · ${theme.fg("dim", `(${containerInfo.agentsSummary})`)}`
-		: "";
+	const collapsedPart =
+		containerInfo?.collapsed && containerInfo.agentsSummary
+			? ` · ${theme.fg("dim", `(${containerInfo.agentsSummary})`)}`
+			: "";
 	const phasePart = phase ? ` · ${theme.fg("dim", phase)}` : "";
 	const cwdBadge = runCwdBadge(run, showCwd);
 	const cwdPart = cwdBadge ? ` · ${theme.fg("dim", cwdBadge)}` : "";
@@ -496,7 +593,9 @@ export function buildLeftLine(theme: Theme, run: LiveRun, selected: boolean, now
 	// current-leg elapsed (and identity age) alongside the terminal date stamp.
 	const resumed = (run.run.resumeCount ?? 0) > 0;
 	const tail = dateStamp
-		? (resumed ? ` · ${elapsed}${identityPart} · ${theme.fg("dim", dateStamp)}` : ` · ${theme.fg("dim", dateStamp)}`)
+		? resumed
+			? ` · ${elapsed}${identityPart} · ${theme.fg("dim", dateStamp)}`
+			: ` · ${theme.fg("dim", dateStamp)}`
 		: ` · ${elapsed}${identityPart}`;
 	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${resumePart}${labelPart}${collapsedPart}${cwdPart}${tail}`;
 	// Hard-clip with no ellipsis — the row already ends at the pane border, so an
@@ -552,22 +651,21 @@ export class SubagentsStatusComponent implements Component {
 	// readable. Persists for the lifetime of the overlay instance.
 	private splitFraction = DEFAULT_LEFT_FRACTION;
 
-	constructor(
-		tui: TUI,
-		theme: Theme,
-		done: () => void,
-		deps: StatusOverlayDeps = {},
-	) {
+	constructor(tui: TUI, theme: Theme, done: () => void, deps: StatusOverlayDeps = {}) {
 		this.tui = tui;
 		this.theme = theme;
 		this.done = done;
-		this.listRunsForOverlay = deps.listRunsForOverlay ?? ((limit) => {
-			const scope = this.showAllSessions ? {} : {
-				...(this.sessionId ? { sessionId: this.sessionId } : { sessionCwd: this.sessionCwd }),
-			};
-			const owned = this.ownedViews.size > 0 ? this.ownedViews : undefined;
-			return expandOverlayByRootRunId(listRunsFromRegistryForOverlay(limit, scope, owned), scope, owned);
-		});
+		this.listRunsForOverlay =
+			deps.listRunsForOverlay ??
+			((limit) => {
+				const scope = this.showAllSessions
+					? {}
+					: {
+							...(this.sessionId ? { sessionId: this.sessionId } : { sessionCwd: this.sessionCwd }),
+						};
+				const owned = this.ownedViews.size > 0 ? this.ownedViews : undefined;
+				return expandOverlayByRootRunId(listRunsFromRegistryForOverlay(limit, scope, owned), scope, owned);
+			});
 		this.listForegroundRuns = deps.listForegroundRuns ?? (() => []);
 		this.leftPaneCap = deps.leftPaneCap ?? LEFT_PANE_CAP;
 		this.sessionCwd = deps.sessionCwd;
@@ -605,11 +703,15 @@ export class SubagentsStatusComponent implements Component {
 			detail: {
 				rows: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);
-					return run ? buildRightLines(this.theme, run, Math.max(20, this.lastRightWidth || 80), this.runs) : [];
+					return run
+						? buildRightLines(this.theme, run, Math.max(20, this.lastRightWidth || 80), this.runs)
+						: [];
 				},
 				title: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);
-					return run ? `${selectedRunTitle(run)} [${run.run.displayState ?? run.run.state}]` : "No run selected";
+					return run
+						? `${selectedRunTitle(run)} [${run.run.displayState ?? run.run.state}]`
+						: "No run selected";
 				},
 			},
 			closeKeys: ["escape", "ctrl+c", "q"],
@@ -628,7 +730,10 @@ export class SubagentsStatusComponent implements Component {
 				{
 					keys: ["return", "o"],
 					label: "collapse group",
-					run: (ctx) => this.toggleCollapseRow(ctx.selectedRow && ctx.selectedRow.kind !== "empty" ? ctx.selectedRow : undefined),
+					run: (ctx) =>
+						this.toggleCollapseRow(
+							ctx.selectedRow && ctx.selectedRow.kind !== "empty" ? ctx.selectedRow : undefined,
+						),
 				},
 				{
 					keys: "a",
@@ -659,7 +764,19 @@ export class SubagentsStatusComponent implements Component {
 		const lineWidth = Math.max(20, this.lastLeftWidth || 80);
 		if (row.kind === "phase") return buildPhaseLine(this.theme, row, isSelected, lineWidth);
 		const containerInfo = this.containerRowInfo(row.run);
-		return buildLeftLine(this.theme, row.run, isSelected, Date.now(), lineWidth, row.depth, showCwd, containerInfo, this.isPendingDelivery(row.run), row.suppressPhaseChip, row.parallelMarker);
+		return buildLeftLine(
+			this.theme,
+			row.run,
+			isSelected,
+			Date.now(),
+			lineWidth,
+			row.depth,
+			showCwd,
+			containerInfo,
+			this.isPendingDelivery(row.run),
+			row.suppressPhaseChip,
+			row.parallelMarker,
+		);
 	}
 
 	private overlayPrimaryTitle(): string {
@@ -681,15 +798,18 @@ export class SubagentsStatusComponent implements Component {
 	// cadence. Tests that inject an explicit refreshMs keep that exact period.
 	private scheduleRefresh(): void {
 		const hasInjectedPeriod = this.refreshMs !== AUTO_REFRESH_MS;
-		this.refreshTimer = setTimeout(() => {
-			this.reload();
-			const signature = overlayRunsSignature(this.runs, this.selectedId, this.errorMessage);
-			const changed = signature !== this.lastRunsSignature;
-			const hasLive = this.runs.some(runHasLiveLabel);
-			this.lastRunsSignature = signature;
-			if (changed || hasLive) this.tui.requestRender();
-			this.scheduleRefresh();
-		}, hasInjectedPeriod || this.runs.some(runHasLiveLabel) ? this.refreshMs : IDLE_REFRESH_MS);
+		this.refreshTimer = setTimeout(
+			() => {
+				this.reload();
+				const signature = overlayRunsSignature(this.runs, this.selectedId, this.errorMessage);
+				const changed = signature !== this.lastRunsSignature;
+				const hasLive = this.runs.some(runHasLiveLabel);
+				this.lastRunsSignature = signature;
+				if (changed || hasLive) this.tui.requestRender();
+				this.scheduleRefresh();
+			},
+			hasInjectedPeriod || this.runs.some(runHasLiveLabel) ? this.refreshMs : IDLE_REFRESH_MS,
+		);
 		this.refreshTimer.unref?.();
 	}
 
@@ -730,8 +850,7 @@ export class SubagentsStatusComponent implements Component {
 			this.leftScroll = 0;
 			return;
 		}
-		const stillHere = this.selectedId !== undefined
-			&& visible.some((row) => this.rowKey(row) === this.selectedId);
+		const stillHere = this.selectedId !== undefined && visible.some((row) => this.rowKey(row) === this.selectedId);
 		if (!stillHere) {
 			this.selectedId = this.rowKey(visible[0]!);
 		}
@@ -831,7 +950,17 @@ export class SubagentsStatusComponent implements Component {
 		const visible = this.displayRows();
 		if (visible.length === 0) return;
 		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
-		this.applySelectionState(moveCursor({ cursor: this.selectedIndex(), scroll: this.leftScroll, itemCount: visible.length, viewportHeight: listHeight }, delta));
+		this.applySelectionState(
+			moveCursor(
+				{
+					cursor: this.selectedIndex(),
+					scroll: this.leftScroll,
+					itemCount: visible.length,
+					viewportHeight: listHeight,
+				},
+				delta,
+			),
+		);
 		this.tui.requestRender();
 	}
 
@@ -839,7 +968,12 @@ export class SubagentsStatusComponent implements Component {
 		const visible = this.displayRows();
 		if (visible.length === 0) return;
 		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
-		const state = { cursor: this.selectedIndex(), scroll: this.leftScroll, itemCount: visible.length, viewportHeight: listHeight };
+		const state = {
+			cursor: this.selectedIndex(),
+			scroll: this.leftScroll,
+			itemCount: visible.length,
+			viewportHeight: listHeight,
+		};
 		this.applySelectionState(toEnd ? endCursor(state) : homeCursor(state));
 		this.tui.requestRender();
 	}
@@ -852,7 +986,18 @@ export class SubagentsStatusComponent implements Component {
 		if (visible.length === 0) return;
 		const page = this.lastLeftListHeight || computeBodyHeight(this.tui);
 		const step = Math.max(1, Math.floor(page * fraction));
-		this.applySelectionState(pageCursor({ cursor: this.selectedIndex(), scroll: this.leftScroll, itemCount: visible.length, viewportHeight: page }, direction, step));
+		this.applySelectionState(
+			pageCursor(
+				{
+					cursor: this.selectedIndex(),
+					scroll: this.leftScroll,
+					itemCount: visible.length,
+					viewportHeight: page,
+				},
+				direction,
+				step,
+			),
+		);
 		this.tui.requestRender();
 	}
 
@@ -895,9 +1040,6 @@ export class SubagentsStatusComponent implements Component {
 			leftMaxWidth: this.leftPaneCap,
 		}).leftWidth;
 	}
-
-
-
 
 	invalidate(): void {
 		// paneOverlay resolves rows lazily during render; the dashboard's existing
@@ -954,7 +1096,14 @@ function selectedRunTailPlain(run: LiveRun): string {
 
 function selectedRunTailRendered(theme: Theme, run: LiveRun): string {
 	const state = run.run.state ?? "";
-	const stateColor = state === "running" ? "accent" : state === "failed" || state === "lost" ? "error" : state === "complete" ? "success" : "dim";
+	const stateColor =
+		state === "running"
+			? "accent"
+			: state === "failed" || state === "lost"
+				? "error"
+				: state === "complete"
+					? "success"
+					: "dim";
 	const parts = [theme.fg(stateColor, `[${state}]`)];
 	if (run.run.currentTool) parts.push(theme.fg("muted", run.run.currentTool));
 	return parts.join(theme.fg("dim", " · "));

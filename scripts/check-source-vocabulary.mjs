@@ -16,11 +16,7 @@ function listSourceFiles(dir) {
 	return files;
 }
 
-const sourceFiles = [
-	...readdirSync(root)
-		.filter((name) => name.endsWith(".ts")),
-	...listSourceFiles("src"),
-].sort();
+const sourceFiles = [...readdirSync(root).filter((name) => name.endsWith(".ts")), ...listSourceFiles("src")].sort();
 
 function stripComments(line, inBlockComment) {
 	let output = "";

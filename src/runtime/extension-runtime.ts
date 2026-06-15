@@ -13,7 +13,7 @@
  * Legacy config is still read from ~/.pi/agent/extensions/subagent/config.json when the primary file is absent.
  */
 
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { type AgentConfig, discoverAgents } from "../shared/agents.ts";
 import { setCurrentPi } from "../shared/current-pi.ts";
@@ -35,9 +35,21 @@ import { registerSlashCommands } from "../surfaces/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "../dispatch/prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "../surfaces/slash-bridge.ts";
 import { connect, type UtilsClient } from "pi-extension-utils";
-import { clearSlashSnapshots, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../state/slash-live-state.ts";
-import registerSubagentNotify, { type SubagentBatchNotifyDetails, type SubagentNotifyDetails } from "../surfaces/notify.ts";
-import { createSlashResultComponent, parseSubagentNotifyContent, SubagentNotifyNoticeComponent } from "../surfaces/message-renderers.ts";
+import {
+	clearSlashSnapshots,
+	resolveSlashMessageDetails,
+	restoreSlashFinalSnapshots,
+	type SlashMessageDetails,
+} from "../state/slash-live-state.ts";
+import registerSubagentNotify, {
+	type SubagentBatchNotifyDetails,
+	type SubagentNotifyDetails,
+} from "../surfaces/notify.ts";
+import {
+	createSlashResultComponent,
+	parseSubagentNotifyContent,
+	SubagentNotifyNoticeComponent,
+} from "../surfaces/message-renderers.ts";
 import { registerControlNotices } from "../surfaces/control-notices.ts";
 import {
 	type RegisterPersonaDirPayload,
@@ -182,13 +194,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		widgetClient ??= connect(pi, { ctx, clientId: "pi-subagents" });
 		return widgetClient;
 	};
-	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered } = createAsyncJobTracker(pi, state, { idleTracker, getWidgetClient });
+	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered } =
+		createAsyncJobTracker(pi, state, { idleTracker, getWidgetClient });
 	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
 		return agents.map((a) => resolveAgentToolPatterns(a, available));
 	};
-	const { getRegisteredPersonaDirs, handleRegisterPersonaDir, handleUnregisterPersonaDir } = createPersonaDirRegistry(pi);
+	const { getRegisteredPersonaDirs, handleRegisterPersonaDir, handleUnregisterPersonaDir } =
+		createPersonaDirRegistry(pi);
 	const executor = createSubagentExecutor({
 		pi,
 		state,
@@ -198,7 +212,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		childRegistry,
 		expandTilde,
 		discoverAgents: (cwd, scope, options) => {
-			const result = discoverAgents(cwd, scope, { ...options, config, registeredPersonaDirs: getRegisteredPersonaDirs() });
+			const result = discoverAgents(cwd, scope, {
+				...options,
+				config,
+				registeredPersonaDirs: getRegisteredPersonaDirs(),
+			});
 			return { ...result, agents: resolveAgentTools(result.agents) };
 		},
 		getActiveRootRoleName: () => roleManager.getActiveRootRoleName(),
@@ -224,19 +242,22 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		});
 	});
 
-	pi.registerMessageRenderer<SubagentNotifyDetails | SubagentBatchNotifyDetails>("subagent-notify", (message, options, theme) => {
-		const content = typeof message.content === "string" ? message.content : "";
-		const details = (message.details as SubagentNotifyDetails | SubagentBatchNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
-		if (!details) return new Text(content, 0, 0);
-		return new SubagentNotifyNoticeComponent(details, options, theme);
-	});
-
+	pi.registerMessageRenderer<SubagentNotifyDetails | SubagentBatchNotifyDetails>(
+		"subagent-notify",
+		(message, options, theme) => {
+			const content = typeof message.content === "string" ? message.content : "";
+			const details =
+				(message.details as SubagentNotifyDetails | SubagentBatchNotifyDetails | undefined) ??
+				parseSubagentNotifyContent(content);
+			if (!details) return new Text(content, 0, 0);
+			return new SubagentNotifyNoticeComponent(details, options, theme);
+		},
+	);
 
 	const slashBridge = registerSlashSubagentBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
-		execute: (id, params, signal, onUpdate, ctx) =>
-			executor.execute(id, params, signal, onUpdate, ctx),
+		execute: (id, params, signal, onUpdate, ctx) => executor.execute(id, params, signal, onUpdate, ctx),
 	});
 
 	const promptTemplateBridge = registerPromptTemplateDelegationBridge({
@@ -309,8 +330,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
 		pi.events.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, handleDelivered),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
-		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleRegisterPersonaDir(payload as RegisterPersonaDirPayload)),
-		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, (payload: unknown) => handleUnregisterPersonaDir(payload as UnregisterPersonaDirPayload)),
+		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, (payload: unknown) =>
+			handleRegisterPersonaDir(payload as RegisterPersonaDirPayload),
+		),
+		pi.events.on(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, (payload: unknown) =>
+			handleUnregisterPersonaDir(payload as UnregisterPersonaDirPayload),
+		),
 	];
 	if (!isChildSession) globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
 
@@ -337,7 +362,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const resetSessionState = (ctx: ExtensionContext) => {
 		state.baseCwd = ctx.cwd;
-		state.currentSessionId = ctx.sessionManager.getSessionId() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		state.currentSessionId =
+			ctx.sessionManager.getSessionId() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		state.lastUiContext = ctx;
 		getWidgetClient(ctx);
 		cleanupSessionArtifacts(ctx);

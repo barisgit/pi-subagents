@@ -18,11 +18,16 @@ function stepFor(status: PersistedRunStatus & { steps: PersistedRunStep[] }, ste
  * projections. `status.steps` is required here because every caller seeds it to
  * `[]` before applying patches.
  */
-export function applyPatchToStatus(status: PersistedRunStatus & { steps: PersistedRunStep[] }, patch: StatusPatch): void {
+export function applyPatchToStatus(
+	status: PersistedRunStatus & { steps: PersistedRunStep[] },
+	patch: StatusPatch,
+): void {
 	const now = Date.now();
 	status.lastUpdate = patch.endedAt ?? now;
 	status.currentStep = patch.stepIndex;
-	const isTerminalStepPatch = patch.endedAt !== undefined && (patch.state === "complete" || patch.state === "failed" || patch.state === "interrupted");
+	const isTerminalStepPatch =
+		patch.endedAt !== undefined &&
+		(patch.state === "complete" || patch.state === "failed" || patch.state === "interrupted");
 	if (patch.state && !isTerminalStepPatch) status.state = patch.state;
 	if (patch.endedAt !== undefined) status.endedAt = patch.endedAt;
 	if (patch.outputText !== undefined && !isTerminalStepPatch) status.outputText = patch.outputText;
@@ -56,7 +61,14 @@ export function applyPatchToStatus(status: PersistedRunStatus & { steps: Persist
 			step.currentToolStartedAt = undefined;
 		}
 	}
-	if (patch.liveText !== undefined || patch.toolCallDelta || patch.toolResultDelta || patch.toolErrorDelta || patch.phase !== undefined || patch.phaseStartedAt !== undefined) {
+	if (
+		patch.liveText !== undefined ||
+		patch.toolCallDelta ||
+		patch.toolResultDelta ||
+		patch.toolErrorDelta ||
+		patch.phase !== undefined ||
+		patch.phaseStartedAt !== undefined
+	) {
 		step.live = step.live ?? {};
 		if (patch.liveText !== undefined) step.live.outputText = patch.liveText;
 		if (patch.toolCallDelta) step.live.toolCallCount = (step.live.toolCallCount ?? 0) + patch.toolCallDelta;

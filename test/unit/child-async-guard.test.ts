@@ -43,15 +43,17 @@ describe("isInsideChildSession", () => {
 
 describe("subagent executor child-session async guard", () => {
 	function makeExecutor(cwd: string) {
-		return (createSubagentExecutor as unknown as (deps: Record<string, unknown>) => {
-			execute: (
-				id: string,
-				params: Record<string, unknown>,
-				signal: AbortSignal,
-				onUpdate: ((r: unknown) => void) | undefined,
-				ctx: Record<string, unknown>,
-			) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: { mode?: string } }>;
-		})({
+		return (
+			createSubagentExecutor as unknown as (deps: Record<string, unknown>) => {
+				execute: (
+					id: string,
+					params: Record<string, unknown>,
+					signal: AbortSignal,
+					onUpdate: ((r: unknown) => void) | undefined,
+					ctx: Record<string, unknown>,
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: { mode?: string } }>;
+			}
+		)({
 			pi: {
 				events: { emit: () => {} },
 				getSessionName: () => undefined,
@@ -109,7 +111,13 @@ describe("subagent executor child-session async guard", () => {
 		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
 		const result = await executor.execute(
 			"id-parallel",
-			{ run: [{ agent: "tester", task: "a" }, { agent: "tester", task: "b" }], async: true },
+			{
+				run: [
+					{ agent: "tester", task: "a" },
+					{ agent: "tester", task: "b" },
+				],
+				async: true,
+			},
 			new AbortController().signal,
 			undefined,
 			makeCtx("/tmp/pi-subagent-child-async-guard"),
@@ -118,7 +126,6 @@ describe("subagent executor child-session async guard", () => {
 		assert.equal(result.details?.mode, "parallel");
 		assert.match(result.content[0]?.text ?? "", /only allowed from the host session/i);
 	});
-
 
 	it("does NOT reject async:true when called from the host session (flag unset)", async () => {
 		// We don't need the run to actually complete; we just need to be sure the

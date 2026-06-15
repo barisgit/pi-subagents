@@ -16,11 +16,7 @@ let tempDir = "";
 function makeProjectSkill(cwd: string, name: string, body: string): void {
 	const skillDir = path.join(cwd, ".pi", "skills", name);
 	fs.mkdirSync(skillDir, { recursive: true });
-	fs.writeFileSync(
-		path.join(skillDir, "SKILL.md"),
-		`---\ndescription: Test description\n---\n\n${body}\n`,
-		"utf-8",
-	);
+	fs.writeFileSync(path.join(skillDir, "SKILL.md"), `---\ndescription: Test description\n---\n\n${body}\n`, "utf-8");
 }
 
 function makeProjectPackageSkill(cwd: string, packageName: string, name: string, body: string): void {
@@ -43,7 +39,9 @@ async function importSkillsFresh() {
 	const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 	const modulePath = path.resolve(projectRoot, "src", "shared", "skills.ts");
 	const bust = `${Date.now()}-${Math.random()}`;
-	return await import(`${pathToFileURL(modulePath).href}?bust=${bust}`) as typeof import("../../src/shared/skills.ts");
+	return (await import(
+		`${pathToFileURL(modulePath).href}?bust=${bust}`
+	)) as typeof import("../../src/shared/skills.ts");
 }
 
 describe("skills filesystem fallback", () => {

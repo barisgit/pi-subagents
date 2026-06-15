@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import registerSubagentPromptRuntime, { SUBAGENT_INTERCOM_SESSION_NAME_ENV, rewriteSubagentPrompt, stripInheritedSkills, stripProjectContext } from "../../src/dispatch/subagent-prompt-runtime.ts";
+import registerSubagentPromptRuntime, {
+	SUBAGENT_INTERCOM_SESSION_NAME_ENV,
+	rewriteSubagentPrompt,
+	stripInheritedSkills,
+	stripProjectContext,
+} from "../../src/dispatch/subagent-prompt-runtime.ts";
 
 const envSnapshot = {
 	PI_SUBAGENT_INHERIT_PROJECT_CONTEXT: process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT,
@@ -17,18 +22,20 @@ const BASE_PROMPT = [
 ].join("");
 
 const PROMPT_WITH_EXPLICIT_SKILL = [
-	"You are a subagent.\n\n<skill name=\"explicit\">\nKeep this section\n</skill>",
+	'You are a subagent.\n\n<skill name="explicit">\nKeep this section\n</skill>',
 	"\n\n# Project Context\n\nProject-specific instructions and guidelines:\n\n## /repo/AGENTS.md\n\nProject rules\n\n",
 	"\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>safe-bash</name>\n    <description>desc</description>\n    <location>/tmp/SKILL.md</location>\n  </skill>\n</available_skills>",
 	"\nCurrent date: 2026-04-16",
 ].join("");
 
 afterEach(() => {
-	if (envSnapshot.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT === undefined) delete process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT;
+	if (envSnapshot.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT === undefined)
+		delete process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT;
 	else process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = envSnapshot.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT;
 	if (envSnapshot.PI_SUBAGENT_INHERIT_SKILLS === undefined) delete process.env.PI_SUBAGENT_INHERIT_SKILLS;
 	else process.env.PI_SUBAGENT_INHERIT_SKILLS = envSnapshot.PI_SUBAGENT_INHERIT_SKILLS;
-	if (envSnapshot.PI_SUBAGENT_INTERCOM_SESSION_NAME === undefined) delete process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME;
+	if (envSnapshot.PI_SUBAGENT_INTERCOM_SESSION_NAME === undefined)
+		delete process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME;
 	else process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME = envSnapshot.PI_SUBAGENT_INTERCOM_SESSION_NAME;
 });
 
@@ -62,18 +69,23 @@ describe("subagent prompt runtime", () => {
 			inheritProjectContext: false,
 			inheritSkills: false,
 		});
-		assert.ok(rewritten.includes("<skill name=\"explicit\">"));
+		assert.ok(rewritten.includes('<skill name="explicit">'));
 		assert.ok(!rewritten.includes("<available_skills>"));
 		assert.ok(!rewritten.includes("# Project Context"));
 	});
 
 	it("sets the child intercom session name from env during agent startup", async () => {
 		let sessionName: string | undefined;
-		let beforeAgentStart: ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) | undefined;
+		let beforeAgentStart:
+			| ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>)
+			| undefined;
 		process.env[SUBAGENT_INTERCOM_SESSION_NAME_ENV] = "subagent-worker-78f659a3";
 
 		registerSubagentPromptRuntime({
-			on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) {
+			on(
+				event: string,
+				handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>,
+			) {
 				if (event === "before_agent_start") beforeAgentStart = handler;
 			},
 			setSessionName(name: string) {
@@ -87,9 +99,14 @@ describe("subagent prompt runtime", () => {
 	});
 
 	it("rewrites the final child-visible prompt through before_agent_start", async () => {
-		let beforeAgentStart: ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) | undefined;
+		let beforeAgentStart:
+			| ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>)
+			| undefined;
 		registerSubagentPromptRuntime({
-			on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) {
+			on(
+				event: string,
+				handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>,
+			) {
 				if (event === "before_agent_start") beforeAgentStart = handler;
 			},
 		} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI);

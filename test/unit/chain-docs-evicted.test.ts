@@ -22,8 +22,22 @@ describe("chain docs eviction", () => {
 			["README.md", read("README.md")],
 			["codemap.md", read("codemap.md")],
 			["skills/subagent/SKILL.md", read("skills/subagent/SKILL.md")],
-			["subagent description", toolDescription(read("src/dispatch/subagent-tool.ts"), "description: `Delegate a bounded task", "parameters: SubagentParams")],
-			["workflow description", toolDescription(read("src/workflow/workflow.ts"), "description: `Orchestrate multiple subagents", "parameters: WorkflowParams")],
+			[
+				"subagent description",
+				toolDescription(
+					read("src/dispatch/subagent-tool.ts"),
+					"description: `Delegate a bounded task",
+					"parameters: SubagentParams",
+				),
+			],
+			[
+				"workflow description",
+				toolDescription(
+					read("src/workflow/workflow.ts"),
+					"description: `Orchestrate multiple subagents",
+					"parameters: WorkflowParams",
+				),
+			],
 		] as const;
 
 		for (const [name, text] of samples) {
@@ -34,7 +48,10 @@ describe("chain docs eviction", () => {
 	});
 
 	it("routes sequential orchestration guidance to workflow", () => {
-		for (const [name, text] of [["README.md", read("README.md")], ["skills/subagent/SKILL.md", read("skills/subagent/SKILL.md")]] as const) {
+		for (const [name, text] of [
+			["README.md", read("README.md")],
+			["skills/subagent/SKILL.md", read("skills/subagent/SKILL.md")],
+		] as const) {
 			assert.match(text, /workflow/i, `${name} should mention workflow`);
 			assert.match(text, /sequential|orchestration|multi-step/i, `${name} should mention orchestration guidance`);
 		}

@@ -16,9 +16,7 @@ const legacyAllowed = new Set([
 	path.join(projectRoot, "skills/subagent/references/migration.md"),
 	thisFile,
 ]);
-const rejectionFixtureFiles = new Set([
-	path.join(projectRoot, "test/integration/dispatch-shapes.test.ts"),
-]);
+const rejectionFixtureFiles = new Set([path.join(projectRoot, "test/integration/dispatch-shapes.test.ts")]);
 const removedCrudActions = new Set(["create", "update", "delete", "get"]);
 
 interface TopLevelKey {
@@ -48,7 +46,10 @@ function lineFor(source: string, index: number): number {
 }
 
 function readScanned(paths: string[]): Array<{ file: string; source: string }> {
-	return [...new Set(paths.flatMap((root) => listFiles(root)))].map((file) => ({ file, source: fs.readFileSync(file, "utf-8") }));
+	return [...new Set(paths.flatMap((root) => listFiles(root)))].map((file) => ({
+		file,
+		source: fs.readFileSync(file, "utf-8"),
+	}));
 }
 
 function findMatching(source: string, start: number, open: string, close: string): number {
@@ -64,17 +65,34 @@ function findMatching(source: string, start: number, open: string, close: string
 			continue;
 		}
 		if (inBlockComment) {
-			if (char === "*" && next === "/") { inBlockComment = false; i++; }
+			if (char === "*" && next === "/") {
+				inBlockComment = false;
+				i++;
+			}
 			continue;
 		}
 		if (quote) {
-			if (char === "\\") { i++; continue; }
+			if (char === "\\") {
+				i++;
+				continue;
+			}
 			if (char === quote) quote = null;
 			continue;
 		}
-		if (char === "/" && next === "/") { inLineComment = true; i++; continue; }
-		if (char === "/" && next === "*") { inBlockComment = true; i++; continue; }
-		if (char === '"' || char === "'" || char === "`") { quote = char; continue; }
+		if (char === "/" && next === "/") {
+			inLineComment = true;
+			i++;
+			continue;
+		}
+		if (char === "/" && next === "*") {
+			inBlockComment = true;
+			i++;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === "`") {
+			quote = char;
+			continue;
+		}
 		if (char === open) depth++;
 		if (char === close) {
 			depth--;
@@ -98,19 +116,42 @@ function topLevelKeys(objectSource: string): TopLevelKey[] {
 			continue;
 		}
 		if (inBlockComment) {
-			if (char === "*" && next === "/") { inBlockComment = false; i++; }
+			if (char === "*" && next === "/") {
+				inBlockComment = false;
+				i++;
+			}
 			continue;
 		}
 		if (quote) {
-			if (char === "\\") { i++; continue; }
+			if (char === "\\") {
+				i++;
+				continue;
+			}
 			if (char === quote) quote = null;
 			continue;
 		}
-		if (char === "/" && next === "/") { inLineComment = true; i++; continue; }
-		if (char === "/" && next === "*") { inBlockComment = true; i++; continue; }
-		if (char === '"' || char === "'" || char === "`") { quote = char; continue; }
-		if (char === "{" || char === "[" || char === "(") { depth++; continue; }
-		if (char === "}" || char === "]" || char === ")") { depth--; continue; }
+		if (char === "/" && next === "/") {
+			inLineComment = true;
+			i++;
+			continue;
+		}
+		if (char === "/" && next === "*") {
+			inBlockComment = true;
+			i++;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === "`") {
+			quote = char;
+			continue;
+		}
+		if (char === "{" || char === "[" || char === "(") {
+			depth++;
+			continue;
+		}
+		if (char === "}" || char === "]" || char === ")") {
+			depth--;
+			continue;
+		}
 		if (char !== ":" || depth !== 1) continue;
 		const before = objectSource.slice(0, i).match(/(?:^|[,{}\s])([A-Za-z_$][\w$]*)\s*$/);
 		if (before?.[1]) keys.push({ name: before[1], colonIndex: i });
@@ -142,7 +183,10 @@ function scanLegacyCalls(file: string, source: string): string[] {
 			}
 			if (key.name === "action") {
 				const value = stringValueAfterColon(objectSource, key.colonIndex);
-				if (value && removedCrudActions.has(value)) failures.push(`${rel(file)}:${lineFor(source, callStart)}: legacy CRUD action ${value} in subagent(...)`);
+				if (value && removedCrudActions.has(value))
+					failures.push(
+						`${rel(file)}:${lineFor(source, callStart)}: legacy CRUD action ${value} in subagent(...)`,
+					);
 			}
 		}
 	}
@@ -154,7 +198,9 @@ function assertClean(label: string, roots: string[]): void {
 	for (const { file, source } of readScanned(roots)) {
 		failures.push(...scanLegacyCalls(file, source));
 		if (!legacyAllowed.has(file) && source.includes("LegacySubagentParamsLike")) {
-			failures.push(`${rel(file)}:${lineFor(source, source.indexOf("LegacySubagentParamsLike"))}: LegacySubagentParamsLike`);
+			failures.push(
+				`${rel(file)}:${lineFor(source, source.indexOf("LegacySubagentParamsLike"))}: LegacySubagentParamsLike`,
+			);
 		}
 	}
 	assert.deepEqual(failures, [], label);

@@ -79,9 +79,7 @@ export function createParallelWorktreeSetup(
 		return {
 			setup: createWorktrees(cwd, runId, tasks.length, {
 				agents: tasks.map((task) => task.agent),
-				setupHook: setupHook
-					? { hookPath: setupHook, timeoutMs: setupHookTimeoutMs }
-					: undefined,
+				setupHook: setupHook ? { hookPath: setupHook, timeoutMs: setupHookTimeoutMs } : undefined,
 			}),
 		};
 	} catch (error) {
@@ -108,7 +106,11 @@ export function buildParallelWorktreeSuffix(
 ): string {
 	if (!worktreeSetup) return "";
 	const diffsDir = path.join(artifactsDir, "worktree-diffs");
-	const diffs = diffWorktrees(worktreeSetup, tasks.map((task) => task.agent), diffsDir);
+	const diffs = diffWorktrees(
+		worktreeSetup,
+		tasks.map((task) => task.agent),
+		diffsDir,
+	);
 	return formatWorktreeDiffSummary(diffs);
 }
 
@@ -128,91 +130,123 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				return true;
 			});
 			let result: SingleResult | undefined;
-			const handle = spawnRun({
-				agentName: task.agent,
-				task: input.taskTexts[index]!,
-				cwd: taskCwd ?? input.ctx.cwd,
-				...(task.label ? { label: task.label } : {}),
-			}, {
-				parentRunId: input.runId,
-				rootRunId: input.rootRunId,
-				notifyPolicy: "each",
-				parentSessionFile: input.ctx.sessionManager.getSessionFile() ?? null,
-				...(input.data.params.sessionDir ? { sessionDir: path.resolve(input.deps.expandTilde(input.data.params.sessionDir)) } : {}),
-				...(input.deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(input.deps.expandTilde(input.deps.config.defaultSessionDir)) } : {}),
-				...(input.ctx.sessionManager?.getSessionId ? { parentSessionId: input.ctx.sessionManager.getSessionId() } : {}),
-				...(() => {
-					const root = resolveDispatchRootSessionId(input.ctx);
-					return root ? { rootSessionId: root } : {};
-				})(),
-				source: "sync",
-				runAgent: async (prepared, layer0Ctx) => {
-					childRunId = prepared.runId;
-					result = await runInProcessChildStep({
-					data: input.data,
-					deps: input.deps,
-					agentConfig: input.agents.find((agent) => agent.name === task.agent)!,
+			const handle = spawnRun(
+				{
+					agentName: task.agent,
 					task: input.taskTexts[index]!,
-					cleanTask: input.taskTexts[index]!,
-					stepIndex: index,
 					cwd: taskCwd ?? input.ctx.cwd,
 					...(task.label ? { label: task.label } : {}),
-					interruptSignal: layer0Ctx.abortSignal,
-					maxSubagentDepth: input.maxSubagentDepths[index],
-					onControlEvent: (event) => {
-						if (event.type === "needs_attention") {
-							interruptRun(prepared.runId, { cascade: true });
-							fg.markNeedsAttention();
-							return;
-						}
-						input.onControlEvent?.(event);
-					},
-					intercomSessionName: input.childIntercomTarget?.(task.agent, index),
-					modelOverride: input.modelOverrides[index],
-					skills: effectiveSkills === false ? [] : effectiveSkills,
-					mode: "parallel",
-					layer0: { runId: prepared.runId, runRecordDir: prepared.runRecordDir, sessionFile: prepared.sessionFile, rootRunId: input.rootRunId },
-					onLayer0StatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
-					onUpdate: input.onUpdate || input.foregroundControl
-				? (progressUpdate) => {
-						const stepResults = progressUpdate.details?.results || [];
-						const stepProgress = progressUpdate.details?.progress || [];
-						if (input.foregroundControl && stepProgress.length > 0) {
-							fg.applyProgress(task.agent, index, stepProgress[0], stepResults[0]?.finalOutput);
-						}
-						if (stepResults.length > 0) input.liveResults[index] = stepResults[0];
-						if (stepProgress.length > 0) input.liveProgress[index] = stepProgress[0];
-						const mergedResults = input.liveResults.filter((result): result is SingleResult => result !== undefined);
-						const mergedProgress = input.liveProgress.filter((progress): progress is AgentProgress => progress !== undefined);
+				},
+				{
+					parentRunId: input.runId,
+					rootRunId: input.rootRunId,
+					notifyPolicy: "each",
+					parentSessionFile: input.ctx.sessionManager.getSessionFile() ?? null,
+					...(input.data.params.sessionDir
+						? { sessionDir: path.resolve(input.deps.expandTilde(input.data.params.sessionDir)) }
+						: {}),
+					...(input.deps.config.defaultSessionDir
+						? {
+								defaultSessionDir: path.resolve(
+									input.deps.expandTilde(input.deps.config.defaultSessionDir),
+								),
+							}
+						: {}),
+					...(input.ctx.sessionManager?.getSessionId
+						? { parentSessionId: input.ctx.sessionManager.getSessionId() }
+						: {}),
+					...(() => {
+						const root = resolveDispatchRootSessionId(input.ctx);
+						return root ? { rootSessionId: root } : {};
+					})(),
+					source: "sync",
+					runAgent: async (prepared, layer0Ctx) => {
+						childRunId = prepared.runId;
+						result = await runInProcessChildStep({
+							data: input.data,
+							deps: input.deps,
+							agentConfig: input.agents.find((agent) => agent.name === task.agent)!,
+							task: input.taskTexts[index]!,
+							cleanTask: input.taskTexts[index]!,
+							stepIndex: index,
+							cwd: taskCwd ?? input.ctx.cwd,
+							...(task.label ? { label: task.label } : {}),
+							interruptSignal: layer0Ctx.abortSignal,
+							maxSubagentDepth: input.maxSubagentDepths[index],
+							onControlEvent: (event) => {
+								if (event.type === "needs_attention") {
+									interruptRun(prepared.runId, { cascade: true });
+									fg.markNeedsAttention();
+									return;
+								}
+								input.onControlEvent?.(event);
+							},
+							intercomSessionName: input.childIntercomTarget?.(task.agent, index),
+							modelOverride: input.modelOverrides[index],
+							skills: effectiveSkills === false ? [] : effectiveSkills,
+							mode: "parallel",
+							layer0: {
+								runId: prepared.runId,
+								runRecordDir: prepared.runRecordDir,
+								sessionFile: prepared.sessionFile,
+								rootRunId: input.rootRunId,
+							},
+							onLayer0StatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
+							onUpdate:
+								input.onUpdate || input.foregroundControl
+									? (progressUpdate) => {
+											const stepResults = progressUpdate.details?.results || [];
+											const stepProgress = progressUpdate.details?.progress || [];
+											if (input.foregroundControl && stepProgress.length > 0) {
+												fg.applyProgress(
+													task.agent,
+													index,
+													stepProgress[0],
+													stepResults[0]?.finalOutput,
+												);
+											}
+											if (stepResults.length > 0) input.liveResults[index] = stepResults[0];
+											if (stepProgress.length > 0) input.liveProgress[index] = stepProgress[0];
+											const mergedResults = input.liveResults.filter(
+												(result): result is SingleResult => result !== undefined,
+											);
+											const mergedProgress = input.liveProgress.filter(
+												(progress): progress is AgentProgress => progress !== undefined,
+											);
+											input.onUpdate?.({
+												content: progressUpdate.content,
+												details: {
+													mode: "parallel",
+													runId: input.runId,
+													results: mergedResults,
+													progress: mergedProgress,
+													controlEvents: progressUpdate.details?.controlEvents,
+												},
+											});
+										}
+									: undefined,
+						});
+						input.liveResults[index] = result;
+						input.liveProgress[index] = result.progress;
+						const mergedResults = input.liveResults.filter(
+							(result): result is SingleResult => result !== undefined,
+						);
+						const mergedProgress = input.liveProgress.filter(
+							(progress): progress is AgentProgress => progress !== undefined,
+						);
 						input.onUpdate?.({
-							content: progressUpdate.content,
+							content: [{ type: "text", text: getSingleResultOutput(result) || "(completed)" }],
 							details: {
 								mode: "parallel",
 								runId: input.runId,
 								results: mergedResults,
 								progress: mergedProgress,
-								controlEvents: progressUpdate.details?.controlEvents,
 							},
 						});
-					}
-				: undefined,
-					});
-					input.liveResults[index] = result;
-					input.liveProgress[index] = result.progress;
-					const mergedResults = input.liveResults.filter((result): result is SingleResult => result !== undefined);
-					const mergedProgress = input.liveProgress.filter((progress): progress is AgentProgress => progress !== undefined);
-					input.onUpdate?.({
-						content: [{ type: "text", text: getSingleResultOutput(result) || "(completed)" }],
-						details: {
-							mode: "parallel",
-							runId: input.runId,
-							results: mergedResults,
-							progress: mergedProgress,
-						},
-					});
-					return singleResultToChildAgentResult(result, prepared);
-						},
-			});
+						return singleResultToChildAgentResult(result, prepared);
+					},
+				},
+			);
 			await awaitRun(handle);
 			if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
 			return result;
@@ -222,17 +256,12 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 	});
 }
 
-export async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
-	const {
-		params,
-		effectiveCwd,
-		agents,
-		ctx,
-		runId,
-		artifactsDir,
-		backgroundRequestedWhileClarifying,
-		onUpdate,
-	} = data;
+export async function runParallelPath(
+	data: ExecutionContextData,
+	deps: ExecutorDeps,
+): Promise<AgentToolResult<Details>> {
+	const { params, effectiveCwd, agents, ctx, runId, artifactsDir, backgroundRequestedWhileClarifying, onUpdate } =
+		data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget : undefined;
 	const allProgress: AgentProgress[] = [];
@@ -277,13 +306,11 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 
 	const currentProvider = ctx.model?.provider;
 	const availableModels = normalizeAvailableModels(ctx.modelRegistry.getAvailable());
-	let taskTexts = tasks.map((t) => t.task);
+	const taskTexts = tasks.map((t) => t.task);
 	const modelOverrides: (string | undefined)[] = tasks.map((t, i) =>
 		resolveModelCandidate(t.model ?? agentConfigs[i]?.model, availableModels, currentProvider),
 	);
-	const skillOverrides: (string[] | false | undefined)[] = tasks.map((t) =>
-		normalizeSkillInput(t.skill),
-	);
+	const skillOverrides: (string[] | false | undefined)[] = tasks.map((t) => normalizeSkillInput(t.skill));
 
 	const behaviors = agentConfigs.map((config) => resolveStepBehavior(config, {}));
 	const liveResults: (SingleResult | undefined)[] = new Array(tasks.length).fill(undefined);
@@ -320,7 +347,9 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 			skillOverrides,
 			behaviors,
 			onControlEvent,
-			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,
+			childIntercomTarget: childIntercomTarget
+				? (agent, index) => childIntercomTarget(runId, agent, index)
+				: undefined,
 			foregroundControl,
 			concurrencyLimit: parallelConcurrency,
 			maxSubagentDepths,
@@ -342,7 +371,12 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 		const interrupted = results.find((result) => result.interrupted);
 		if (interrupted) {
 			return {
-				content: [{ type: "text", text: `Parallel run paused after interrupt (${interrupted.agent}). Waiting for explicit next action.` }],
+				content: [
+					{
+						type: "text",
+						text: `Parallel run paused after interrupt (${interrupted.agent}). Waiting for explicit next action.`,
+					},
+				],
 				details: compactForegroundDetails({
 					mode: "parallel",
 					runId,
@@ -365,7 +399,9 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 			Boolean((result.truncation?.text || getSingleResultOutput(result)).trim());
 		const ok = results.filter((result) => result.exitCode === 0 && hasOutput(result)).length;
 		const emptyCount = results.filter((result) => result.exitCode === 0 && !hasOutput(result)).length;
-		const downgradeNote = backgroundRequestedWhileClarifying ? " (background requested, but clarify kept this run foreground)" : "";
+		const downgradeNote = backgroundRequestedWhileClarifying
+			? " (background requested, but clarify kept this run foreground)"
+			: "";
 		const aggregatedOutput = aggregateParallelOutputs(
 			results.map((result) => ({
 				agent: result.agent,

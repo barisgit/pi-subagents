@@ -13,8 +13,12 @@ const FIVE_SECONDS = 5_000;
 const NOW = 100_000;
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 describe("deriveRunDisplayState lost requires unknown phase", () => {
 	it("active-phase-not-lost: thinking + 30s old heartbeat → not lost", () => {

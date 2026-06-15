@@ -111,7 +111,11 @@ function pickSafeForkLeafId(sessionManager: ForkableSessionManager, leafId: stri
 	const content = entry.message?.content;
 	if (!Array.isArray(content)) return leafId;
 	const hasDispatchToolUse = content.some(
-		(block) => block && typeof block === "object" && (block as { type?: string }).type === "toolCall" && (block as { name?: string }).name === "subagent",
+		(block) =>
+			block &&
+			typeof block === "object" &&
+			(block as { type?: string }).type === "toolCall" &&
+			(block as { name?: string }).name === "subagent",
 	);
 	if (!hasDispatchToolUse) return leafId;
 	const parentId = entry.parentId;

@@ -55,10 +55,7 @@ describe("RunView producers: owned-async memory vs foreign disk", () => {
 
 	// (producer) owned ids resolve live, others foreign; empty (post-reload) => all foreign.
 	it("sortLiveRuns stamps owned async ids live and the rest foreign", () => {
-		const async: AsyncRunSummary[] = [
-			ownedAsync({ id: "mine" }).run,
-			ownedAsync({ id: "theirs" }).run,
-		];
+		const async: AsyncRunSummary[] = [ownedAsync({ id: "mine" }).run, ownedAsync({ id: "theirs" }).run];
 		const sync: ForegroundRunSummary[] = [];
 
 		const owned = sortLiveRuns(sync, async, new Set(["mine"]));
@@ -67,7 +64,10 @@ describe("RunView producers: owned-async memory vs foreign disk", () => {
 
 		// Post-reload: registry empty => no owned ids => every run hydrates foreign.
 		const reloaded = sortLiveRuns(sync, async, new Set());
-		assert.ok(reloaded.every((r) => r.ownership === "foreign"), "empty owned set => all foreign (today's behavior)");
+		assert.ok(
+			reloaded.every((r) => r.ownership === "foreign"),
+			"empty owned set => all foreign (today's behavior)",
+		);
 	});
 
 	// (producer) readRunViewForEntry prefers the in-memory owned view; non-owned
@@ -80,19 +80,33 @@ describe("RunView producers: owned-async memory vs foreign disk", () => {
 		const mkLeaf = (runId: string, label: string): RunsRegistryEntry => {
 			const runRecordDir = path.join(root, "runs", runId);
 			fs.mkdirSync(runRecordDir, { recursive: true });
-			fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
+			fs.writeFileSync(
+				path.join(runRecordDir, "status.json"),
+				JSON.stringify({
+					runId,
+					mode: "single",
+					state: "complete",
+					startedAt: 1_000,
+					lastUpdate: 1_001,
+					endedAt: 1_001,
+					cwd: root,
+					currentStep: 0,
+					label: `disk:${label}`,
+					steps: [{ agent: "fixer", status: "complete", startedAt: 1_000, endedAt: 1_001 }],
+				}),
+				"utf8",
+			);
+			const entry = {
 				runId,
+				runRecordDir,
 				mode: "single",
-				state: "complete",
-				startedAt: 1_000,
-				lastUpdate: 1_001,
-				endedAt: 1_001,
+				source: "async",
+				agentName: "fixer",
+				label,
+				rootRunId: runId,
 				cwd: root,
-				currentStep: 0,
-				label: `disk:${label}`,
-				steps: [{ agent: "fixer", status: "complete", startedAt: 1_000, endedAt: 1_001 }],
-			}), "utf8");
-			const entry = { runId, runRecordDir, mode: "single", source: "async", agentName: "fixer", label, rootRunId: runId, cwd: root, startedAt: 1_000 } as RunsRegistryEntry;
+				startedAt: 1_000,
+			} as RunsRegistryEntry;
 			appendRunEntry(entry);
 			return entry;
 		};
@@ -114,7 +128,11 @@ describe("RunView producers: owned-async memory vs foreign disk", () => {
 
 		// Reload: registry empty => no ownedViews => every run hydrates from disk.
 		const afterReload = readRunViewForEntry(ownedEntry, entries);
-		assert.equal(afterReload?.label, "disk:owned", "after reload the owned run hydrates from disk = today's behavior");
+		assert.equal(
+			afterReload?.label,
+			"disk:owned",
+			"after reload the owned run hydrates from disk = today's behavior",
+		);
 	});
 });
 
@@ -124,7 +142,14 @@ describe("latent-site conversions: owned-async behaves like disk by data, not pr
 		// resumeCount>0 is required for runIdentityAge to emit a value at all, so the
 		// freeze branch it claims to test is actually exercised (not a vacuous
 		// undefined===undefined).
-		const done = ownedAsync({ id: "done", state: "complete", endedAt: 2_000, lastUpdate: 2_000, resumeCount: 1, resumedAt: 1_200 });
+		const done = ownedAsync({
+			id: "done",
+			state: "complete",
+			endedAt: 2_000,
+			lastUpdate: 2_000,
+			resumeCount: 1,
+			resumedAt: 1_200,
+		});
 		// Drive with two clocks far past endedAt: frozen output must not change.
 		assert.equal(runElapsed(done, 5_000), runElapsed(done, 9_999), "elapsed frozen at endedAt");
 		assert.equal(runElapsed(done, 5_000), "800ms", "elapsed measured from resumedAt to endedAt, not now");
@@ -153,7 +178,11 @@ describe("latent-site conversions: owned-async behaves like disk by data, not pr
 		const sigBefore = overlayRunsSignature([before], undefined, undefined);
 
 		const phaseAdvanced = ownedAsync({ id: "adv", phase: "streaming_text", currentStep: 0 });
-		assert.notEqual(overlayRunsSignature([phaseAdvanced], undefined, undefined), sigBefore, "phase change repaints");
+		assert.notEqual(
+			overlayRunsSignature([phaseAdvanced], undefined, undefined),
+			sigBefore,
+			"phase change repaints",
+		);
 
 		const stepAdvanced = ownedAsync({
 			id: "adv",
@@ -167,7 +196,11 @@ describe("latent-site conversions: owned-async behaves like disk by data, not pr
 		assert.notEqual(overlayRunsSignature([stepAdvanced], undefined, undefined), sigBefore, "step advance repaints");
 
 		const displayAdvanced = ownedAsync({ id: "adv", phase: "thinking", currentStep: 0, displayState: "lost" });
-		assert.notEqual(overlayRunsSignature([displayAdvanced], undefined, undefined), sigBefore, "displayState change repaints");
+		assert.notEqual(
+			overlayRunsSignature([displayAdvanced], undefined, undefined),
+			sigBefore,
+			"displayState change repaints",
+		);
 	});
 
 	// (3) owned-async parallel PARENT with child rows is a container by structure.
@@ -186,8 +219,21 @@ describe("latent-site conversions: owned-async behaves like disk by data, not pr
 
 	// (4) owned-async CHILDREN appear in the right-pane children filter.
 	it("includes owned-async children in the detail-pane children filter", () => {
-		const parent = ownedAsync({ id: "wf", mode: "parallel", state: "running", workflow: true, steps: [] as never } as Partial<AsyncRunSummary>);
-		const child = ownedAsync({ id: "kid", parentRunId: "wf", mode: "single", state: "complete", endedAt: 1_900, label: "kid-label" } as Partial<AsyncRunSummary>);
+		const parent = ownedAsync({
+			id: "wf",
+			mode: "parallel",
+			state: "running",
+			workflow: true,
+			steps: [] as never,
+		} as Partial<AsyncRunSummary>);
+		const child = ownedAsync({
+			id: "kid",
+			parentRunId: "wf",
+			mode: "single",
+			state: "complete",
+			endedAt: 1_900,
+			label: "kid-label",
+		} as Partial<AsyncRunSummary>);
 		const lines = buildWorkflowRightLines(theme, parent.run, 120, [parent, child]).join("\n");
 		assert.match(lines, /kid-label|kid/, "owned-async child appears in the right-pane steps list");
 	});

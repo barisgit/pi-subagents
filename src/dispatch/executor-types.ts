@@ -125,7 +125,11 @@ export interface ExecutorDeps {
 	tempArtifactsDir: string;
 	childRegistry: ChildAgentRegistry;
 	expandTilde: (p: string) => string;
-	discoverAgents: (cwd: string, scope: AgentScope, options?: { preset?: string; includeInternal?: boolean }) => { agents: AgentConfig[] };
+	discoverAgents: (
+		cwd: string,
+		scope: AgentScope,
+		options?: { preset?: string; includeInternal?: boolean },
+	) => { agents: AgentConfig[] };
 	getActiveRootRoleName?: () => string | undefined;
 }
 

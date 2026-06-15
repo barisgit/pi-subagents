@@ -35,27 +35,55 @@ describe("agent management config parsing", () => {
 	it("lists internal agents only when includeInternal is true", () => {
 		const agentsDir = path.join(tempDir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "visible.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "visible.md"),
+			`---
 name: visible
 description: Visible helper
 ---
 
 Visible
-`, "utf-8");
-		fs.writeFileSync(path.join(agentsDir, "hidden.md"), `---
+`,
+			"utf-8",
+		);
+		fs.writeFileSync(
+			path.join(agentsDir, "hidden.md"),
+			`---
 name: hidden
 description: Hidden helper
 scope: internal
 ---
 
 Hidden
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
-		const defaultList = readText(handleList({}, { cwd: tempDir, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] }));
+		const defaultList = readText(
+			handleList(
+				{},
+				{
+					cwd: tempDir,
+					modelRegistry: {
+						getAvailable: () => [],
+					} as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"],
+				},
+			),
+		);
 		assert.match(defaultList, /visible/);
 		assert.doesNotMatch(defaultList, /hidden/);
 
-		const internalList = readText(handleList({ includeInternal: true }, { cwd: tempDir, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] }));
+		const internalList = readText(
+			handleList(
+				{ includeInternal: true },
+				{
+					cwd: tempDir,
+					modelRegistry: {
+						getAvailable: () => [],
+					} as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"],
+				},
+			),
+		);
 		assert.match(internalList, /visible/);
 		assert.match(internalList, /hidden/);
 	});

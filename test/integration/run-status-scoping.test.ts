@@ -25,7 +25,13 @@ function tmpRegistry(): string {
 	return root;
 }
 
-function writeStatus(runRecordDir: string, runId: string, state: "queued" | "running" | "lost" | "complete", startedAt: number, cwd?: string): void {
+function writeStatus(
+	runRecordDir: string,
+	runId: string,
+	state: "queued" | "running" | "lost" | "complete",
+	startedAt: number,
+	cwd?: string,
+): void {
 	fs.mkdirSync(runRecordDir, { recursive: true });
 	const status: Record<string, unknown> = {
 		runId,
@@ -40,7 +46,15 @@ function writeStatus(runRecordDir: string, runId: string, state: "queued" | "run
 	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify(status));
 }
 
-function makeEntry(root: string, runId: string, opts: Partial<RunsRegistryEntry> & { withStatus?: { state: "queued" | "running" | "lost" | "complete" }; cwd?: string; startedAt?: number }): void {
+function makeEntry(
+	root: string,
+	runId: string,
+	opts: Partial<RunsRegistryEntry> & {
+		withStatus?: { state: "queued" | "running" | "lost" | "complete" };
+		cwd?: string;
+		startedAt?: number;
+	},
+): void {
 	const runRecordDir = path.join(root, "runs", runId);
 	const startedAt = opts.startedAt ?? Date.now();
 	if (opts.withStatus) writeStatus(runRecordDir, runId, opts.withStatus.state, startedAt, opts.cwd);
@@ -85,7 +99,12 @@ describe("inspectSubagentStatus no-id list scoping", () => {
 		const root = tmpRegistry();
 		const now = Date.now();
 		makeEntry(root, "mine", { withStatus: { state: "running" }, rootSessionId: "sess-current", startedAt: now });
-		makeEntry(root, "nested-mine", { withStatus: { state: "running" }, parentSessionId: "sess-child", rootSessionId: "sess-current", startedAt: now });
+		makeEntry(root, "nested-mine", {
+			withStatus: { state: "running" },
+			parentSessionId: "sess-child",
+			rootSessionId: "sess-current",
+			startedAt: now,
+		});
 		makeEntry(root, "theirs", { withStatus: { state: "running" }, rootSessionId: "sess-other", startedAt: now });
 
 		const result = inspectSubagentStatus({ sessionId: "sess-current" });
@@ -112,7 +131,11 @@ describe("inspectSubagentStatus no-id list scoping", () => {
 		const now = Date.now();
 		// Plenty of entries but none in this session.
 		for (let i = 0; i < 50; i++) {
-			makeEntry(root, `noise-${i}`, { withStatus: { state: "running" }, rootSessionId: "sess-other", startedAt: now });
+			makeEntry(root, `noise-${i}`, {
+				withStatus: { state: "running" },
+				rootSessionId: "sess-other",
+				startedAt: now,
+			});
 		}
 		const result = inspectSubagentStatus({ sessionId: "sess-current", sessionCwd: "/scoped/proj" });
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";

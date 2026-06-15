@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, discoverAgents } from "../shared/agents.ts";
 import { resolveToolPatterns } from "../dispatch/resolve-tool-patterns.ts";
 import { selectRootRole } from "../shared/root-role-selection.ts";
-import { type ExtensionConfig, type SubagentState } from "../protocol/types.ts";
+import type { ExtensionConfig, SubagentState } from "../protocol/types.ts";
 
 export interface RootRoleManager {
 	initializeRootRole(ctx: ExtensionContext): Promise<void>;
@@ -82,10 +82,12 @@ export function createRootRoleManager(deps: {
 	}
 
 	function resolveRequestedWorkflow(): string | undefined {
-		return normalizeName(pi.getFlag("preset"))
-			?? normalizeName(process.env.PI_PRESET)
-			?? normalizeName(process.env.OH_MY_OPENCODE_SLIM_PRESET)
-			?? normalizeName(config.defaultPreset);
+		return (
+			normalizeName(pi.getFlag("preset")) ??
+			normalizeName(process.env.PI_PRESET) ??
+			normalizeName(process.env.OH_MY_OPENCODE_SLIM_PRESET) ??
+			normalizeName(config.defaultPreset)
+		);
 	}
 
 	function resolveRootRoleCandidatesForCwd(
@@ -128,16 +130,28 @@ export function createRootRoleManager(deps: {
 		const normalizedModel = normalizeName(modelRef);
 		if (!normalizedModel) return;
 		const slashIdx = normalizedModel.indexOf("/");
-		const model = slashIdx === -1
-			? ctx.modelRegistry.getAvailable().find((candidate) => candidate.id === normalizedModel)
-			: ctx.modelRegistry.find(normalizedModel.substring(0, slashIdx), normalizedModel.substring(slashIdx + 1));
+		const model =
+			slashIdx === -1
+				? ctx.modelRegistry.getAvailable().find((candidate) => candidate.id === normalizedModel)
+				: ctx.modelRegistry.find(
+						normalizedModel.substring(0, slashIdx),
+						normalizedModel.substring(slashIdx + 1),
+					);
 		if (!model) {
-			notify(ctx, `Role '${activeRootRoleName ?? "unknown"}': model '${normalizedModel}' was not found`, "warning");
+			notify(
+				ctx,
+				`Role '${activeRootRoleName ?? "unknown"}': model '${normalizedModel}' was not found`,
+				"warning",
+			);
 			return;
 		}
 		const success = await withRuntimePresetSettingsPreserved(() => pi.setModel(model));
 		if (!success) {
-			notify(ctx, `Role '${activeRootRoleName ?? "unknown"}': no API key for ${model.provider}/${model.id}`, "warning");
+			notify(
+				ctx,
+				`Role '${activeRootRoleName ?? "unknown"}': no API key for ${model.provider}/${model.id}`,
+				"warning",
+			);
 		}
 	}
 
@@ -167,11 +181,21 @@ export function createRootRoleManager(deps: {
 
 	function updateRootStatus(ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
-		ctx.ui.setStatus("preset", activeWorkflowName ? ctx.ui.theme.fg("accent", `preset:${activeWorkflowName}`) : undefined);
-		ctx.ui.setStatus("role", activeRootRoleName ? ctx.ui.theme.fg("accent", `role:${activeRootRoleName}`) : undefined);
+		ctx.ui.setStatus(
+			"preset",
+			activeWorkflowName ? ctx.ui.theme.fg("accent", `preset:${activeWorkflowName}`) : undefined,
+		);
+		ctx.ui.setStatus(
+			"role",
+			activeRootRoleName ? ctx.ui.theme.fg("accent", `role:${activeRootRoleName}`) : undefined,
+		);
 	}
 
-	async function activateRootRole(ctx: ExtensionContext, role: AgentConfig, workflowName: string | undefined): Promise<void> {
+	async function activateRootRole(
+		ctx: ExtensionContext,
+		role: AgentConfig,
+		workflowName: string | undefined,
+	): Promise<void> {
 		const previousWorkflowName = activeWorkflowName;
 		const previousRootRoleName = activeRootRoleName;
 		activeWorkflowName = workflowName;
@@ -189,7 +213,10 @@ export function createRootRoleManager(deps: {
 
 	async function initializeRootRole(ctx: ExtensionContext): Promise<void> {
 		const requestedWorkflow = resolveRequestedWorkflow();
-		const { availableRoles, warnings, defaultRole, appliedWorkflow } = resolveRootRoleCandidates(ctx, requestedWorkflow);
+		const { availableRoles, warnings, defaultRole, appliedWorkflow } = resolveRootRoleCandidates(
+			ctx,
+			requestedWorkflow,
+		);
 		for (const warning of warnings) notify(ctx, warning, "warning");
 		if (availableRoles.length === 0) {
 			notify(ctx, "No main roles are available for the current workflow.", "warning");
@@ -207,11 +234,19 @@ export function createRootRoleManager(deps: {
 		const selectedRole = selectRootRole(availableRoles, { roleFlag, envRole, restoredRole, defaultRole });
 
 		if (!selectedRole) {
-			notify(ctx, `Unable to resolve a main role. Available: ${availableRoles.map((role) => role.name).join(", ")}`, "warning");
+			notify(
+				ctx,
+				`Unable to resolve a main role. Available: ${availableRoles.map((role) => role.name).join(", ")}`,
+				"warning",
+			);
 			return;
 		}
 		if (requestedRole && selectedRole.name !== requestedRole) {
-			notify(ctx, `Role '${requestedRole}' is not available in this workflow. Using '${selectedRole.name}' instead.`, "warning");
+			notify(
+				ctx,
+				`Role '${requestedRole}' is not available in this workflow. Using '${selectedRole.name}' instead.`,
+				"warning",
+			);
 		}
 		await activateRootRole(ctx, selectedRole, appliedWorkflow ?? requestedWorkflow);
 	}
@@ -224,7 +259,11 @@ export function createRootRoleManager(deps: {
 		for (const warning of warnings) notify(ctx, warning, "warning");
 		const role = availableRoles.find((candidate) => candidate.name === normalizedRole);
 		if (!role) {
-			notify(ctx, `Unknown main role '${requestedRole}'. Available: ${availableRoles.map((candidate) => candidate.name).join(", ") || "(none)"}`, "error");
+			notify(
+				ctx,
+				`Unknown main role '${requestedRole}'. Available: ${availableRoles.map((candidate) => candidate.name).join(", ") || "(none)"}`,
+				"error",
+			);
 			return false;
 		}
 		await activateRootRole(ctx, role, appliedWorkflow ?? workflowName);
@@ -253,7 +292,10 @@ export function createRootRoleManager(deps: {
 					const requested = normalizeName(args);
 					if (!requested) {
 						const workflowName = activeWorkflowName ?? resolveRequestedWorkflow();
-						const { availableRoles, warnings, appliedWorkflow } = resolveRootRoleCandidates(ctx, workflowName);
+						const { availableRoles, warnings, appliedWorkflow } = resolveRootRoleCandidates(
+							ctx,
+							workflowName,
+						);
 						for (const warning of warnings) notify(ctx, warning, "warning");
 						if (availableRoles.length === 0) {
 							notify(ctx, "No main roles are available for the current workflow.", "warning");

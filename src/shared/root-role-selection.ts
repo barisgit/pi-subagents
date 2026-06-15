@@ -7,12 +7,10 @@ export interface RootRoleSelectionInput {
 	defaultRole?: string;
 }
 
-export function selectRootRole(
-	availableRoles: AgentConfig[],
-	input: RootRoleSelectionInput,
-): AgentConfig | undefined {
-	const candidates = [input.roleFlag, input.envRole, input.restoredRole, input.defaultRole]
-		.filter((value): value is string => Boolean(value));
+export function selectRootRole(availableRoles: AgentConfig[], input: RootRoleSelectionInput): AgentConfig | undefined {
+	const candidates = [input.roleFlag, input.envRole, input.restoredRole, input.defaultRole].filter(
+		(value): value is string => Boolean(value),
+	);
 	for (const candidate of candidates) {
 		const role = availableRoles.find((available) => available.name === candidate);
 		if (role) return role;

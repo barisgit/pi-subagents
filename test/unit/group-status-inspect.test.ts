@@ -22,7 +22,13 @@ function tmpRegistry(): string {
 	return root;
 }
 
-function seedChild(root: string, runId: string, parentRunId: string, agentName: string, state: "complete" | "failed"): void {
+function seedChild(
+	root: string,
+	runId: string,
+	parentRunId: string,
+	agentName: string,
+	state: "complete" | "failed",
+): void {
 	const runRecordDir = path.join(root, "runs", runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
 	fs.writeFileSync(

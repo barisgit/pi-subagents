@@ -61,7 +61,10 @@ describe("resume leg duration display", () => {
 		// Strict byte-identical guard: resumeCount:0 must equal the field being absent.
 		const absent: LiveRun = JSON.parse(JSON.stringify(run));
 		delete (absent.run as unknown as Record<string, unknown>).resumeCount;
-		assert.equal(buildLeftLine(theme as never, run, false, now, 240), buildLeftLine(theme as never, absent, false, now, 240));
+		assert.equal(
+			buildLeftLine(theme as never, run, false, now, 240),
+			buildLeftLine(theme as never, absent, false, now, 240),
+		);
 	});
 
 	it("shows current leg duration on a resumed terminal row alongside the date stamp", () => {
@@ -88,10 +91,55 @@ describe("resume leg duration display", () => {
 	});
 
 	it("keeps never-resumed widget row strings byte-identical while adding a resumed glyph only for resumed jobs", () => {
-		const never = buildWidgetLines([{ asyncId: "never", asyncDir: "/tmp/never", status: "complete", mode: "single", agents: ["fixer"], startedAt: 1_000, updatedAt: 13_000, resumeCount: 0 }], theme as never, 200);
-		const absent = buildWidgetLines([{ asyncId: "never", asyncDir: "/tmp/never", status: "complete", mode: "single", agents: ["fixer"], startedAt: 1_000, updatedAt: 13_000 }], theme as never, 200);
+		const never = buildWidgetLines(
+			[
+				{
+					asyncId: "never",
+					asyncDir: "/tmp/never",
+					status: "complete",
+					mode: "single",
+					agents: ["fixer"],
+					startedAt: 1_000,
+					updatedAt: 13_000,
+					resumeCount: 0,
+				},
+			],
+			theme as never,
+			200,
+		);
+		const absent = buildWidgetLines(
+			[
+				{
+					asyncId: "never",
+					asyncDir: "/tmp/never",
+					status: "complete",
+					mode: "single",
+					agents: ["fixer"],
+					startedAt: 1_000,
+					updatedAt: 13_000,
+				},
+			],
+			theme as never,
+			200,
+		);
 		assert.deepEqual(never, absent);
-		const resumed = buildWidgetLines([{ asyncId: "resumed", asyncDir: "/tmp/resumed", status: "complete", mode: "single", agents: ["fixer"], startedAt: 1_000, resumedAt: 10_000, resumeCount: 2, updatedAt: 22_000 }], theme as never, 200);
+		const resumed = buildWidgetLines(
+			[
+				{
+					asyncId: "resumed",
+					asyncDir: "/tmp/resumed",
+					status: "complete",
+					mode: "single",
+					agents: ["fixer"],
+					startedAt: 1_000,
+					resumedAt: 10_000,
+					resumeCount: 2,
+					updatedAt: 22_000,
+				},
+			],
+			theme as never,
+			200,
+		);
 		assert.match(resumed.join("\n"), /↻2/);
 		assert.match(resumed.join("\n"), /12\.0s/);
 	});

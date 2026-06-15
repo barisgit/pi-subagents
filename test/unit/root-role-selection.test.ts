@@ -30,7 +30,10 @@ describe("root role selection", () => {
 
 	it("falls back to the first discovered role without inventing persona names", () => {
 		assert.equal(selectRootRole(roles, { defaultRole: "missing" })?.name, "captain");
-		assert.equal(selectRootRole(roles, { roleFlag: "orchestrator", envRole: "main", restoredRole: "missing" })?.name, "captain");
+		assert.equal(
+			selectRootRole(roles, { roleFlag: "orchestrator", envRole: "main", restoredRole: "missing" })?.name,
+			"captain",
+		);
 	});
 
 	it("returns undefined when no roles are available", () => {

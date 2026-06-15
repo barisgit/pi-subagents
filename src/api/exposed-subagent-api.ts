@@ -1,7 +1,7 @@
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type RegisteredPersonaDir, discoverAgents } from "../shared/agents.ts";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { RegisteredPersonaDir, discoverAgents } from "../shared/agents.ts";
 import { claimPendingChildLineage, setHostLineage } from "../state/lineage.ts";
-import { type createSubagentExecutor } from "../dispatch/subagent-executor.ts";
+import type { createSubagentExecutor } from "../dispatch/subagent-executor.ts";
 import {
 	type Details,
 	type ExtensionConfig,
@@ -67,55 +67,58 @@ export function createHostSubagentApi(params: CreateHostSubagentApiParams): {
 	republish: () => void;
 } {
 	const { pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents } = params;
-	const buildSpawnRawContext = (): ExtensionContext => state.lastUiContext ?? ({
-		cwd: state.baseCwd,
-		hasUI: false,
-		ui: {} as ExtensionContext["ui"],
-		sessionManager: {
-			getSessionId: () => state.currentSessionId ?? "spawn-raw",
-			getSessionFile: () => null,
-		} as unknown as ExtensionContext["sessionManager"],
-		modelRegistry: { getAvailable: () => [] } as unknown as ExtensionContext["modelRegistry"],
-		model: undefined,
-		isIdle: () => true,
-		signal: undefined,
-		abort: () => {},
-		hasPendingMessages: () => false,
-		shutdown: () => {},
-		getContextUsage: () => undefined,
-		compact: () => {},
-		getSystemPrompt: () => "",
-	} as ExtensionContext);
-	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> => executor.executeInternal(
-		"subagent-spawn-raw",
-		{
-			agent: "__raw__",
-			task: input.prompt,
-			async: input.async,
-			cwd: input.cwd,
-			metadata: input.metadata,
-			rawAgentConfig: {
-				name: "__raw__",
-				description: "Raw extension subagent",
-				tools: input.tools ?? ["read", "grep", "find", "ls"],
-				model: input.model,
-				thinking: input.thinking,
-				systemPromptMode: input.systemPromptMode ?? "replace",
-				inheritProjectContext: input.inheritProjectContext ?? false,
-				inheritSkills: input.inheritSkills === true,
-				systemPrompt: input.systemPrompt,
-				source: "builtin",
-				filePath: "<spawnRaw>",
-				skills: Array.isArray(input.inheritSkills) ? input.inheritSkills : undefined,
-				defaultReads: input.defaultReads,
-				defaultProgress: input.defaultProgress,
-				surface: "internal",
+	const buildSpawnRawContext = (): ExtensionContext =>
+		state.lastUiContext ??
+		({
+			cwd: state.baseCwd,
+			hasUI: false,
+			ui: {} as ExtensionContext["ui"],
+			sessionManager: {
+				getSessionId: () => state.currentSessionId ?? "spawn-raw",
+				getSessionFile: () => null,
+			} as unknown as ExtensionContext["sessionManager"],
+			modelRegistry: { getAvailable: () => [] } as unknown as ExtensionContext["modelRegistry"],
+			model: undefined,
+			isIdle: () => true,
+			signal: undefined,
+			abort: () => {},
+			hasPendingMessages: () => false,
+			shutdown: () => {},
+			getContextUsage: () => undefined,
+			compact: () => {},
+			getSystemPrompt: () => "",
+		} as ExtensionContext);
+	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> =>
+		executor.executeInternal(
+			"subagent-spawn-raw",
+			{
+				agent: "__raw__",
+				task: input.prompt,
+				async: input.async,
+				cwd: input.cwd,
+				metadata: input.metadata,
+				rawAgentConfig: {
+					name: "__raw__",
+					description: "Raw extension subagent",
+					tools: input.tools ?? ["read", "grep", "find", "ls"],
+					model: input.model,
+					thinking: input.thinking,
+					systemPromptMode: input.systemPromptMode ?? "replace",
+					inheritProjectContext: input.inheritProjectContext ?? false,
+					inheritSkills: input.inheritSkills === true,
+					systemPrompt: input.systemPrompt,
+					source: "builtin",
+					filePath: "<spawnRaw>",
+					skills: Array.isArray(input.inheritSkills) ? input.inheritSkills : undefined,
+					defaultReads: input.defaultReads,
+					defaultProgress: input.defaultProgress,
+					surface: "internal",
+				},
 			},
-		},
-		new AbortController().signal,
-		undefined,
-		buildSpawnRawContext(),
-	) as unknown as SpawnResult;
+			new AbortController().signal,
+			undefined,
+			buildSpawnRawContext(),
+		) as unknown as SpawnResult;
 	// Host lineage is recorded on session_start once we know the host session
 	// id. Until then, lineage() returns a best-effort host shape with a null
 	// rootSessionId so callers never see undefined.
@@ -130,12 +133,12 @@ export function createHostSubagentApi(params: CreateHostSubagentApiParams): {
 	};
 	const subagentApi: SubagentExposedAPI = {
 		spawnRaw,
-		list: (options) => discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", {
-			config,
-			includeInternal: options?.includeInternal,
-			registeredPersonaDirs: getRegisteredPersonaDirs(),
-		})
-			.agents.map((agent) => ({
+		list: (options) =>
+			discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", {
+				config,
+				includeInternal: options?.includeInternal,
+				registeredPersonaDirs: getRegisteredPersonaDirs(),
+			}).agents.map((agent) => ({
 				name: agent.name,
 				description: agent.description,
 				source: agent.source,

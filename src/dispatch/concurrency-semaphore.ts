@@ -118,5 +118,4 @@ class SemaphorePermit implements ConcurrencyPermit {
 	markHeld(): void {
 		this.state = "held";
 	}
-
 }

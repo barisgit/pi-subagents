@@ -67,20 +67,31 @@ function seedRun(root: string, entry: SeedRun): void {
 	const state = entry.state ?? "complete";
 	const terminal = state !== "running";
 	if (entry.agentName) {
-		fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-			runId: entry.runId,
-			mode: entry.mode ?? "single",
-			state,
-			startedAt: entry.startedAt,
-			lastUpdate: terminal ? entry.startedAt + 1 : Date.now(),
-			runnerHeartbeatAt: terminal ? entry.startedAt + 1 : Date.now(),
-			...(terminal ? { endedAt: entry.startedAt + 1 } : {}),
-			cwd: root,
-			currentStep: 0,
-			...(entry.label ? { label: entry.label } : {}),
-			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-			steps: [{ agent: entry.agentName, status: state, startedAt: entry.startedAt, ...(terminal ? { endedAt: entry.startedAt + 1 } : {}) }],
-		}), "utf8");
+		fs.writeFileSync(
+			path.join(runRecordDir, "status.json"),
+			JSON.stringify({
+				runId: entry.runId,
+				mode: entry.mode ?? "single",
+				state,
+				startedAt: entry.startedAt,
+				lastUpdate: terminal ? entry.startedAt + 1 : Date.now(),
+				runnerHeartbeatAt: terminal ? entry.startedAt + 1 : Date.now(),
+				...(terminal ? { endedAt: entry.startedAt + 1 } : {}),
+				cwd: root,
+				currentStep: 0,
+				...(entry.label ? { label: entry.label } : {}),
+				...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+				steps: [
+					{
+						agent: entry.agentName,
+						status: state,
+						startedAt: entry.startedAt,
+						...(terminal ? { endedAt: entry.startedAt + 1 } : {}),
+					},
+				],
+			}),
+			"utf8",
+		);
 	}
 	appendRunEntry({
 		runId: entry.runId,
@@ -108,9 +119,32 @@ afterEach(() => {
 describe("dashboard collapse and container rows", () => {
 	it("enter collapses a workflow container: phase rows and children hide", () => {
 		const root = tmpRegistry();
-		seedRun(root, { runId: "wf-1", mode: "parallel", workflow: true, label: "wf", rootRunId: "wf-1", startedAt: 1000 });
-		seedRun(root, { runId: "child-a", agentName: "explorer", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 1, phaseTitle: "recon", startedAt: 1100 });
-		seedRun(root, { runId: "child-b", agentName: "qa", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 2, phaseTitle: "verify", startedAt: 1200 });
+		seedRun(root, {
+			runId: "wf-1",
+			mode: "parallel",
+			workflow: true,
+			label: "wf",
+			rootRunId: "wf-1",
+			startedAt: 1000,
+		});
+		seedRun(root, {
+			runId: "child-a",
+			agentName: "explorer",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 1,
+			phaseTitle: "recon",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "child-b",
+			agentName: "qa",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 2,
+			phaseTitle: "verify",
+			startedAt: 1200,
+		});
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
@@ -146,9 +180,33 @@ describe("dashboard collapse and container rows", () => {
 
 	it("running workflow container shows done/total and the current phase from its children", () => {
 		const root = tmpRegistry();
-		seedRun(root, { runId: "wf-1", mode: "parallel", workflow: true, label: "wf", rootRunId: "wf-1", startedAt: 1000 });
-		seedRun(root, { runId: "wf-child-1", agentName: "explorer", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 1, phaseTitle: "recon", startedAt: 1100 });
-		seedRun(root, { runId: "wf-child-2", agentName: "qa", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 2, phaseTitle: "verify", state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "wf-1",
+			mode: "parallel",
+			workflow: true,
+			label: "wf",
+			rootRunId: "wf-1",
+			startedAt: 1000,
+		});
+		seedRun(root, {
+			runId: "wf-child-1",
+			agentName: "explorer",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 1,
+			phaseTitle: "recon",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "wf-child-2",
+			agentName: "qa",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 2,
+			phaseTitle: "verify",
+			state: "running",
+			startedAt: 1200,
+		});
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
@@ -163,10 +221,25 @@ describe("dashboard collapse and container rows", () => {
 	it("a complete child under a still-open parallel group renders the pending-delivery accent glyph", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "pg-1", mode: "parallel", rootRunId: "pg-1", startedAt: 1000 });
-		seedRun(root, { runId: "pg-done", agentName: "explorer", parentRunId: "pg-1", rootRunId: "pg-1", startedAt: 1100 });
-		seedRun(root, { runId: "pg-live", agentName: "qa", parentRunId: "pg-1", rootRunId: "pg-1", state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "pg-done",
+			agentName: "explorer",
+			parentRunId: "pg-1",
+			rootRunId: "pg-1",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "pg-live",
+			agentName: "qa",
+			parentRunId: "pg-1",
+			rootRunId: "pg-1",
+			state: "running",
+			startedAt: 1200,
+		});
 
-		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, { refreshMs: 0 });
+		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, {
+			refreshMs: 0,
+		});
 		try {
 			const lines = component.render(220);
 			// The finished child is done but its result has not been delivered to
@@ -183,8 +256,26 @@ describe("dashboard collapse and container rows", () => {
 	it("phase rows dedupe a 'Phase N:' prefix already present in the script's phase title", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf-3", mode: "parallel", workflow: true, rootRunId: "wf-3", startedAt: 1000 });
-		seedRun(root, { runId: "wf3-a", agentName: "explorer", parentRunId: "wf-3", rootRunId: "wf-3", phaseIndex: 1, phaseTitle: "Phase 1: recon", parallelGroupId: "pg", startedAt: 1100 });
-		seedRun(root, { runId: "wf3-b", agentName: "qa", parentRunId: "wf-3", rootRunId: "wf-3", phaseIndex: 2, phaseTitle: "Phase 2: verify", state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "wf3-a",
+			agentName: "explorer",
+			parentRunId: "wf-3",
+			rootRunId: "wf-3",
+			phaseIndex: 1,
+			phaseTitle: "Phase 1: recon",
+			parallelGroupId: "pg",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "wf3-b",
+			agentName: "qa",
+			parentRunId: "wf-3",
+			rootRunId: "wf-3",
+			phaseIndex: 2,
+			phaseTitle: "Phase 2: verify",
+			state: "running",
+			startedAt: 1200,
+		});
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
@@ -204,10 +295,27 @@ describe("dashboard collapse and container rows", () => {
 	it("workflow children are never pending-delivery (script consumes results live)", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf-2", mode: "parallel", workflow: true, rootRunId: "wf-2", startedAt: 1000 });
-		seedRun(root, { runId: "wf2-done", agentName: "explorer", parentRunId: "wf-2", rootRunId: "wf-2", phaseIndex: 1, startedAt: 1100 });
-		seedRun(root, { runId: "wf2-live", agentName: "qa", parentRunId: "wf-2", rootRunId: "wf-2", phaseIndex: 2, state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "wf2-done",
+			agentName: "explorer",
+			parentRunId: "wf-2",
+			rootRunId: "wf-2",
+			phaseIndex: 1,
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "wf2-live",
+			agentName: "qa",
+			parentRunId: "wf-2",
+			rootRunId: "wf-2",
+			phaseIndex: 2,
+			state: "running",
+			startedAt: 1200,
+		});
 
-		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, { refreshMs: 0 });
+		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, {
+			refreshMs: 0,
+		});
 		try {
 			const lines = component.render(220);
 			const childRow = lines.find((line) => line.includes("└─") && line.includes("explorer"));

@@ -181,13 +181,14 @@ function makeHarness(cwd: string) {
 			agents: ["A", "B", "C"].map((name) => makeAgent(name, { model: "mock/test-model" })),
 		}),
 	} as never);
-	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> => executor.execute(
-		"id",
-		params as never,
-		new AbortController().signal,
-		undefined,
-		makeCtx(cwd) as never,
-	) as Promise<ExecutorResult>;
+	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> =>
+		executor.execute(
+			"id",
+			params as never,
+			new AbortController().signal,
+			undefined,
+			makeCtx(cwd) as never,
+		) as Promise<ExecutorResult>;
 	return { execute, state, sent, completionEvents };
 }
 
@@ -214,9 +215,14 @@ describe("batch notifications", () => {
 	});
 
 	it("per-run-default emits one completion notification per child", async () => {
-		restoreRuntime = installFakeRuntime(["one", "two", "three"].map((output) => new FakeAgentSession(async (_task, session) => {
-			session.emit(assistantMessage(output));
-		})));
+		restoreRuntime = installFakeRuntime(
+			["one", "two", "three"].map(
+				(output) =>
+					new FakeAgentSession(async (_task, session) => {
+						session.emit(assistantMessage(output));
+					}),
+			),
+		);
 		const harness = makeHarness(tempDir);
 
 		const result = await harness.execute({
@@ -232,7 +238,10 @@ describe("batch notifications", () => {
 		await waitFor(() => harness.sent.length === 3, "expected three per-child notifications");
 		assert.equal(harness.completionEvents.length, 1);
 		assert.equal(harness.sent.length, 3);
-		assert.deepEqual(harness.sent.map((entry) => entry.message.customType), ["subagent-notify", "subagent-notify", "subagent-notify"]);
+		assert.deepEqual(
+			harness.sent.map((entry) => entry.message.customType),
+			["subagent-notify", "subagent-notify", "subagent-notify"],
+		);
 		assert.ok(harness.sent.every((entry) => entry.message.content?.startsWith("Background task completed:")));
 		assert.ok(harness.sent[0]!.message.content?.includes("(1/3)"));
 		assert.ok(harness.sent[1]!.message.content?.includes("(2/3)"));
@@ -240,9 +249,14 @@ describe("batch notifications", () => {
 	});
 
 	it("rollup-when-batch-true emits one rollup with all child runIds and states", async () => {
-		restoreRuntime = installFakeRuntime(["one", "two", "three"].map((output) => new FakeAgentSession(async (_task, session) => {
-			session.emit(assistantMessage(output));
-		})));
+		restoreRuntime = installFakeRuntime(
+			["one", "two", "three"].map(
+				(output) =>
+					new FakeAgentSession(async (_task, session) => {
+						session.emit(assistantMessage(output));
+					}),
+			),
+		);
 		const harness = makeHarness(tempDir);
 
 		const result = await harness.execute({
@@ -263,7 +277,10 @@ describe("batch notifications", () => {
 		assert.equal(event.total, 3);
 		assert.equal(event.completed, 3);
 		assert.equal(rows.length, 3);
-		assert.deepEqual(rows.map((row) => row.state), ["complete", "complete", "complete"]);
+		assert.deepEqual(
+			rows.map((row) => row.state),
+			["complete", "complete", "complete"],
+		);
 		const content = harness.sent[0]!.message.content ?? "";
 		for (const row of rows) {
 			assert.ok(content.includes(String(row.agent)), `content should include ${String(row.agent)}`);

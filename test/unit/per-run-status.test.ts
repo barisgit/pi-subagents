@@ -30,9 +30,13 @@ async function waitForCompleteStatus(runRecordDir: string): Promise<void> {
 }
 
 class FakeAgentSession {
-	subscribe(): () => void { return () => {}; }
+	subscribe(): () => void {
+		return () => {};
+	}
 	async prompt(): Promise<void> {}
-	getLastAssistantText(): string { return "done"; }
+	getLastAssistantText(): string {
+		return "done";
+	}
 	async abort(): Promise<void> {}
 	dispose(): void {}
 	setActiveToolsByName(): void {}
@@ -52,7 +56,11 @@ function installFakeRuntime(): void {
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: { open: (file: string) => ({ getSessionId: () => `session-${file}` }) as never },
-		createAgentSession: async () => ({ session: new FakeAgentSession() as never, extensionsResult: { extensions: [], diagnostics: [] } }) as never,
+		createAgentSession: async () =>
+			({
+				session: new FakeAgentSession() as never,
+				extensionsResult: { extensions: [], diagnostics: [] },
+			}) as never,
 	});
 }
 
@@ -94,14 +102,23 @@ function makeCtx(cwd: string) {
 	};
 }
 
-async function execute(cwd: string, emitted: Array<{ event: string; payload: Record<string, unknown> }>): Promise<{ details?: { runId?: string } }> {
-	return await makeExecutor(cwd, emitted).execute(
+async function execute(
+	cwd: string,
+	emitted: Array<{ event: string; payload: Record<string, unknown> }>,
+): Promise<{ details?: { runId?: string } }> {
+	return (await makeExecutor(cwd, emitted).execute(
 		"id",
-		{ async: true, run: [{ agent: "A", task: "alpha" }, { agent: "B", task: "bravo" }] } as never,
+		{
+			async: true,
+			run: [
+				{ agent: "A", task: "alpha" },
+				{ agent: "B", task: "bravo" },
+			],
+		} as never,
 		new AbortController().signal,
 		undefined,
 		makeCtx(cwd) as never,
-	) as { details?: { runId?: string } };
+	)) as { details?: { runId?: string } };
 }
 
 async function waitForEntries(count: number): Promise<void> {
@@ -142,7 +159,12 @@ describe("async parallel per-run status", () => {
 		for (const child of children) {
 			const statusPath = path.join(child.runRecordDir, "status.json");
 			assert.equal(fs.existsSync(statusPath), true);
-			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as { version?: number; runId?: string; mode?: string; steps?: unknown[] };
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as {
+				version?: number;
+				runId?: string;
+				mode?: string;
+				steps?: unknown[];
+			};
 			assert.equal(status.version, STATUS_JSON_VERSION);
 			assert.equal(status.runId, child.runId);
 			assert.equal(status.mode, "single");

@@ -49,12 +49,25 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 		const key = trimmed.slice(0, eq).trim();
 		const val = trimmed.slice(eq + 1).trim();
 		switch (key) {
-			case "output": config.output = val === "false" ? false : val; break;
-			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
-			case "model": config.model = val || undefined; break;
-			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
-			case "progress": config.progress = val !== "false"; break;
-			case "preset": config.preset = val || undefined; break;
+			case "output":
+				config.output = val === "false" ? false : val;
+				break;
+			case "reads":
+				config.reads = val === "false" ? false : val.split("+").filter(Boolean);
+				break;
+			case "model":
+				config.model = val || undefined;
+				break;
+			case "skill":
+			case "skills":
+				config.skill = val === "false" ? false : val.split("+").filter(Boolean);
+				break;
+			case "progress":
+				config.progress = val !== "false";
+				break;
+			case "preset":
+				config.preset = val || undefined;
+				break;
 		}
 	}
 	return config;
@@ -64,7 +77,10 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
 	const bracket = token.indexOf("[");
 	if (bracket === -1) return { name: token, config: {} };
 	const end = token.lastIndexOf("]");
-	return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
+	return {
+		name: token.slice(0, bracket),
+		config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)),
+	};
 };
 
 const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fork: boolean } => {
@@ -101,7 +117,9 @@ const extractTopLevelInlineConfig = (rawArgs: string): { args: string; config: I
 };
 
 const resolveSlashPreset = (...values: Array<string | undefined>): { preset?: string; error?: string } => {
-	const presets = [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+	const presets = [
+		...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))),
+	];
 	if (presets.length > 1) {
 		return { error: `Conflicting preset values: ${presets.join(", ")}` };
 	}
@@ -126,7 +144,9 @@ const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) => (pre
 		return agents.map((a) => ({ value: `${prefix} ${a.name}`, label: a.name }));
 	}
 
-	return agents.filter((a) => a.name.startsWith(lastWord)).map((a) => ({ value: `${beforeLastWord}${a.name}`, label: a.name }));
+	return agents
+		.filter((a) => a.name.startsWith(lastWord))
+		.map((a) => ({ value: `${beforeLastWord}${a.name}`, label: a.name }));
 };
 
 async function requestSlashRun(
@@ -141,9 +161,13 @@ async function requestSlashRun(
 
 		const startTimeoutMs = 15_000;
 		const startTimeout = setTimeout(() => {
-			finish(() => reject(new Error(
-				"Slash subagent bridge did not start within 15s. Ensure the extension is loaded correctly.",
-			)));
+			finish(() =>
+				reject(
+					new Error(
+						"Slash subagent bridge did not start within 15s. Ensure the extension is loaded correctly.",
+					),
+				),
+			);
 		}, startTimeoutMs);
 
 		const onStarted = (data: unknown) => {
@@ -175,11 +199,11 @@ async function requestSlashRun(
 
 		const onTerminalInput = ctx.hasUI
 			? ctx.ui.onTerminalInput((input) => {
-				if (!matchesKey(input, Key.escape)) return undefined;
-				pi.events.emit(SLASH_SUBAGENT_CANCEL_EVENT, { requestId });
-				finish(() => reject(new Error("Cancelled")));
-				return { consume: true };
-			})
+					if (!matchesKey(input, Key.escape)) return undefined;
+					pi.events.emit(SLASH_SUBAGENT_CANCEL_EVENT, { requestId });
+					finish(() => reject(new Error("Cancelled")));
+					return { consume: true };
+				})
 			: undefined;
 
 		const unsubStarted = pi.events.on(SLASH_SUBAGENT_STARTED_EVENT, onStarted);
@@ -203,9 +227,11 @@ async function requestSlashRun(
 		// If not started, no bridge received the request.
 		if (!started && done) return;
 		if (!started) {
-			finish(() => reject(new Error(
-				"No slash subagent bridge responded. Ensure the subagent extension is loaded correctly.",
-			)));
+			finish(() =>
+				reject(
+					new Error("No slash subagent bridge responded. Ensure the subagent extension is loaded correctly."),
+				),
+			);
 		}
 	});
 }
@@ -214,7 +240,9 @@ function extractSlashMessageText(content: string | Array<{ type?: string; text?:
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	return content
-		.filter((part): part is { type: "text"; text: string } => part?.type === "text" && typeof part.text === "string")
+		.filter(
+			(part): part is { type: "text"; text: string } => part?.type === "text" && typeof part.text === "string",
+		)
 		.map((part) => part.text)
 		.join("\n");
 }
@@ -224,9 +252,7 @@ function formatExportPathList(paths: string[]): string {
 }
 
 function collectResultPaths(results: SingleResult[], getPath: (result: SingleResult) => string | undefined): string[] {
-	return results
-		.map(getPath)
-		.filter((file): file is string => typeof file === "string" && file.length > 0);
+	return results.map(getPath).filter((file): file is string => typeof file === "string" && file.length > 0);
 }
 
 function buildSlashExportText(response: SlashSubagentResponse): string {
@@ -255,17 +281,17 @@ function persistSlashSessionSnapshot(ctx: ExtensionContext): void {
 		sessionManager._rewriteFile();
 		sessionManager.flushed = true;
 	} catch (error) {
-		logger.error("Failed to persist slash session snapshot for export", error instanceof Error ? error : undefined, {
-			error: error instanceof Error ? undefined : String(error),
-		});
+		logger.error(
+			"Failed to persist slash session snapshot for export",
+			error instanceof Error ? error : undefined,
+			{
+				error: error instanceof Error ? undefined : String(error),
+			},
+		);
 	}
 }
 
-async function runSlashSubagent(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	params: SubagentParamsLike,
-): Promise<void> {
+async function runSlashSubagent(pi: ExtensionAPI, ctx: ExtensionContext, params: SubagentParamsLike): Promise<void> {
 	const requestId = randomUUID();
 	const initialDetails = buildSlashInitialResult(requestId, params);
 	const initialText = extractSlashMessageText(initialDetails.result.content) || "Running subagent...";
@@ -314,7 +340,11 @@ async function runSlashSubagent(
 	}
 }
 
-interface ParsedStep { name: string; config: InlineConfig; task?: string }
+interface ParsedStep {
+	name: string;
+	config: InlineConfig;
+	task?: string;
+}
 
 const parseAgentArgs = (
 	state: SubagentState,
@@ -367,7 +397,10 @@ const parseAgentArgs = (
 			ctx.ui.notify(usage, "error");
 			return null;
 		}
-		steps = agentsPart.split(/\s+/).filter(Boolean).map((t) => parseAgentToken(t));
+		steps = agentsPart
+			.split(/\s+/)
+			.filter(Boolean)
+			.map((t) => parseAgentToken(t));
 	}
 
 	if (steps.length === 0) {
@@ -401,14 +434,28 @@ export function registerSlashCommands(
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const { args: input, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run [preset=name] <agent> [task] [--bg] [--fork]", "error"); return; }
-			const { name: agentName, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
+			if (!input) {
+				ctx.ui.notify("Usage: /run [preset=name] <agent> [task] [--bg] [--fork]", "error");
+				return;
+			}
+			const { name: agentName, config: inline } = parseAgentToken(
+				firstSpace === -1 ? input : input.slice(0, firstSpace),
+			);
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
 			const presetResolution = resolveSlashPreset(topLevel.preset, inline.preset);
-			if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
+			if (presetResolution.error) {
+				ctx.ui.notify(presetResolution.error, "error");
+				return;
+			}
 
-			const agents = discoverAgents(state.baseCwd, "both", { preset: presetResolution.preset, surface: "subagent" }).agents;
-			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
+			const agents = discoverAgents(state.baseCwd, "both", {
+				preset: presetResolution.preset,
+				surface: "subagent",
+			}).agents;
+			if (!agents.find((a) => a.name === agentName)) {
+				ctx.ui.notify(`Unknown agent: ${agentName}`, "error");
+				return;
+			}
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
@@ -427,15 +474,22 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run agents in parallel: /parallel [preset=name] scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
+		description:
+			'Run agents in parallel: /parallel [preset=name] scout "task1" -> reviewer "task2" [--bg] [--fork]',
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const { args: parallelArgs, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
 			const parsed = parseAgentArgs(state, parallelArgs, "parallel", ctx, topLevel.preset);
 			if (!parsed) return;
-			const presetResolution = resolveSlashPreset(topLevel.preset, ...parsed.steps.map((step) => step.config.preset));
-			if (presetResolution.error) { ctx.ui.notify(presetResolution.error, "error"); return; }
+			const presetResolution = resolveSlashPreset(
+				topLevel.preset,
+				...parsed.steps.map((step) => step.config.preset),
+			);
+			if (presetResolution.error) {
+				ctx.ui.notify(presetResolution.error, "error");
+				return;
+			}
 			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
 				agent: name,
 				task: stepTask ?? parsed.task,
@@ -472,7 +526,9 @@ export function registerSlashCommands(
 				sessionCwd,
 				...(sessionId ? { sessionId } : {}),
 				getBranchAnchorRunIds,
-				...(childRegistry ? { getOwnedRunViews: () => new Map(childRegistry.listRunViews().map((view) => [view.id, view])) } : {}),
+				...(childRegistry
+					? { getOwnedRunViews: () => new Map(childRegistry.listRunViews().map((view) => [view.id, view])) }
+					: {}),
 			});
 		const client = getWidgetClient?.(ctx);
 		if (client) {

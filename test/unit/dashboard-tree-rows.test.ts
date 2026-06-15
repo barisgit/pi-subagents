@@ -48,11 +48,33 @@ function asyncRun(seed: AsyncSeed): LiveRun {
 describe("dashboard tree rows", () => {
 	it("session-scoped filter keeps nested descendants from the host session shard", () => {
 		const runs: LiveRun[] = [
-			asyncRun({ id: "parent-visible", agent: "fixer", label: "visible parent", rootSessionId: "sess-host", parentSessionId: "sess-host", startedAt: 100 }),
+			asyncRun({
+				id: "parent-visible",
+				agent: "fixer",
+				label: "visible parent",
+				rootSessionId: "sess-host",
+				parentSessionId: "sess-host",
+				startedAt: 100,
+			}),
 			// Child has stale lineage (parentSessionId sess-child) but its root session
 			// is the host: it must still flow in as a descendant of the visible parent.
-			asyncRun({ id: "child-stale-lineage", agent: "review", label: "stale child", parentRunId: "parent-visible", rootSessionId: "sess-host", parentSessionId: "sess-child", startedAt: 200 }),
-			asyncRun({ id: "unrelated-other-session", agent: "qa", label: "other session", rootSessionId: "sess-other", parentSessionId: "sess-other", startedAt: 300 }),
+			asyncRun({
+				id: "child-stale-lineage",
+				agent: "review",
+				label: "stale child",
+				parentRunId: "parent-visible",
+				rootSessionId: "sess-host",
+				parentSessionId: "sess-child",
+				startedAt: 200,
+			}),
+			asyncRun({
+				id: "unrelated-other-session",
+				agent: "qa",
+				label: "other session",
+				rootSessionId: "sess-other",
+				parentSessionId: "sess-other",
+				startedAt: 300,
+			}),
 		];
 
 		const scoped = filterRunsToSessionTree(runs, { sessionId: "sess-host" });
@@ -71,20 +93,38 @@ describe("dashboard tree rows", () => {
 
 	it("parallel dispatch flattens children to top-level rows and the container is not tallied", () => {
 		const runs: LiveRun[] = [
-			asyncRun({ id: "group-parallel", agent: "group", mode: "parallel", state: "running", label: "parallel group", startedAt: 1 }),
+			asyncRun({
+				id: "group-parallel",
+				agent: "group",
+				mode: "parallel",
+				state: "running",
+				label: "parallel group",
+				startedAt: 1,
+			}),
 		];
 		for (let i = 0; i < 20; i++) {
 			runs.push(asyncRun({ id: `unrelated-${i}`, agent: "other", label: `unrelated ${i}`, startedAt: 10 + i }));
 		}
 		const agents = ["fixer", "review", "qa", "oracle"];
 		agents.forEach((agent, index) => {
-			runs.push(asyncRun({ id: `child-${agent}`, agent, label: `child ${agent}`, parentRunId: "group-parallel", startedAt: 100 + index }));
+			runs.push(
+				asyncRun({
+					id: `child-${agent}`,
+					agent,
+					label: `child ${agent}`,
+					parentRunId: "group-parallel",
+					startedAt: 100 + index,
+				}),
+			);
 		});
 
 		const rows = deriveDisplayRows(runs, new Set());
 
 		// The parallel group CONTAINER is never emitted.
-		assert.equal(rows.some((row) => row.kind === "run" && row.run.run.id === "group-parallel"), false);
+		assert.equal(
+			rows.some((row) => row.kind === "run" && row.run.run.id === "group-parallel"),
+			false,
+		);
 
 		// Each child renders flat (depth 0) with the parallel batch marker.
 		for (const agent of agents) {
@@ -108,18 +148,22 @@ describe("dashboard tree rows", () => {
 			const runRecordDir = path.join(root, "runs", runId);
 			fs.mkdirSync(runRecordDir, { recursive: true });
 			const startedAt = 1000 - i; // descending so run-00 sorts first (newest)
-			fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-				runId,
-				mode: "single",
-				state: "complete",
-				startedAt,
-				lastUpdate: startedAt + 1,
-				endedAt: startedAt + 1,
-				cwd: root,
-				currentStep: 0,
-				label: `run ${String(i).padStart(2, "0")}`,
-				steps: [{ agent: "fixer", status: "complete", startedAt, endedAt: startedAt + 1 }],
-			}), "utf8");
+			fs.writeFileSync(
+				path.join(runRecordDir, "status.json"),
+				JSON.stringify({
+					runId,
+					mode: "single",
+					state: "complete",
+					startedAt,
+					lastUpdate: startedAt + 1,
+					endedAt: startedAt + 1,
+					cwd: root,
+					currentStep: 0,
+					label: `run ${String(i).padStart(2, "0")}`,
+					steps: [{ agent: "fixer", status: "complete", startedAt, endedAt: startedAt + 1 }],
+				}),
+				"utf8",
+			);
 			appendRunEntry({
 				runId,
 				runRecordDir,
@@ -133,8 +177,12 @@ describe("dashboard tree rows", () => {
 			} as RunsRegistryEntry);
 		}
 		const component = new SubagentsStatusComponent(
-			{ requestRender: () => {}, terminal: { rows: 48 } } as ConstructorParameters<typeof SubagentsStatusComponent>[0],
-			{ fg: (_t: string, text: string) => text, bg: (_t: string, text: string) => text } as ConstructorParameters<typeof SubagentsStatusComponent>[1],
+			{ requestRender: () => {}, terminal: { rows: 48 } } as ConstructorParameters<
+				typeof SubagentsStatusComponent
+			>[0],
+			{ fg: (_t: string, text: string) => text, bg: (_t: string, text: string) => text } as ConstructorParameters<
+				typeof SubagentsStatusComponent
+			>[1],
 			() => {},
 			{ refreshMs: 1000, sessionCwd: root },
 		);
@@ -142,7 +190,10 @@ describe("dashboard tree rows", () => {
 			// Establish lastLeftListHeight via a first render; selection starts at top.
 			component.render(180);
 			const counterIndex = (): number => {
-				const m = component.render(180).join("\n").match(/(\d+)\/60/);
+				const m = component
+					.render(180)
+					.join("\n")
+					.match(/(\d+)\/60/);
 				return m ? Number(m[1]) : -1;
 			};
 			const start = counterIndex();

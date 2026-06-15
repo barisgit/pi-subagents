@@ -21,7 +21,16 @@ afterEach(() => {
 });
 
 function makeState(cwd: string): SubagentState {
-	return { baseCwd: cwd, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null, poller: null };
+	return {
+		baseCwd: cwd,
+		currentSessionId: null,
+		asyncJobs: new Map(),
+		foregroundControls: new Map(),
+		lastForegroundControlId: null,
+		cleanupTimers: new Map(),
+		lastUiContext: null,
+		poller: null,
+	};
 }
 
 class FakeSession {
@@ -29,15 +38,27 @@ class FakeSession {
 	messages: unknown[] = [];
 	resolvePrompt: (() => void) | undefined;
 	promptPromise: Promise<void> | undefined;
-	subscribe() { return () => {}; }
+	subscribe() {
+		return () => {};
+	}
 	setActiveToolsByName() {}
-	getLastAssistantText() { return "resumed output"; }
+	getLastAssistantText() {
+		return "resumed output";
+	}
 	dispose() {}
-	abort() { this.resolvePrompt?.(); }
+	abort() {
+		this.resolvePrompt?.();
+	}
 	prompt(message: string) {
 		this.prompts.push(message);
-		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "resumed", result: "resumed output", artifacts: [] } });
-		this.promptPromise ??= new Promise<void>((resolve) => { this.resolvePrompt = resolve; });
+		this.messages.push({
+			role: "toolResult",
+			toolName: "submit_result",
+			details: { status: "ok", summary: "resumed", result: "resumed output", artifacts: [] },
+		});
+		this.promptPromise ??= new Promise<void>((resolve) => {
+			this.resolvePrompt = resolve;
+		});
 		return this.promptPromise;
 	}
 }
@@ -46,37 +67,97 @@ function setup(opts: { pending?: boolean } = {}) {
 	tempDir = createTempDir("pi-subagent-disk-resume-");
 	setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	const events: Array<{ channel: string; data: unknown }> = [];
-	const pi = { events: { emit: (channel: string, data: unknown) => events.push({ channel, data }) }, getSessionName: () => undefined, setSessionName: () => {}, getAllTools: () => [] };
+	const pi = {
+		events: { emit: (channel: string, data: unknown) => events.push({ channel, data }) },
+		getSessionName: () => undefined,
+		setSessionName: () => {},
+		getAllTools: () => [],
+	};
 	setCurrentPi(pi as never);
 	const session = new FakeSession();
 	if (!opts.pending) session.promptPromise = Promise.resolve();
 	let opened = "";
 	let createdSessionId = "";
 	restoreDeps = __setChildAgentExecutorDepsForTest({
-		SessionManager: { open: (file: string) => { opened = file; return { getSessionId: () => "same-session-id" }; } } as never,
-		DefaultResourceLoader: class { async reload() {} } as never,
+		SessionManager: {
+			open: (file: string) => {
+				opened = file;
+				return { getSessionId: () => "same-session-id" };
+			},
+		} as never,
+		DefaultResourceLoader: class {
+			async reload() {}
+		} as never,
 		getAgentDir: () => tempDir!,
-		createAgentSession: (async (options: { sessionManager: { getSessionId: () => string } }) => { createdSessionId = options.sessionManager.getSessionId(); return { session } as never; }) as never,
+		createAgentSession: (async (options: { sessionManager: { getSessionId: () => string } }) => {
+			createdSessionId = options.sessionManager.getSessionId();
+			return { session } as never;
+		}) as never,
 	});
 	const state = makeState(tempDir);
 	const childRegistry = new ChildAgentRegistry();
 	const executor = createSubagentExecutor({
-		pi, state, config: { parallel: { concurrency: 1 } }, asyncByDefault: false, tempArtifactsDir: tempDir, childRegistry, expandTilde: (v: string) => v,
+		pi,
+		state,
+		config: { parallel: { concurrency: 1 } },
+		asyncByDefault: false,
+		tempArtifactsDir: tempDir,
+		childRegistry,
+		expandTilde: (v: string) => v,
 		discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }),
 	} as never);
-	const execute = (params: Record<string, unknown>) => executor.execute("id", params as never, new AbortController().signal, undefined, {
-		cwd: tempDir!, hasUI: false, ui: {}, sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => null }, modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] }, model: { provider: "mock" },
-	} as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
-	return { execute, session, events, childRegistry, get opened() { return opened; }, get createdSessionId() { return createdSessionId; }, state };
+	const execute = (params: Record<string, unknown>) =>
+		executor.execute("id", params as never, new AbortController().signal, undefined, {
+			cwd: tempDir!,
+			hasUI: false,
+			ui: {},
+			sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => null },
+			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
+			model: { provider: "mock" },
+		} as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+	return {
+		execute,
+		session,
+		events,
+		childRegistry,
+		get opened() {
+			return opened;
+		},
+		get createdSessionId() {
+			return createdSessionId;
+		},
+		state,
+	};
 }
 
 function writeCompleteRun(root: string, runId = "resume-run") {
 	const runRecordDir = path.join(root, runId);
 	const sessionFile = path.join(runRecordDir, "run-0", "session.jsonl");
 	fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-	fs.writeFileSync(sessionFile, "{\"sessionId\":\"same-session-id\"}\n", "utf8");
-	appendRunEntry({ runId, runRecordDir, mode: "single", source: "sync", agentName: "fixer", rootRunId: runId, cwd: root, startedAt: 1234 });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({ runId, mode: "single", state: "complete", startedAt: 1234, endedAt: 1300, cwd: root, steps: [{ agent: "fixer", status: "complete" }] }), "utf8");
+	fs.writeFileSync(sessionFile, '{"sessionId":"same-session-id"}\n', "utf8");
+	appendRunEntry({
+		runId,
+		runRecordDir,
+		mode: "single",
+		source: "sync",
+		agentName: "fixer",
+		rootRunId: runId,
+		cwd: root,
+		startedAt: 1234,
+	});
+	fs.writeFileSync(
+		path.join(runRecordDir, "status.json"),
+		JSON.stringify({
+			runId,
+			mode: "single",
+			state: "complete",
+			startedAt: 1234,
+			endedAt: 1300,
+			cwd: root,
+			steps: [{ agent: "fixer", status: "complete" }],
+		}),
+		"utf8",
+	);
 	return { runRecordDir, sessionFile };
 }
 
@@ -97,15 +178,35 @@ describe("disk resume", () => {
 		const h = setup();
 		writeCompleteRun(tempDir!);
 		await h.execute({ action: "resume", id: "resume-run", message: "continue", async: false });
-		assert.deepEqual(readAllEntries().map((entry) => entry.runId), ["resume-run"]);
+		assert.deepEqual(
+			readAllEntries().map((entry) => entry.runId),
+			["resume-run"],
+		);
 		assert.equal(h.createdSessionId, "same-session-id");
 	});
 
 	it("live handle path does not require disk status", async () => {
 		const h = setup();
-		const liveSession = { messages: [] as string[], postUserMessage(message: string) { this.messages.push(message); } };
-		h.state.asyncJobs.set("live-run", { asyncId: "live-run", asyncDir: "/missing", status: "complete", mode: "single", updatedAt: Date.now() });
-		h.childRegistry.register({ runId: "live-run", stepIndex: 0, session: liveSession, completed: new Promise(() => {}), abort: async () => {} } as never);
+		const liveSession = {
+			messages: [] as string[],
+			postUserMessage(message: string) {
+				this.messages.push(message);
+			},
+		};
+		h.state.asyncJobs.set("live-run", {
+			asyncId: "live-run",
+			asyncDir: "/missing",
+			status: "complete",
+			mode: "single",
+			updatedAt: Date.now(),
+		});
+		h.childRegistry.register({
+			runId: "live-run",
+			stepIndex: 0,
+			session: liveSession,
+			completed: new Promise(() => {}),
+			abort: async () => {},
+		} as never);
 
 		const result = await h.execute({ action: "resume", id: "live-run", message: "live follow-up" });
 

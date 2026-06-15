@@ -25,7 +25,12 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 	});
 
 	it("surfaces dispatch failure and does not return a masking fallback status:ok envelope", async () => {
-		const maskingEnvelope = { status: "ok" as const, summary: "fallback text", result: "fallback text", artifacts: [] };
+		const maskingEnvelope = {
+			status: "ok" as const,
+			summary: "fallback text",
+			result: "fallback text",
+			artifacts: [],
+		};
 		await assert.rejects(
 			runWorkflowScript({
 				dispatch: async () => ({ envelope: maskingEnvelope, exitCode: 1, error: "child failed" }),
@@ -43,7 +48,10 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 	it("surfaces interrupted dispatches even when the child fallback envelope says ok", async () => {
 		await assert.rejects(
 			runWorkflowScript({
-				dispatch: async () => ({ envelope: { status: "ok", summary: "fallback", result: "fallback" }, interrupted: true }),
+				dispatch: async () => ({
+					envelope: { status: "ok", summary: "fallback", result: "fallback" },
+					interrupted: true,
+				}),
 				script: "return await agent('explorer', 'task');",
 			}),
 			/was interrupted/,
@@ -57,16 +65,31 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 		const previousHome = process.env.HOME;
 		process.env.HOME = root;
 		setRegistryPathForTests(path.join(root, ".pi", "agent", "pi-subagents", "runs-index.jsonl"));
-		const created: Array<{ model?: { provider: string; id: string }; tools?: string[]; customTools?: Array<{ name: string }> }> = [];
-		class FakeResourceLoader { async reload(): Promise<void> {} }
+		const created: Array<{
+			model?: { provider: string; id: string };
+			tools?: string[];
+			customTools?: Array<{ name: string }>;
+		}> = [];
+		class FakeResourceLoader {
+			async reload(): Promise<void> {}
+		}
 		class FakeSession {
 			messages: unknown[] = [];
-			subscribe(): () => void { return () => {}; }
+			subscribe(): () => void {
+				return () => {};
+			}
 			async prompt(task: string): Promise<void> {
 				if (task === "fail") throw new Error("child boom");
-				this.messages.push({ role: "toolResult", toolName: "submit_result", isError: false, details: { status: "ok", summary: task, result: task, artifacts: [] } });
+				this.messages.push({
+					role: "toolResult",
+					toolName: "submit_result",
+					isError: false,
+					details: { status: "ok", summary: task, result: task, artifacts: [] },
+				});
 			}
-			getLastAssistantText(): string { return "done"; }
+			getLastAssistantText(): string {
+				return "done";
+			}
 			async abort(): Promise<void> {}
 			dispose(): void {}
 			setActiveToolsByName(): void {}
@@ -75,34 +98,78 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 			DefaultResourceLoader: FakeResourceLoader as never,
 			getAgentDir: () => "/tmp/pi-agent",
 			SessionManager: { open: () => ({ getSessionId: () => "child-session" }) as never },
-			createAgentSession: (async (options: { model?: { provider: string; id: string }; tools?: string[]; customTools?: Array<{ name: string }> }) => {
+			createAgentSession: (async (options: {
+				model?: { provider: string; id: string };
+				tools?: string[];
+				customTools?: Array<{ name: string }>;
+			}) => {
 				created.push(options);
-				return { session: new FakeSession() as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
+				return {
+					session: new FakeSession() as never,
+					extensionsResult: { extensions: [], diagnostics: [] },
+				} as never;
 			}) as never,
 		});
 		try {
 			const executor = createSubagentExecutor({
-				pi: { events: { emit: () => {} }, getSessionName: () => undefined, setSessionName: () => {}, getAllTools: () => [] },
-				state: { baseCwd: root, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null, poller: null },
+				pi: {
+					events: { emit: () => {} },
+					getSessionName: () => undefined,
+					setSessionName: () => {},
+					getAllTools: () => [],
+				},
+				state: {
+					baseCwd: root,
+					currentSessionId: null,
+					asyncJobs: new Map(),
+					foregroundControls: new Map(),
+					lastForegroundControlId: null,
+					cleanupTimers: new Map(),
+					lastUiContext: null,
+					poller: null,
+				},
 				config: { parallel: { concurrency: 1 }, control: { enabled: true, needsAttentionAfterMs: 1234 } },
 				asyncByDefault: false,
 				tempArtifactsDir: root,
 				childRegistry: new ChildAgentRegistry(),
 				expandTilde: (value: string) => value,
-				discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model", tools: ["read"], skills: ["tdd"] })] }),
+				discoverAgents: () => ({
+					agents: [makeAgent("fixer", { model: "mock/test-model", tools: ["read"], skills: ["tdd"] })],
+				}),
 			} as never);
-			const ctx = { cwd: root, hasUI: false, ui: {}, sessionManager: { getSessionId: () => "parent", getSessionFile: () => null }, modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] }, model: { provider: "mock" } };
-			const group = executor.openWorkflowGroup({ toolCallId: "wf", signal: new AbortController().signal, ctx: ctx as never });
+			const ctx = {
+				cwd: root,
+				hasUI: false,
+				ui: {},
+				sessionManager: { getSessionId: () => "parent", getSessionFile: () => null },
+				modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
+				model: { provider: "mock" },
+			};
+			const group = executor.openWorkflowGroup({
+				toolCallId: "wf",
+				signal: new AbortController().signal,
+				ctx: ctx as never,
+			});
 			const ok = await group.dispatchChild({ role: "fixer", task: "ok", index: 0 });
 			assert.deepEqual(ok.structuredResult, { status: "ok", summary: "ok", result: "ok", artifacts: [] });
 			assert.equal(created[0]?.model?.id, "test-model");
 			assert.deepEqual(created[0]?.tools, ["read", "submit_result"]);
-			assert.equal(created[0]?.customTools?.some((tool) => tool.name === "submit_result"), true);
+			assert.equal(
+				created[0]?.customTools?.some((tool) => tool.name === "submit_result"),
+				true,
+			);
 
 			const failed = await group.dispatchChild({ role: "fixer", task: "fail", index: 1 });
 			assert.notEqual(failed.exitCode, 0);
 			await assert.rejects(
-				runWorkflowScript({ dispatch: async () => ({ envelope: failed.structuredResult, exitCode: failed.exitCode, error: failed.error }), script: "return await agent('fixer', 'fail');" }),
+				runWorkflowScript({
+					dispatch: async () => ({
+						envelope: failed.structuredResult,
+						exitCode: failed.exitCode,
+						error: failed.error,
+					}),
+					script: "return await agent('fixer', 'fail');",
+				}),
 				(error: unknown) => error instanceof WorkflowAgentError && /child boom/.test(error.message),
 			);
 		} finally {

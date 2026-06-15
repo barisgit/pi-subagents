@@ -77,8 +77,9 @@ export function resolveModelRef<T extends ModelRefInfo>(
 	if (slashIdx !== -1) {
 		const provider = ref.substring(0, slashIdx);
 		const id = ref.substring(slashIdx + 1);
-		const providerMatch = findByProvider?.(provider, id)
-			?? models.find((model) => model.provider.toLowerCase() === provider.toLowerCase() && model.id === id);
+		const providerMatch =
+			findByProvider?.(provider, id) ??
+			models.find((model) => model.provider.toLowerCase() === provider.toLowerCase() && model.id === id);
 		if (providerMatch) return providerMatch;
 		if (models.some((model) => model.provider.toLowerCase() === provider.toLowerCase())) return undefined;
 	}

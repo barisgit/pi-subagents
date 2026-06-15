@@ -14,8 +14,14 @@ const WORKFLOW_GROUP_STATE_FILE = "workflow-group.json";
 export function writeWorkflowGroupState(runRecordDir: string, state: WorkflowGroupLifecycle): void {
 	try {
 		fs.mkdirSync(runRecordDir, { recursive: true });
-		fs.writeFileSync(path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE), JSON.stringify({ state, updatedAt: Date.now() }), "utf8");
-	} catch { /* liveness marker is best-effort; must never break the run */ }
+		fs.writeFileSync(
+			path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE),
+			JSON.stringify({ state, updatedAt: Date.now() }),
+			"utf8",
+		);
+	} catch {
+		/* liveness marker is best-effort; must never break the run */
+	}
 }
 
 // The script that produced a workflow group, persisted so the dashboard can
@@ -28,19 +34,29 @@ export function writeWorkflowScript(runRecordDir: string, script: string): void 
 	try {
 		fs.mkdirSync(runRecordDir, { recursive: true });
 		fs.writeFileSync(path.join(runRecordDir, WORKFLOW_SCRIPT_FILE), JSON.stringify({ script }), "utf8");
-	} catch { /* best-effort; must never break the run */ }
+	} catch {
+		/* best-effort; must never break the run */
+	}
 }
 
 export function readWorkflowScript(runRecordDir: string): string | undefined {
 	try {
-		const parsed = JSON.parse(fs.readFileSync(path.join(runRecordDir, WORKFLOW_SCRIPT_FILE), "utf8")) as { script?: string };
+		const parsed = JSON.parse(fs.readFileSync(path.join(runRecordDir, WORKFLOW_SCRIPT_FILE), "utf8")) as {
+			script?: string;
+		};
 		return typeof parsed.script === "string" && parsed.script.trim() !== "" ? parsed.script : undefined;
-	} catch { return undefined; }
+	} catch {
+		return undefined;
+	}
 }
 
 export function readWorkflowGroupState(runRecordDir: string): WorkflowGroupLifecycle | undefined {
 	try {
-		const parsed = JSON.parse(fs.readFileSync(path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE), "utf8")) as { state?: WorkflowGroupLifecycle };
+		const parsed = JSON.parse(fs.readFileSync(path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE), "utf8")) as {
+			state?: WorkflowGroupLifecycle;
+		};
 		return parsed.state;
-	} catch { return undefined; }
+	} catch {
+		return undefined;
+	}
 }

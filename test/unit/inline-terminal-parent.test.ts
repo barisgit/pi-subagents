@@ -17,32 +17,54 @@ afterEach(() => [parent, child].forEach(rmRun));
 
 describe("terminal parent inline nesting", () => {
 	it("summarises completed sync children in the header tally without re-expanding the child card", () => {
-		writeRun(child, { parentRunId: parent, state: "complete", agent: "fixer", label: "finished child", tokens: 2048, startedAt: 1_000, endedAt: 2_500, events: [tool("read", { path: "/tmp/a" })] });
-		const widget = renderSubagentResult({
-			content: [{ type: "text", text: "done" }],
-			details: {
-				mode: "single",
-				runId: parent,
-				results: [{
-					agent: "parent",
-					task: "parent task",
-					exitCode: 0,
-					messages: [],
-					usage,
-					progress: {
-						index: 0,
-						agent: "parent",
-						status: "completed",
-						task: "parent task",
-						recentTools: [{ tool: "subagent", args: childTask, rawArgs: { agent: "fixer", task: childTask, label: "finished child" }, endMs: 2_500 }],
-						recentOutput: [],
-						toolCount: 1,
-						tokens: 0,
-						durationMs: 2_500,
-					},
-				}],
+		writeRun(child, {
+			parentRunId: parent,
+			state: "complete",
+			agent: "fixer",
+			label: "finished child",
+			tokens: 2048,
+			startedAt: 1_000,
+			endedAt: 2_500,
+			events: [tool("read", { path: "/tmp/a" })],
+		});
+		const widget = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {
+					mode: "single",
+					runId: parent,
+					results: [
+						{
+							agent: "parent",
+							task: "parent task",
+							exitCode: 0,
+							messages: [],
+							usage,
+							progress: {
+								index: 0,
+								agent: "parent",
+								status: "completed",
+								task: "parent task",
+								recentTools: [
+									{
+										tool: "subagent",
+										args: childTask,
+										rawArgs: { agent: "fixer", task: childTask, label: "finished child" },
+										endMs: 2_500,
+									},
+								],
+								recentOutput: [],
+								toolCount: 1,
+								tokens: 0,
+								durationMs: 2_500,
+							},
+						},
+					],
+				},
 			},
-		}, { expanded: false }, theme);
+			{ expanded: false },
+			theme,
+		);
 
 		const text = widget.render(120).join("\n");
 		// Header tail now carries the child tally; the full child card is no longer

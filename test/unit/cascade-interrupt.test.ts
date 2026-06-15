@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { awaitRun, interruptRun, openGroup, spawnRun, type Layer0PreparedRunStep, type Layer0RunAgent } from "../../src/dispatch/layer0-runs.ts";
+import {
+	awaitRun,
+	interruptRun,
+	openGroup,
+	spawnRun,
+	type Layer0PreparedRunStep,
+	type Layer0RunAgent,
+} from "../../src/dispatch/layer0-runs.ts";
 import { setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 
@@ -50,29 +57,55 @@ describe("Layer-0 cascade interrupt", () => {
 		const abortedRunIds: string[] = [];
 		const runAgent: Layer0RunAgent = async (step, ctx) => {
 			const startedAt = Date.now();
-			await new Promise<void>((resolve) => ctx.abortSignal.addEventListener("abort", () => {
-				abortedRunIds.push(step.runId);
-				resolve();
-			}, { once: true }));
+			await new Promise<void>((resolve) =>
+				ctx.abortSignal.addEventListener(
+					"abort",
+					() => {
+						abortedRunIds.push(step.runId);
+						resolve();
+					},
+					{ once: true },
+				),
+			);
 			return interruptedResultFor(step, startedAt);
 		};
 
-		const groupA = openGroup({ cwd: root, rootRunId: "root-run", notifyPolicy: "silent", defaultSessionDir: path.join(root, "runs") });
-		const groupB = openGroup({ cwd: root, rootRunId: "root-run", notifyPolicy: "silent", defaultSessionDir: path.join(root, "runs") });
-		const groupAChildren = ["A1", "A2"].map((agentName) => spawnRun({ agentName, task: `run ${agentName}`, cwd: root }, {
-			parentRunId: groupA.runId,
+		const groupA = openGroup({
+			cwd: root,
 			rootRunId: "root-run",
 			notifyPolicy: "silent",
-			runAgent,
 			defaultSessionDir: path.join(root, "runs"),
-		}));
-		const groupBChildren = ["B1", "B2"].map((agentName) => spawnRun({ agentName, task: `run ${agentName}`, cwd: root }, {
-			parentRunId: groupB.runId,
+		});
+		const groupB = openGroup({
+			cwd: root,
 			rootRunId: "root-run",
 			notifyPolicy: "silent",
-			runAgent,
 			defaultSessionDir: path.join(root, "runs"),
-		}));
+		});
+		const groupAChildren = ["A1", "A2"].map((agentName) =>
+			spawnRun(
+				{ agentName, task: `run ${agentName}`, cwd: root },
+				{
+					parentRunId: groupA.runId,
+					rootRunId: "root-run",
+					notifyPolicy: "silent",
+					runAgent,
+					defaultSessionDir: path.join(root, "runs"),
+				},
+			),
+		);
+		const groupBChildren = ["B1", "B2"].map((agentName) =>
+			spawnRun(
+				{ agentName, task: `run ${agentName}`, cwd: root },
+				{
+					parentRunId: groupB.runId,
+					rootRunId: "root-run",
+					notifyPolicy: "silent",
+					runAgent,
+					defaultSessionDir: path.join(root, "runs"),
+				},
+			),
+		);
 
 		const interruptResult = interruptRun(groupA.runId, { cascade: true });
 		await Promise.all(groupAChildren.map((handle) => awaitRun(handle)));
@@ -81,7 +114,10 @@ describe("Layer-0 cascade interrupt", () => {
 		const groupBChildRunIds = groupBChildren.map((handle) => handle.runId).sort();
 		assert.deepEqual(interruptResult.interruptedRunIds.sort(), groupAChildRunIds);
 		assert.deepEqual(abortedRunIds.filter((runId) => groupAChildRunIds.includes(runId)).sort(), groupAChildRunIds);
-		assert.deepEqual(abortedRunIds.filter((runId) => groupBChildRunIds.includes(runId)), []);
+		assert.deepEqual(
+			abortedRunIds.filter((runId) => groupBChildRunIds.includes(runId)),
+			[],
+		);
 
 		interruptRun(groupB.runId, { cascade: true });
 		await Promise.all(groupBChildren.map((handle) => awaitRun(handle)));

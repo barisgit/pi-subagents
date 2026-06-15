@@ -15,7 +15,9 @@ export function resolveSingleOutputPath(
 	if (typeof output !== "string" || !output) return undefined;
 	if (path.isAbsolute(output)) return output;
 	const baseCwd = requestedCwd
-		? (path.isAbsolute(requestedCwd) ? requestedCwd : path.resolve(runtimeCwd, requestedCwd))
+		? path.isAbsolute(requestedCwd)
+			? requestedCwd
+			: path.resolve(runtimeCwd, requestedCwd)
 		: runtimeCwd;
 	return path.resolve(baseCwd, output);
 }
@@ -58,9 +60,8 @@ export function resolveSingleOutput(
 
 	try {
 		const stat = fs.statSync(outputPath);
-		const changedSinceStart = !beforeRun?.exists
-			|| stat.mtimeMs !== beforeRun.mtimeMs
-			|| stat.size !== beforeRun.size;
+		const changedSinceStart =
+			!beforeRun?.exists || stat.mtimeMs !== beforeRun.mtimeMs || stat.size !== beforeRun.size;
 		if (changedSinceStart) {
 			return {
 				fullOutput: fs.readFileSync(outputPath, "utf-8"),

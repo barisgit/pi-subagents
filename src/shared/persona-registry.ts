@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type RegisteredPersonaDir, loadInternalPersonaDir } from "./agents.ts";
 import {
 	type PersonaDirErrorPayload,
@@ -14,10 +14,11 @@ export function createPersonaDirRegistry(pi: ExtensionAPI): {
 	handleUnregisterPersonaDir(data: unknown): void;
 } {
 	const personaDirs = new Map<string, RegisterPersonaDirPayload>();
-	const getRegisteredPersonaDirs = (): RegisteredPersonaDir[] => Array.from(personaDirs.values()).map((dir) => ({
-		extensionId: dir.extensionId,
-		path: dir.path,
-	}));
+	const getRegisteredPersonaDirs = (): RegisteredPersonaDir[] =>
+		Array.from(personaDirs.values()).map((dir) => ({
+			extensionId: dir.extensionId,
+			path: dir.path,
+		}));
 	const emitPersonaDirError = (payload: PersonaDirErrorPayload) => {
 		pi.events.emit(SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT, payload);
 	};

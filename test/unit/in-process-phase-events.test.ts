@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import {
-	createPhaseEventHandler,
-	type StatusPatch,
-} from "../../src/dispatch/in-process-executor.ts";
+import { createPhaseEventHandler, type StatusPatch } from "../../src/dispatch/in-process-executor.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;
@@ -21,8 +18,12 @@ function makeCollector(): { patches: StatusPatch[]; onStatusUpdate: (p: StatusPa
 }
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 describe("in-process phase events (emits phase patches)", () => {
 	it("thinking_delta event produces patch with phase: 'thinking'", () => {
@@ -153,7 +154,9 @@ describe("in-process phase events (emits phase patches)", () => {
 		const { handle } = createPhaseEventHandler({
 			runId: "r10",
 			stepIndex: 0,
-			onStatusUpdate: () => { called = false; },
+			onStatusUpdate: () => {
+				called = false;
+			},
 			initialNow: 1000,
 		});
 		handle(event({ type: "agent_end" }), 2000);
@@ -185,8 +188,8 @@ describe("in-process phase events (emits phase patches)", () => {
 			[messageUpdate("thinking_delta"), 1200],
 			[messageUpdate("thinking_delta"), 1250], // within-phase, suppressed
 			[messageUpdate("thinking_delta"), 1300], // within-phase, suppressed
-			[messageUpdate("text_delta"), 1400],     // transition → streaming_text
-			[messageUpdate("text_delta"), 1450],     // within-phase, suppressed
+			[messageUpdate("text_delta"), 1400], // transition → streaming_text
+			[messageUpdate("text_delta"), 1450], // within-phase, suppressed
 			[event({ type: "tool_execution_start", toolName: "bash" }), 1500],
 			[event({ type: "tool_execution_update" }), 1550],
 			[event({ type: "tool_execution_end", toolName: "bash" }), 1600],

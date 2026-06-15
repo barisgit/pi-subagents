@@ -11,7 +11,13 @@ import type { MockPi } from "../support/helpers.ts";
 function createPiHarness() {
 	const events = new EventEmitter();
 	let exposed: SubagentExposedAPI | undefined;
-	const tools: Array<{ name: string }> = [{ name: "read" }, { name: "grep" }, { name: "find" }, { name: "ls" }, { name: "bash" }];
+	const tools: Array<{ name: string }> = [
+		{ name: "read" },
+		{ name: "grep" },
+		{ name: "find" },
+		{ name: "ls" },
+		{ name: "bash" },
+	];
 	const sessionHandlers = new Map<string, (...args: unknown[]) => unknown>();
 	const pi = {
 		events: {
@@ -41,7 +47,8 @@ function createPiHarness() {
 }
 
 function readLastCallArgs(mockPi: MockPi): string[] {
-	const callFile = fs.readdirSync(mockPi.dir)
+	const callFile = fs
+		.readdirSync(mockPi.dir)
 		.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
 		.sort()
 		.at(-1);

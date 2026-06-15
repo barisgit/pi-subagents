@@ -1,12 +1,16 @@
+import type { ActivityState, ControlConfig, ControlEvent, ResolvedControlConfig } from "../protocol/types.ts";
 import {
-	type ActivityState,
-	type ControlConfig,
-	type ControlEvent,
-	type ResolvedControlConfig,
-} from "../protocol/types.ts";
-import { CONTROL_EVENT_TYPES, CONTROL_NOTIFICATION_CHANNELS, DEFAULT_CONTROL_CONFIG, deriveActivityState } from "../shared/control-policy.ts";
+	CONTROL_EVENT_TYPES,
+	CONTROL_NOTIFICATION_CHANNELS,
+	DEFAULT_CONTROL_CONFIG,
+	deriveActivityState,
+} from "../shared/control-policy.ts";
 
-export { DEFAULT_CONTROL_CONFIG, DEFAULT_NEEDS_ATTENTION_AFTER_MS, deriveActivityState } from "../shared/control-policy.ts";
+export {
+	DEFAULT_CONTROL_CONFIG,
+	DEFAULT_NEEDS_ATTENTION_AFTER_MS,
+	deriveActivityState,
+} from "../shared/control-policy.ts";
 
 function parsePositiveInt(value: unknown): number | undefined {
 	if (typeof value !== "number") return undefined;
@@ -22,20 +26,20 @@ function parseControlList<T extends string>(value: unknown, allowed: readonly T[
 	return parsed.length > 0 ? Array.from(new Set(parsed)) : undefined;
 }
 
-export function resolveControlConfig(
-	globalConfig?: ControlConfig,
-	override?: ControlConfig,
-): ResolvedControlConfig {
+export function resolveControlConfig(globalConfig?: ControlConfig, override?: ControlConfig): ResolvedControlConfig {
 	const enabled = override?.enabled ?? globalConfig?.enabled ?? DEFAULT_CONTROL_CONFIG.enabled;
-	const needsAttentionAfterMs = parsePositiveInt(override?.needsAttentionAfterMs)
-		?? parsePositiveInt(globalConfig?.needsAttentionAfterMs)
-		?? DEFAULT_CONTROL_CONFIG.needsAttentionAfterMs;
-	const notifyOn = parseControlList(override?.notifyOn, CONTROL_EVENT_TYPES)
-		?? parseControlList(globalConfig?.notifyOn, CONTROL_EVENT_TYPES)
-		?? DEFAULT_CONTROL_CONFIG.notifyOn;
-	const notifyChannels = parseControlList(override?.notifyChannels, CONTROL_NOTIFICATION_CHANNELS)
-		?? parseControlList(globalConfig?.notifyChannels, CONTROL_NOTIFICATION_CHANNELS)
-		?? DEFAULT_CONTROL_CONFIG.notifyChannels;
+	const needsAttentionAfterMs =
+		parsePositiveInt(override?.needsAttentionAfterMs) ??
+		parsePositiveInt(globalConfig?.needsAttentionAfterMs) ??
+		DEFAULT_CONTROL_CONFIG.needsAttentionAfterMs;
+	const notifyOn =
+		parseControlList(override?.notifyOn, CONTROL_EVENT_TYPES) ??
+		parseControlList(globalConfig?.notifyOn, CONTROL_EVENT_TYPES) ??
+		DEFAULT_CONTROL_CONFIG.notifyOn;
+	const notifyChannels =
+		parseControlList(override?.notifyChannels, CONTROL_NOTIFICATION_CHANNELS) ??
+		parseControlList(globalConfig?.notifyChannels, CONTROL_NOTIFICATION_CHANNELS) ??
+		DEFAULT_CONTROL_CONFIG.notifyChannels;
 	return {
 		enabled,
 		needsAttentionAfterMs,
@@ -132,9 +136,10 @@ export function buildControlEvent(input: {
 	const ts = input.ts ?? Date.now();
 	const elapsedMs = input.lastActivityAt ? Math.max(0, ts - input.lastActivityAt) : undefined;
 	const elapsedSeconds = elapsedMs !== undefined ? Math.floor(elapsedMs / 1000) : undefined;
-	const message = elapsedSeconds !== undefined
-		? `${input.agent} needs attention (no observed activity for ${elapsedSeconds}s)`
-		: `${input.agent} needs attention`;
+	const message =
+		elapsedSeconds !== undefined
+			? `${input.agent} needs attention (no observed activity for ${elapsedSeconds}s)`
+			: `${input.agent} needs attention`;
 	return {
 		type: "needs_attention",
 		from: input.from,
@@ -169,7 +174,12 @@ export function controlNotificationKey(event: ControlEvent, childIntercomTarget?
 	return `${childKey}:${event.type}`;
 }
 
-export function claimControlNotification(config: ResolvedControlConfig, event: ControlEvent, seenKeys: Set<string>, childIntercomTarget?: string): boolean {
+export function claimControlNotification(
+	config: ResolvedControlConfig,
+	event: ControlEvent,
+	seenKeys: Set<string>,
+	childIntercomTarget?: string,
+): boolean {
 	if (!shouldNotifyControlEvent(config, event)) return false;
 	const key = controlNotificationKey(event, childIntercomTarget);
 	if (seenKeys.has(key)) return false;
@@ -191,9 +201,7 @@ export function formatControlNoticeMessage(event: ControlEvent, childIntercomTar
 		`Run: ${runTarget}${event.index !== undefined ? ` step ${event.index + 1}` : ""}`,
 		`Signal: ${event.message}`,
 		"Hint: Inspect status first unless the run is clearly blocked.",
-		childIntercomTarget
-			? `Nudge: ${nudgeCommand}`
-			: "Nudge: no child message route registered",
+		childIntercomTarget ? `Nudge: ${nudgeCommand}` : "Nudge: no child message route registered",
 		`Status: subagent({ action: "status", id: "${runTarget}" })`,
 		`Interrupt: subagent({ action: "interrupt", id: "${runTarget}" })`,
 	].join("\n");

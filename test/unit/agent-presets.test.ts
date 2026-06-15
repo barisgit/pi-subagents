@@ -21,13 +21,17 @@ function writeProjectAgent(name: string, model = "anthropic/claude-sonnet-4", ex
 	const filePath = path.join(tempProject, ".pi", "agents", `${name}.md`);
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const extra = extraFrontmatter.trim() ? `\n${extraFrontmatter.trim()}` : "";
-	fs.writeFileSync(filePath, `---
+	fs.writeFileSync(
+		filePath,
+		`---
 name: ${name}
 description: ${name} agent
 model: ${model}${extra}
 ---
 You are ${name}.
-`, "utf-8");
+`,
+		"utf-8",
+	);
 }
 
 describe("agent presets", () => {
@@ -117,14 +121,18 @@ describe("agent presets", () => {
 
 	it("applies preset overlays to extension-registered personas while keeping them strict-mode survivable", () => {
 		const personaDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-registered-persona-"));
-		fs.writeFileSync(path.join(personaDir, "charter-qa.md"), `---
+		fs.writeFileSync(
+			path.join(personaDir, "charter-qa.md"),
+			`---
 name: charter-qa
 description: Charter QA persona
 model: anthropic/claude-sonnet-4-6
 thinking: high
 ---
 You are charter-qa.
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
 			presets: {
@@ -186,13 +194,19 @@ You are charter-qa.
 		});
 
 		const mainResult = discoverAgents(tempProject, "project", { preset: "workflow", surface: "main" });
-		assert.deepEqual(mainResult.agents.map((agent) => agent.name), ["build"]);
+		assert.deepEqual(
+			mainResult.agents.map((agent) => agent.name),
+			["build"],
+		);
 		assert.equal(mainResult.agents[0]?.model, "openai/gpt-5");
 		assert.equal(mainResult.preset.applied, "workflow");
 		assert.equal(mainResult.preset.defaultRole, "build");
 
 		const subagentResult = discoverAgents(tempProject, "project", { preset: "workflow", surface: "subagent" });
-		assert.deepEqual(subagentResult.agents.map((agent) => agent.name), ["explorer"]);
+		assert.deepEqual(
+			subagentResult.agents.map((agent) => agent.name),
+			["explorer"],
+		);
 		assert.equal(subagentResult.agents[0]?.model, "openai/gpt-5-mini");
 	});
 });

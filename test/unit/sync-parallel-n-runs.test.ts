@@ -17,9 +17,13 @@ class FakeResourceLoader {
 }
 
 class FakeAgentSession {
-	subscribe(): () => void { return () => {}; }
+	subscribe(): () => void {
+		return () => {};
+	}
 	async prompt(): Promise<void> {}
-	getLastAssistantText(): string { return "done"; }
+	getLastAssistantText(): string {
+		return "done";
+	}
 	async abort(): Promise<void> {}
 	dispose(): void {}
 	setActiveToolsByName(): void {}
@@ -39,7 +43,11 @@ function installFakeRuntime(): void {
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: { open: (file: string) => ({ getSessionId: () => `session-${file}` }) as never },
-		createAgentSession: async () => ({ session: new FakeAgentSession() as never, extensionsResult: { extensions: [], diagnostics: [] } }) as never,
+		createAgentSession: async () =>
+			({
+				session: new FakeAgentSession() as never,
+				extensionsResult: { extensions: [], diagnostics: [] },
+			}) as never,
 	});
 }
 
@@ -82,13 +90,18 @@ function makeCtx(cwd: string) {
 }
 
 async function execute(cwd: string): Promise<{ details?: { runId?: string } }> {
-	return await makeExecutor(cwd).execute(
+	return (await makeExecutor(cwd).execute(
 		"id",
-		{ run: [{ agent: "A", task: "alpha" }, { agent: "B", task: "bravo" }] } as never,
+		{
+			run: [
+				{ agent: "A", task: "alpha" },
+				{ agent: "B", task: "bravo" },
+			],
+		} as never,
 		new AbortController().signal,
 		undefined,
 		makeCtx(cwd) as never,
-	) as { details?: { runId?: string } };
+	)) as { details?: { runId?: string } };
 }
 
 afterEach(() => {
@@ -119,7 +132,13 @@ describe("sync parallel Layer-0 run wiring", () => {
 		assert.equal(children.length, 2);
 		assert.equal(new Set(children.map((entry) => entry.runId)).size, 2);
 		assert.deepEqual(children.map((entry) => entry.agentName).sort(), ["A", "B"]);
-		assert.equal(children.every((entry) => entry.mode === "single" && entry.source === "sync"), true);
-		assert.equal(entries.some((entry) => Object.hasOwn(entry, "agentNames")), false);
+		assert.equal(
+			children.every((entry) => entry.mode === "single" && entry.source === "sync"),
+			true,
+		);
+		assert.equal(
+			entries.some((entry) => Object.hasOwn(entry, "agentNames")),
+			false,
+		);
 	});
 });

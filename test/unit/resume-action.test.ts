@@ -35,7 +35,12 @@ function makeState(cwd: string): SubagentState {
 	};
 }
 
-function registerHandle(registry: ChildAgentRegistry, runId: string, stepIndex: number, session = new FakeSession()): FakeSession {
+function registerHandle(
+	registry: ChildAgentRegistry,
+	runId: string,
+	stepIndex: number,
+	session = new FakeSession(),
+): FakeSession {
 	const handle: ChildAgentHandle = {
 		runId,
 		stepIndex,
@@ -63,26 +68,28 @@ function makeHarness(cwd: string) {
 		tempArtifactsDir: cwd,
 		childRegistry,
 		expandTilde: (value: string) => value,
-		discoverAgents: () => ({ agents: ["main", "explorer"].map((name) => makeAgent(name, { model: "mock/test-model" })) }),
+		discoverAgents: () => ({
+			agents: ["main", "explorer"].map((name) => makeAgent(name, { model: "mock/test-model" })),
+		}),
 	} as never);
-	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> => executor.execute(
-		"id",
-		params as never,
-		new AbortController().signal,
-		undefined,
-		{
+	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> =>
+		executor.execute("id", params as never, new AbortController().signal, undefined, {
 			cwd,
 			hasUI: false,
 			ui: {},
 			sessionManager: { getSessionId: () => "session-resume-action", getSessionFile: () => null },
 			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
 			model: { provider: "mock" },
-		} as never,
-	) as Promise<ExecutorResult>;
+		} as never) as Promise<ExecutorResult>;
 	return { execute, state, childRegistry };
 }
 
-function markAsync(state: SubagentState, runId: string, status: "queued" | "running" | "complete" | "failed" | "paused" | "lost", mode: "single" | "parallel" = "single"): void {
+function markAsync(
+	state: SubagentState,
+	runId: string,
+	status: "queued" | "running" | "complete" | "failed" | "paused" | "lost",
+	mode: "single" | "parallel" = "single",
+): void {
 	state.asyncJobs.set(runId, {
 		asyncId: runId,
 		asyncDir: "/tmp/pi-subagent-resume-action",
@@ -140,7 +147,12 @@ describe("resume action", () => {
 	});
 
 	it("agent-switch-attempt-rejected", () => {
-		const taskError = validateSubagentToolInput({ action: "resume", id: "x", message: "hi", run: [{ agent: "explorer", task: "y" }] });
+		const taskError = validateSubagentToolInput({
+			action: "resume",
+			id: "x",
+			message: "hi",
+			run: [{ agent: "explorer", task: "y" }],
+		});
 		const agentError = validateSubagentToolInput({ action: "resume", id: "x", message: "hi", agent: "explorer" });
 
 		assert.equal(taskError?.isError, true);

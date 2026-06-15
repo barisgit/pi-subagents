@@ -11,7 +11,16 @@ import { makeAgent } from "../support/helpers.ts";
 const tmpRoots: string[] = [];
 let previousHome: string | undefined;
 let restoreRuntime: (() => void) | undefined;
-let promptGate: { started: number; expected: number; allStarted: Promise<void>; resolveAllStarted: () => void; release: Promise<void>; resolveRelease: () => void } | undefined;
+let promptGate:
+	| {
+			started: number;
+			expected: number;
+			allStarted: Promise<void>;
+			resolveAllStarted: () => void;
+			release: Promise<void>;
+			resolveRelease: () => void;
+	  }
+	| undefined;
 let openedSessionFiles: string[] = [];
 
 class FakeResourceLoader {
@@ -22,17 +31,22 @@ class FakeAgentSession {
 	private listeners: Array<(event: unknown) => void> = [];
 	subscribe(listener: (event: unknown) => void): () => void {
 		this.listeners.push(listener);
-		return () => { this.listeners = this.listeners.filter((entry) => entry !== listener); };
+		return () => {
+			this.listeners = this.listeners.filter((entry) => entry !== listener);
+		};
 	}
 	async prompt(): Promise<void> {
-		for (const listener of this.listeners) listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
+		for (const listener of this.listeners)
+			listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
 		if (promptGate) {
 			promptGate.started++;
 			if (promptGate.started === promptGate.expected) promptGate.resolveAllStarted();
 			await promptGate.release;
 		}
 	}
-	getLastAssistantText(): string { return "done"; }
+	getLastAssistantText(): string {
+		return "done";
+	}
 	async abort(): Promise<void> {}
 	dispose(): void {}
 	setActiveToolsByName(): void {}
@@ -40,20 +54,39 @@ class FakeAgentSession {
 
 function defer(): { promise: Promise<void>; resolve: () => void } {
 	let resolve!: () => void;
-	const promise = new Promise<void>((r) => { resolve = r; });
+	const promise = new Promise<void>((r) => {
+		resolve = r;
+	});
 	return { promise, resolve };
 }
 
 function installPromptGate(expected: number): void {
 	const allStarted = defer();
 	const release = defer();
-	promptGate = { started: 0, expected, allStarted: allStarted.promise, resolveAllStarted: allStarted.resolve, release: release.promise, resolveRelease: release.resolve };
+	promptGate = {
+		started: 0,
+		expected,
+		allStarted: allStarted.promise,
+		resolveAllStarted: allStarted.resolve,
+		release: release.promise,
+		resolveRelease: release.resolve,
+	};
 }
 
 async function waitForPrompts(deps: any): Promise<void> {
 	await Promise.race([
 		promptGate!.allStarted,
-		new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`timed out waiting for prompts; started=${promptGate?.started ?? 0}; controls=${deps.state.foregroundControls.size}; entries=${readAllEntries().length}`)), 1000)),
+		new Promise<void>((_, reject) =>
+			setTimeout(
+				() =>
+					reject(
+						new Error(
+							`timed out waiting for prompts; started=${promptGate?.started ?? 0}; controls=${deps.state.foregroundControls.size}; entries=${readAllEntries().length}`,
+						),
+					),
+				1000,
+			),
+		),
 	]);
 }
 
@@ -82,11 +115,17 @@ function installFakeRuntime(): void {
 	restoreRuntime = __setChildAgentExecutorDepsForTest({
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
-		SessionManager: { open: (file: string) => {
-			openedSessionFiles.push(file);
-			return { getSessionId: () => `session-${file}` } as never;
-		} },
-		createAgentSession: async () => ({ session: new FakeAgentSession() as never, extensionsResult: { extensions: [], diagnostics: [] } }) as never,
+		SessionManager: {
+			open: (file: string) => {
+				openedSessionFiles.push(file);
+				return { getSessionId: () => `session-${file}` } as never;
+			},
+		},
+		createAgentSession: async () =>
+			({
+				session: new FakeAgentSession() as never,
+				extensionsResult: { extensions: [], diagnostics: [] },
+			}) as never,
 	});
 }
 
@@ -128,10 +167,21 @@ function makeCtx(cwd: string) {
 	};
 }
 
-function execute(deps: any, cwd: string, onUpdate?: (update: { details?: { progress?: Array<{ status?: string }>; results?: unknown[]; totalSteps?: number } }) => void) {
+function execute(
+	deps: any,
+	cwd: string,
+	onUpdate?: (update: {
+		details?: { progress?: Array<{ status?: string }>; results?: unknown[]; totalSteps?: number };
+	}) => void,
+) {
 	return createSubagentExecutor(deps).execute(
 		"id",
-		{ run: [{ agent: "A", task: "alpha" }, { agent: "B", task: "bravo" }] } as never,
+		{
+			run: [
+				{ agent: "A", task: "alpha" },
+				{ agent: "B", task: "bravo" },
+			],
+		} as never,
 		new AbortController().signal,
 		onUpdate as never,
 		makeCtx(cwd) as never,
@@ -192,7 +242,10 @@ describe("sync foreground parallel executor", () => {
 		assert.ok(settledCounts.includes(2), "merged update after the second resolved child must show 2/2 settled");
 		const final = updates.at(-1)!;
 		assert.equal(final.details?.progress?.length, 2);
-		assert.equal(final.details?.progress?.every((progress) => progress.status !== "running"), true);
+		assert.equal(
+			final.details?.progress?.every((progress) => progress.status !== "running"),
+			true,
+		);
 		assert.equal(final.details?.results?.length, 2);
 	});
 
@@ -210,14 +263,28 @@ describe("sync foreground parallel executor", () => {
 		const children = entries.filter((entry) => entry.parentRunId === group.runId);
 		assert.equal(children.length, 2);
 		assert.deepEqual(
-			deps.childRegistry.snapshot().map((entry: { runId: string }) => entry.runId).sort(),
+			deps.childRegistry
+				.snapshot()
+				.map((entry: { runId: string }) => entry.runId)
+				.sort(),
 			children.map((entry) => entry.runId).sort(),
 		);
-		assert.deepEqual(openedSessionFiles.sort(), children.map((entry) => path.join(entry.runRecordDir, "run-0", "session.jsonl")).sort());
+		assert.deepEqual(
+			openedSessionFiles.sort(),
+			children.map((entry) => path.join(entry.runRecordDir, "run-0", "session.jsonl")).sort(),
+		);
 		for (const child of children) {
 			const status = await waitForStatusPhase(path.join(child.runRecordDir, "status.json"));
-			assert.equal(status.phase, "thinking", "in-process foreground child phase patches must bridge to the child status writer");
-			assert.equal(typeof status.runnerHeartbeatAt, "number", "in-process foreground child heartbeat patches must bridge to the child status writer");
+			assert.equal(
+				status.phase,
+				"thinking",
+				"in-process foreground child phase patches must bridge to the child status writer",
+			);
+			assert.equal(
+				typeof status.runnerHeartbeatAt,
+				"number",
+				"in-process foreground child heartbeat patches must bridge to the child status writer",
+			);
 		}
 
 		promptGate!.resolveRelease();

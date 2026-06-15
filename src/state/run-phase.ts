@@ -45,11 +45,7 @@ export function initialRunPhaseState(now: number): RunPhaseState {
  * still return a fresh JSON-serializable state with `lastPhaseTickAt` set to
  * `now` and `previousPhase` omitted.
  */
-export function advanceRunPhase(
-	prev: RunPhaseState,
-	event: AgentSessionEvent,
-	now: number,
-): RunPhaseState {
+export function advanceRunPhase(prev: RunPhaseState, event: AgentSessionEvent, now: number): RunPhaseState {
 	const record = event as Record<string, unknown>;
 	const eventType = typeof record.type === "string" ? record.type : undefined;
 	const boundary = nextAfterTurnEnd(prev, eventType);
@@ -79,8 +75,8 @@ export function advanceRunPhase(
 				return nextState(prev, "streaming_text", now, { afterTurnEnd: boundary });
 			}
 			if (
-				(assistantType === "toolcall_start" || assistantType === "toolcall_delta")
-				&& streamingToolName(record) === SUBMIT_RESULT_TOOL_NAME
+				(assistantType === "toolcall_start" || assistantType === "toolcall_delta") &&
+				streamingToolName(record) === SUBMIT_RESULT_TOOL_NAME
 			) {
 				return nextState(prev, "finishing", now, { afterTurnEnd: boundary });
 			}
@@ -244,9 +240,7 @@ export function formatPhase(
 ): string {
 	if (phase === undefined || phase === "idle") return "";
 
-	const dur = phaseStartedAt !== undefined
-		? ` ${formatDuration(Math.max(0, now - phaseStartedAt))}`
-		: "";
+	const dur = phaseStartedAt !== undefined ? ` ${formatDuration(Math.max(0, now - phaseStartedAt))}` : "";
 
 	switch (phase) {
 		case "waiting_model":

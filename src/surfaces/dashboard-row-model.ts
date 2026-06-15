@@ -27,7 +27,18 @@ export interface ContainerRowInfo {
 
 export type DisplayRow =
 	| { kind: "run"; run: LiveRun; depth: number; parallelMarker?: boolean; suppressPhaseChip?: boolean }
-	| { kind: "phase"; id: string; workflowId: string; phaseIndex: number; title?: string; depth: number; done: number; total: number; running: boolean; collapsed: boolean };
+	| {
+			kind: "phase";
+			id: string;
+			workflowId: string;
+			phaseIndex: number;
+			title?: string;
+			depth: number;
+			done: number;
+			total: number;
+			running: boolean;
+			collapsed: boolean;
+	  };
 
 export function parentRunIdOf(run: LiveRun): string | undefined {
 	return run.run.parentRunId;
@@ -43,9 +54,8 @@ export function runMatchesSession(
 	scope: { sessionId?: string; sessionCwd?: string } | string | undefined,
 ): boolean {
 	// Back-compat: previously the second arg was just sessionCwd as a string.
-	const { sessionId, sessionCwd } = typeof scope === "string"
-		? { sessionId: undefined, sessionCwd: scope }
-		: scope ?? {};
+	const { sessionId, sessionCwd } =
+		typeof scope === "string" ? { sessionId: undefined, sessionCwd: scope } : (scope ?? {});
 	if (!sessionId && !sessionCwd) return true;
 	if (run.ownership === "live") return true;
 	if (sessionId) {
@@ -103,7 +113,9 @@ export function filterRunsToSessionTree(
 }
 
 function baseSortLiveRuns(runs: LiveRun[]): LiveRun[] {
-	return [...runs].sort((a, b) => compareRunsForDisplay({ ...a.run, updatedAt: a.run.lastUpdate }, { ...b.run, updatedAt: b.run.lastUpdate }));
+	return [...runs].sort((a, b) =>
+		compareRunsForDisplay({ ...a.run, updatedAt: a.run.lastUpdate }, { ...b.run, updatedAt: b.run.lastUpdate }),
+	);
 }
 
 function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
@@ -171,7 +183,11 @@ function buildDepthMap(runs: LiveRun[]): Map<string, number> {
 	return depths;
 }
 
-export function sortLiveRuns(sync: ForegroundRunSummary[], async: AsyncRunSummary[], ownedIds?: ReadonlySet<string>): LiveRun[] {
+export function sortLiveRuns(
+	sync: ForegroundRunSummary[],
+	async: AsyncRunSummary[],
+	ownedIds?: ReadonlySet<string>,
+): LiveRun[] {
 	// Single ordering rule for the dashboard: needs_attention pinned to the very top,
 	// then everything strictly by spawn time (newest first). State buckets are NOT
 	// used here -- otherwise old failed runs would float above recently completed
@@ -221,7 +237,11 @@ export function countAgentRows(runs: LiveRun[]): number {
 
 /** Synthesize the container-row enrichment (collapse marker, done/total child
  * progress, current phase, collapsed agent summary) from the children. */
-export function containerRowInfo(runs: LiveRun[], collapsedIds: ReadonlySet<string>, run: LiveRun): ContainerRowInfo | undefined {
+export function containerRowInfo(
+	runs: LiveRun[],
+	collapsedIds: ReadonlySet<string>,
+	run: LiveRun,
+): ContainerRowInfo | undefined {
 	if (!isGroupContainerRow(runs, run)) return undefined;
 	const children = runs.filter((other) => other.run.parentRunId === run.run.id);
 	const done = children.filter((child) => {
@@ -235,7 +255,10 @@ export function containerRowInfo(runs: LiveRun[], collapsedIds: ReadonlySet<stri
 		for (const child of children) {
 			if (child.run.phaseIndex === undefined) continue;
 			if (!best || child.run.phaseIndex > best.index) {
-				best = { index: child.run.phaseIndex, ...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}) };
+				best = {
+					index: child.run.phaseIndex,
+					...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}),
+				};
 			}
 		}
 		if (best && run.run.state === "running") {
@@ -249,7 +272,9 @@ export function containerRowInfo(runs: LiveRun[], collapsedIds: ReadonlySet<stri
 		// Field priority preserved: currentAgent (live-only) wins, else first
 		// step's agent (foreign), else mode. Live views carry steps:[] and foreign
 		// views carry no currentAgent, so the unified read matches both old arms.
-		const agents = children.map((child) => child.run.currentAgent ?? child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode);
+		const agents = children.map(
+			(child) => child.run.currentAgent ?? child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode,
+		);
 		const unique = Array.from(new Set(agents.filter(Boolean)));
 		agentsSummary = `${children.length} ${children.length === 1 ? "agent" : "agents"}${unique.length > 0 ? `: ${unique.join(", ")}` : ""}`;
 	}
@@ -278,7 +303,9 @@ export function isPendingDelivery(runs: LiveRun[], run: LiveRun): boolean {
 }
 
 export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<string>): DisplayRow[] {
-	const skippedParallelIds = new Set(runs.filter((run) => isSkippedParallelContainer(runs, run)).map((run) => run.run.id));
+	const skippedParallelIds = new Set(
+		runs.filter((run) => isSkippedParallelContainer(runs, run)).map((run) => run.run.id),
+	);
 	const displayRuns = runs.filter((run) => !skippedParallelIds.has(run.run.id));
 	const depthMap = buildDepthMap(displayRuns);
 	const ids = new Set(runs.map((run) => run.run.id));
@@ -293,7 +320,11 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 
 	const rows: DisplayRow[] = [];
 	const processed = new Set<string>();
-	const emitRun = (run: LiveRun, depth: number, options: { parallelMarker?: boolean; suppressPhaseChip?: boolean } = {}) => {
+	const emitRun = (
+		run: LiveRun,
+		depth: number,
+		options: { parallelMarker?: boolean; suppressPhaseChip?: boolean } = {},
+	) => {
 		processed.add(run.run.id);
 		rows.push({ kind: "run", run, depth, ...options });
 	};
@@ -305,14 +336,18 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 		const phaseless = children.filter((child) => child.run.phaseIndex === undefined);
 		for (const child of phaseless) emitTree(child, depth + 1);
 
-		const phaseIndexes = Array.from(new Set(children
-			.filter((child) => child.run.phaseIndex !== undefined)
-			.map((child) => child.run.phaseIndex!))).sort((a, b) => a - b);
+		const phaseIndexes = Array.from(
+			new Set(
+				children.filter((child) => child.run.phaseIndex !== undefined).map((child) => child.run.phaseIndex!),
+			),
+		).sort((a, b) => a - b);
 		for (const phaseIndex of phaseIndexes) {
 			const phaseChildren = children.filter((child) => child.run.phaseIndex === phaseIndex);
 			const phaseId = `phase:${workflow.run.id}:${phaseIndex}`;
 			const title = dedupePhaseTitle(phaseChildren.find((child) => child.run.phaseTitle)?.run.phaseTitle);
-			const parallelGroups = new Set(phaseChildren.map((child) => child.run.parallelGroupId).filter((id): id is string => Boolean(id)));
+			const parallelGroups = new Set(
+				phaseChildren.map((child) => child.run.parallelGroupId).filter((id): id is string => Boolean(id)),
+			);
 			rows.push({
 				kind: "phase",
 				id: phaseId,
@@ -326,14 +361,24 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 				collapsed: collapsedIds.has(phaseId),
 			});
 			if (collapsedIds.has(phaseId)) continue;
-			for (const child of phaseChildren) emitTree(child, depth + 2, { suppressPhaseChip: true, parallelMarker: child.run.parallelGroupId !== undefined && parallelGroups.has(child.run.parallelGroupId) });
+			for (const child of phaseChildren)
+				emitTree(child, depth + 2, {
+					suppressPhaseChip: true,
+					parallelMarker:
+						child.run.parallelGroupId !== undefined && parallelGroups.has(child.run.parallelGroupId),
+				});
 		}
 	};
-	const emitTree = (run: LiveRun, depth: number, options: { parallelMarker?: boolean; suppressPhaseChip?: boolean } = {}) => {
+	const emitTree = (
+		run: LiveRun,
+		depth: number,
+		options: { parallelMarker?: boolean; suppressPhaseChip?: boolean } = {},
+	) => {
 		if (processed.has(run.run.id)) return;
 		if (skippedParallelIds.has(run.run.id)) {
 			processed.add(run.run.id);
-			for (const child of childrenByParent.get(run.run.id) ?? []) emitTree(child, depth, { parallelMarker: true });
+			for (const child of childrenByParent.get(run.run.id) ?? [])
+				emitTree(child, depth, { parallelMarker: true });
 			return;
 		}
 		emitRun(run, depth, options);

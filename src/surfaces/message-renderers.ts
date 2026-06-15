@@ -1,20 +1,24 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { type Details } from "../protocol/types.ts";
+import type { Details } from "../protocol/types.ts";
 import { getSlashRenderableSnapshot, type SlashMessageDetails } from "../state/slash-live-state.ts";
 import { renderSubagentResult, syncResultAnimation } from "./render-result.ts";
 import { formatDuration, shortenPath } from "./formatters.ts";
-import { type SubagentBatchNotifyDetails, type SubagentNotifyDetails } from "./notify.ts";
+import type { SubagentBatchNotifyDetails, SubagentNotifyDetails } from "./notify.ts";
 
 function isSlashResultRunning(result: { details?: Details }): boolean {
-	return result.details?.progress?.some((entry) => entry.status === "running")
-		|| result.details?.results.some((entry) => entry.progress?.status === "running")
-		|| false;
+	return (
+		result.details?.progress?.some((entry) => entry.status === "running") ||
+		result.details?.results.some((entry) => entry.progress?.status === "running") ||
+		false
+	);
 }
 
 function isSlashResultError(result: { details?: Details }): boolean {
-	return result.details?.results.some((entry) => entry.exitCode !== 0 && entry.progress?.status !== "running") || false;
+	return (
+		result.details?.results.some((entry) => entry.exitCode !== 0 && entry.progress?.status !== "running") || false
+	);
 }
 
 function rebuildSlashResultContainer(
@@ -25,7 +29,11 @@ function rebuildSlashResultContainer(
 ): void {
 	container.clear();
 	container.addChild(new Spacer(1));
-	const boxTheme = isSlashResultRunning(result) ? "toolPendingBg" : isSlashResultError(result) ? "toolErrorBg" : "toolSuccessBg";
+	const boxTheme = isSlashResultRunning(result)
+		? "toolPendingBg"
+		: isSlashResultError(result)
+			? "toolErrorBg"
+			: "toolSuccessBg";
 	const box = new Box(1, 1, (text: string) => theme.bg(boxTheme, text));
 	box.addChild(renderSubagentResult(result, options, theme));
 	container.addChild(box);
@@ -105,14 +113,17 @@ export class SubagentNotifyNoticeComponent implements Component {
 		if (width < 3) return [truncateToWidth("Subagent notification", width)];
 		const bodyWidth = Math.max(1, Math.min(width - 2, 68));
 		const borderChar = "─";
-		const header = this.details.kind === "batch"
-			? ` Subagent batch complete · ${this.details.completed}/${this.details.total} `
-			: ` Subagent ${this.details.status}: ${this.details.agent} `;
+		const header =
+			this.details.kind === "batch"
+				? ` Subagent batch complete · ${this.details.completed}/${this.details.total} `
+				: ` Subagent ${this.details.status}: ${this.details.agent} `;
 		const headerText = truncateToWidth(header, bodyWidth, "");
 		const headerPadding = Math.max(0, bodyWidth - visibleWidth(headerText));
 		// Truncation/inner styles inject ANSI resets; keep the closing border in
 		// its own accent segment so a reset inside the text can't bleach it.
-		const lines = [this.theme.fg("accent", `╭${headerText}`) + this.theme.fg("accent", `${borderChar.repeat(headerPadding)}╮`)];
+		const lines = [
+			this.theme.fg("accent", `╭${headerText}`) + this.theme.fg("accent", `${borderChar.repeat(headerPadding)}╮`),
+		];
 
 		for (const line of this.bodyLines()) {
 			const text = truncateToWidth(line, bodyWidth, "…");
@@ -126,27 +137,30 @@ export class SubagentNotifyNoticeComponent implements Component {
 	private bodyLines(): string[] {
 		if (this.details.kind === "batch") {
 			const lines = this.details.children.map((child) => {
-				const glyph = child.state === "complete" || child.state === "completed"
-					? this.theme.fg("success", "✓")
-					: child.state === "paused"
-						? this.theme.fg("warning", "■")
-						: this.theme.fg("error", "✗");
+				const glyph =
+					child.state === "complete" || child.state === "completed"
+						? this.theme.fg("success", "✓")
+						: child.state === "paused"
+							? this.theme.fg("warning", "■")
+							: this.theme.fg("error", "✗");
 				const name = child.label?.trim() || child.agent || child.runId.slice(0, 8);
 				return `${glyph} ${name} ${this.theme.fg("dim", `(${child.agent}) · ${child.state}`)}`;
 			});
 			return lines.length > 0 ? lines : ["(no child results)"];
 		}
 
-		const icon = this.details.status === "completed"
-			? this.theme.fg("success", "✓")
-			: this.details.status === "paused"
-				? this.theme.fg("warning", "■")
-				: this.theme.fg("error", "✗");
+		const icon =
+			this.details.status === "completed"
+				? this.theme.fg("success", "✓")
+				: this.details.status === "paused"
+					? this.theme.fg("warning", "■")
+					: this.theme.fg("error", "✗");
 		const parts: string[] = [];
 		if (this.details.taskInfo) parts.push(this.details.taskInfo);
 		if (this.details.durationMs !== undefined) parts.push(formatDuration(this.details.durationMs));
 		let first = `${icon} ${this.theme.bold(this.details.agent)} ${this.theme.fg("dim", this.details.status)}`;
-		if (parts.length > 0) first += ` ${this.theme.fg("dim", "·")} ${parts.map((part) => this.theme.fg("dim", part)).join(` ${this.theme.fg("dim", "·")} `)}`;
+		if (parts.length > 0)
+			first += ` ${this.theme.fg("dim", "·")} ${parts.map((part) => this.theme.fg("dim", part)).join(` ${this.theme.fg("dim", "·")} `)}`;
 		const lines = [first];
 		const trimmedPreview = this.details.resultPreview.trim();
 		const previewLines = this.options.expanded

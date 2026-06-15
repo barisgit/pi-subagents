@@ -3,8 +3,12 @@ import { after, afterEach, describe, it } from "node:test";
 import { formatPhase } from "../../src/state/run-phase.ts";
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 describe("formatPhase", () => {
 	it("formats thinking with elapsed seconds", () => {

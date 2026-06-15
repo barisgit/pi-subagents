@@ -10,7 +10,6 @@ import { formatTokens } from "./formatters.ts";
 
 export type Theme = Pick<ExtensionContext["ui"]["theme"], "fg"> & { bold: (value: string) => string };
 
-
 export function getTermWidth(): number {
 	return process.stdout.columns || 120;
 }
@@ -19,11 +18,11 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /**
  * Truncate a line to maxWidth, preserving ANSI styling through the ellipsis.
- * 
+ *
  * pi-tui's truncateToWidth adds \x1b[0m before ellipsis which resets all styling,
  * causing background color bleed in the TUI. This implementation tracks active
  * ANSI styles and re-applies them before the ellipsis.
- * 
+ *
  * Uses Intl.Segmenter for proper Unicode/emoji handling (not char-by-char).
  */
 export function truncLine(text: string, maxWidth: number): string {
@@ -122,13 +121,25 @@ export function tintAgentName(name: string, color: string | undefined): string {
 // Distinctive multi-headline spinner: sparkle/star cycle (vs the ASCII '- \ | /').
 // Used only on the top-level parallel/single header so the headline reads as
 // "the container is alive" without making every per-agent row spin too.
-const MULTI_SPINNER = ["\u2733", "\u2734", "\u2735", "\u2736", "\u2737", "\u2738", "\u2739", "\u273A", "\u273B", "\u273C", "\u273D"];
+const MULTI_SPINNER = [
+	"\u2733",
+	"\u2734",
+	"\u2735",
+	"\u2736",
+	"\u2737",
+	"\u2738",
+	"\u2739",
+	"\u273A",
+	"\u273B",
+	"\u273C",
+	"\u273D",
+];
 export function multiSpinnerFrame(): string {
 	return MULTI_SPINNER[Math.floor(Date.now() / WIDGET_ANIMATION_MS) % MULTI_SPINNER.length]!;
 }
 
 export function themeBold(theme: Theme, text: string): string {
-	return ((theme as { bold?: (value: string) => string }).bold?.(text)) ?? text;
+	return (theme as { bold?: (value: string) => string }).bold?.(text) ?? text;
 }
 
 export function formatTokenStat(tokens: number): string {

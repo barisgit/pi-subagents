@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ChildAgentResult, ChildAgentExitState, PersistedRunStatus, PersistedRunStep, StatusPatch } from "../protocol/status-types.ts";
+import type {
+	ChildAgentResult,
+	ChildAgentExitState,
+	PersistedRunStatus,
+	PersistedRunStep,
+	StatusPatch,
+} from "../protocol/status-types.ts";
 import type { TokenUsage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 import { applyPatchToStatus } from "./status-patch.ts";
@@ -64,7 +70,9 @@ export function statusFromMeta(runId: string, meta: StatusMeta): PersistedRunSta
 		...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),
 		...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
 		...(meta.resumeCount !== undefined ? { resumeCount: meta.resumeCount } : {}),
-		steps: meta.steps ? meta.steps.map((step) => ({ ...step, live: step.live ? { ...step.live } : undefined })) : [],
+		steps: meta.steps
+			? meta.steps.map((step) => ({ ...step, live: step.live ? { ...step.live } : undefined }))
+			: [],
 		...(meta.label ? { label: meta.label } : {}),
 		...(meta.cwd ? { cwd: meta.cwd } : {}),
 		...(meta.parentRunId ? { parentRunId: meta.parentRunId } : {}),
@@ -146,13 +154,19 @@ export class StatusWriter {
 	 * the resumed/running step set, then apply the shared run-level terminal
 	 * convention. Writes immediately.
 	 */
-	finalizeTerminal(end: { state?: "complete" | "failed"; steps?: Array<Partial<StatusStep>>; totalTokens?: TokenUsage; sessionFile?: string }): void {
+	finalizeTerminal(end: {
+		state?: "complete" | "failed";
+		steps?: Array<Partial<StatusStep>>;
+		totalTokens?: TokenUsage;
+		sessionFile?: string;
+	}): void {
 		this.ensureInitialized();
 		if (!this.status) return;
 		const endedAt = Date.now();
 		const steps = this.status.steps.map((step, index) => {
 			const patch = end.steps?.[index] ?? {};
-			const status = patch.status ?? (end.state === "failed" ? "failed" : step.status === "failed" ? "failed" : "complete");
+			const status =
+				patch.status ?? (end.state === "failed" ? "failed" : step.status === "failed" ? "failed" : "complete");
 			const startedAt = patch.startedAt ?? step.startedAt ?? this.status!.startedAt;
 			return {
 				...step,
@@ -173,7 +187,19 @@ export class StatusWriter {
 		this.writeNow();
 	}
 
-	async finalize(result: ChildAgentResult, options?: { totalUsage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number } }): Promise<void> {
+	async finalize(
+		result: ChildAgentResult,
+		options?: {
+			totalUsage?: {
+				input: number;
+				output: number;
+				cacheRead?: number;
+				cacheWrite?: number;
+				cost?: number;
+				turns?: number;
+			};
+		},
+	): Promise<void> {
 		this.ensureInitialized();
 		this.clearTimer();
 		this.applyPatch({
@@ -298,7 +324,9 @@ export function __setStatusWriterWriteJsonForTest(fn: (filePath: string, payload
 	};
 }
 
-let statusUpdateObserverForTest: ((runId: string, patch: Partial<PersistedRunStatus>, options: { flush?: boolean }, runRecordDir?: string) => void) | undefined;
+let statusUpdateObserverForTest:
+	| ((runId: string, patch: Partial<PersistedRunStatus>, options: { flush?: boolean }, runRecordDir?: string) => void)
+	| undefined;
 
 /** Fires inside mergePatch (TERMINAL policy) for the caller-forwards-phase test hook. */
 export function __setSyncRunStatusUpdateObserverForTest(observer: typeof statusUpdateObserverForTest): () => void {
@@ -324,14 +352,31 @@ function mergeValue(target: Record<string, unknown>, source: Record<string, unkn
 			const existing = Array.isArray(target[key]) ? [...(target[key] as unknown[])] : [];
 			for (let i = 0; i < value.length; i++) {
 				const next = value[i];
-				if (next && typeof next === "object" && !Array.isArray(next) && existing[i] && typeof existing[i] === "object" && !Array.isArray(existing[i])) {
-					existing[i] = mergeValue({ ...(existing[i] as Record<string, unknown>) }, next as Record<string, unknown>);
+				if (
+					next &&
+					typeof next === "object" &&
+					!Array.isArray(next) &&
+					existing[i] &&
+					typeof existing[i] === "object" &&
+					!Array.isArray(existing[i])
+				) {
+					existing[i] = mergeValue(
+						{ ...(existing[i] as Record<string, unknown>) },
+						next as Record<string, unknown>,
+					);
 				} else if (next !== undefined) {
 					existing[i] = next;
 				}
 			}
 			target[key] = existing;
-		} else if (value && typeof value === "object" && !Array.isArray(value) && target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
+		} else if (
+			value &&
+			typeof value === "object" &&
+			!Array.isArray(value) &&
+			target[key] &&
+			typeof target[key] === "object" &&
+			!Array.isArray(target[key])
+		) {
 			target[key] = mergeValue({ ...(target[key] as Record<string, unknown>) }, value as Record<string, unknown>);
 		} else {
 			target[key] = value;

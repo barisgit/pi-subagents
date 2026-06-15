@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import {
-	AgentSession,
+	type AgentSession,
 	createAgentSession,
 	DefaultResourceLoader,
 	getAgentDir,
@@ -23,10 +23,36 @@ import {
 import { logger } from "../shared/logger.ts";
 import { pushPendingChildLineage, setChildLineage } from "../state/lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhaseState } from "../state/run-phase.ts";
-import { SUBAGENT_PHASE_CHANGE_EVENT, SUBAGENT_STUCK_EVENT, type ControlConfig, type SubagentLineage, type SubagentPhaseChangePayload, type SubagentStuckPayload } from "../protocol/types.ts";
-import type { ChildAgentExitState, ChildAgentResult, ChildUsage, RunPhase, StatusPatch } from "../protocol/status-types.ts";
-export type { ChildAgentExitState, ChildAgentResult, ChildUsage, RunPhase, StatusPatch } from "../protocol/status-types.ts";
-import { extractSubmitResultEnvelope, fallbackSubmitResultEnvelope, hasSubmitResultToolResult, SUBMIT_RESULT_REPROMPT, SUBMIT_RESULT_TOOL_NAME, type SubmitResultEnvelope } from "../protocol/submit-result.ts";
+import {
+	SUBAGENT_PHASE_CHANGE_EVENT,
+	SUBAGENT_STUCK_EVENT,
+	type ControlConfig,
+	type SubagentLineage,
+	type SubagentPhaseChangePayload,
+	type SubagentStuckPayload,
+} from "../protocol/types.ts";
+import type {
+	ChildAgentExitState,
+	ChildAgentResult,
+	ChildUsage,
+	RunPhase,
+	StatusPatch,
+} from "../protocol/status-types.ts";
+export type {
+	ChildAgentExitState,
+	ChildAgentResult,
+	ChildUsage,
+	RunPhase,
+	StatusPatch,
+} from "../protocol/status-types.ts";
+import {
+	extractSubmitResultEnvelope,
+	fallbackSubmitResultEnvelope,
+	hasSubmitResultToolResult,
+	SUBMIT_RESULT_REPROMPT,
+	SUBMIT_RESULT_TOOL_NAME,
+	type SubmitResultEnvelope,
+} from "../protocol/submit-result.ts";
 import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
@@ -49,7 +75,10 @@ export interface PhaseEventHandler {
 	getState(): RunPhaseState;
 }
 
-export function emitPhaseChange(pi: PhaseEventHandlerOptions["pi"] | undefined, payload: SubagentPhaseChangePayload): void {
+export function emitPhaseChange(
+	pi: PhaseEventHandlerOptions["pi"] | undefined,
+	payload: SubagentPhaseChangePayload,
+): void {
 	try {
 		const events = pi?.events;
 		if (!events || typeof events.emit !== "function") {
@@ -155,24 +184,28 @@ export function createPhaseTicker(
 	legacyOptions?: LegacyPhaseTickerOptions,
 	initialNow?: number,
 ): PhaseTickerHandle | LegacyPhaseTickerHandle {
-	const now = legacyOptions?.now ?? (typeof optionsOrGetPhaseState === "function" ? undefined : optionsOrGetPhaseState.now) ?? Date.now;
+	const now =
+		legacyOptions?.now ??
+		(typeof optionsOrGetPhaseState === "function" ? undefined : optionsOrGetPhaseState.now) ??
+		Date.now;
 	let legacyLastEventAt = initialNow ?? now();
-	const options: PhaseTickerOptions = typeof optionsOrGetPhaseState === "function"
-		? {
-			intervalMs: legacyOptions?.intervalMs,
-			quietMs: legacyOptions?.quietThresholdMs,
-			stuckThresholdMs: legacyOptions?.stuckThresholdMs,
-			getPhaseState: optionsOrGetPhaseState,
-			getLastEventAt: () => legacyLastEventAt,
-			onStatusUpdate: legacyOptions!.onStatusUpdate,
-			onStuck: legacyOptions?.onStuck,
-			now,
-			setIntervalFn: legacyOptions?.setIntervalFn,
-			clearIntervalFn: legacyOptions?.clearIntervalFn,
-			runId: legacyOptions!.runId,
-			stepIndex: legacyOptions!.stepIndex,
-		}
-		: optionsOrGetPhaseState;
+	const options: PhaseTickerOptions =
+		typeof optionsOrGetPhaseState === "function"
+			? {
+					intervalMs: legacyOptions?.intervalMs,
+					quietMs: legacyOptions?.quietThresholdMs,
+					stuckThresholdMs: legacyOptions?.stuckThresholdMs,
+					getPhaseState: optionsOrGetPhaseState,
+					getLastEventAt: () => legacyLastEventAt,
+					onStatusUpdate: legacyOptions!.onStatusUpdate,
+					onStuck: legacyOptions?.onStuck,
+					now,
+					setIntervalFn: legacyOptions?.setIntervalFn,
+					clearIntervalFn: legacyOptions?.clearIntervalFn,
+					runId: legacyOptions!.runId,
+					stepIndex: legacyOptions!.stepIndex,
+				}
+			: optionsOrGetPhaseState;
 	const intervalMs = options.intervalMs ?? 5_000;
 	const quietMs = options.quietMs ?? 4_000;
 	const stuckThresholdMs = options.stuckThresholdMs ?? 60_000;
@@ -318,13 +351,15 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext, notifyCom
 
 	const completed = executeChildAgent(step, teedCtx, combinedSignal, (createdSession) => {
 		session = createdSession;
-	}).then((result) => {
-		// Final usage is NOT carried in the patch stream; land it in memory here.
-		ctx.registry.finalizeView(step.runId, result);
-		return result;
-	}).finally(() => {
-		ctx.registry.delete(step.runId, step.stepIndex);
-	});
+	})
+		.then((result) => {
+			// Final usage is NOT carried in the patch stream; land it in memory here.
+			ctx.registry.finalizeView(step.runId, result);
+			return result;
+		})
+		.finally(() => {
+			ctx.registry.delete(step.runId, step.stepIndex);
+		});
 
 	const handle: ChildAgentHandle = {
 		runId: step.runId,
@@ -471,10 +506,18 @@ async function executeChildAgent(
 			outputText = session.getLastAssistantText?.() ?? "";
 		}
 
-		const shouldRequireSubmitResult = step.activeToolNames?.includes("submit_result") === true
-			|| step.customTools.some((tool) => tool.name === "submit_result");
-		for (let reprompt = 0; shouldRequireSubmitResult && reprompt < 2 && !hasSubmitResultToolResult(getSessionMessages(session)); reprompt++) {
-			const repromptPromise = session.prompt(SUBMIT_RESULT_REPROMPT, { expandPromptTemplates: false, source: "extension" });
+		const shouldRequireSubmitResult =
+			step.activeToolNames?.includes("submit_result") === true ||
+			step.customTools.some((tool) => tool.name === "submit_result");
+		for (
+			let reprompt = 0;
+			shouldRequireSubmitResult && reprompt < 2 && !hasSubmitResultToolResult(getSessionMessages(session));
+			reprompt++
+		) {
+			const repromptPromise = session.prompt(SUBMIT_RESULT_REPROMPT, {
+				expandPromptTemplates: false,
+				source: "extension",
+			});
 			const repromptAborted = await promptOrAbort(repromptPromise, signal);
 			if (repromptAborted) {
 				await session.abort();
@@ -499,7 +542,8 @@ async function executeChildAgent(
 		if (shouldRequireSubmitResult) {
 			structuredResult = extractSubmitResultEnvelope(getSessionMessages(session));
 			if (structuredResult) {
-				outputText = typeof structuredResult.result === "string" ? structuredResult.result : structuredResult.summary;
+				outputText =
+					typeof structuredResult.result === "string" ? structuredResult.result : structuredResult.summary;
 			} else {
 				const fallbackText = session.getLastAssistantText?.() || outputText;
 				structuredResult = fallbackSubmitResultEnvelope(fallbackText);
@@ -553,7 +597,10 @@ async function executeChildAgent(
 	} catch (error) {
 		const reason = formatError(error);
 		const state: ChildAgentExitState = signal.aborted ? "interrupted" : "failed";
-		const result = baseResult(state, { message: reason, reason: state === "interrupted" ? abortReason(signal) : undefined });
+		const result = baseResult(state, {
+			message: reason,
+			reason: state === "interrupted" ? abortReason(signal) : undefined,
+		});
 		ctx.onStatusUpdate?.({
 			runId: step.runId,
 			stepIndex: step.stepIndex,
@@ -603,11 +650,7 @@ async function executeChildAgent(
  * messages, or a generic fallback. Returns undefined when the run looks healthy
  * (at least one assistant message succeeded, or the agent did real work).
  */
-function detectProviderFailure(
-	session: AgentSession,
-	outputText: string,
-	toolCallCount: number,
-): string | undefined {
+function detectProviderFailure(session: AgentSession, outputText: string, toolCallCount: number): string | undefined {
 	if (outputText.trim().length > 0) return undefined;
 	if (toolCallCount > 0) return undefined;
 	const messages = session.messages;
@@ -635,7 +678,9 @@ function seedForkSessionFile(input: { sourcePath: string; targetPath: string; ch
 	try {
 		copyFileSync(input.sourcePath, input.targetPath, fsConstants.COPYFILE_FICLONE);
 	} catch (error) {
-		throw new Error(`Fork-reuse: failed to clone session from '${input.sourcePath}' to '${input.targetPath}': ${(error as Error).message}`);
+		throw new Error(
+			`Fork-reuse: failed to clone session from '${input.sourcePath}' to '${input.targetPath}': ${(error as Error).message}`,
+		);
 	}
 }
 
@@ -752,7 +797,16 @@ function handleSessionEvent(
 	// tool_result's `details.totalUsage` so the descendant tree bubbles up.
 	if (counters.accumulateUsage) {
 		if (type === "message_end" && record.message && typeof record.message === "object") {
-			const msg = record.message as { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } };
+			const msg = record.message as {
+				role?: string;
+				usage?: {
+					input?: number;
+					output?: number;
+					cacheRead?: number;
+					cacheWrite?: number;
+					cost?: { total?: number };
+				};
+			};
 			if (msg.role === "assistant" && msg.usage) {
 				const u = msg.usage;
 				counters.accumulateUsage.input += u.input || 0;
@@ -762,8 +816,24 @@ function handleSessionEvent(
 				counters.accumulateUsage.cost += u.cost?.total || 0;
 				counters.accumulateUsage.turns += 1;
 			}
-		} else if (type === "tool_execution_end" && record.toolName === "subagent" && record.result && typeof record.result === "object") {
-			const result = record.result as { details?: { totalUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number; turns?: number } } };
+		} else if (
+			type === "tool_execution_end" &&
+			record.toolName === "subagent" &&
+			record.result &&
+			typeof record.result === "object"
+		) {
+			const result = record.result as {
+				details?: {
+					totalUsage?: {
+						input?: number;
+						output?: number;
+						cacheRead?: number;
+						cacheWrite?: number;
+						cost?: number;
+						turns?: number;
+					};
+				};
+			};
 			const nested = result.details?.totalUsage;
 			if (nested) {
 				counters.accumulateUsage.input += nested.input || 0;

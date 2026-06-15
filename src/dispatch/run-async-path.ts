@@ -3,8 +3,13 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type AgentConfig, resolveAgentColor } from "../shared/agents.ts";
 import { normalizeAvailableModels, resolveModelCandidate } from "./model-fallback.ts";
 import { normalizeSkillInput } from "../shared/skills.ts";
-import { type ChildAgentHandle, type ChildAgentResult, type ChildAgentStep, dispatchAsyncChild } from "./in-process-executor.ts";
-import { StatusWriter } from "../state/status-writer.ts";
+import {
+	type ChildAgentHandle,
+	type ChildAgentResult,
+	type ChildAgentStep,
+	dispatchAsyncChild,
+} from "./in-process-executor.ts";
+import type { StatusWriter } from "../state/status-writer.ts";
 import { formatRunHandle } from "../state/run-shape.ts";
 import { resolveChildCwd } from "../shared/utils.ts";
 import { mapConcurrent } from "./parallel-utils.ts";
@@ -71,7 +76,12 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 
 	if (hasSingle) {
 		const agentConfig = agents.find((x) => x.name === params.agent);
-		if (!agentConfig) return { content: [{ type: "text", text: `Unknown agent: ${params.agent}` }], isError: true, details: { mode: "single" as const, results: [] } };
+		if (!agentConfig)
+			return {
+				content: [{ type: "text", text: `Unknown agent: ${params.agent}` }],
+				isError: true,
+				details: { mode: "single" as const, results: [] },
+			};
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
 		const built = buildAsyncChildStep({
@@ -82,7 +92,11 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			stepIndex: 0,
 			cwd: effectiveCwd,
 			...(params.label ? { label: params.label } : {}),
-			modelOverride: resolveModelCandidate((params.model as string | undefined) ?? agentConfig.model, availableModels, currentProvider),
+			modelOverride: resolveModelCandidate(
+				(params.model as string | undefined) ?? agentConfig.model,
+				availableModels,
+				currentProvider,
+			),
 			skills: normalizedSkills === false ? false : normalizedSkills,
 			output: rawOutput === true ? agentConfig.output : (rawOutput as string | false | undefined),
 			maxSubagentDepth: resolveChildMaxSubagentDepth(currentMaxSubagentDepth, agentConfig.maxSubagentDepth),
@@ -96,7 +110,12 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		for (let index = 0; index < tasks.length; index++) {
 			const task = tasks[index]!;
 			const agentConfig = agents.find((agent) => agent.name === task.agent);
-			if (!agentConfig) return { content: [{ type: "text", text: `Unknown agent: ${task.agent}` }], isError: true, details: { mode: "parallel" as const, results: [] } };
+			if (!agentConfig)
+				return {
+					content: [{ type: "text", text: `Unknown agent: ${task.agent}` }],
+					isError: true,
+					details: { mode: "parallel" as const, results: [] },
+				};
 			const skillOverride = normalizeSkillInput(task.skill);
 			const built = buildAsyncChildStep({
 				data,
@@ -128,7 +147,9 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			...(runLabel ? { label: runLabel } : {}),
 			...(parentRunId ? { parentRunId } : {}),
 			...(params.sessionDir ? { sessionDir: path.resolve(deps.expandTilde(params.sessionDir)) } : {}),
-			...(deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) } : {}),
+			...(deps.config.defaultSessionDir
+				? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
+				: {}),
 			parentSessionFile: ctx.sessionManager.getSessionFile() ?? null,
 			...(parentSessionId ? { parentSessionId } : {}),
 			...(rootSessionId ? { rootSessionId } : {}),
@@ -137,80 +158,91 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		});
 		const groupRunId = group.runId;
 		const groupRootRunId = rootRunId === runId ? groupRunId : rootRunId;
-		emitRunAnchor(deps.pi, { runId: groupRunId, rootRunId: groupRootRunId, mode: "parallel", source: "async", parentRunId });
+		emitRunAnchor(deps.pi, {
+			runId: groupRunId,
+			rootRunId: groupRootRunId,
+			mode: "parallel",
+			source: "async",
+			parentRunId,
+		});
 		const asyncDetachedAbort = new AbortController();
 		const childRuns = steps.map((item, originalStepIndex) => {
-			const handle = spawnRun({
-				agentName: item.step.agentName,
-				task: item.step.task,
-				cwd: item.step.cwd,
-				...(item.step.label ? { label: item.step.label } : {}),
-			}, {
-				parentRunId: groupRunId,
-				rootRunId: groupRootRunId,
-				notifyPolicy: "each",
-				parentSessionFile: ctx.sessionManager.getSessionFile() ?? null,
-				...(params.sessionDir ? { sessionDir: path.resolve(deps.expandTilde(params.sessionDir)) } : {}),
-				...(deps.config.defaultSessionDir ? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) } : {}),
-				...(rootSessionId ? { rootSessionId } : {}),
-				...(parentSessionId ? { parentSessionId } : {}),
-				source: "async",
-				runAgent: async (prepared, layer0Ctx) => {
-					const childStep: ChildAgentStep = {
-						...item.step,
-						runId: prepared.runId,
-						stepIndex: 0,
-						runRecordDir: prepared.runRecordDir,
-						sessionFile: prepared.sessionFile,
-						rootRunId: groupRootRunId,
-					};
-					const childHandle = dispatchAsyncChild(childStep, {
-						extensionCtx: ctx,
-						abortSignal: asyncDetachedAbort.signal,
-						onStatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
-						registry: deps.childRegistry,
-						pi: deps.pi,
-					});
-					return childHandle.completed;
+			const handle = spawnRun(
+				{
+					agentName: item.step.agentName,
+					task: item.step.task,
+					cwd: item.step.cwd,
+					...(item.step.label ? { label: item.step.label } : {}),
 				},
-				onLifecycle: (event) => {
-					if (event.type === "run.started") {
-						safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
+				{
+					parentRunId: groupRunId,
+					rootRunId: groupRootRunId,
+					notifyPolicy: "each",
+					parentSessionFile: ctx.sessionManager.getSessionFile() ?? null,
+					...(params.sessionDir ? { sessionDir: path.resolve(deps.expandTilde(params.sessionDir)) } : {}),
+					...(deps.config.defaultSessionDir
+						? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
+						: {}),
+					...(rootSessionId ? { rootSessionId } : {}),
+					...(parentSessionId ? { parentSessionId } : {}),
+					source: "async",
+					runAgent: async (prepared, layer0Ctx) => {
+						const childStep: ChildAgentStep = {
+							...item.step,
+							runId: prepared.runId,
+							stepIndex: 0,
+							runRecordDir: prepared.runRecordDir,
+							sessionFile: prepared.sessionFile,
+							rootRunId: groupRootRunId,
+						};
+						const childHandle = dispatchAsyncChild(childStep, {
+							extensionCtx: ctx,
+							abortSignal: asyncDetachedAbort.signal,
+							onStatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
+							registry: deps.childRegistry,
+							pi: deps.pi,
+						});
+						return childHandle.completed;
+					},
+					onLifecycle: (event) => {
+						if (event.type === "run.started") {
+							safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
+								id: event.runId,
+								runId: event.runId,
+								metadata: params.metadata,
+								controlConfig,
+								agent: item.step.agentName,
+								task: item.cleanTask.slice(0, 50),
+								cwd: item.step.cwd,
+								asyncDir: event.runRecordDir,
+								parentRunId: groupRunId,
+							});
+							return;
+						}
+						const result = event.result;
+						safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
 							id: event.runId,
 							runId: event.runId,
-							metadata: params.metadata,
-							controlConfig,
-							agent: item.step.agentName,
-							task: item.cleanTask.slice(0, 50),
-							cwd: item.step.cwd,
-							asyncDir: event.runRecordDir,
 							parentRunId: groupRunId,
+							rootRunId: groupRootRunId,
+							metadata: params.metadata,
+							notifyPolicy,
+							agent: item.step.agentName,
+							...(item.step.label ? { label: item.step.label } : {}),
+							success: result ? result.state === "complete" : false,
+							summary: result?.outputText ?? (event.error ? String(event.error) : ""),
+							exitCode: result?.exitCode,
+							state: result?.state ?? "failed",
+							durationMs: result?.durationMs,
+							sessionFile: result?.sessionFile ?? event.sessionFile,
+							timestamp: event.timestamp,
+							taskIndex: originalStepIndex,
+							totalTasks: steps.length,
+							asyncDir: event.runRecordDir,
 						});
-						return;
-					}
-					const result = event.result;
-					safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
-						id: event.runId,
-						runId: event.runId,
-						parentRunId: groupRunId,
-						rootRunId: groupRootRunId,
-						metadata: params.metadata,
-						notifyPolicy,
-						agent: item.step.agentName,
-						...(item.step.label ? { label: item.step.label } : {}),
-						success: result ? result.state === "complete" : false,
-						summary: result?.outputText ?? (event.error ? String(event.error) : ""),
-						exitCode: result?.exitCode,
-						state: result?.state ?? "failed",
-						durationMs: result?.durationMs,
-						sessionFile: result?.sessionFile ?? event.sessionFile,
-						timestamp: event.timestamp,
-						taskIndex: originalStepIndex,
-						totalTasks: steps.length,
-						asyncDir: event.runRecordDir,
-					});
+					},
 				},
-			});
+			);
 			return { item, originalStepIndex, handle };
 		});
 
@@ -218,7 +250,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			logger.info("finalizeAsync: awaiting layer0 parallel handles", { runId: groupRunId });
 			try {
 				const settled = await Promise.allSettled(childRuns.map((child) => child.handle.completed));
-				const results = settled.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : []);
+				const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []));
 				const finalResult = results.find((result) => result.state !== "complete") ?? results.at(-1);
 				const totalUsage: Usage = emptyUsage();
 				for (const entry of settled) {
@@ -230,53 +262,62 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						const entry = settled[index];
 						if (entry?.status !== "fulfilled") return [];
 						const r = entry.value;
-						return [{
-							id: child.handle.runId,
-							runId: child.handle.runId,
-							dispatchRunId: groupRunId,
-							...(params.batch === true ? { batchId: groupRunId } : {}),
-							stepIndex: child.originalStepIndex,
-							agent: child.item.step.agentName,
-							...(child.item.step.label ? { label: child.item.step.label } : {}),
-							state: r.state,
-							success: r.state === "complete",
-							exitCode: r.exitCode,
-							output: r.outputText ?? "",
-							summary: r.outputText ?? "",
-							durationMs: r.durationMs,
-							sessionFile: r.sessionFile,
-						}];
+						return [
+							{
+								id: child.handle.runId,
+								runId: child.handle.runId,
+								dispatchRunId: groupRunId,
+								...(params.batch === true ? { batchId: groupRunId } : {}),
+								stepIndex: child.originalStepIndex,
+								agent: child.item.step.agentName,
+								...(child.item.step.label ? { label: child.item.step.label } : {}),
+								state: r.state,
+								success: r.state === "complete",
+								exitCode: r.exitCode,
+								output: r.outputText ?? "",
+								summary: r.outputText ?? "",
+								durationMs: r.durationMs,
+								sessionFile: r.sessionFile,
+							},
+						];
 					})
 					.sort((a, b) => a.stepIndex - b.stepIndex);
-				safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, buildAsyncAggregateCompletePayload({
-					id: groupRunId,
-					runId: groupRunId,
-					parentRunId,
-					rootRunId: groupRootRunId,
-					notifyPolicy,
-					success: finalResult?.state === "complete",
-					agent: steps.map(({ step }) => step.agentName).join(","),
-					summary: finalResult?.outputText ?? "",
-					state: finalResult?.state,
-					results: childResults,
-					children: childResults,
-					total: childResults.length,
-					completed: childResults.filter((child) => child.state === "complete").length,
-					asyncDir: group.runRecordDir,
-					metadata: params.metadata,
-					syncFields: {
-						exitCode: finalResult?.exitCode,
-						durationMs: finalResult?.durationMs,
-						sessionFile: finalResult?.sessionFile,
-						shareUrl: finalResult?.shareUrl,
-						result: finalResult,
-						totalUsage,
-						batch: params.batch === true,
-						batchId: groupRunId,
-					},
-				}));
+				safeEmit(
+					SUBAGENT_ASYNC_COMPLETE_EVENT,
+					buildAsyncAggregateCompletePayload({
+						id: groupRunId,
+						runId: groupRunId,
+						parentRunId,
+						rootRunId: groupRootRunId,
+						notifyPolicy,
+						success: finalResult?.state === "complete",
+						agent: steps.map(({ step }) => step.agentName).join(","),
+						summary: finalResult?.outputText ?? "",
+						state: finalResult?.state,
+						results: childResults,
+						children: childResults,
+						total: childResults.length,
+						completed: childResults.filter((child) => child.state === "complete").length,
+						asyncDir: group.runRecordDir,
+						metadata: params.metadata,
+						syncFields: {
+							exitCode: finalResult?.exitCode,
+							durationMs: finalResult?.durationMs,
+							sessionFile: finalResult?.sessionFile,
+							shareUrl: finalResult?.shareUrl,
+							result: finalResult,
+							totalUsage,
+							batch: params.batch === true,
+							batchId: groupRunId,
+						},
+					}),
+				);
 			} catch (err) {
-				logger.error("finalizeAsync: layer0 parallel threw", err instanceof Error ? err : new Error(String(err)), { runId: groupRunId });
+				logger.error(
+					"finalizeAsync: layer0 parallel threw",
+					err instanceof Error ? err : new Error(String(err)),
+					{ runId: groupRunId },
+				);
 			} finally {
 				deps.childRegistry.delete(groupRunId);
 			}
@@ -297,7 +338,13 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			...childLines,
 			`Group handle: ${formatRunHandle({ mode: "parallel", agents: steps.map(({ step }) => step.agentName), style: "verbose" })} [${groupRunId}]`,
 		].join("\n");
-		return asyncStartedResult({ mode, runId: groupRunId, asyncDir: group.runRecordDir, text: handleText, children: childDetails });
+		return asyncStartedResult({
+			mode,
+			runId: groupRunId,
+			asyncDir: group.runRecordDir,
+			text: handleText,
+			children: childDetails,
+		});
 	}
 	const runRecordDir = first.step.runRecordDir;
 	const startedAt = Date.now();
@@ -323,23 +370,26 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			},
 		})),
 	};
-	const runHandle = openRunRecord({
-		agentName: first.step.agentName,
-		task: first.step.task,
-		cwd: effectiveCwd,
-		...(runLabel ? { label: runLabel } : {}),
-	}, {
-		runId,
-		runRecordDir,
-		sessionFile: first.step.sessionFile,
-		rootRunId,
-		...(parentRunId ? { parentRunId } : {}),
-		...(asyncParentSessionId ? { parentSessionId: asyncParentSessionId } : {}),
-		...(asyncRootSessionId ? { rootSessionId: asyncRootSessionId } : {}),
-		source: "async",
-		variant: "async-detached",
-		initialize: initializeMeta,
-	});
+	const runHandle = openRunRecord(
+		{
+			agentName: first.step.agentName,
+			task: first.step.task,
+			cwd: effectiveCwd,
+			...(runLabel ? { label: runLabel } : {}),
+		},
+		{
+			runId,
+			runRecordDir,
+			sessionFile: first.step.sessionFile,
+			rootRunId,
+			...(parentRunId ? { parentRunId } : {}),
+			...(asyncParentSessionId ? { parentSessionId: asyncParentSessionId } : {}),
+			...(asyncRootSessionId ? { rootSessionId: asyncRootSessionId } : {}),
+			source: "async",
+			variant: "async-detached",
+			initialize: initializeMeta,
+		},
+	);
 	const statusWriter = runHandle.statusWriter;
 	// Seed metadata for the registry's in-memory RunView mirror (async-only). Same
 	// StatusMeta as status.json plus the session-hierarchy + dir fields RunView carries.
@@ -374,11 +424,25 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			logger.info("finalizeAsync: handles resolved", { runId, count: handles.length });
 			const settled = await Promise.allSettled(handles.map((handle) => handle.completed));
 			logger.info("finalizeAsync: settled", { runId, states: settled.map((s) => s.status) });
-			const results = settled.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : []);
+			const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []));
 			finalResult = results.find((result) => result.state !== "complete") ?? results.at(-1);
 			if (!finalResult && settled[0]?.status === "rejected") {
 				const now = Date.now();
-				finalResult = { runId, stepIndex: 0, state: "failed", exitCode: 1, outputText: "", toolCallCount: 0, toolResultCount: 0, toolErrorCount: 0, durationMs: now - startedAt, startedAt, endedAt: now, sessionFile: first.step.sessionFile, error: { message: String(settled[0].reason) } };
+				finalResult = {
+					runId,
+					stepIndex: 0,
+					state: "failed",
+					exitCode: 1,
+					outputText: "",
+					toolCallCount: 0,
+					toolResultCount: 0,
+					toolErrorCount: 0,
+					durationMs: now - startedAt,
+					startedAt,
+					endedAt: now,
+					sessionFile: first.step.sessionFile,
+					error: { message: String(settled[0].reason) },
+				};
 			}
 			// Canonical run-level usage aggregate across all child agents (single,
 			// or each step of parallel/parallel). For single mode this is just the
@@ -394,12 +458,15 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 				addUsageInto(totalUsage, finalResult.usage as Usage);
 			}
 			if (finalResult) finalizeRun(runHandle, { via: "result", result: finalResult, totalUsage });
-			logger.info("finalizeAsync: emitting COMPLETE", { runId, success: finalResult?.state === "complete", state: finalResult?.state });
-			const completeAgent = mode === "parallel"
-				? steps.map(({ step }) => step.agentName).join(",")
-				: first.step.agentName;
+			logger.info("finalizeAsync: emitting COMPLETE", {
+				runId,
+				success: finalResult?.state === "complete",
+				state: finalResult?.state,
+			});
+			const completeAgent =
+				mode === "parallel" ? steps.map(({ step }) => step.agentName).join(",") : first.step.agentName;
 			const childResults = settled
-				.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : [])
+				.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []))
 				.sort((a, b) => a.stepIndex - b.stepIndex)
 				.map((r) => {
 					const step = steps.find((candidate) => candidate.step.stepIndex === r.stepIndex)?.step;
@@ -420,7 +487,9 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						sessionFile: r.sessionFile,
 					};
 				});
-				safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, buildAsyncAggregateCompletePayload({
+			safeEmit(
+				SUBAGENT_ASYNC_COMPLETE_EVENT,
+				buildAsyncAggregateCompletePayload({
 					id: runId,
 					runId,
 					parentRunId,
@@ -446,7 +515,8 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						batch: params.batch === true,
 						batchId: runId,
 					},
-				}));
+				}),
+			);
 		} catch (err) {
 			logger.error("finalizeAsync: threw", err instanceof Error ? err : new Error(String(err)), { runId });
 		} finally {
@@ -458,7 +528,11 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 	let handlesPromise: Promise<ChildAgentHandle[]>;
 	if (mode === "parallel") {
 		const concurrency = hasTasks
-			? resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency, deps.config.parallel?.maxConcurrency)
+			? resolveTopLevelParallelConcurrency(
+					params.concurrency,
+					deps.config.parallel?.concurrency,
+					deps.config.parallel?.maxConcurrency,
+				)
 			: 4;
 		handlesPromise = mapConcurrent(steps, concurrency, async (item) => {
 			const handle = dispatchAsyncChild(item.step, asyncCtx);
@@ -481,8 +555,9 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		asyncDir: runRecordDir,
 	});
 
-	const handleText = mode === "single"
-		? `Async: ${first.step.agentName} [${runId}]`
-		: `Async parallel: ${formatRunHandle({ mode: "parallel", agents: steps.map(({ step }) => step.agentName), style: "verbose" })} [${runId}]`;
+	const handleText =
+		mode === "single"
+			? `Async: ${first.step.agentName} [${runId}]`
+			: `Async parallel: ${formatRunHandle({ mode: "parallel", agents: steps.map(({ step }) => step.agentName), style: "verbose" })} [${runId}]`;
 	return asyncStartedResult({ mode, runId, asyncDir: runRecordDir, text: handleText });
 }

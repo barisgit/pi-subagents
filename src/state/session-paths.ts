@@ -33,9 +33,10 @@ export function resolveChildSessionFile(opts: ResolveChildSessionFileOpts): Reso
 	// entries into its own session.jsonl at session-open time (see
 	// in-process-executor.ts seedForkSessionFile).
 
-	const baseRoot = opts.sessionDirOverride
-		?? opts.defaultSessionDir
-		?? (opts.parentSessionFile
+	const baseRoot =
+		opts.sessionDirOverride ??
+		opts.defaultSessionDir ??
+		(opts.parentSessionFile
 			? path.join(path.dirname(opts.parentSessionFile), path.basename(opts.parentSessionFile, ".jsonl"))
 			: mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-")));
 	// Layout:

@@ -21,8 +21,10 @@ describe("doctrine doc", () => {
 		assert.equal(existsSync(docPath), true);
 	});
 
-	it("has H1 \"Subagent schema decisions\"", () => {
-		const firstH1 = readDoc().split(/\r?\n/).find((line) => line.startsWith("# "));
+	it('has H1 "Subagent schema decisions"', () => {
+		const firstH1 = readDoc()
+			.split(/\r?\n/)
+			.find((line) => line.startsWith("# "));
 		assert.equal(firstH1, "# Subagent schema decisions");
 	});
 
@@ -61,7 +63,7 @@ describe("doctrine doc", () => {
 			"sessionDir",
 			"control",
 			"skill",
-						"artifacts",
+			"artifacts",
 			"progress",
 			"agentScope",
 			"includeInternal",

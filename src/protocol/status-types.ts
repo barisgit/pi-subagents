@@ -75,7 +75,13 @@ export interface LiveStepProgress {
 	toolResultCount?: number;
 	toolErrorCount?: number;
 	currentToolArgs?: string;
-	recentTools?: Array<{ tool: string; args?: string; rawArgs?: Record<string, unknown>; endMs: number; durationMs?: number }>;
+	recentTools?: Array<{
+		tool: string;
+		args?: string;
+		rawArgs?: Record<string, unknown>;
+		endMs: number;
+		durationMs?: number;
+	}>;
 	tokenSamples?: Array<{ ts: number; tokens: number }>;
 	lastToolEndAt?: number;
 	toolCount?: number;

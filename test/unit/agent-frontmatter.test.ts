@@ -43,23 +43,29 @@ describe("agent frontmatter scope", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "hidden.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "hidden.md"),
+			`---
 name: hidden
 description: Hidden helper
 scope: internal
 ---
 
 Stay hidden
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const defaultResult = discoverAgents(dir, "project", { surface: "subagent" });
-		assert.equal(defaultResult.agents.find((agent) => agent.name === "hidden"), undefined);
+		assert.equal(
+			defaultResult.agents.find((agent) => agent.name === "hidden"),
+			undefined,
+		);
 
 		const internalResult = discoverAgents(dir, "project", { surface: "subagent", includeInternal: true });
 		const hidden = internalResult.agents.find((agent) => agent.name === "hidden");
 		assert.equal(hidden?.surface, "internal");
 	});
-
 });
 
 describe("agent frontmatter maxSubagentDepth", () => {
@@ -85,14 +91,18 @@ describe("agent frontmatter maxSubagentDepth", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "scout.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "scout.md"),
+			`---
 name: scout
 description: Scout
 maxSubagentDepth: 1
 ---
 
 Inspect code
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const scout = result.agents.find((agent) => agent.name === "scout");
@@ -123,14 +133,18 @@ describe("agent frontmatter fallbackModels", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 fallbackModels: openai/gpt-5-mini, anthropic/claude-sonnet-4
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -160,14 +174,18 @@ describe("agent frontmatter systemPromptMode", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 systemPromptMode: replace
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -198,7 +216,9 @@ describe("agent frontmatter prompt inheritance flags", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 inheritProjectContext: true
@@ -206,7 +226,9 @@ inheritSkills: true
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -221,13 +243,17 @@ describe("agent frontmatter prompt assembly defaults", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -268,13 +294,17 @@ Do work
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "delegate.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "delegate.md"),
+			`---
 name: delegate
 description: Delegate
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const delegate = result.agents.find((agent) => agent.name === "delegate");
@@ -290,24 +320,41 @@ describe("project agent directory discovery", () => {
 		tempDirs.push(dir);
 		fs.mkdirSync(path.join(dir, ".agents", "skills"), { recursive: true });
 		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(path.join(dir, ".agents", "legacy.md"), `---
+		fs.writeFileSync(
+			path.join(dir, ".agents", "legacy.md"),
+			`---
 name: legacy
 description: Legacy
 ---
 
 Legacy prompt
-`, "utf-8");
-		fs.writeFileSync(path.join(dir, ".pi", "agents", "canonical.md"), `---
+`,
+			"utf-8",
+		);
+		fs.writeFileSync(
+			path.join(dir, ".pi", "agents", "canonical.md"),
+			`---
 name: canonical
 description: Canonical
 ---
 
 Canonical prompt
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
-		assert.ok(result.agents.find((agent) => agent.name === "legacy" && agent.filePath === path.join(dir, ".agents", "legacy.md")));
-		assert.ok(result.agents.find((agent) => agent.name === "canonical" && agent.filePath === path.join(dir, ".pi", "agents", "canonical.md")));
+		assert.ok(
+			result.agents.find(
+				(agent) => agent.name === "legacy" && agent.filePath === path.join(dir, ".agents", "legacy.md"),
+			),
+		);
+		assert.ok(
+			result.agents.find(
+				(agent) =>
+					agent.name === "canonical" && agent.filePath === path.join(dir, ".pi", "agents", "canonical.md"),
+			),
+		);
 		assert.equal(result.projectAgentsDir, path.join(dir, ".pi", "agents"));
 	});
 
@@ -316,20 +363,28 @@ Canonical prompt
 		tempDirs.push(dir);
 		fs.mkdirSync(path.join(dir, ".agents"), { recursive: true });
 		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(path.join(dir, ".agents", "shared.md"), `---
+		fs.writeFileSync(
+			path.join(dir, ".agents", "shared.md"),
+			`---
 name: shared
 description: Legacy shared
 ---
 
 Legacy prompt
-`, "utf-8");
-		fs.writeFileSync(path.join(dir, ".pi", "agents", "shared.md"), `---
+`,
+			"utf-8",
+		);
+		fs.writeFileSync(
+			path.join(dir, ".pi", "agents", "shared.md"),
+			`---
 name: shared
 description: Canonical shared
 ---
 
 Canonical prompt
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const shared = discoverAgents(dir, "project").agents.find((agent) => agent.name === "shared");
 		assert.ok(shared);
@@ -348,6 +403,4 @@ Canonical prompt
 		const result = discoverAgentsAll(nested);
 		assert.equal(result.projectDir, path.join(dir, ".pi", "agents"));
 	});
-
-
 });

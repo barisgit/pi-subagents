@@ -26,7 +26,10 @@ function text(result: ExecutorResult | null): string {
 
 function actionLiterals(): string[] {
 	const action = SubagentParams.properties.action as { anyOf?: Array<{ const?: string }> };
-	return (action.anyOf ?? []).map((item) => item.const).filter((value): value is string => typeof value === "string").sort();
+	return (action.anyOf ?? [])
+		.map((item) => item.const)
+		.filter((value): value is string => typeof value === "string")
+		.sort();
 }
 
 function makeState(cwd: string): SubagentState {
@@ -71,20 +74,15 @@ function makeHarness(cwd: string) {
 		expandTilde: (value: string) => value,
 		discoverAgents: () => ({ agents: ["main"].map((name) => makeAgent(name, { model: "mock/test-model" })) }),
 	} as never);
-	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> => executor.execute(
-		"id",
-		params as never,
-		new AbortController().signal,
-		undefined,
-		{
+	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> =>
+		executor.execute("id", params as never, new AbortController().signal, undefined, {
 			cwd,
 			hasUI: false,
 			ui: {},
 			sessionManager: { getSessionId: () => "session-control-verbs", getSessionFile: () => null },
 			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
 			model: { provider: "mock" },
-		} as never,
-	) as Promise<ExecutorResult>;
+		} as never) as Promise<ExecutorResult>;
 	return { execute, state, childRegistry };
 }
 

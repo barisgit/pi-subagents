@@ -63,7 +63,16 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		appendRunEntry(child);
 		fs.writeFileSync(
 			path.join(childDir, "status.json"),
-			JSON.stringify({ runId: child.runId, mode: "single", state: "complete", startedAt: 1000, endedAt: 2500, cwd: root, currentStep: 0, steps: [] }),
+			JSON.stringify({
+				runId: child.runId,
+				mode: "single",
+				state: "complete",
+				startedAt: 1000,
+				endedAt: 2500,
+				cwd: root,
+				currentStep: 0,
+				steps: [],
+			}),
 		);
 		const entries = readAllEntries();
 
@@ -176,13 +185,26 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		// status.json has NO parentRunId of its own, so only the registry entry carries it.
 		fs.writeFileSync(
 			path.join(leafDir, "status.json"),
-			JSON.stringify({ runId: leaf.runId, mode: "single", state: "complete", startedAt: 1000, endedAt: 2000, cwd: root, currentStep: 0, steps: [] }),
+			JSON.stringify({
+				runId: leaf.runId,
+				mode: "single",
+				state: "complete",
+				startedAt: 1000,
+				endedAt: 2000,
+				cwd: root,
+				currentStep: 0,
+				steps: [],
+			}),
 		);
 		const entries = readAllEntries();
 
 		const a = readRunViewForEntry(leaf, entries);
 		const b = runViewFromRegistryEntry(leaf, entries);
 		assert.equal(a?.parentRunId, undefined, "A does not inject the registry parentRunId onto a leaf summary");
-		assert.equal(b.parentRunId, "some-parent", "B injects the registry parentRunId when the leaf summary lacks one");
+		assert.equal(
+			b.parentRunId,
+			"some-parent",
+			"B injects the registry parentRunId when the leaf summary lacks one",
+		);
 	});
 });

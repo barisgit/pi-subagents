@@ -289,7 +289,11 @@ function normalizePresetAgentSurface(value: unknown): AgentSurface | undefined {
 	return value === "main" || value === "subagent" || value === "both" || value === "internal" ? value : undefined;
 }
 
-function isVisibleOnSurface(agent: AgentConfig, surface: Exclude<AgentSurface, "both"> | undefined, includeInternal = false): boolean {
+function isVisibleOnSurface(
+	agent: AgentConfig,
+	surface: Exclude<AgentSurface, "both"> | undefined,
+	includeInternal = false,
+): boolean {
 	const agentSurface = agent.surface ?? defaultSurface();
 	if (agentSurface === "internal") return includeInternal;
 	if (!surface) return true;
@@ -325,32 +329,52 @@ function getPresetAgentOverlays(preset: PresetConfig | undefined): Record<string
 
 function applyPresetOverlay(agent: AgentConfig, overlay: AgentPresetOverlay): AgentConfig {
 	const next: AgentConfig = { ...agent };
-	if (overlay.model !== undefined) next.model = overlay.model === false ? undefined : normalizePresetName(overlay.model);
-	if (overlay.fallbackModels !== undefined) next.fallbackModels = overlay.fallbackModels === false ? undefined : normalizePresetStringArray(overlay.fallbackModels);
-	if (overlay.thinking !== undefined) next.thinking = overlay.thinking === false ? undefined : normalizePresetName(overlay.thinking);
-	if (overlay.tools !== undefined) next.tools = overlay.tools === false ? undefined : normalizePresetStringArray(overlay.tools);
-	if (overlay.mcpDirectTools !== undefined) next.mcpDirectTools = overlay.mcpDirectTools === false ? undefined : normalizePresetStringArray(overlay.mcpDirectTools);
-	if (overlay.extensions !== undefined) next.extensions = overlay.extensions === false ? undefined : normalizePresetStringArray(overlay.extensions);
-	if (overlay.skills !== undefined) next.skills = overlay.skills === false ? undefined : normalizePresetStringArray(overlay.skills);
-	if (overlay.output !== undefined) next.output = overlay.output === false ? undefined : normalizePresetName(overlay.output);
-	if (overlay.defaultReads !== undefined) next.defaultReads = overlay.defaultReads === false ? undefined : normalizePresetStringArray(overlay.defaultReads);
+	if (overlay.model !== undefined)
+		next.model = overlay.model === false ? undefined : normalizePresetName(overlay.model);
+	if (overlay.fallbackModels !== undefined)
+		next.fallbackModels =
+			overlay.fallbackModels === false ? undefined : normalizePresetStringArray(overlay.fallbackModels);
+	if (overlay.thinking !== undefined)
+		next.thinking = overlay.thinking === false ? undefined : normalizePresetName(overlay.thinking);
+	if (overlay.tools !== undefined)
+		next.tools = overlay.tools === false ? undefined : normalizePresetStringArray(overlay.tools);
+	if (overlay.mcpDirectTools !== undefined)
+		next.mcpDirectTools =
+			overlay.mcpDirectTools === false ? undefined : normalizePresetStringArray(overlay.mcpDirectTools);
+	if (overlay.extensions !== undefined)
+		next.extensions = overlay.extensions === false ? undefined : normalizePresetStringArray(overlay.extensions);
+	if (overlay.skills !== undefined)
+		next.skills = overlay.skills === false ? undefined : normalizePresetStringArray(overlay.skills);
+	if (overlay.output !== undefined)
+		next.output = overlay.output === false ? undefined : normalizePresetName(overlay.output);
+	if (overlay.defaultReads !== undefined)
+		next.defaultReads =
+			overlay.defaultReads === false ? undefined : normalizePresetStringArray(overlay.defaultReads);
 	if (overlay.defaultProgress !== undefined) next.defaultProgress = overlay.defaultProgress;
 	if (overlay.interactive !== undefined) next.interactive = overlay.interactive;
 	if (overlay.maxSubagentDepth !== undefined) {
-		next.maxSubagentDepth = typeof overlay.maxSubagentDepth === "number" && Number.isInteger(overlay.maxSubagentDepth) && overlay.maxSubagentDepth >= 0
-			? overlay.maxSubagentDepth
-			: undefined;
+		next.maxSubagentDepth =
+			typeof overlay.maxSubagentDepth === "number" &&
+			Number.isInteger(overlay.maxSubagentDepth) &&
+			overlay.maxSubagentDepth >= 0
+				? overlay.maxSubagentDepth
+				: undefined;
 	}
-	if (overlay.systemPromptMode === "append" || overlay.systemPromptMode === "replace") next.systemPromptMode = overlay.systemPromptMode;
+	if (overlay.systemPromptMode === "append" || overlay.systemPromptMode === "replace")
+		next.systemPromptMode = overlay.systemPromptMode;
 	if (overlay.inheritProjectContext !== undefined) next.inheritProjectContext = overlay.inheritProjectContext;
 	if (overlay.inheritSkills !== undefined) next.inheritSkills = overlay.inheritSkills;
-	if (overlay.systemPrompt !== undefined) next.systemPrompt = overlay.systemPrompt === false ? "" : overlay.systemPrompt;
+	if (overlay.systemPrompt !== undefined)
+		next.systemPrompt = overlay.systemPrompt === false ? "" : overlay.systemPrompt;
 	if (overlay.disabled !== undefined) next.disabled = overlay.disabled;
 	if (overlay.surface !== undefined) next.surface = normalizePresetAgentSurface(overlay.surface);
 	if (overlay.scope !== undefined) next.surface = normalizePresetAgentSurface(overlay.scope);
 	if (overlay.canDelegate !== undefined) next.canDelegate = overlay.canDelegate;
 	if (overlay.allowedDelegateAgents !== undefined) {
-		next.allowedDelegateAgents = overlay.allowedDelegateAgents === false ? undefined : normalizePresetStringArray(overlay.allowedDelegateAgents);
+		next.allowedDelegateAgents =
+			overlay.allowedDelegateAgents === false
+				? undefined
+				: normalizePresetStringArray(overlay.allowedDelegateAgents);
 	}
 	return next;
 }
@@ -367,9 +391,10 @@ function applyPresetOverlays(
 		warnings: [],
 	};
 	if (!requested) return { agents, preset: presetInfo, overlays: {} };
-	const preset = config.presets && typeof config.presets === "object" && !Array.isArray(config.presets)
-		? config.presets[requested]
-		: undefined;
+	const preset =
+		config.presets && typeof config.presets === "object" && !Array.isArray(config.presets)
+			? config.presets[requested]
+			: undefined;
 	if (!preset) {
 		presetInfo.warnings.push(`Requested preset '${requested}' was not found in ${getExtensionConfigPath()}.`);
 		return { agents, preset: presetInfo, overlays: {} };
@@ -407,10 +432,7 @@ function splitToolList(rawTools: string[] | undefined): { tools?: string[]; mcpD
 }
 
 function joinToolList(config: Pick<AgentConfig, "tools" | "mcpDirectTools">): string[] | undefined {
-	const joined = [
-		...(config.tools ?? []),
-		...(config.mcpDirectTools ?? []).map((tool) => `mcp:${tool}`),
-	];
+	const joined = [...(config.tools ?? []), ...(config.mcpDirectTools ?? []).map((tool) => `mcp:${tool}`)];
 	return joined.length > 0 ? joined : undefined;
 }
 
@@ -448,7 +470,9 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 			: {}),
 		...(override.thinking !== undefined ? { thinking: override.thinking } : {}),
 		...(override.systemPromptMode !== undefined ? { systemPromptMode: override.systemPromptMode } : {}),
-		...(override.inheritProjectContext !== undefined ? { inheritProjectContext: override.inheritProjectContext } : {}),
+		...(override.inheritProjectContext !== undefined
+			? { inheritProjectContext: override.inheritProjectContext }
+			: {}),
 		...(override.inheritSkills !== undefined ? { inheritSkills: override.inheritSkills } : {}),
 		...(override.disabled !== undefined ? { disabled: override.disabled } : {}),
 		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
@@ -514,13 +538,17 @@ function parseOverrideStringArrayOrFalse(
 	if (value === undefined) return undefined;
 	if (value === false) return false;
 	if (!Array.isArray(value)) {
-		throw new Error(`Builtin override '${meta.name}' in '${meta.filePath}' has invalid '${meta.field}'; expected an array of strings or false.`);
+		throw new Error(
+			`Builtin override '${meta.name}' in '${meta.filePath}' has invalid '${meta.field}'; expected an array of strings or false.`,
+		);
 	}
 
 	const items: string[] = [];
 	for (const item of value) {
 		if (typeof item !== "string") {
-			throw new Error(`Builtin override '${meta.name}' in '${meta.filePath}' has invalid '${meta.field}'; expected an array of strings or false.`);
+			throw new Error(
+				`Builtin override '${meta.name}' in '${meta.filePath}' has invalid '${meta.field}'; expected an array of strings or false.`,
+			);
 		}
 		const trimmed = item.trim();
 		if (trimmed) items.push(trimmed);
@@ -542,19 +570,27 @@ function parseBuiltinOverrideEntry(
 
 	if ("model" in input) {
 		if (typeof input.model === "string" || input.model === false) override.model = input.model;
-		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'model'; expected a string or false.`);
+		else
+			throw new Error(
+				`Builtin override '${name}' in '${filePath}' has invalid 'model'; expected a string or false.`,
+			);
 	}
 
 	if ("thinking" in input) {
 		if (typeof input.thinking === "string" || input.thinking === false) override.thinking = input.thinking;
-		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'thinking'; expected a string or false.`);
+		else
+			throw new Error(
+				`Builtin override '${name}' in '${filePath}' has invalid 'thinking'; expected a string or false.`,
+			);
 	}
 
 	if ("systemPromptMode" in input) {
 		if (input.systemPromptMode === "append" || input.systemPromptMode === "replace") {
 			override.systemPromptMode = input.systemPromptMode;
 		} else {
-			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'systemPromptMode'; expected 'append' or 'replace'.`);
+			throw new Error(
+				`Builtin override '${name}' in '${filePath}' has invalid 'systemPromptMode'; expected 'append' or 'replace'.`,
+			);
 		}
 	}
 
@@ -562,7 +598,9 @@ function parseBuiltinOverrideEntry(
 		if (typeof input.inheritProjectContext === "boolean") {
 			override.inheritProjectContext = input.inheritProjectContext;
 		} else {
-			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'inheritProjectContext'; expected a boolean.`);
+			throw new Error(
+				`Builtin override '${name}' in '${filePath}' has invalid 'inheritProjectContext'; expected a boolean.`,
+			);
 		}
 	}
 
@@ -570,7 +608,9 @@ function parseBuiltinOverrideEntry(
 		if (typeof input.inheritSkills === "boolean") {
 			override.inheritSkills = input.inheritSkills;
 		} else {
-			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'inheritSkills'; expected a boolean.`);
+			throw new Error(
+				`Builtin override '${name}' in '${filePath}' has invalid 'inheritSkills'; expected a boolean.`,
+			);
 		}
 	}
 
@@ -584,10 +624,17 @@ function parseBuiltinOverrideEntry(
 
 	if ("systemPrompt" in input) {
 		if (typeof input.systemPrompt === "string") override.systemPrompt = input.systemPrompt;
-		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'systemPrompt'; expected a string.`);
+		else
+			throw new Error(
+				`Builtin override '${name}' in '${filePath}' has invalid 'systemPrompt'; expected a string.`,
+			);
 	}
 
-	const fallbackModels = parseOverrideStringArrayOrFalse(input.fallbackModels, { filePath, name, field: "fallbackModels" });
+	const fallbackModels = parseOverrideStringArrayOrFalse(input.fallbackModels, {
+		filePath,
+		name,
+		field: "fallbackModels",
+	});
 	if (fallbackModels !== undefined) override.fallbackModels = fallbackModels;
 
 	const skills = parseOverrideStringArrayOrFalse(input.skills, { filePath, name, field: "skills" });
@@ -692,15 +739,30 @@ function applyBuiltinOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools">,
+	draft: Pick<
+		AgentConfig,
+		| "model"
+		| "fallbackModels"
+		| "thinking"
+		| "systemPromptMode"
+		| "inheritProjectContext"
+		| "inheritSkills"
+		| "disabled"
+		| "systemPrompt"
+		| "skills"
+		| "tools"
+		| "mcpDirectTools"
+	>,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
 	if (draft.model !== base.model) override.model = draft.model ?? false;
-	if (!arraysEqual(draft.fallbackModels, base.fallbackModels)) override.fallbackModels = draft.fallbackModels ? [...draft.fallbackModels] : false;
+	if (!arraysEqual(draft.fallbackModels, base.fallbackModels))
+		override.fallbackModels = draft.fallbackModels ? [...draft.fallbackModels] : false;
 	if (draft.thinking !== base.thinking) override.thinking = draft.thinking ?? false;
 	if (draft.systemPromptMode !== base.systemPromptMode) override.systemPromptMode = draft.systemPromptMode;
-	if (draft.inheritProjectContext !== base.inheritProjectContext) override.inheritProjectContext = draft.inheritProjectContext;
+	if (draft.inheritProjectContext !== base.inheritProjectContext)
+		override.inheritProjectContext = draft.inheritProjectContext;
 	if (draft.inheritSkills !== base.inheritSkills) override.inheritSkills = draft.inheritSkills;
 	if (draft.disabled !== base.disabled) override.disabled = draft.disabled ?? false;
 	if (draft.systemPrompt !== base.systemPrompt) override.systemPrompt = draft.systemPrompt;
@@ -723,12 +785,16 @@ export function saveBuiltinAgentOverride(
 	if (!filePath) throw new Error("Project override is not available here. No project config root was found.");
 
 	const settings = readSettingsFileStrict(filePath);
-	const subagents = settings.subagents && typeof settings.subagents === "object" && !Array.isArray(settings.subagents)
-		? { ...(settings.subagents as Record<string, unknown>) }
-		: {};
-	const agentOverrides = subagents.agentOverrides && typeof subagents.agentOverrides === "object" && !Array.isArray(subagents.agentOverrides)
-		? { ...(subagents.agentOverrides as Record<string, unknown>) }
-		: {};
+	const subagents =
+		settings.subagents && typeof settings.subagents === "object" && !Array.isArray(settings.subagents)
+			? { ...(settings.subagents as Record<string, unknown>) }
+			: {};
+	const agentOverrides =
+		subagents.agentOverrides &&
+		typeof subagents.agentOverrides === "object" &&
+		!Array.isArray(subagents.agentOverrides)
+			? { ...(subagents.agentOverrides as Record<string, unknown>) }
+			: {};
 
 	agentOverrides[name] = cloneOverrideValue(override);
 	subagents.agentOverrides = agentOverrides;
@@ -824,21 +890,24 @@ function loadAgentsFromDir(dir: string, source: AgentSource, options?: { forceIn
 			?.split(",")
 			.map((model) => model.trim())
 			.filter(Boolean);
-		const systemPromptMode = frontmatter.systemPromptMode === "replace"
-			? "replace"
-			: frontmatter.systemPromptMode === "append"
-				? "append"
-				: defaultSystemPromptMode(frontmatter.name);
-		const inheritProjectContext = frontmatter.inheritProjectContext === "true"
-			? true
-			: frontmatter.inheritProjectContext === "false"
-				? false
-				: defaultInheritProjectContext(frontmatter.name);
-		const inheritSkills = frontmatter.inheritSkills === "true"
-			? true
-			: frontmatter.inheritSkills === "false"
-				? false
-				: defaultInheritSkills();
+		const systemPromptMode =
+			frontmatter.systemPromptMode === "replace"
+				? "replace"
+				: frontmatter.systemPromptMode === "append"
+					? "append"
+					: defaultSystemPromptMode(frontmatter.name);
+		const inheritProjectContext =
+			frontmatter.inheritProjectContext === "true"
+				? true
+				: frontmatter.inheritProjectContext === "false"
+					? false
+					: defaultInheritProjectContext(frontmatter.name);
+		const inheritSkills =
+			frontmatter.inheritSkills === "true"
+				? true
+				: frontmatter.inheritSkills === "false"
+					? false
+					: defaultInheritSkills();
 
 		let extensions: string[] | undefined;
 		if (frontmatter.extensions !== undefined) {
@@ -855,25 +924,26 @@ function loadAgentsFromDir(dir: string, source: AgentSource, options?: { forceIn
 
 		const parsedMaxSubagentDepth = Number(frontmatter.maxSubagentDepth);
 
-		const surface = options?.forceInternal === true
-			? "internal"
-			: normalizePresetAgentSurface(frontmatter.scope) ?? normalizePresetAgentSurface(frontmatter.surface) ?? defaultSurface();
-		const canDelegate = frontmatter.canDelegate === "true"
-			? true
-			: frontmatter.canDelegate === "false"
-				? false
-				: defaultCanDelegate(frontmatter.name);
-		const allowedDelegateAgents = frontmatter.allowedDelegateAgents !== undefined
-			? frontmatter.allowedDelegateAgents
-				.split(",")
-				.map((agent) => agent.trim())
-				.filter(Boolean)
-			: defaultAllowedDelegateAgents(frontmatter.name);
-		const disabled = frontmatter.disabled === "true"
-			? true
-			: frontmatter.disabled === "false"
-				? false
-				: undefined;
+		const surface =
+			options?.forceInternal === true
+				? "internal"
+				: (normalizePresetAgentSurface(frontmatter.scope) ??
+					normalizePresetAgentSurface(frontmatter.surface) ??
+					defaultSurface());
+		const canDelegate =
+			frontmatter.canDelegate === "true"
+				? true
+				: frontmatter.canDelegate === "false"
+					? false
+					: defaultCanDelegate(frontmatter.name);
+		const allowedDelegateAgents =
+			frontmatter.allowedDelegateAgents !== undefined
+				? frontmatter.allowedDelegateAgents
+						.split(",")
+						.map((agent) => agent.trim())
+						.filter(Boolean)
+				: defaultAllowedDelegateAgents(frontmatter.name);
+		const disabled = frontmatter.disabled === "true" ? true : frontmatter.disabled === "false" ? false : undefined;
 
 		agents.push({
 			name: frontmatter.name,
@@ -902,8 +972,12 @@ function loadAgentsFromDir(dir: string, source: AgentSource, options?: { forceIn
 			disabled,
 			surface,
 			canDelegate,
-			allowedDelegateAgents: allowedDelegateAgents && allowedDelegateAgents.length > 0 ? allowedDelegateAgents : undefined,
-			color: typeof frontmatter.color === "string" && frontmatter.color.trim() ? frontmatter.color.trim() : undefined,
+			allowedDelegateAgents:
+				allowedDelegateAgents && allowedDelegateAgents.length > 0 ? allowedDelegateAgents : undefined,
+			color:
+				typeof frontmatter.color === "string" && frontmatter.color.trim()
+					? frontmatter.color.trim()
+					: undefined,
 			extraFields: Object.keys(extraFields).length > 0 ? extraFields : undefined,
 		});
 	}
@@ -1002,10 +1076,7 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 		userSettingsPath,
 		projectSettingsPath,
 	);
-	const userBase = [
-		...loadAgentsFromDir(userDirOld, "user"),
-		...loadAgentsFromDir(userDirNew, "user"),
-	];
+	const userBase = [...loadAgentsFromDir(userDirOld, "user"), ...loadAgentsFromDir(userDirNew, "user")];
 	const projectMap = new Map<string, AgentConfig>();
 	for (const dir of projectDirs) {
 		for (const agent of loadAgentsFromDir(dir, "project")) {
@@ -1028,8 +1099,8 @@ export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions):
 	const presetProject = applyPresetOverlays(projectBase, options);
 	// Prefer ~/.pi/agent/agents/ as primary; fall back to ~/.agents/ if only that exists
 	const userDir = fs.existsSync(userDirOld) ? userDirOld : fs.existsSync(userDirNew) ? userDirNew : userDirOld;
-	const filterBySurface = (agents: AgentConfig[]) => agents
-		.filter((agent) => isVisibleOnSurface(agent, options?.surface, options?.includeInternal));
+	const filterBySurface = (agents: AgentConfig[]) =>
+		agents.filter((agent) => isVisibleOnSurface(agent, options?.surface, options?.includeInternal));
 
 	return {
 		builtin: filterBySurface([...presetBuiltin.agents, ...registeredAgents]),

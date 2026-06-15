@@ -22,7 +22,12 @@ import { runChildAgent } from "./in-process-executor.ts";
 import { resolveSubagentIntercomTarget } from "./intercom-bridge.ts";
 import { createActivityTicker } from "./subagent-control.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
-import { captureSingleOutputSnapshot, injectSingleOutputInstruction, resolveSingleOutput, resolveSingleOutputPath } from "../surfaces/single-output.ts";
+import {
+	captureSingleOutputSnapshot,
+	injectSingleOutputInstruction,
+	resolveSingleOutput,
+	resolveSingleOutputPath,
+} from "../surfaces/single-output.ts";
 import { SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
 import { ensureArtifactsDir, getArtifactPaths, writeArtifact, writeMetadata } from "../shared/artifacts.ts";
 import { resolveAgentColor } from "../shared/agents.ts";
@@ -43,7 +48,8 @@ export function buildAsyncChildStep(input: {
 	maxSubagentDepth: number;
 }): AsyncDispatchStep | { error: AgentToolResult<Details> } {
 	const { data, deps, agentConfig, stepIndex } = input;
-	const rawSkills = input.skills !== undefined ? input.skills : resolveStepBehavior(agentConfig, { skills: undefined }).skills;
+	const rawSkills =
+		input.skills !== undefined ? input.skills : resolveStepBehavior(agentConfig, { skills: undefined }).skills;
 	const skillNames = data.forkReuse || rawSkills === false ? [] : (rawSkills ?? agentConfig.skills ?? []);
 	const outputPath = resolveSingleOutputPath(input.output, data.ctx.cwd, input.cwd);
 	const cleanTask = input.task;
@@ -57,7 +63,10 @@ export function buildAsyncChildStep(input: {
 		task,
 		skillNames,
 		intercom: data.intercomBridge.active
-			? { selfTarget: resolveSubagentIntercomTarget(data.runId, agentConfig.name, stepIndex), bridgeTarget: data.intercomBridge.orchestratorTarget }
+			? {
+					selfTarget: resolveSubagentIntercomTarget(data.runId, agentConfig.name, stepIndex),
+					bridgeTarget: data.intercomBridge.orchestratorTarget,
+				}
 			: undefined,
 		...(outputPath ? { outputPath } : {}),
 		...(input.label ? { label: input.label } : {}),
@@ -93,7 +102,10 @@ function combineOptionalSignals(...signals: Array<AbortSignal | undefined>): Abo
 }
 
 function appendProgressOutput(progress: AgentProgress, text: string): void {
-	const lines = text.split("\n").slice(-10).filter((line) => line.trim());
+	const lines = text
+		.split("\n")
+		.slice(-10)
+		.filter((line) => line.trim());
 	if (lines.length === 0) return;
 	progress.recentOutput.push(...lines);
 	if (progress.recentOutput.length > 50) progress.recentOutput.splice(0, progress.recentOutput.length - 50);
@@ -140,9 +152,10 @@ export async function runInProcessChildStep(input: {
 		cwd: input.cwd,
 		task: input.task,
 		skillNames,
-		intercom: input.intercomSessionName || data.intercomBridge.orchestratorTarget
-			? { selfTarget: input.intercomSessionName, bridgeTarget: data.intercomBridge.orchestratorTarget }
-			: undefined,
+		intercom:
+			input.intercomSessionName || data.intercomBridge.orchestratorTarget
+				? { selfTarget: input.intercomSessionName, bridgeTarget: data.intercomBridge.orchestratorTarget }
+				: undefined,
 		...(input.outputPath ? { outputPath: input.outputPath } : {}),
 		...(input.label ? { label: input.label } : {}),
 		...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
@@ -168,7 +181,8 @@ export async function runInProcessChildStep(input: {
 	if (data.artifactConfig.enabled) {
 		artifactPathsResult = getArtifactPaths(data.artifactsDir, data.runId, agentConfig.name, stepIndex);
 		ensureArtifactsDir(data.artifactsDir);
-		if (data.artifactConfig.includeInput !== false) writeArtifact(artifactPathsResult.inputPath, `# Task for ${agentConfig.name}\n\n${input.cleanTask}`);
+		if (data.artifactConfig.includeInput !== false)
+			writeArtifact(artifactPathsResult.inputPath, `# Task for ${agentConfig.name}\n\n${input.cleanTask}`);
 	}
 	const outputSnapshot = captureSingleOutputSnapshot(input.outputPath);
 	const usage = emptyUsage();
@@ -252,75 +266,90 @@ export async function runInProcessChildStep(input: {
 			extensionCtx: data.ctx,
 			abortSignal: combineOptionalSignals(data.signal, input.interruptSignal),
 			onEvent: (_stepIndex: number, event: AgentSessionEvent) => {
-			const record = event as Record<string, unknown>;
-			const now = Date.now();
-			progress.lastActivityAt = now;
-			if (record.type === "tool_execution_start") {
-				const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-				if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
-					progress.toolCount++;
-					progress.currentTool = toolName;
-					progress.currentToolRawArgs = record.args && typeof record.args === "object" && !Array.isArray(record.args) ? record.args as Record<string, unknown> : undefined;
-					progress.currentToolArgs = progress.currentToolRawArgs ? JSON.stringify(progress.currentToolRawArgs).slice(0, 200) : undefined;
-					progress.currentToolStartedAt = now;
-				}
-				emitUpdate();
-			} else if (record.type === "tool_execution_end") {
-				if (progress.currentTool) {
-					const durationMs = progress.currentToolStartedAt !== undefined ? Math.max(0, now - progress.currentToolStartedAt) : undefined;
-					progress.recentTools.push({ tool: progress.currentTool, args: progress.currentToolArgs || "", rawArgs: progress.currentToolRawArgs, endMs: now, durationMs });
-				}
-				// Bubble nested subagent usage into the parent's accumulator. When a
-				// child agent invokes the `subagent` tool, the tool_result carries
-				// `details.totalUsage` representing the full descendant tree. Adding
-				// it here means parent SingleResult.usage (and therefore
-				// details.totalUsage on the foreground return) includes nested work
-				// even though the descendant's message_end events fire on a
-				// different AgentSession's bus.
-				const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-				if (toolName === "subagent" && record.result && typeof record.result === "object") {
-					const result = record.result as { details?: { totalUsage?: Usage } };
-					const nested = result.details?.totalUsage;
-					if (nested) {
-						usage.input += nested.input || 0;
-						usage.output += nested.output || 0;
-						usage.cacheRead = (usage.cacheRead ?? 0) + (nested.cacheRead || 0);
-						usage.cacheWrite = (usage.cacheWrite ?? 0) + (nested.cacheWrite || 0);
-						usage.cost = (usage.cost ?? 0) + (nested.cost || 0);
-						progress.tokens = totalUsageTokens(usage);
+				const record = event as Record<string, unknown>;
+				const now = Date.now();
+				progress.lastActivityAt = now;
+				if (record.type === "tool_execution_start") {
+					const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
+					if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
+						progress.toolCount++;
+						progress.currentTool = toolName;
+						progress.currentToolRawArgs =
+							record.args && typeof record.args === "object" && !Array.isArray(record.args)
+								? (record.args as Record<string, unknown>)
+								: undefined;
+						progress.currentToolArgs = progress.currentToolRawArgs
+							? JSON.stringify(progress.currentToolRawArgs).slice(0, 200)
+							: undefined;
+						progress.currentToolStartedAt = now;
 					}
-				}
-				progress.currentTool = undefined;
-				progress.currentToolArgs = undefined;
-				progress.currentToolRawArgs = undefined;
-				progress.currentToolStartedAt = undefined;
-				progress.lastToolEndAt = now;
-				emitUpdate();
-			} else if (record.type === "message_end" && record.message) {
-				const message = record.message as Message;
-				messages.push(message);
-				if (message.role === "assistant") {
-					usage.turns = (usage.turns ?? 0) + 1;
-					const u = message.usage;
-					if (u) {
-						usage.input += u.input || 0;
-						usage.output += u.output || 0;
-						usage.cacheRead = (usage.cacheRead ?? 0) + (u.cacheRead || 0);
-						usage.cacheWrite = (usage.cacheWrite ?? 0) + (u.cacheWrite || 0);
-						usage.cost = (usage.cost ?? 0) + (u.cost?.total || 0);
-						progress.tokens = totalUsageTokens(usage);
-						progress.tokenSamples?.push({ ts: now, tokens: progress.tokens });
-						// Persist live token usage to this child's status.json so nested-child
-						// readers (which only see the on-disk status, not in-memory progress)
-						// show running token counts instead of ~0 until finalize.
-						const liveTokens = tokenUsageFromUsage(usage);
-						if (liveTokens) input.onLayer0StatusUpdate?.({ runId: childRunId, stepIndex, tokens: liveTokens });
+					emitUpdate();
+				} else if (record.type === "tool_execution_end") {
+					if (progress.currentTool) {
+						const durationMs =
+							progress.currentToolStartedAt !== undefined
+								? Math.max(0, now - progress.currentToolStartedAt)
+								: undefined;
+						progress.recentTools.push({
+							tool: progress.currentTool,
+							args: progress.currentToolArgs || "",
+							rawArgs: progress.currentToolRawArgs,
+							endMs: now,
+							durationMs,
+						});
 					}
-					appendProgressOutput(progress, extractTextFromContent(message.content));
+					// Bubble nested subagent usage into the parent's accumulator. When a
+					// child agent invokes the `subagent` tool, the tool_result carries
+					// `details.totalUsage` representing the full descendant tree. Adding
+					// it here means parent SingleResult.usage (and therefore
+					// details.totalUsage on the foreground return) includes nested work
+					// even though the descendant's message_end events fire on a
+					// different AgentSession's bus.
+					const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
+					if (toolName === "subagent" && record.result && typeof record.result === "object") {
+						const result = record.result as { details?: { totalUsage?: Usage } };
+						const nested = result.details?.totalUsage;
+						if (nested) {
+							usage.input += nested.input || 0;
+							usage.output += nested.output || 0;
+							usage.cacheRead = (usage.cacheRead ?? 0) + (nested.cacheRead || 0);
+							usage.cacheWrite = (usage.cacheWrite ?? 0) + (nested.cacheWrite || 0);
+							usage.cost = (usage.cost ?? 0) + (nested.cost || 0);
+							progress.tokens = totalUsageTokens(usage);
+						}
+					}
+					progress.currentTool = undefined;
+					progress.currentToolArgs = undefined;
+					progress.currentToolRawArgs = undefined;
+					progress.currentToolStartedAt = undefined;
+					progress.lastToolEndAt = now;
+					emitUpdate();
+				} else if (record.type === "message_end" && record.message) {
+					const message = record.message as Message;
+					messages.push(message);
+					if (message.role === "assistant") {
+						usage.turns = (usage.turns ?? 0) + 1;
+						const u = message.usage;
+						if (u) {
+							usage.input += u.input || 0;
+							usage.output += u.output || 0;
+							usage.cacheRead = (usage.cacheRead ?? 0) + (u.cacheRead || 0);
+							usage.cacheWrite = (usage.cacheWrite ?? 0) + (u.cacheWrite || 0);
+							usage.cost = (usage.cost ?? 0) + (u.cost?.total || 0);
+							progress.tokens = totalUsageTokens(usage);
+							progress.tokenSamples?.push({ ts: now, tokens: progress.tokens });
+							// Persist live token usage to this child's status.json so nested-child
+							// readers (which only see the on-disk status, not in-memory progress)
+							// show running token counts instead of ~0 until finalize.
+							const liveTokens = tokenUsageFromUsage(usage);
+							if (liveTokens)
+								input.onLayer0StatusUpdate?.({ runId: childRunId, stepIndex, tokens: liveTokens });
+						}
+						appendProgressOutput(progress, extractTextFromContent(message.content));
+					}
+					emitUpdate();
 				}
-				emitUpdate();
-			}
-		},
+			},
 			onStatusUpdate: (patch) => {
 				applyStatusPatchToProgress(patch);
 				input.onLayer0StatusUpdate?.(patch);
@@ -345,16 +374,19 @@ export async function runInProcessChildStep(input: {
 	});
 }
 
-function childResultToSingleResult(childResult: ChildAgentResult, input: {
-	resultShell: SingleResult;
-	progress: AgentProgress;
-	startedAt: number;
-	artifactPathsResult?: ArtifactPaths;
-	artifactConfig: ArtifactConfig;
-	maxOutput?: MaxOutputConfig;
-	outputPath?: string;
-	outputSnapshot?: ReturnType<typeof captureSingleOutputSnapshot>;
-}): SingleResult {
+function childResultToSingleResult(
+	childResult: ChildAgentResult,
+	input: {
+		resultShell: SingleResult;
+		progress: AgentProgress;
+		startedAt: number;
+		artifactPathsResult?: ArtifactPaths;
+		artifactConfig: ArtifactConfig;
+		maxOutput?: MaxOutputConfig;
+		outputPath?: string;
+		outputSnapshot?: ReturnType<typeof captureSingleOutputSnapshot>;
+	},
+): SingleResult {
 	const result = input.resultShell;
 	result.exitCode = childResult.exitCode;
 	result.error = childResult.error?.message;
@@ -380,7 +412,8 @@ function childResultToSingleResult(childResult: ChildAgentResult, input: {
 	};
 	if (input.artifactPathsResult && input.artifactConfig.enabled !== false) {
 		result.artifactPaths = input.artifactPathsResult;
-		if (input.artifactConfig.includeOutput !== false) writeArtifact(input.artifactPathsResult.outputPath, result.finalOutput ?? "");
+		if (input.artifactConfig.includeOutput !== false)
+			writeArtifact(input.artifactPathsResult.outputPath, result.finalOutput ?? "");
 		if (input.artifactConfig.includeMetadata !== false) {
 			writeMetadata(input.artifactPathsResult.metadataPath, {
 				runId: childResult.runId,
@@ -400,7 +433,11 @@ function childResultToSingleResult(childResult: ChildAgentResult, input: {
 		}
 	}
 	if (input.maxOutput) {
-		const truncationResult = truncateOutput(result.finalOutput ?? "", { ...DEFAULT_MAX_OUTPUT, ...input.maxOutput }, input.artifactPathsResult?.outputPath);
+		const truncationResult = truncateOutput(
+			result.finalOutput ?? "",
+			{ ...DEFAULT_MAX_OUTPUT, ...input.maxOutput },
+			input.artifactPathsResult?.outputPath,
+		);
 		if (truncationResult.truncated) result.truncation = truncationResult;
 	}
 	return result;

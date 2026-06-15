@@ -21,16 +21,10 @@ function additionalProperty(errors: Iterable<SchemaError>): string | undefined {
 
 describe("schema field set", () => {
 	it("top-level keys are exactly the slim set", () => {
-		assert.deepEqual(sortedKeys(SubagentParams), [
-			"action",
-			"async",
-			"batch",
-			"concurrency",
-			"id",
-			"message",
-			"run",
-			"worktree",
-		].sort());
+		assert.deepEqual(
+			sortedKeys(SubagentParams),
+			["action", "async", "batch", "concurrency", "id", "message", "run", "worktree"].sort(),
+		);
 	});
 
 	it("rejects unknown top-level keys with structured key detail", () => {
@@ -42,13 +36,7 @@ describe("schema field set", () => {
 	});
 
 	it("task keys are exactly the slim set", () => {
-		assert.deepEqual(sortedKeys(TaskSchema), [
-			"agent",
-			"context",
-			"label",
-			"output",
-			"task",
-		].sort());
+		assert.deepEqual(sortedKeys(TaskSchema), ["agent", "context", "label", "output", "task"].sort());
 	});
 
 	it("rejects unknown task keys with structured key detail", () => {

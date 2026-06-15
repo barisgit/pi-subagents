@@ -5,7 +5,8 @@
  * upward from `surfaces/`. Presentation modules re-export these.
  */
 
-export const ASYNC_NO_POLL_GUIDANCE = "Avoid polling: Pi will send a completion or needs-attention message and trigger a new turn when this run needs you. Continue independent work or stop if blocked on the result. Use status/sleep checks only when immediate inspection is genuinely necessary.";
+export const ASYNC_NO_POLL_GUIDANCE =
+	"Avoid polling: Pi will send a completion or needs-attention message and trigger a new turn when this run needs you. Continue independent work or stop if blocked on the result. Use status/sleep checks only when immediate inspection is genuinely necessary.";
 
 /**
  * Format token count with k suffix for large numbers
@@ -36,11 +37,8 @@ export function formatToolCall(name: string, args: Record<string, unknown>, expa
 		case "read":
 		case "write":
 		case "edit": {
-			const target = typeof args.path === "string"
-				? args.path
-				: typeof args.file_path === "string"
-					? args.file_path
-					: "";
+			const target =
+				typeof args.path === "string" ? args.path : typeof args.file_path === "string" ? args.file_path : "";
 			return `${name} ${shortenPath(target)}`;
 		}
 		default: {

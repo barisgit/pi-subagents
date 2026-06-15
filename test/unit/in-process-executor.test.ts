@@ -161,9 +161,12 @@ describe("runChildAgent", () => {
 		installFakeRuntime([session]);
 		const events: unknown[] = [];
 
-		const result = await runChildAgent(makeStep(), makeContext({
-			onEvent: (_stepIndex, event) => events.push(event),
-		}));
+		const result = await runChildAgent(
+			makeStep(),
+			makeContext({
+				onEvent: (_stepIndex, event) => events.push(event),
+			}),
+		);
 
 		assert.equal(result.state, "complete");
 		assert.equal(result.exitCode, 0);
@@ -184,15 +187,21 @@ describe("runChildAgent", () => {
 		installFakeRuntime([session]);
 		const patches: unknown[] = [];
 
-		const result = await runChildAgent(makeStep(), makeContext({
-			onStatusUpdate: (patch) => patches.push(patch),
-		}));
+		const result = await runChildAgent(
+			makeStep(),
+			makeContext({
+				onStatusUpdate: (patch) => patches.push(patch),
+			}),
+		);
 
 		assert.equal(result.toolCallCount, 2);
 		assert.equal(result.toolResultCount, 2);
 		assert.equal(result.toolErrorCount, 1);
 		assert.equal(patches.filter((patch) => (patch as { toolCallDelta?: number }).toolCallDelta === 1).length, 2);
-		assert.equal(patches.filter((patch) => (patch as { toolResultDelta?: number }).toolResultDelta === 1).length, 2);
+		assert.equal(
+			patches.filter((patch) => (patch as { toolResultDelta?: number }).toolResultDelta === 1).length,
+			2,
+		);
 		assert.equal(patches.filter((patch) => (patch as { toolErrorDelta?: number }).toolErrorDelta === 1).length, 1);
 	});
 
@@ -264,16 +273,19 @@ describe("dispatchAsyncChild", () => {
 		let createCalls = 0;
 		installFakeRuntime([session], () => createCalls++);
 		const completed = new Promise((resolve) => {
-			const handle = dispatchAsyncChild(makeStep({ runId: "async-run" }), makeContext({
-				onCompleted: resolve,
-			}));
+			const handle = dispatchAsyncChild(
+				makeStep({ runId: "async-run" }),
+				makeContext({
+					onCompleted: resolve,
+				}),
+			);
 			assert.equal(handle.runId, "async-run");
 			assert.equal(createCalls, 0);
 			assert.equal(session.promptCalls, 0);
 		});
 
 		release();
-		const result = await completed as { state: string; outputText: string };
+		const result = (await completed) as { state: string; outputText: string };
 		assert.equal(result.state, "complete");
 		assert.equal(result.outputText, "done");
 	});
@@ -304,8 +316,14 @@ describe("ChildAgentRegistry", () => {
 		registry.register(handleA);
 		registry.register(handleB);
 		assert.equal(registry.get("a"), handleA);
-		assert.deepEqual(registry.snapshot(), [{ runId: "a", stepIndex: 0 }, { runId: "b", stepIndex: 1 }]);
-		assert.deepEqual(registry.list().map((handle) => handle.runId), ["a", "b"]);
+		assert.deepEqual(registry.snapshot(), [
+			{ runId: "a", stepIndex: 0 },
+			{ runId: "b", stepIndex: 1 },
+		]);
+		assert.deepEqual(
+			registry.list().map((handle) => handle.runId),
+			["a", "b"],
+		);
 
 		await registry.abortRun("a", "reload");
 		assert.equal(signalA.aborted, true);
@@ -313,7 +331,10 @@ describe("ChildAgentRegistry", () => {
 
 		registry.delete("a");
 		assert.equal(registry.get("a"), undefined);
-		assert.deepEqual(registry.list().map((handle) => handle.runId), ["b"]);
+		assert.deepEqual(
+			registry.list().map((handle) => handle.runId),
+			["b"],
+		);
 
 		await registry.abortAll("shutdown");
 		assert.deepEqual(aborts, ["a:reload", "b:shutdown"]);
@@ -327,7 +348,10 @@ describe("ChildAgentRegistry", () => {
 
 		registry.register(handleA);
 		registry.register(handleB);
-		assert.deepEqual(registry.snapshot(), [{ runId: "shared", stepIndex: 0 }, { runId: "shared", stepIndex: 1 }]);
+		assert.deepEqual(registry.snapshot(), [
+			{ runId: "shared", stepIndex: 0 },
+			{ runId: "shared", stepIndex: 1 },
+		]);
 
 		registry.delete("shared", 0);
 		assert.deepEqual(registry.snapshot(), [{ runId: "shared", stepIndex: 1 }]);

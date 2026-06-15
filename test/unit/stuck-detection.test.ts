@@ -72,8 +72,12 @@ function baseOpts(
 }
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 describe("stuck detection (subagent:stuck emits once per phase)", () => {
 	it("stuck-after-60s in thinking emits ONE stuck event", (t) => {
@@ -83,9 +87,11 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 		const phaseRef = makePhaseRef();
 		startThinking(phaseRef, 0);
 
-		const ticker = createPhaseTicker(baseOpts(phaseRef, {
-			onStuck: (payload) => stuckEvents.push(payload),
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, {
+				onStuck: (payload) => stuckEvents.push(payload),
+			}),
+		);
 
 		t.mock.timers.tick(55_000);
 		assert.equal(stuckEvents.length, 0, "no stuck event before the default 60s threshold");
@@ -105,9 +111,11 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 
 		const stuckEvents: SubagentStuckPayload[] = [];
 		const phaseRef = fixedPhaseRef({ phase: "idle", phaseStartedAt: 0, lastPhaseTickAt: 0 });
-		const ticker = createPhaseTicker(baseOpts(phaseRef, {
-			onStuck: (payload) => stuckEvents.push(payload),
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, {
+				onStuck: (payload) => stuckEvents.push(payload),
+			}),
+		);
 
 		t.mock.timers.tick(60_000);
 		assert.equal(stuckEvents.length, 0);
@@ -119,9 +127,11 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 
 		const stuckEvents: SubagentStuckPayload[] = [];
 		const phaseRef = fixedPhaseRef({ phase: "paused", phaseStartedAt: 0, lastPhaseTickAt: 0 });
-		const ticker = createPhaseTicker(baseOpts(phaseRef, {
-			onStuck: (payload) => stuckEvents.push(payload),
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, {
+				onStuck: (payload) => stuckEvents.push(payload),
+			}),
+		);
 
 		t.mock.timers.tick(60_000);
 		assert.equal(stuckEvents.length, 0);
@@ -134,9 +144,11 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 		const stuckEvents: SubagentStuckPayload[] = [];
 		const phaseRef = makePhaseRef();
 		startThinking(phaseRef, 0);
-		const ticker = createPhaseTicker(baseOpts(phaseRef, {
-			onStuck: (payload) => stuckEvents.push(payload),
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, {
+				onStuck: (payload) => stuckEvents.push(payload),
+			}),
+		);
 
 		t.mock.timers.tick(50_000);
 		startTool(phaseRef, 50_000);
@@ -154,9 +166,11 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 		const stuckEvents: SubagentStuckPayload[] = [];
 		const phaseRef = makePhaseRef();
 		startThinking(phaseRef, 0);
-		const ticker = createPhaseTicker(baseOpts(phaseRef, {
-			onStuck: (payload) => stuckEvents.push(payload),
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, {
+				onStuck: (payload) => stuckEvents.push(payload),
+			}),
+		);
 
 		t.mock.timers.tick(120_000);
 		assert.equal(stuckEvents.length, 1);
@@ -170,12 +184,16 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 		const patches: StatusPatch[] = [];
 		const phaseRef = makePhaseRef();
 		startThinking(phaseRef, 0);
-		const ticker = createPhaseTicker(baseOpts(phaseRef, {
-			quietMs: 0,
-			stuckThresholdMs: 5_000,
-			onStatusUpdate: (patch) => patches.push(patch),
-			onStuck: () => { throw new Error("bus exploded"); },
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, {
+				quietMs: 0,
+				stuckThresholdMs: 5_000,
+				onStatusUpdate: (patch) => patches.push(patch),
+				onStuck: () => {
+					throw new Error("bus exploded");
+				},
+			}),
+		);
 
 		assert.doesNotThrow(() => t.mock.timers.tick(5_000));
 		assert.equal(patches.length, 2, "heartbeat and phase still emit on the throwing stuck tick");
@@ -191,11 +209,13 @@ describe("stuck detection (subagent:stuck emits once per phase)", () => {
 		const calls: Array<{ event: string; payload: SubagentStuckPayload }> = [];
 		const phaseRef = makePhaseRef();
 		startTool(phaseRef, 0, "bash");
-		const ticker = createPhaseTicker(baseOpts(phaseRef, {
-			runId: "run-42",
-			stepIndex: 7,
-			onStuck: (payload) => calls.push({ event: SUBAGENT_STUCK_EVENT, payload }),
-		}));
+		const ticker = createPhaseTicker(
+			baseOpts(phaseRef, {
+				runId: "run-42",
+				stepIndex: 7,
+				onStuck: (payload) => calls.push({ event: SUBAGENT_STUCK_EVENT, payload }),
+			}),
+		);
 
 		t.mock.timers.tick(60_000);
 		assert.equal(calls.length, 1);

@@ -82,14 +82,24 @@ function asyncRun(seed: AsyncSeed): LiveRun {
 function twoBranches(): LiveRun[] {
 	return [
 		asyncRun({ id: "current-branch", agent: "fixer", label: "current branch run", startedAt: 100 }),
-		asyncRun({ id: "current-child", agent: "review", label: "current child", parentRunId: "current-branch", startedAt: 150 }),
+		asyncRun({
+			id: "current-child",
+			agent: "review",
+			label: "current child",
+			parentRunId: "current-branch",
+			startedAt: 150,
+		}),
 		asyncRun({ id: "reverted-branch", agent: "qa", label: "reverted branch run", startedAt: 200 }),
 	];
 }
 
 function appendCompleteRun(
 	root: string,
-	entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & { agentName: string; mode?: "single" | "parallel"; cwd?: string },
+	entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & {
+		agentName: string;
+		mode?: "single" | "parallel";
+		cwd?: string;
+	},
 ): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
@@ -106,7 +116,14 @@ function appendCompleteRun(
 			currentStep: 0,
 			...(entry.label ? { label: entry.label } : {}),
 			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-			steps: [{ agent: entry.agentName, status: "complete", startedAt: entry.startedAt, endedAt: entry.startedAt + 1 }],
+			steps: [
+				{
+					agent: entry.agentName,
+					status: "complete",
+					startedAt: entry.startedAt,
+					endedAt: entry.startedAt + 1,
+				},
+			],
 		}),
 		"utf8",
 	);
@@ -127,9 +144,34 @@ function appendCompleteRun(
 }
 
 function seedTwoBranches(root: string): void {
-	appendCompleteRun(root, { runId: "current-branch", agentName: "fixer", label: "current branch run", rootRunId: "current-branch", parentSessionId: "sess-host", rootSessionId: "sess-host", startedAt: 100 });
-	appendCompleteRun(root, { runId: "current-child", agentName: "review", label: "current child", parentRunId: "current-branch", rootRunId: "current-branch", parentSessionId: "sess-host", rootSessionId: "sess-host", startedAt: 150 });
-	appendCompleteRun(root, { runId: "reverted-branch", agentName: "qa", label: "reverted branch run", rootRunId: "reverted-branch", parentSessionId: "sess-host", rootSessionId: "sess-host", startedAt: 200 });
+	appendCompleteRun(root, {
+		runId: "current-branch",
+		agentName: "fixer",
+		label: "current branch run",
+		rootRunId: "current-branch",
+		parentSessionId: "sess-host",
+		rootSessionId: "sess-host",
+		startedAt: 100,
+	});
+	appendCompleteRun(root, {
+		runId: "current-child",
+		agentName: "review",
+		label: "current child",
+		parentRunId: "current-branch",
+		rootRunId: "current-branch",
+		parentSessionId: "sess-host",
+		rootSessionId: "sess-host",
+		startedAt: 150,
+	});
+	appendCompleteRun(root, {
+		runId: "reverted-branch",
+		agentName: "qa",
+		label: "reverted branch run",
+		rootRunId: "reverted-branch",
+		parentSessionId: "sess-host",
+		rootSessionId: "sess-host",
+		startedAt: 200,
+	});
 }
 
 afterEach(() => {
@@ -139,11 +181,7 @@ afterEach(() => {
 
 describe("overlay branch-aware membership (VAL-TREE-MEMBERSHIP)", () => {
 	it("keeps only runs whose branch anchor is on the current branch, with descendants", () => {
-		const scoped = filterRunsToSessionTree(
-			twoBranches(),
-			{ sessionId: "sess-host" },
-			new Set(["current-branch"]),
-		);
+		const scoped = filterRunsToSessionTree(twoBranches(), { sessionId: "sess-host" }, new Set(["current-branch"]));
 		const ids = scoped.map((run) => run.run.id).sort();
 		// Anchored top-level run + its descendant survive; the reverted run is gone.
 		// The child is NOT itself anchored: descendants of an included root flow in.
@@ -151,11 +189,7 @@ describe("overlay branch-aware membership (VAL-TREE-MEMBERSHIP)", () => {
 	});
 
 	it("drops every top-level run when no anchors are on the current branch", () => {
-		const scoped = filterRunsToSessionTree(
-			twoBranches(),
-			{ sessionId: "sess-host" },
-			new Set<string>(),
-		);
+		const scoped = filterRunsToSessionTree(twoBranches(), { sessionId: "sess-host" }, new Set<string>());
 		assert.deepEqual(scoped, []);
 	});
 
@@ -192,18 +226,32 @@ describe("overlay branch-aware membership (VAL-TREE-MEMBERSHIP)", () => {
 
 		// Dispatch 1: anchor `current-branch`. Its entry id is the fork point we
 		// will revert back to (it stays on the branch after the revert).
-		const forkPoint = sm.appendCustomEntry("subagent_run", { runId: "current-branch", rootRunId: "current-branch", mode: "single", source: "async" });
+		const forkPoint = sm.appendCustomEntry("subagent_run", {
+			runId: "current-branch",
+			rootRunId: "current-branch",
+			mode: "single",
+			source: "async",
+		});
 		assert.ok(forkPoint, "need a leaf id to revert back to");
 
 		// Dispatch 2 on the SAME branch: anchor `reverted-branch` (a later turn).
-		sm.appendCustomEntry("subagent_run", { runId: "reverted-branch", rootRunId: "reverted-branch", mode: "single", source: "async" });
+		sm.appendCustomEntry("subagent_run", {
+			runId: "reverted-branch",
+			rootRunId: "reverted-branch",
+			mode: "single",
+			source: "async",
+		});
 
 		// Before the revert, both anchors are on the branch.
 		assert.deepEqual([...branchAnchorRunIdsOf(sm)].sort(), ["current-branch", "reverted-branch"]);
 
 		// /tree revert: move the leaf back to the first dispatch.
 		sm.branch(forkPoint);
-		assert.deepEqual([...branchAnchorRunIdsOf(sm)], ["current-branch"], "reverted anchor must leave the current branch");
+		assert.deepEqual(
+			[...branchAnchorRunIdsOf(sm)],
+			["current-branch"],
+			"reverted anchor must leave the current branch",
+		);
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, {
 			refreshMs: 1000,

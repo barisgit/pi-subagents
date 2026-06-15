@@ -168,7 +168,9 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(state.asyncJobs.has("run-live"), true);
 			assert.equal(state.asyncJobs.has("run-other"), false);
 			assert.equal(state.asyncJobs.has("run-terminal"), false);
-			const job = state.asyncJobs.get("run-live") as { status?: string; agents?: string[]; runnerHeartbeatAt?: number } | undefined;
+			const job = state.asyncJobs.get("run-live") as
+				| { status?: string; agents?: string[]; runnerHeartbeatAt?: number }
+				| undefined;
 			assert.equal(job?.status, "running");
 			assert.deepEqual(job?.agents, ["worker"]);
 			assert.equal(job?.runnerHeartbeatAt, now);
@@ -187,7 +189,10 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			const hostSessionId = "host-session-1";
 			// A days-old interrupted run sharing this session's rootSessionId must NOT be
 			// reclaimed onto the live widget (and must not fire a stale needs-attention alarm).
-			for (const [runId, lifecycleState] of [["run-interrupted", "interrupted"], ["run-skipped", "skipped"]] as const) {
+			for (const [runId, lifecycleState] of [
+				["run-interrupted", "interrupted"],
+				["run-skipped", "skipped"],
+			] as const) {
 				const dir = path.join(asyncRoot, runId);
 				writeStatus(dir, {
 					runId,
@@ -289,7 +294,10 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(state.asyncJobs.has("run-1"), true, "undelivered job must not be cleaned up");
 
 			tracker.handleDelivered({ runIds: ["run-1"] });
-			assert.equal((state.asyncJobs.get("run-1") as { pendingDelivery?: boolean } | undefined)?.pendingDelivery, false);
+			assert.equal(
+				(state.asyncJobs.get("run-1") as { pendingDelivery?: boolean } | undefined)?.pendingDelivery,
+				false,
+			);
 
 			await new Promise((resolve) => setTimeout(resolve, 40));
 			assert.equal(state.asyncJobs.has("run-1"), false, "delivered job should retire after retention");
@@ -313,11 +321,30 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			const childDir = path.join(asyncRoot, "wf-child");
 			// The phase label travels via the child's status.json (the poller
 			// mirrors status.label onto the job; handleStarted has no label field).
-			writeStatus(childDir, { runId: "wf-child", mode: "single", state: "running", agent: "explorer", label: "Phase 1: recon", parentRunId: "wf-group", runnerHeartbeatAt: Date.now(), lastUpdate: Date.now(), startedAt: Date.now() });
+			writeStatus(childDir, {
+				runId: "wf-child",
+				mode: "single",
+				state: "running",
+				agent: "explorer",
+				label: "Phase 1: recon",
+				parentRunId: "wf-group",
+				runnerHeartbeatAt: Date.now(),
+				lastUpdate: Date.now(),
+				startedAt: Date.now(),
+			});
 			tracker.handleStarted({ id: "wf-child", asyncDir: childDir, agent: "explorer", parentRunId: "wf-group" });
 
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			const group = state.asyncJobs.get("wf-group") as { status: string; kind?: string; stepsTotal?: number; currentStep?: number; label?: string; displayState?: string } | undefined;
+			const group = state.asyncJobs.get("wf-group") as
+				| {
+						status: string;
+						kind?: string;
+						stepsTotal?: number;
+						currentStep?: number;
+						label?: string;
+						displayState?: string;
+				  }
+				| undefined;
 			assert.ok(group, "group job should exist");
 			assert.equal(group?.kind, "workflow");
 			assert.equal(group?.status, "running", "statusless group must not be marked lost while children run");
@@ -326,10 +353,20 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(group?.label, "Phase 1: recon", "group label mirrors the active child's phase label");
 
 			// Workflow finishes: lifecycle flips, group goes pending-delivery.
-			writeStatus(childDir, { runId: "wf-child", mode: "single", state: "complete", agent: "explorer", parentRunId: "wf-group", startedAt: Date.now(), lastUpdate: Date.now() });
+			writeStatus(childDir, {
+				runId: "wf-child",
+				mode: "single",
+				state: "complete",
+				agent: "explorer",
+				parentRunId: "wf-group",
+				startedAt: Date.now(),
+				lastUpdate: Date.now(),
+			});
 			writeWorkflowGroupState(groupDir, "complete");
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			const finished = state.asyncJobs.get("wf-group") as { status: string; pendingDelivery?: boolean } | undefined;
+			const finished = state.asyncJobs.get("wf-group") as
+				| { status: string; pendingDelivery?: boolean }
+				| undefined;
 			assert.equal(finished?.status, "complete");
 			assert.equal(finished?.pendingDelivery, true, "group must wait for its one notification to deliver");
 		} finally {
@@ -394,14 +431,18 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		try {
 			const runDir = path.join(asyncRoot, "run-2");
 			fs.mkdirSync(runDir, { recursive: true });
-			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
-				runId: "run-2",
-				mode: "single",
-				state: "complete",
-				startedAt: Date.now() - 1000,
-				lastUpdate: Date.now(),
-				steps: [{ agent: "worker", status: "complete" }],
-			}), "utf-8");
+			fs.writeFileSync(
+				path.join(runDir, "status.json"),
+				JSON.stringify({
+					runId: "run-2",
+					mode: "single",
+					state: "complete",
+					startedAt: Date.now() - 1000,
+					lastUpdate: Date.now(),
+					steps: [{ agent: "worker", status: "complete" }],
+				}),
+				"utf-8",
+			);
 
 			const state = createState();
 			const ui = createUiContext();
@@ -422,5 +463,4 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			removeTempDir(asyncRoot);
 		}
 	});
-
 });

@@ -71,10 +71,11 @@ describe("builtin agent disabling", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("reviewer")
-				&& error.message.includes("disabled"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("reviewer") &&
+				error.message.includes("disabled"),
 		);
 	});
 
@@ -83,7 +84,9 @@ describe("builtin agent disabling", () => {
 			subagents: { disableBuiltins: true },
 		});
 
-		const runtimeBuiltinCount = discoverAgents(tempProject, "both").agents.filter((agent) => agent.source === "builtin").length;
+		const runtimeBuiltinCount = discoverAgents(tempProject, "both").agents.filter(
+			(agent) => agent.source === "builtin",
+		).length;
 		assert.equal(runtimeBuiltinCount, 0);
 
 		const allBuiltins = discoverAgentsAll(tempProject).builtin;
@@ -152,9 +155,10 @@ describe("builtin agent disabling", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("disableBuiltins"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("disableBuiltins"),
 		);
 	});
 
@@ -170,10 +174,17 @@ describe("builtin agent disabling", () => {
 			"utf-8",
 		);
 
-		const text = readText(handleList(
-			{},
-			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] },
-		));
+		const text = readText(
+			handleList(
+				{},
+				{
+					cwd: tempProject,
+					modelRegistry: {
+						getAvailable: () => [],
+					} as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"],
+				},
+			),
+		);
 
 		assert.match(text, /Executable agents:/);
 		assert.doesNotMatch(text, /Disabled builtins:/);

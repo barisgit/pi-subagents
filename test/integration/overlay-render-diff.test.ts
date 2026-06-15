@@ -10,8 +10,12 @@ import type { AsyncRunOverlayData, AsyncRunSummary } from "../../src/state/async
 // keep ticking every period regardless of structural change.
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 function wait(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -26,7 +30,12 @@ function createTestTui(requestRender: () => void): StatusTui {
 
 function createTestTheme(): StatusTheme {
 	const passthrough = (_token: string, text: string) => text;
-	return { fg: passthrough, bg: passthrough, dim: (t: string) => t, bold: (t: string) => t } as unknown as StatusTheme;
+	return {
+		fg: passthrough,
+		bg: passthrough,
+		dim: (t: string) => t,
+		bold: (t: string) => t,
+	} as unknown as StatusTheme;
 }
 
 function terminalRun(id: string): AsyncRunSummary {
@@ -84,7 +93,9 @@ describe("overlay render-on-diff", () => {
 		let renders = 0;
 		const snapshot: AsyncRunOverlayData = { active: [], recent: [terminalRun("done-1"), terminalRun("done-2")] };
 		const component = new SubagentsStatusComponent(
-			createTestTui(() => { renders++; }),
+			createTestTui(() => {
+				renders++;
+			}),
 			createTestTheme(),
 			() => {},
 			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },
@@ -99,7 +110,9 @@ describe("overlay render-on-diff", () => {
 		let renders = 0;
 		let snapshot: AsyncRunOverlayData = { active: [], recent: [terminalRun("done-1")] };
 		const component = new SubagentsStatusComponent(
-			createTestTui(() => { renders++; }),
+			createTestTui(() => {
+				renders++;
+			}),
 			createTestTheme(),
 			() => {},
 			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },
@@ -119,7 +132,9 @@ describe("overlay render-on-diff", () => {
 		// keep the refresh loop live; an idle tick over it requests no render.
 		const snapshot: AsyncRunOverlayData = { active: [], recent: [pausedRun("paused-1")] };
 		const component = new SubagentsStatusComponent(
-			createTestTui(() => { renders++; }),
+			createTestTui(() => {
+				renders++;
+			}),
 			createTestTheme(),
 			() => {},
 			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },
@@ -133,7 +148,9 @@ describe("overlay render-on-diff", () => {
 		let renders = 0;
 		const snapshot: AsyncRunOverlayData = { active: [runningRun("live-1")], recent: [] };
 		const component = new SubagentsStatusComponent(
-			createTestTui(() => { renders++; }),
+			createTestTui(() => {
+				renders++;
+			}),
 			createTestTheme(),
 			() => {},
 			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },

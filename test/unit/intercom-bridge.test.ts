@@ -53,7 +53,10 @@ describe("resolveIntercomSessionTarget", () => {
 describe("resolveSubagentIntercomTarget", () => {
 	it("builds stable child session targets from run metadata", () => {
 		assert.equal(resolveSubagentIntercomTarget("78f659a3", "worker"), "subagent-worker-78f659a3");
-		assert.equal(resolveSubagentIntercomTarget("78f659a3", "oracle executor", 1), "subagent-oracle-executor-78f659a3-2");
+		assert.equal(
+			resolveSubagentIntercomTarget("78f659a3", "oracle executor", 1),
+			"subagent-oracle-executor-78f659a3-2",
+		);
 	});
 });
 
@@ -176,7 +179,8 @@ describe("applyIntercomBridgeToAgent", () => {
 		mode: "always",
 		orchestratorTarget: "main",
 		extensionDir: "/Users/test/.pi/agent/extensions/pi-intercom",
-		instruction: "Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: \"ask\", to: \"main\", message: \"<question>\" })\n- Completion/update: intercom({ action: \"send\", to: \"main\", message: \"DONE: <summary>\" })",
+		instruction:
+			'Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: "ask", to: "main", message: "<question>" })\n- Completion/update: intercom({ action: "send", to: "main", message: "DONE: <summary>" })',
 	};
 
 	it("injects intercom tool and prompt instructions", () => {

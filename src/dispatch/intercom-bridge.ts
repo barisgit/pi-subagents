@@ -44,7 +44,13 @@ export function resolveIntercomSessionTarget(sessionName: string | undefined, se
 }
 
 function sanitizeIntercomTargetPart(value: string): string {
-	return value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
+	return (
+		value
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9_-]+/g, "-")
+			.replace(/^-+|-+$/g, "") || "agent"
+	);
 }
 
 export function resolveSubagentIntercomTarget(runId: string, agent: string, index?: number): string {
@@ -102,9 +108,7 @@ function extensionSandboxAllowsIntercom(extensions: string[] | undefined, extens
 function resolveInstructionTemplate(instructionFile: string, settingsDir: string): string {
 	if (!instructionFile) return DEFAULT_INTERCOM_BRIDGE_TEMPLATE;
 	const expandedPath = expandTilde(instructionFile);
-	const resolvedPath = path.isAbsolute(expandedPath)
-		? expandedPath
-		: path.resolve(settingsDir, expandedPath);
+	const resolvedPath = path.isAbsolute(expandedPath) ? expandedPath : path.resolve(settingsDir, expandedPath);
 	try {
 		return fs.readFileSync(resolvedPath, "utf-8");
 	} catch (error) {
@@ -170,9 +174,7 @@ export function applyIntercomBridgeToAgent(agent: AgentConfig, bridge: IntercomB
 	if (!bridge.active || !bridge.orchestratorTarget) return agent;
 	if (!extensionSandboxAllowsIntercom(agent.extensions, bridge.extensionDir)) return agent;
 
-	const tools = agent.tools && !agent.tools.includes("intercom")
-		? [...agent.tools, "intercom"]
-		: agent.tools;
+	const tools = agent.tools && !agent.tools.includes("intercom") ? [...agent.tools, "intercom"] : agent.tools;
 	const instruction = bridge.instruction;
 	const trimmedPrompt = agent.systemPrompt?.trim() || "";
 	const systemPrompt = trimmedPrompt.includes(INTERCOM_BRIDGE_MARKER)

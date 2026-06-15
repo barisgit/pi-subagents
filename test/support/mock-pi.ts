@@ -43,7 +43,8 @@ function writeExecutable(filePath: string, content: string): void {
 
 function listQueueFiles(queueDir: string, prefix: string): string[] {
 	try {
-		return fs.readdirSync(queueDir)
+		return fs
+			.readdirSync(queueDir)
 			.filter((name) => name.startsWith(prefix))
 			.sort();
 	} catch {

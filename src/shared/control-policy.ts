@@ -1,4 +1,9 @@
-import type { ActivityState, ControlEventType, ControlNotificationChannel, ResolvedControlConfig } from "../protocol/types.ts";
+import type {
+	ActivityState,
+	ControlEventType,
+	ControlNotificationChannel,
+	ResolvedControlConfig,
+} from "../protocol/types.ts";
 
 export const CONTROL_EVENT_TYPES: ControlEventType[] = ["needs_attention"];
 export const CONTROL_NOTIFICATION_CHANNELS: ControlNotificationChannel[] = ["event", "async", "intercom"];

@@ -46,12 +46,18 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
 
 export function displayStatePriority(state: RunDisplayState | undefined): number {
 	switch (state) {
-		case "lost": return 0;
-		case "needs_attention": return 1;
-		case "tool_running": return 2;
-		case "working": return 3;
-		case "quiet": return 4;
-		default: return 5;
+		case "lost":
+			return 0;
+		case "needs_attention":
+			return 1;
+		case "tool_running":
+			return 2;
+		case "working":
+			return 3;
+		case "quiet":
+			return 4;
+		default:
+			return 5;
 	}
 }
 
@@ -73,8 +79,12 @@ function terminalDisplayKey(run: RunDisplaySortProjection): number {
 }
 
 export function compareRunsForDisplay(a: RunDisplaySortProjection, b: RunDisplaySortProjection): number {
-	const displayA = displayStatePriority(a.displayState ?? (a.activityState === "needs_attention" ? "needs_attention" : undefined));
-	const displayB = displayStatePriority(b.displayState ?? (b.activityState === "needs_attention" ? "needs_attention" : undefined));
+	const displayA = displayStatePriority(
+		a.displayState ?? (a.activityState === "needs_attention" ? "needs_attention" : undefined),
+	);
+	const displayB = displayStatePriority(
+		b.displayState ?? (b.activityState === "needs_attention" ? "needs_attention" : undefined),
+	);
 	if (displayA !== displayB) return displayA - displayB;
 	const activeA = activeDisplayBucket(a);
 	const activeB = activeDisplayBucket(b);
