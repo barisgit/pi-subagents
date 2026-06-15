@@ -27,8 +27,8 @@ Last green gates after `4d06587`:
 
 ```bash
 cd /Users/blaz/Programming_local/Projects/pi-extensions/pi-subagents
-npm run test:unit                         # 778/778 pass
-bash scripts/charter-tsc-no-new-errors.sh # 0 new errors vs baseline 275
+npm run test:unit                         # all pass
+npm run typecheck                         # 0 errors
 npm run check:source-vocabulary           # pass
 ```
 
@@ -99,7 +99,7 @@ Manual smoke after the final commit was recommended but not confirmed in this th
 - Keep root-role selection generic: explicit/configured/restored role first, then first discovered main-surface role.
 - User prefers live UX iteration over theoretical completion: after dashboard/UI changes, reload Pi and smoke actual `/subagents-status`.
 - No speculative over-engineering. Make small, behavior-backed changes.
-- Gates matter: run `npm run test:unit`, `charter-tsc-no-new-errors`, and `check:source-vocabulary` before commits.
+- Gates matter: run `npm run test:unit`, `npm run typecheck`, `npm run lint`, and `npm run check:source-vocabulary` before commits.
 - Do not publish npm packages without explicit user coordination; OTP may be required.
 
 ## Failed approaches / do not repeat
@@ -168,7 +168,7 @@ Manual smoke after the final commit was recommended but not confirmed in this th
 4. If smoke finds a bug, keep the fix narrow in `src/surfaces/subagents-status.ts` or `pi-extension-utils` depending on ownership, then rerun:
    ```bash
    npm run test:unit
-   bash scripts/charter-tsc-no-new-errors.sh
+   npm run typecheck
    npm run check:source-vocabulary
    ```
 

@@ -1,92 +1,52 @@
-# Code map
+# Repository Atlas: pi-subagents
 
-## Entry point
-- `index.ts` — root extension entry point; registers tools, slash commands, notifications, widgets, and async/status APIs while importing implementation from `src/`.
+## Project Responsibility
 
-## `src/api/`
-- `exposed-subagent-api.ts` — publishes the cross-extension subagent API and lineage for host and child sessions.
+A pi-coding-agent extension that adds subagent dispatch to Pi: a `subagent` tool for delegating bounded work to named specialist agents, plus parallel/async execution, same-role forks, JavaScript workflow orchestration, a fullscreen status dashboard, an above-editor async widget, and completion notifications. Child agents run **in-process** through the host `AgentSession` (the only `child_process` spawn is git for worktrees); `status.json` + an append-only run registry are the durable post-reload recovery path.
 
-## `src/dispatch/`
-- `agent-scope.ts` — validates same-role fork scope and inherited agent context.
-- `agent-selection.ts` — resolves requested agent personas for dispatch.
-- `concurrency-semaphore.ts` — bounds parallel child starts.
-- `fork-context.ts` — builds forked same-agent prompts and context.
-- `in-process-executor.ts` — runs child agents through the host process bridge.
-- `intercom-bridge.ts` — injects inter-agent communication instructions.
-- `layer0-runs.ts` — handles layer-zero run lifecycle helpers.
-- `model-fallback.ts` — chooses fallback models for child agents.
-- `parallel-utils.ts` — normalizes and summarizes parallel dispatch inputs.
-- `prompt-template-bridge.ts` — registers prompt-template delegation hooks.
-- `resolve-tool-patterns.ts` — expands allowed tool pattern configuration.
-- `run-async-path.ts` — runs the async/background single and parallel dispatch path (detached, returns immediately; null when not async).
-- `run-parallel-path.ts` — runs the foreground parallel dispatch path with worktree setup/cleanup and shared foreground control.
-- `sdk-0.75-compat.ts` — adapts older SDK event/result shapes.
-- `subagent-control.ts` — formats foreground control and notification events.
-- `subagent-executor.ts` — orchestrates subagent runs, async/background mode, worktrees, progress, and resume.
-- `subagent-prompt-runtime.ts` — prepares runtime prompt sections for children.
-- `top-level-async.ts` — enforces top-level async dispatch policy.
-- `worktree.ts` — creates and cleans isolated worktree execution roots.
+This codebase is the product of two completed refactoring charters:
+- `subagents-deepening` (committed `2730d31`): made the four oversized modules deep at the right seam (index 1181→20, executor 3538→2207, render split, status 1544→949).
+- `runview-unification` (this branch): introduced one canonical in-memory `RunView` (two producers: live-from-memory + foreign-from-disk), one `PersistedRunStatus` disk type, one `StatusWriter`, one `openRunRecord` dispatch funnel, broke the 11 dispatch import cycles to 0, and hardened the disk-IO boundary with a validated codec.
 
-## `src/runtime/`
-- `root-role-manager.ts` — manages the root session role lifecycle: discovery, activation, settings preservation, and the `/role` command.
+## System Entry Points
 
-## `src/state/`
-- `async-status.ts` — stores async status and completion metadata.
-- `completion-dedupe.ts` — prevents duplicate completion notices.
-- `lineage.ts` — tracks parent/child lineage for nested runs.
-- `run-history.ts` — records historical run entries.
-- `run-liveness.ts` — classifies silent, stuck, and attention-needed runs.
-- `run-phase.ts` — formats phase/progress labels.
-- `run-shape.ts` — centralizes single and parallel run display shape.
-- `run-status.ts` — inspects current run status for tools and slash commands.
-- `run-transcript.ts` — persists transcript snippets for completed runs.
-- `runs-registry.ts` — reads and writes run registry records.
-- `session-paths.ts` — resolves session-scoped storage paths.
-- `session-tokens.ts` — tracks session token accounting.
-- `slash-live-state.ts` — snapshots slash-command live render state.
-- `status-writer.ts` — writes status files for active runs.
-- `sync-run-persistence.ts` — persists foreground run results.
-- `usage-totals.ts` — aggregates token and usage totals.
+- `index.ts` — root extension entry point (thin shell, ~20 lines); registers tools, slash commands, notifications, widgets, and async/status APIs by importing implementation from `src/`.
+- `src/runtime/extension-runtime.ts` — `activate()`: constructs the per-activation `ChildAgentRegistry` and wires tools/commands/notifications/widgets/role lifecycle.
+- `package.json` — dependency manifest, npm scripts (`test:unit`, `test:integration`, `test:all`, `lint`, `format`, `check:source-vocabulary`), and `lint-staged` config.
 
-## `src/surfaces/`
-- `agent-management.ts` — applies create/edit/archive actions to agent definitions.
-- `agent-serializer.ts` — serializes agent markdown/frontmatter.
-- `async-guidance.ts` — formats user guidance for async/background runs.
-- `async-job-tracker.ts` — tracks async jobs for widget display.
-- `formatters.ts` — formats durations, paths, and display text.
-- `idle-tracker.ts` — observes idle/notification thresholds.
-- `notify.ts` — registers subagent completion and attention notifications.
-- `render.ts` — renders run progress, results, and widgets.
-- `single-output.ts` — formats single-run output blocks.
-- `slash-bridge.ts` — connects slash-command subagent dispatch.
-- `slash-commands.ts` — registers `/run`, `/parallel`, and `/subagents-status`.
-- `subagents-status.ts` — renders aggregate subagent status.
+## Tooling & Quality Gates
 
-## `src/workflow/`
-- `workflow-group-state.ts` — tracks grouped workflow child state.
-- `workflow.ts` — exposes JavaScript workflow orchestration over subagents.
+- **Prettier** owns formatting (`.prettierrc.json`: tabs, width 4, double quotes, semicolons, trailing-comma all). **Biome** lints only (`biome.json`: `formatter.enabled: false`). They do not conflict.
+- **Husky + lint-staged** pre-commit hook runs `biome lint --write` then `prettier --write` on staged `.ts/.mjs` (+ Prettier on `.json`).
+- **`.editorconfig`** + **`.vscode/settings.json`** pin Prettier as the format-on-save formatter with tab indentation.
+- `npm run typecheck` (`tsc --noEmit`) — must stay at 0 errors.
+- `npm run lint` (Biome) — must report 0 errors.
+- `scripts/check-source-vocabulary.mjs` — forbids reintroducing hardcoded role-name defaults.
 
-## `src/protocol/`
-- `schemas.ts` — defines public tool input schemas.
-- `submit-result.ts` — implements the child completion tool contract.
-- `types.ts` — declares shared wire/API types.
+## Directory Map (Aggregated)
 
-## `src/shared/`
-- `agents.ts` — discovers agent markdown files and persona directories.
-- `artifacts.ts` — manages artifact directory paths and cleanup.
-- `current-pi.ts` — stores the active Pi host reference.
-- `file-coalescer.ts` — coalesces child output files.
-- `frontmatter.ts` — parses and writes markdown frontmatter.
-- `logger.ts` — writes extension diagnostic logs.
-- `settings.ts` — resolves extension and per-agent settings.
-- `skills.ts` — discovers skills and resolves skill paths.
-- `utils.ts` — shared text, filesystem, and helper utilities.
+| Directory | Responsibility Summary | Detailed Map |
+|-----------|------------------------|--------------|
+| `src/dispatch/` | Subagent dispatch + child-agent execution: tool entry, run-record funnel (`openRunRecord`), sync/async/parallel paths, in-process session bridge, per-activation registry, worktrees, resume, intercom. (26 files) | [View Map](src/dispatch/codemap.md) |
+| `src/surfaces/` | Presentation/UI layer: split renderers (result/inline/shared/widget), fullscreen dashboard + pure row-model, slash commands, notifications, async job widget, agent CRUD. (20 files) | [View Map](src/surfaces/codemap.md) |
+| `src/state/` | Run-state + persistence: canonical in-memory `RunView` (two producers), one `StatusWriter`, status-patch applier, disk hydration, append-only registry, pure phase/liveness/shape kernels. (18 files) | [View Map](src/state/codemap.md) |
+| `src/shared/` | Low-level leaf utilities (imported downward, no upward imports): agent/skill discovery, fs codecs, runtime-env policy, path constants, formatting, settings, logging. (16 files) | [View Map](src/shared/codemap.md) |
+| `src/protocol/` | Protocol/vocabulary layer (pure DTOs, no fs): wire types, the canonical `PersistedRunStatus` + `parsePersistedRunStatus` codec, tool schemas, child completion contract. (4 files) | [View Map](src/protocol/codemap.md) |
+| `src/runtime/` | Runtime activation: per-activation wiring of tool/widgets/bridges + root-session role lifecycle (`/role`). (2 files) | [View Map](src/runtime/codemap.md) |
+| `src/workflow/` | JavaScript workflow orchestration over subagents: `workflow` tool, sandbox globals (`agent`/`parallel`/`phase`), durable group lifecycle. (2 files) | [View Map](src/workflow/codemap.md) |
+| `src/api/` | Frozen cross-extension public API boundary: session-scoped `SubagentExposedAPI` + lineage events for sibling extensions. (1 file) | [View Map](src/api/codemap.md) |
+
+## Key Architectural Invariants
+
+- **One canonical run type:** `RunView` (in-memory, `src/state/run-view.ts`) with exactly two producers — live-from-memory (registry mirror) and foreign-from-disk (`statusToRunView`). Former `ForegroundRunSummary`/`AsyncRunSummary` are thin aliases.
+- **One persisted type:** `PersistedRunStatus` (`src/protocol/status-types.ts`), written by one `StatusWriter` through one `openRunRecord` funnel.
+- **No storage facade:** there is exactly one filesystem backend; do NOT introduce a `RunStore`/`RunRepository`/`StorageAdapter`/`RunPersistence` interface (reserved tokens, enforced by the canonical verifier).
+- **No hardcoded role defaults** (`main`/`orchestrator`); root-role selection is generic with fallback-to-first-discovered.
+- **Dashboard taxonomy:** `workflow` is the durable entity; `parallel` is a receipt/container. No PgUp/PgDn paging (paneOverlay owns scroll).
 
 ## Tests
-- `test/unit/` — unit tests, including source layout validation and path-resolution coverage.
-- `test/integration/` — integration tests run with the TypeScript loader hook.
-- `test/support/` — shared test helpers and loader/isolation hooks.
-- `test/fixtures/` — reusable test fixture files.
 
-## Scripts
-- `scripts/` — local gates and maintenance scripts, including TypeScript baseline checking and source-vocabulary validation.
+- `test/unit/` — unit tests (824 pass), including source-layout + path-resolution coverage.
+- `test/integration/` — integration tests (132 pass, 10 pre-existing skips) via the TypeScript loader hook.
+- `test/support/` — shared test helpers and loader/isolation hooks.
+- `test/fixtures/` — reusable fixtures (excluded from Prettier; workflow recipe `.js` files carry YAML frontmatter).
