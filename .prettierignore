@@ -1,0 +1,10 @@
+node_modules/
+dist/
+lib/
+package-lock.json
+.pi/
+.notes/
+*.md
+banner.png
+CHANGELOG.md
+.tsc-errors-baseline.txt

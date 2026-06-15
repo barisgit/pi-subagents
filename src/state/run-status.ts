@@ -4,7 +4,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ASYNC_NO_POLL_GUIDANCE } from "../shared/formatting.ts";
 import { formatAsyncRunList, listRunsFromRegistry, readRunViewForEntry } from "./async-status.ts";
 import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
-import { type Details } from "../protocol/types.ts";
+import type { Details } from "../protocol/types.ts";
 import { readStatus } from "../shared/utils.ts";
 
 export interface RunStatusParams {
@@ -59,9 +59,10 @@ function scopeRunsForSession<T extends { rootSessionId?: string; parentSessionId
 export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<Details> {
 	if (!params.id && !params.runId && !params.dir) {
 		try {
-			const states = params.includeCompleted === false
-				? ["queued", "running", "lost"] as const
-				: ["queued", "running", "lost", "complete", "failed", "paused"] as const;
+			const states =
+				params.includeCompleted === false
+					? (["queued", "running", "lost"] as const)
+					: (["queued", "running", "lost", "complete", "failed", "paused"] as const);
 			const all = listRunsFromRegistry({ states: [...states] });
 			const scoped = scopeRunsForSession(all, { sessionId: params.sessionId, sessionCwd: params.sessionCwd });
 			const runs = scoped
@@ -106,7 +107,7 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 	}
 
 	if (asyncDir) {
-		let status;
+		let status: ReturnType<typeof readStatus>;
 		try {
 			status = readStatus(asyncDir);
 		} catch (error) {
@@ -121,14 +122,21 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 		const sessionPath = path.join(asyncDir, "run-0", "session.jsonl");
 		if (status) {
 			const stepsTotal = status.steps?.length ?? 1;
-			const completedParallelSteps = status.steps?.filter((step) => step.status === "complete" || step.status === "failed" || step.status === "skipped").length ?? 0;
+			const completedParallelSteps =
+				status.steps?.filter(
+					(step) => step.status === "complete" || step.status === "failed" || step.status === "skipped",
+				).length ?? 0;
 			const current = status.currentStep !== undefined ? status.currentStep + 1 : undefined;
-			const stepLine = status.mode === "parallel"
-				? `Progress: ${completedParallelSteps}/${stepsTotal} tasks complete`
-				: current !== undefined ? `Step: ${current}/${stepsTotal}` : `Steps: ${stepsTotal}`;
+			const stepLine =
+				status.mode === "parallel"
+					? `Progress: ${completedParallelSteps}/${stepsTotal} tasks complete`
+					: current !== undefined
+						? `Step: ${current}/${stepsTotal}`
+						: `Steps: ${stepsTotal}`;
 			const started = new Date(status.startedAt).toISOString();
 			const updated = status.lastUpdate ? new Date(status.lastUpdate).toISOString() : "n/a";
-			const statusActivityText = status.state === "running" ? activityText(status.activityState, status.lastActivityAt) : undefined;
+			const statusActivityText =
+				status.state === "running" ? activityText(status.activityState, status.lastActivityAt) : undefined;
 
 			const lines = [
 				`Run: ${status.runId}`,
@@ -141,13 +149,17 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 				`Dir: ${asyncDir}`,
 			].filter((line): line is string => Boolean(line));
 			for (const [index, step] of (status.steps ?? []).entries()) {
-				const stepActivityText = step.status === "running" ? activityText(step.activityState, step.lastActivityAt) : undefined;
-				lines.push(`Step ${index + 1}: ${step.agent} ${step.status}${stepActivityText ? `, ${stepActivityText}` : ""}`);
+				const stepActivityText =
+					step.status === "running" ? activityText(step.activityState, step.lastActivityAt) : undefined;
+				lines.push(
+					`Step ${index + 1}: ${step.agent} ${step.status}${stepActivityText ? `, ${stepActivityText}` : ""}`,
+				);
 			}
 			if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
 			else if (fs.existsSync(sessionPath)) lines.push(`Session: ${sessionPath}`);
 			if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
-			if (status.state === "running" || status.state === "queued" || status.state === "lost") lines.push("", ASYNC_NO_POLL_GUIDANCE);
+			if (status.state === "running" || status.state === "queued" || status.state === "lost")
+				lines.push("", ASYNC_NO_POLL_GUIDANCE);
 
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
 		}
@@ -172,9 +184,12 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 			for (const child of children) {
 				const childSummary = readRunViewForEntry(child, registryEntries);
 				const agent = child.agentName ?? child.agentNames?.join("+") ?? "(group)";
-				lines.push(`Child: ${child.runId.slice(0, 8)} | ${agent} | ${childSummary?.state ?? "unknown"}${child.label ? ` | ${child.label}` : ""}`);
+				lines.push(
+					`Child: ${child.runId.slice(0, 8)} | ${agent} | ${childSummary?.state ?? "unknown"}${child.label ? ` | ${child.label}` : ""}`,
+				);
 			}
-			if (summary.state === "running" || summary.state === "queued" || summary.state === "lost") lines.push("", ASYNC_NO_POLL_GUIDANCE);
+			if (summary.state === "running" || summary.state === "queued" || summary.state === "lost")
+				lines.push("", ASYNC_NO_POLL_GUIDANCE);
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
 		}
 	}

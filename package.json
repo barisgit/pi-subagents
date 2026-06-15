@@ -1,71 +1,89 @@
 {
-  "name": "pi-subagents",
-  "version": "1.0.0",
-  "description": "Pi extension for delegating tasks to subagents with parallel execution, workflow orchestration, and TUI clarification",
-  "author": "Nico Bailon",
-  "license": "MIT",
-  "type": "module",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/nicobailon/pi-subagents.git"
-  },
-  "homepage": "https://github.com/nicobailon/pi-subagents#readme",
-  "bugs": {
-    "url": "https://github.com/nicobailon/pi-subagents/issues"
-  },
-  "keywords": [
-    "pi-package",
-    "pi",
-    "pi-coding-agent",
-    "subagents",
-    "ai",
-    "agents",
-    "cli"
-  ],
-  "bin": {
-    "pi-subagents": "install.mjs"
-  },
-  "files": [
-    "*.ts",
-    "!*.test.ts",
-    "src/**/*.ts",
-    "*.mjs",
-    "agents/",
-    "skills/**/*",
-    "README.md",
-    "CHANGELOG.md"
-  ],
-  "scripts": {
-    "test": "npm run test:unit",
-    "test:unit": "node --experimental-strip-types --import ./test/support/isolate-registry.mjs --test test/unit/*.test.ts",
-    "test:integration": "node --experimental-transform-types --import ./test/support/register-loader.mjs --test test/integration/*.test.ts",
-    "test:all": "npm run test:unit && npm run test:integration",
-    "check:source-vocabulary": "node scripts/check-source-vocabulary.mjs"
-  },
-  "pi": {
-    "extensions": [
-      "./index.ts"
-    ],
-    "skills": [
-      "./skills"
-    ]
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
-  },
-  "dependencies": {
-    "pi-extension-utils": "^0.3.2",
-    "typebox": "^1.1.24"
-  },
-  "devDependencies": {
-    "@earendil-works/pi-agent-core": "^0.75.4",
-    "@earendil-works/pi-ai": "^0.75.4",
-    "@earendil-works/pi-coding-agent": "^0.75.4",
-    "tiktoken": "^1.0.22",
-    "typescript": "^6.0.3",
-    "@earendil-works/pi-tui": "0.75.4"
-  }
+	"name": "pi-subagents",
+	"version": "1.0.0",
+	"description": "Pi extension for delegating tasks to subagents with parallel execution, workflow orchestration, and TUI clarification",
+	"author": "Nico Bailon",
+	"license": "MIT",
+	"type": "module",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nicobailon/pi-subagents.git"
+	},
+	"homepage": "https://github.com/nicobailon/pi-subagents#readme",
+	"bugs": {
+		"url": "https://github.com/nicobailon/pi-subagents/issues"
+	},
+	"keywords": [
+		"pi-package",
+		"pi",
+		"pi-coding-agent",
+		"subagents",
+		"ai",
+		"agents",
+		"cli"
+	],
+	"bin": {
+		"pi-subagents": "install.mjs"
+	},
+	"files": [
+		"*.ts",
+		"!*.test.ts",
+		"src/**/*.ts",
+		"*.mjs",
+		"agents/",
+		"skills/**/*",
+		"README.md",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"test": "npm run test:unit",
+		"test:unit": "node --experimental-strip-types --import ./test/support/isolate-registry.mjs --test test/unit/*.test.ts",
+		"test:integration": "node --experimental-transform-types --import ./test/support/register-loader.mjs --test test/integration/*.test.ts",
+		"test:all": "npm run test:unit && npm run test:integration",
+		"check:source-vocabulary": "node scripts/check-source-vocabulary.mjs",
+		"lint": "biome lint",
+		"lint:fix": "biome lint --write",
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
+		"prepare": "husky"
+	},
+	"lint-staged": {
+		"*.{ts,mjs}": [
+			"biome lint --write --no-errors-on-unmatched",
+			"prettier --write"
+		],
+		"*.json": [
+			"prettier --write"
+		]
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		],
+		"skills": [
+			"./skills"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"dependencies": {
+		"pi-extension-utils": "^0.3.2",
+		"typebox": "^1.1.24"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.0",
+		"@earendil-works/pi-agent-core": "^0.75.4",
+		"@earendil-works/pi-ai": "^0.75.4",
+		"@earendil-works/pi-coding-agent": "^0.75.4",
+		"@earendil-works/pi-tui": "0.75.4",
+		"husky": "^9.1.7",
+		"lint-staged": "^17.0.7",
+		"prettier": "^3.8.4",
+		"tiktoken": "^1.0.22",
+		"typescript": "^6.0.3"
+	}
 }
