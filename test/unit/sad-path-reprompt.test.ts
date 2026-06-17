@@ -111,10 +111,7 @@ describe("sad-path reprompt", () => {
 		assert.equal(session.prompts.length, 3, "initial prompt + exactly 2 reprompts");
 		assert.match(session.prompts[1] ?? "", /You did not call submit_result/);
 		assert.deepEqual(result.structuredResult, {
-			status: "ok",
-			summary: "Final prose-only completion after bounded nudges.",
 			result: "Final prose-only completion after bounded nudges.",
-			artifacts: [],
 		});
 		assert.equal(result.outputText, "Final prose-only completion after bounded nudges.");
 	});

@@ -30,7 +30,7 @@ describe("child tool injection", () => {
 		assert.equal(typeof submit?.execute, "function", "submit_result is executable, not a metadata stub");
 		const result = await submit?.execute?.(
 			"manual",
-			{ status: "ok", summary: "done", result: "payload" },
+			{ result: "payload" },
 			new AbortController().signal,
 			() => {},
 			{} as never,

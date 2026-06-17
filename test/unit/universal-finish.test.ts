@@ -39,7 +39,7 @@ class FakeAgentSession {
 
 	async prompt(text: string): Promise<void> {
 		this.prompts.push(text);
-		const envelope = { status: "ok", summary: "structured", result: "structured payload", artifacts: [] };
+		const envelope = { result: "structured payload" };
 		this.messages.push({
 			role: "assistant",
 			content: [{ type: "toolCall", id: "submit", name: "submit_result", arguments: envelope }],
@@ -127,10 +127,7 @@ describe("universal finish", () => {
 		assert.doesNotMatch(session.prompts[0] ?? "", /Structured finish/);
 		assert.equal(result.outputText, "structured payload");
 		assert.deepEqual(result.structuredResult, {
-			status: "ok",
-			summary: "structured",
 			result: "structured payload",
-			artifacts: [],
 		});
 	});
 });

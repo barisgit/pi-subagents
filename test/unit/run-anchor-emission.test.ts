@@ -32,7 +32,7 @@ class FakeAgentSession {
 			role: "toolResult",
 			toolName: "submit_result",
 			isError: false,
-			details: { status: "ok", summary: task, result: task, artifacts: [] },
+			details: { result: task },
 		});
 	}
 	messages: unknown[] = [];

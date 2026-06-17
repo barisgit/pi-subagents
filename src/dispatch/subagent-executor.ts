@@ -1526,7 +1526,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				groupRunId: group.runId,
 				async: effectiveAsync,
 				asyncDir: group.runRecordDir,
-				dispatchChild: async ({ role, task, index, phaseIndex, phaseTitle, parallelGroupId }) => {
+				dispatchChild: async ({ role, task, index, phaseIndex, phaseTitle, parallelGroupId, resultSchema }) => {
 					const agentConfig = agents.find((agent) => agent.name === role);
 					let result: SingleResult | undefined;
 					const handle = spawnRun(
@@ -1596,6 +1596,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 										agentConfig.maxSubagentDepth,
 									),
 									mode: "parallel",
+									...(resultSchema ? { resultSchema } : {}),
 									layer0: {
 										runId: prepared.runId,
 										runRecordDir: prepared.runRecordDir,

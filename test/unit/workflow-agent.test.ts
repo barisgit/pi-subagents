@@ -10,8 +10,8 @@ import { runWorkflowScript, WorkflowAgentError } from "../../src/workflow/workfl
 import { makeAgent } from "../support/helpers.ts";
 
 describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
-	it("resolves to the submit_result envelope returned by an injected dispatch", async () => {
-		const envelope = { status: "ok" as const, summary: "done", result: { answer: 7 }, artifacts: ["artifact.txt"] };
+	it("resolves to the child's result returned by an injected dispatch", async () => {
+		const envelope = { result: { answer: 7 } };
 		const value = await runWorkflowScript({
 			dispatch: async (role, task) => {
 				assert.equal(role, "explorer");
@@ -21,15 +21,12 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 			script: "return await agent('explorer', 'inventory');",
 		});
 
-		assert.deepEqual(value, envelope);
+		assert.deepEqual(value, { answer: 7 });
 	});
 
 	it("surfaces dispatch failure and does not return a masking fallback status:ok envelope", async () => {
 		const maskingEnvelope = {
-			status: "ok" as const,
-			summary: "fallback text",
 			result: "fallback text",
-			artifacts: [],
 		};
 		await assert.rejects(
 			runWorkflowScript({
@@ -49,12 +46,59 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 		await assert.rejects(
 			runWorkflowScript({
 				dispatch: async () => ({
-					envelope: { status: "ok", summary: "fallback", result: "fallback" },
+					envelope: { result: "fallback" },
 					interrupted: true,
 				}),
 				script: "return await agent('explorer', 'task');",
 			}),
 			/was interrupted/,
+		);
+	});
+
+	it("threads a workflow-authored JSON Schema to dispatch as a TypeBox resultSchema tag", async () => {
+		let seenTags: { resultSchema?: unknown } | undefined;
+		const envelope = { result: { approved: true } };
+		const value = await runWorkflowScript({
+			dispatch: async (_role, _task, tags) => {
+				seenTags = tags;
+				return envelope;
+			},
+			script: "return await agent('review', 'check', { schema: { type: 'object', required: ['approved'], properties: { approved: { type: 'boolean' } }, additionalProperties: false } });",
+		});
+		assert.deepEqual(value, { approved: true });
+		// The plain JSON Schema is wrapped at the boundary; the child's submit_result
+		// tool enforces it. We assert the tag carries a usable schema object with the
+		// author's keywords intact (Type.Unsafe preserves type/required/properties).
+		// The schema object is authored inside the VM realm, so its array prototype
+		// differs from the host's; compare values, not prototype-strict structure.
+		const schema = seenTags?.resultSchema as Record<string, unknown> | undefined;
+		assert.ok(schema, "resultSchema tag should be present");
+		assert.equal(schema?.type, "object");
+		const required = schema?.required as string[] | undefined;
+		assert.equal(required?.length, 1);
+		assert.equal(required?.[0], "approved");
+		assert.equal(schema?.additionalProperties, false);
+	});
+
+	it("omits the resultSchema tag when no schema is supplied", async () => {
+		let seenTags: { resultSchema?: unknown } | undefined;
+		await runWorkflowScript({
+			dispatch: async (_role, _task, tags) => {
+				seenTags = tags;
+				return { result: "text" };
+			},
+			script: "return await agent('explorer', 'inventory');",
+		});
+		assert.equal(seenTags?.resultSchema, undefined);
+	});
+
+	it("fails closed when agent() is given a non-object schema", async () => {
+		await assert.rejects(
+			runWorkflowScript({
+				dispatch: async () => ({ result: "x" }),
+				script: "return await agent('review', 'check', { schema: 'not-a-schema' });",
+			}),
+			/plain JSON Schema object/,
 		);
 	});
 });
@@ -84,7 +128,7 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 					role: "toolResult",
 					toolName: "submit_result",
 					isError: false,
-					details: { status: "ok", summary: task, result: task, artifacts: [] },
+					details: { result: task },
 				});
 			}
 			getLastAssistantText(): string {
@@ -151,7 +195,7 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 				ctx: ctx as never,
 			});
 			const ok = await group.dispatchChild({ role: "fixer", task: "ok", index: 0 });
-			assert.deepEqual(ok.structuredResult, { status: "ok", summary: "ok", result: "ok", artifacts: [] });
+			assert.deepEqual(ok.structuredResult, { result: "ok" });
 			assert.equal(created[0]?.model?.id, "test-model");
 			assert.deepEqual(created[0]?.tools, ["read", "submit_result"]);
 			assert.equal(

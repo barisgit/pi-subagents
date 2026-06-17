@@ -30,7 +30,7 @@ class FakeAgentSession {
 			role: "toolResult",
 			toolName: "submit_result",
 			isError: false,
-			details: { status: "ok", summary: "done", result: "done", artifacts: [] },
+			details: { result: "done" },
 		},
 	];
 

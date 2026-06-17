@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import vm from "node:vm";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import { writeWorkflowScript } from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "../protocol/submit-result.ts";
@@ -28,6 +28,10 @@ export interface WorkflowDispatchOutcome {
 export type WorkflowDispatchResult = SubmitResultEnvelope | WorkflowDispatchOutcome;
 export interface WorkflowDispatchTags {
 	parallelGroupId?: string;
+	// Workflow-authored result schema for this child's submit_result. The script
+	// owns the contract via agent(role, task, { schema }); the child never decides
+	// its own shape and the public subagent tool never receives a schema.
+	resultSchema?: TSchema;
 }
 export type WorkflowDispatch = (
 	role: string,
@@ -47,6 +51,7 @@ export interface WorkflowGroupHandle {
 		phaseIndex?: number;
 		phaseTitle?: string;
 		parallelGroupId?: string;
+		resultSchema?: TSchema;
 	}): Promise<SingleResult>;
 	finishAsync?(success: boolean, summary?: string): void;
 	failWorkflow?(message: string, tags?: { phaseIndex?: number; phaseTitle?: string }): Promise<void>;
@@ -175,7 +180,10 @@ function ensureWorkflowRejectionListener(): void {
 }
 
 function isSubmitResultEnvelopeLike(value: WorkflowDispatchResult): value is SubmitResultEnvelope {
-	return Boolean(value) && typeof value === "object" && "status" in value && "summary" in value && "result" in value;
+	// A direct envelope is the single-field { result } shape. The alternative
+	// (WorkflowDispatchOutcome) carries envelope/isError/exitCode/... at top level
+	// and never a bare top-level `result`, so this stays unambiguous.
+	return Boolean(value) && typeof value === "object" && "result" in value && !("envelope" in value);
 }
 
 function dispatchFailureMessage(role: string, outcome: WorkflowDispatchOutcome): string {
@@ -189,22 +197,25 @@ function dispatchFailureMessage(role: string, outcome: WorkflowDispatchOutcome):
 function failureEnvelope(role: string, task: string, outcome: WorkflowDispatchOutcome): SubmitResultEnvelope {
 	return (
 		outcome.envelope ?? {
-			status: "failed",
-			summary: dispatchFailureMessage(role, outcome),
 			result: { role, task, exitCode: outcome.exitCode, error: outcome.error, interrupted: outcome.interrupted },
-			artifacts: [],
 		}
 	);
 }
 
+// Returns the child's `result` value DIRECTLY (a string by default, or the typed
+// object when the workflow supplied a schema) — Claude-style. The single-field
+// envelope is unwrapped here so scripts write `fix` / `review.approved`, never
+// `fix.result`. Failure is keyed on the dispatch outcome (isError/exitCode/error/
+// interrupted), never on any child self-reported status, and throws so the script
+// can catch/branch.
 async function agentGlobal(
 	dispatch: WorkflowDispatch,
 	role: string,
 	task: string,
 	tags?: WorkflowDispatchTags,
-): Promise<SubmitResultEnvelope> {
+): Promise<unknown> {
 	const outcome = await dispatch(role, task, tags);
-	if (isSubmitResultEnvelopeLike(outcome)) return outcome;
+	if (isSubmitResultEnvelopeLike(outcome)) return outcome.result;
 	if (
 		outcome.isError === true ||
 		(outcome.exitCode !== undefined && outcome.exitCode !== 0) ||
@@ -214,7 +225,7 @@ async function agentGlobal(
 		const envelope = failureEnvelope(role, task, outcome);
 		throw new WorkflowAgentError(dispatchFailureMessage(role, outcome), envelope);
 	}
-	if (outcome.envelope) return outcome.envelope;
+	if (outcome.envelope) return outcome.envelope.result;
 	throw new WorkflowAgentError(
 		`agent '${role}' returned no submit_result envelope`,
 		failureEnvelope(role, task, { ...outcome, error: "missing submit_result envelope" }),
@@ -287,9 +298,27 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	};
 
 	const parallelGroupStore = new AsyncLocalStorage<string>();
-	const agent = (role: string, task: string) => {
+	// A workflow script runs in a VM with no imports, so it cannot author a TypeBox
+	// schema. It passes a PLAIN JSON Schema object via agent(role, task, { schema }).
+	// We wrap it with Type.Unsafe at this boundary so the child's submit_result tool
+	// (Compile().Check()) enforces it — verified to reject missing/typed/extra fields.
+	// Fail closed: a non-object schema is a script bug, so we throw rather than
+	// silently drop the contract down to the default any-JSON result.
+	const toResultSchema = (schema: unknown): TSchema => {
+		if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
+			throw new TypeError("agent(role, task, { schema }) expects a plain JSON Schema object");
+		}
+		return Type.Unsafe(schema as Record<string, unknown>);
+	};
+	const agent = (role: string, task: string, opts?: { schema?: unknown }) => {
 		const groupId = parallelGroupStore.getStore();
-		return track(agentGlobal(options.dispatch, role, task, { ...(groupId ? { parallelGroupId: groupId } : {}) }));
+		const resultSchema = opts?.schema !== undefined ? toResultSchema(opts.schema) : undefined;
+		return track(
+			agentGlobal(options.dispatch, role, task, {
+				...(groupId ? { parallelGroupId: groupId } : {}),
+				...(resultSchema ? { resultSchema } : {}),
+			}),
+		);
 	};
 	const parallel = <T>(thunks: Array<() => Promise<T>>) => {
 		if (!Array.isArray(thunks)) return track(parallelGlobal(thunks));
@@ -583,7 +612,7 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Use whenever the NEXT step depends on a previous step's result: branch on a child's structured output, retry/fallback on failure, loop until a condition holds (e.g. review until approved), decide fan-out width at runtime, or pass data between steps. Prefer this over multiple subagent calls when any decision sits between dispatches; use plain subagent for a single task or a fixed independent batch.
 
 The script runs in a sandbox with three globals:
-- agent(role, task) -> Promise<{status: "ok"|"blocked"|"failed", summary, result, artifacts?}> — dispatch one subagent (same roles as the subagent tool) and get its structured envelope. Rejects if the child fails, so failures propagate unless you catch them.
+- agent(role, task, opts?) -> Promise<result> — dispatch one subagent (same roles as the subagent tool) and get its result DIRECTLY. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape. Example: const r = await agent("review", "Review this fix.", { schema: { type: "object", required: ["approved"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false } }); then branch on r.approved.
 - parallel(thunks) -> Promise<results[]> — run agent calls concurrently: parallel([() => agent("explorer", "..."), () => agent("qa", "...")]).
 - phase(title) — label the current stage for live status displays.
 
@@ -592,9 +621,9 @@ Top-level await is supported. Return a value from the script; it becomes the wor
 Example (fix, then review-loop until approved, max 2 rounds):
 const fix = await agent("fixer", "Fix the flaky test in foo.test.ts");
 for (let round = 0; round < 2; round++) {
-  const review = await agent("review", "Review the fix: " + fix.summary);
-  if (review.result?.approved !== false) return { fix, review };
-  await agent("fixer", "Address review findings: " + review.summary);
+  const review = await agent("review", "Review the fix and return { approved: boolean }: " + fix, { schema: { type: "object", required: ["approved"], properties: { approved: { type: "boolean" } }, additionalProperties: false } });
+  if (review.approved) return { fix, review };
+  await agent("fixer", "Address review findings.");
 }
 return "escalate: review did not approve after 2 rounds";
 
@@ -640,6 +669,7 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 									phaseIndex: emitter!.phaseIndex(),
 									...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
 									...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
+									...(tags?.resultSchema ? { resultSchema: tags.resultSchema } : {}),
 								});
 								emitter!.childSettled(result, index);
 								return {

@@ -7,7 +7,7 @@ describe("workflow phase global (VAL-PHASE)", () => {
 	it("emits a progress line through onUpdate without changing the script return value", async () => {
 		const updates: Array<{ content: Array<{ type: string; text: string }>; details: Details }> = [];
 		const value = await runWorkflowScript({
-			dispatch: async () => ({ status: "ok", summary: "unused", result: "unused" }),
+			dispatch: async () => ({ result: "unused" }),
 			onPhase: createWorkflowPhaseEmitter("wf", (update) => updates.push(update as (typeof updates)[number])),
 			script: "phase('Inventory');\nreturn 'done';",
 		});
@@ -22,7 +22,7 @@ describe("workflow phase global (VAL-PHASE)", () => {
 
 	it("ignores phase emitter errors", async () => {
 		const value = await runWorkflowScript({
-			dispatch: async () => ({ status: "ok", summary: "unused", result: "unused" }),
+			dispatch: async () => ({ result: "unused" }),
 			onPhase: () => {
 				throw new Error("render failed");
 			},

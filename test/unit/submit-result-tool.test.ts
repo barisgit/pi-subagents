@@ -11,9 +11,9 @@ import {
 } from "../../src/protocol/submit-result.ts";
 
 describe("submit_result tool", () => {
-	it("validates the fixed envelope and terminates", async () => {
+	it("validates the single-field envelope and terminates", async () => {
 		const tool = createSubmitResultTool();
-		const envelope = { status: "ok", summary: "done", result: "full result", artifacts: ["/tmp/a"] };
+		const envelope = { result: "full result" };
 
 		assert.deepEqual(
 			validateToolArguments(tool, { type: "toolCall", id: "good", name: "submit_result", arguments: envelope }),
@@ -25,19 +25,9 @@ describe("submit_result tool", () => {
 					type: "toolCall",
 					id: "bad",
 					name: "submit_result",
-					arguments: { status: "ok", result: "no summary" },
+					arguments: {},
 				}),
-			/summary|Expected required property/,
-		);
-		assert.throws(
-			() =>
-				validateToolArguments(tool, {
-					type: "toolCall",
-					id: "bad-status",
-					name: "submit_result",
-					arguments: { ...envelope, status: "maybe" },
-				}),
-			/status|allowed values/,
+			/result|Expected required property/,
 		);
 		assert.throws(
 			() =>
@@ -45,18 +35,13 @@ describe("submit_result tool", () => {
 					type: "toolCall",
 					id: "extra",
 					name: "submit_result",
-					arguments: { ...envelope, surprise: true },
+					arguments: { ...envelope, status: "ok", summary: "done", artifacts: [] },
 				}),
-			/surprise|Unexpected property/,
+			/status|summary|artifacts|Unexpected property/,
 		);
 
-		const parameters = tool.parameters as { properties?: { status?: Record<string, unknown> } };
-		assert.deepEqual(parameters.properties?.status?.enum, ["ok", "blocked", "failed"]);
-		assert.equal(
-			"anyOf" in (parameters.properties?.status ?? {}),
-			false,
-			"Cursor Composer drops submit_result args when status is encoded as anyOf const literals",
-		);
+		const parameters = tool.parameters as { properties?: Record<string, unknown> };
+		assert.deepEqual(Object.keys(parameters.properties ?? {}), ["result"]);
 
 		const result = await tool.execute?.("manual", envelope, new AbortController().signal, () => {}, {} as never);
 		assert.equal(result?.terminate, true);
@@ -65,12 +50,9 @@ describe("submit_result tool", () => {
 
 	it("rejects invalid and error submit_result results so unvalidated args cannot leak through", () => {
 		// Extra keys: a TypeBox-validated envelope (additionalProperties:false) never carries extras.
-		assert.equal(
-			isSubmitResultEnvelope({ status: "ok", summary: "x", result: { value: 1 }, surprise: true }),
-			false,
-		);
+		assert.equal(isSubmitResultEnvelope({ result: { value: 1 }, surprise: true }), false);
 		// Valid minimal envelope still accepted.
-		assert.equal(isSubmitResultEnvelope({ status: "ok", summary: "x", result: "y" }), true);
+		assert.equal(isSubmitResultEnvelope({ result: "y" }), true);
 
 		// An SDK-rejected (isError) submit_result toolResult must NOT count as compliant.
 		const errored = [
@@ -88,7 +70,7 @@ describe("submit_result tool", () => {
 					{
 						type: "toolCall",
 						name: "submit_result",
-						arguments: { status: "ok", summary: "x", result: { value: 1 }, surprise: true },
+						arguments: { result: { value: 1 }, surprise: true },
 					},
 				],
 			},
@@ -101,15 +83,12 @@ describe("submit_result tool", () => {
 			{
 				role: "toolResult",
 				toolName: "submit_result",
-				details: { status: "ok", summary: "done", result: "payload", artifacts: [] },
+				details: { result: "payload" },
 			},
 		];
 		assert.equal(hasSubmitResultToolResult(compliant), true);
 		assert.deepEqual(extractSubmitResultEnvelope(compliant), {
-			status: "ok",
-			summary: "done",
 			result: "payload",
-			artifacts: [],
 		});
 	});
 

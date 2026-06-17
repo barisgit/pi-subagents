@@ -542,8 +542,13 @@ async function executeChildAgent(
 		if (shouldRequireSubmitResult) {
 			structuredResult = extractSubmitResultEnvelope(getSessionMessages(session));
 			if (structuredResult) {
+				// result is the parent-visible output. A string passes through; a typed
+				// object (workflow-schema'd) is JSON-stringified so the text surface stays
+				// a string while workflow scripts read the object off structuredResult.result.
 				outputText =
-					typeof structuredResult.result === "string" ? structuredResult.result : structuredResult.summary;
+					typeof structuredResult.result === "string"
+						? structuredResult.result
+						: JSON.stringify(structuredResult.result);
 			} else {
 				const fallbackText = session.getLastAssistantText?.() || outputText;
 				structuredResult = fallbackSubmitResultEnvelope(fallbackText);

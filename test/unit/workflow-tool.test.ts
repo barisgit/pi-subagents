@@ -9,14 +9,14 @@ const ctx = {} as never;
 type WorkflowToolResult = AgentToolResult<unknown> & { isError?: boolean };
 
 async function executeWorkflow(script: string): Promise<WorkflowToolResult> {
-	const tool = createWorkflowTool({ dispatch: async () => ({ status: "ok", summary: "unused", result: "unused" }) });
+	const tool = createWorkflowTool({ dispatch: async () => ({ result: "unused" }) });
 	return (await tool.execute?.("wf", { script }, new AbortController().signal, () => {}, ctx)) as WorkflowToolResult;
 }
 
 describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 	it("exposes the workflow tool with strict { script: string, async?: boolean } parameters", () => {
 		const tool = createWorkflowTool({
-			dispatch: async () => ({ status: "ok", summary: "unused", result: "unused" }),
+			dispatch: async () => ({ result: "unused" }),
 		});
 
 		assert.equal(tool.name, "workflow");
@@ -112,7 +112,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// documented best-effort limitation as an explicit contract, not a silent leak.
 		const res = runWorkflowInSubprocess(
 			"Promise.reject(new Error('raw-boom'));\nreturn 'ok';",
-			"async () => ({ status: 'ok', summary: 'u', result: 'u' })",
+			"async () => ({ result: 'u' })",
 		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, false);
@@ -211,7 +211,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			"const floats = [];",
 			"process.on('unhandledRejection', (r) => { floats.push(String(r && r.message ? r.message : r)); });",
 			"import(process.env.WF_URL).then(async (m) => {",
-			"  const tool = m.createWorkflowTool({ openWorkflowGroup: () => ({ groupRunId: 'g', async dispatchChild({ role, task, index }) { await Promise.resolve(); return { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, structuredResult: { status: 'ok', summary: 's', result: 'r' }, progress: { index, agent: role, status: 'completed', task, recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0, lastActivityAt: Date.now() } }; } }) });",
+			"  const tool = m.createWorkflowTool({ openWorkflowGroup: () => ({ groupRunId: 'g', async dispatchChild({ role, task, index }) { await Promise.resolve(); return { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, structuredResult: { result: 'r' }, progress: { index, agent: role, status: 'completed', task, recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0, lastActivityAt: Date.now() } }; } }) });",
 			// Mixed group (one real agent + one raw thunk) leaves a phantom slot, so
 			// parallelGroupSettled actually deletes it and emits the CLEAR frame. That clear
 			// frame is the 2nd emit with a single completed result (the 1st is childSettled);
@@ -243,7 +243,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
-			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
+			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ result: 'r' }) });",
 			"  await tool.execute('wf', { script: 'return 1;' }, new AbortController().signal, () => {}, {});",
 			"  await new Promise((r) => setTimeout(r, 30));",
 			"  Promise.reject(new Error('host-bug'));",
@@ -269,7 +269,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		const program = [
 			"const base = process.env.WF_URL;",
 			"const m1 = await import(base + '?first');",
-			"const tool1 = m1.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
+			"const tool1 = m1.createWorkflowTool({ dispatch: async () => ({ result: 'r' }) });",
 			"await tool1.execute('wf1', { script: 'return 1;' }, new AbortController().signal, () => {}, {});",
 			"const m2 = await import(base + '?second');",
 			"const tool2 = m2.createWorkflowTool({ dispatch: async () => ({ isError: true, exitCode: 1, error: 'reload-boom' }) });",
@@ -295,7 +295,7 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
-			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
+			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ result: 'r' }) });",
 			"  await tool.execute('wf', { script: 'return 1;' }, new AbortController().signal, () => {}, {});",
 			"  await new Promise((r) => setTimeout(r, 20));",
 			"  const e = new Error('symbol-collision-host-bug');",
@@ -367,9 +367,9 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			"import(process.env.WF_URL).then(async (m) => {",
 			"  const delay = (ms) => new Promise((r) => setTimeout(r, ms));",
 			"  const dispatch = async (_role, task) => {",
-			"    if (task === 'slow-ok') { await delay(100); return { status: 'ok', summary: 'slow', result: 'slow' }; }",
+			"    if (task === 'slow-ok') { await delay(100); return { result: 'slow' }; }",
 			"    if (task === 'bad') { await delay(20); return { isError: true, exitCode: 1, error: 'foreign-boom' }; }",
-			"    return { status: 'ok', summary: task, result: task };",
+			"    return { result: task };",
 			"  };",
 			"  const a = m.runWorkflowScript({ dispatch, script: \"await agent('explorer', 'slow-ok');\\nreturn 'A-ok';\" });",
 			"  const b = m.runWorkflowScript({ dispatch, script: process.env.WF_B_SCRIPT });",

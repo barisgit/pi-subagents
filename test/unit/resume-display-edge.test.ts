@@ -54,7 +54,7 @@ class BlockingSession {
 		this.messages.push({
 			role: "toolResult",
 			toolName: "submit_result",
-			details: { status: "ok", summary: "done", result: "done after block", artifacts: [] },
+			details: { result: "done after block" },
 		});
 		await new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;

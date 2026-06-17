@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import type { ResolvedSkill } from "../shared/skills.ts";
@@ -87,6 +88,8 @@ export function prepareChildStep(input: {
 	maxSubagentDepth: number;
 	/** Foreground layer-0 override for run identity + session paths. */
 	layer0?: { runId: string; sessionFile: string; runRecordDir: string; rootRunId: string };
+	/** Workflow-authored result schema for submit_result (workflow path only). */
+	resultSchema?: TSchema;
 }): PrepareChildStepResult {
 	const { data, deps, agentConfig, stepIndex } = input;
 	const availableModels = data.ctx.modelRegistry.getAvailable();
@@ -146,7 +149,7 @@ export function prepareChildStep(input: {
 			: {}),
 		...(data.forkReuse ? { forkContextFile: data.sessionFileForIndex(stepIndex) } : {}),
 	});
-	const { activeToolNames, customTools } = resolveChildTools(agentConfig, deps.pi);
+	const { activeToolNames, customTools } = resolveChildTools(agentConfig, deps.pi, input.resultSchema);
 	const step: ChildAgentStep = {
 		runId: input.layer0?.runId ?? data.runId,
 		stepIndex,

@@ -19,7 +19,7 @@ function result(
 		exitCode,
 		messages: [],
 		usage: { input: 0, output: 0 },
-		structuredResult: { status: exitCode === 0 ? "ok" : "failed", summary: task, result: task, artifacts: [] },
+		structuredResult: { result: task },
 		progress: {
 			index,
 			agent,
@@ -57,7 +57,7 @@ describe("workflow final result rendering does not throw on non-Details payloads
 	const animCtx = { state: {}, invalidate: () => {} } as never;
 	for (const [label, details] of [
 		["plain script return value", { value: 42 }],
-		["error envelope", { status: "failed", summary: "boom", result: "boom", artifacts: [] }],
+		["error envelope", { result: "boom" }],
 		["message object", { message: "boom" }],
 		// Non-array `progress` and a `results` array of non-Details elements must not
 		// throw: the guards validate both array-ness AND element shape.

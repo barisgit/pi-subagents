@@ -37,7 +37,7 @@ class FakeSession {
 	messages = [];
 	subscribe() { return () => {}; }
 	async prompt(task) {
-		this.messages.push({ role: "toolResult", toolName: "submit_result", isError: false, details: { status: "ok", summary: task, result: task, artifacts: [] } });
+		this.messages.push({ role: "toolResult", toolName: "submit_result", isError: false, details: { result: task } });
 	}
 	getLastAssistantText() { return "done"; }
 	async abort() {}

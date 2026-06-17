@@ -54,7 +54,7 @@ class FakeSession {
 		this.messages.push({
 			role: "toolResult",
 			toolName: "submit_result",
-			details: { status: "ok", summary: "resumed", result: "resumed output", artifacts: [] },
+			details: { result: "resumed output" },
 		});
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;

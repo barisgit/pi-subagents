@@ -30,6 +30,7 @@ import {
 	shouldNotifyControlEvent,
 } from "./subagent-control.ts";
 import { createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
+import type { TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import type { RunMode } from "../state/run-shape.ts";
 import { tokenUsageFromUsage } from "../state/usage-totals.ts";
@@ -353,6 +354,11 @@ export function sumUsages(...usages: (Usage | undefined)[]): Usage {
 export function resolveChildTools(
 	agentConfig: AgentConfig,
 	pi: ExtensionAPI,
+	// Workflow-authored result schema for this child's submit_result. Supplied ONLY
+	// by the workflow dispatch path (a script's agent(role, task, { schema })), never
+	// by the public subagent tool — the orchestrating workflow owns the contract, the
+	// child never decides it. Undefined keeps the default any-JSON result.
+	resultSchema?: TSchema,
 ): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
 	// Semantics:
 	//   tools frontmatter absent (undefined)  -> no allowlist => session sees ALL tools
@@ -375,7 +381,7 @@ export function resolveChildTools(
 	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
 	const customTools = [
 		...pi.getAllTools().filter((tool) => customToolNames.has(tool.name)),
-		createSubmitResultTool(),
+		resultSchema ? createSubmitResultTool(resultSchema) : createSubmitResultTool(),
 	] as ToolDefinition[];
 	return { activeToolNames, customTools };
 }

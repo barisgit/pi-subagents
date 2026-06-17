@@ -45,7 +45,7 @@ class FakeAgentSession {
 		this.messages.push({
 			role: "toolResult",
 			toolName: "submit_result",
-			details: { status: "ok", summary: "done", result: this.getLastAssistantText(), artifacts: [] },
+			details: { result: this.getLastAssistantText() },
 		});
 		await this.promptImpl(task, this);
 	}

@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
 import type { AgentConfig } from "../shared/agents.ts";
 import {
 	type AgentProgress,
@@ -141,6 +142,8 @@ export async function runInProcessChildStep(input: {
 	wrapUpdateDetails?: (update: AgentToolResult<Details>) => AgentToolResult<Details>;
 	layer0?: { runId: string; runRecordDir: string; sessionFile: string; rootRunId: string };
 	onLayer0StatusUpdate?: (patch: StatusPatch) => void;
+	/** Workflow-authored result schema for submit_result (workflow path only). */
+	resultSchema?: TSchema;
 }): Promise<SingleResult> {
 	const { data, deps, agentConfig, stepIndex } = input;
 	const skillNames = input.skills ?? agentConfig.skills ?? [];
@@ -161,6 +164,7 @@ export async function runInProcessChildStep(input: {
 		...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
 		maxSubagentDepth: input.maxSubagentDepth,
 		...(input.layer0 ? { layer0: input.layer0 } : {}),
+		...(input.resultSchema ? { resultSchema: input.resultSchema } : {}),
 	});
 	if ("error" in prepared) {
 		return {
