@@ -27,7 +27,7 @@ This codebase is the product of two completed refactoring charters:
 
 | Directory | Responsibility Summary | Detailed Map |
 |-----------|------------------------|--------------|
-| `src/dispatch/` | Subagent dispatch + child-agent execution: tool entry, run-record funnel (`openRunRecord`), sync/async/parallel paths, in-process session bridge, per-activation registry, worktrees, resume, intercom. (26 files) | [View Map](src/dispatch/codemap.md) |
+| `src/dispatch/` | Subagent dispatch + child-agent execution: tool entry, run-record funnel (`openRunRecord`), sync/async/parallel paths, in-process session bridge, one per-process leaf-concurrency pool, per-activation registry, worktrees, resume, intercom. (27 files) | [View Map](src/dispatch/codemap.md) |
 | `src/surfaces/` | Presentation/UI layer: split renderers (result/inline/shared/widget), fullscreen dashboard + pure row-model, slash commands, notifications, async job widget, agent CRUD. (20 files) | [View Map](src/surfaces/codemap.md) |
 | `src/state/` | Run-state + persistence: canonical in-memory `RunView` (two producers), one `StatusWriter`, status-patch applier, disk hydration, append-only registry, pure phase/liveness/shape kernels. (18 files) | [View Map](src/state/codemap.md) |
 | `src/shared/` | Low-level leaf utilities (imported downward, no upward imports): agent/skill discovery, fs codecs, runtime-env policy, path constants, formatting, settings, logging. (16 files) | [View Map](src/shared/codemap.md) |
