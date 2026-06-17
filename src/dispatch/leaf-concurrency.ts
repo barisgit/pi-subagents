@@ -25,7 +25,6 @@ import { type ConcurrencyPermit, ConcurrencySemaphore } from "./concurrency-sema
 
 interface LeafConcurrencyRegistry {
 	semaphore: ConcurrencySemaphore;
-	maxPermits: number;
 	/** Active permits keyed by the holder's runId, so a nested dispatch can find
 	 * its ancestor's permit to park it while awaiting descendants. */
 	permitsByRunId: Map<string, ConcurrencyPermit>;
@@ -40,18 +39,17 @@ function normalizeMaxPermits(value: number | undefined, fallback: number): numbe
 }
 
 /**
- * Resolve the process-wide registry, creating it on first use. The first caller
- * sizes the pool from `maxPermits`; later calls do NOT resize it (the pool is a
- * process resource, and reloads/child runtimes must not silently change a live
- * bound). Sizing is therefore first-win for the process lifetime.
+ * Read the process-wide registry, creating it at the default size if it does not
+ * yet exist. Does NOT resize an existing pool — acquire/park must observe the
+ * capacity that activation configured, never reset it. The pool is keyed on
+ * globalThis so it survives reloads and is shared across child module instances.
  */
-function registry(maxPermits: number): LeafConcurrencyRegistry {
+function getRegistry(): LeafConcurrencyRegistry {
 	const globals = globalThis as unknown as Record<symbol, LeafConcurrencyRegistry | undefined>;
 	let reg = globals[REGISTRY_KEY];
 	if (!reg) {
 		reg = {
-			semaphore: new ConcurrencySemaphore(maxPermits),
-			maxPermits,
+			semaphore: new ConcurrencySemaphore(DEFAULT_MAX_CONCURRENT_AGENTS),
 			permitsByRunId: new Map(),
 		};
 		globals[REGISTRY_KEY] = reg;
@@ -59,13 +57,27 @@ function registry(maxPermits: number): LeafConcurrencyRegistry {
 	return reg;
 }
 
+/**
+ * Create or RESIZE the pool to `maxPermits`. This is the only path that changes
+ * capacity, so a changed `maxConcurrentAgents` takes effect on the next
+ * activation without recreating the pool or revoking in-flight permits.
+ */
+function ensureRegistrySized(maxPermits: number): LeafConcurrencyRegistry {
+	const reg = getRegistry();
+	if (reg.semaphore.limit !== maxPermits) reg.semaphore.resize(maxPermits);
+	return reg;
+}
+
 /** Default pool size when config does not set `maxConcurrentAgents`. */
 export const DEFAULT_MAX_CONCURRENT_AGENTS = 4;
 
-/** The resolved per-process limit (for display/diagnostics). */
+/**
+ * Apply (and return) the per-process leaf-concurrency limit. Called at
+ * activation with the configured value; resizes the live pool so reloads take
+ * effect. Safe to call for display/diagnostics too.
+ */
 export function leafConcurrencyLimit(maxConcurrentAgents?: number): number {
-	const fallback = DEFAULT_MAX_CONCURRENT_AGENTS;
-	return registry(normalizeMaxPermits(maxConcurrentAgents, fallback)).maxPermits;
+	return ensureRegistrySized(normalizeMaxPermits(maxConcurrentAgents, DEFAULT_MAX_CONCURRENT_AGENTS)).semaphore.limit;
 }
 
 /**
@@ -73,8 +85,8 @@ export function leafConcurrencyLimit(maxConcurrentAgents?: number): number {
  * if under the limit). The returned release function frees the slot and clears
  * the run's permit entry; it is safe to call exactly once.
  */
-export async function acquireLeafPermit(runId: string, maxConcurrentAgents?: number): Promise<() => void> {
-	const reg = registry(normalizeMaxPermits(maxConcurrentAgents, DEFAULT_MAX_CONCURRENT_AGENTS));
+export async function acquireLeafPermit(runId: string): Promise<() => void> {
+	const reg = getRegistry();
 	const permit = await reg.semaphore.acquire();
 	reg.permitsByRunId.set(runId, permit);
 	let released = false;
@@ -93,13 +105,9 @@ export async function acquireLeafPermit(runId: string, maxConcurrentAgents?: num
  * occupy a leaf slot while blocked. If `parentRunId` holds no permit (e.g. a
  * top-level dispatch from the host), `fn` simply runs without parking.
  */
-export async function parkLeafPermit<T>(
-	parentRunId: string | undefined,
-	fn: () => Promise<T> | T,
-	maxConcurrentAgents?: number,
-): Promise<T> {
+export async function parkLeafPermit<T>(parentRunId: string | undefined, fn: () => Promise<T> | T): Promise<T> {
 	if (!parentRunId) return await fn();
-	const reg = registry(normalizeMaxPermits(maxConcurrentAgents, DEFAULT_MAX_CONCURRENT_AGENTS));
+	const reg = getRegistry();
 	const permit = reg.permitsByRunId.get(parentRunId);
 	if (!permit) return await fn();
 	return await permit.runWhileParked(fn);

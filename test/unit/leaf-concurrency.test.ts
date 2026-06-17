@@ -18,10 +18,30 @@ afterEach(() => {
 });
 
 describe("leaf-concurrency (per-process pool)", () => {
-	it("sizes from config first-win and ignores later resizes", () => {
+	it("resizes the live pool when config changes (reloads take effect)", () => {
 		assert.equal(leafConcurrencyLimit(2), 2);
-		// Later callers (reloads / child runtimes) must not resize a live pool.
-		assert.equal(leafConcurrencyLimit(9), 2);
+		// A later activation with a changed config resizes the same pool so reloads
+		// apply without recreating it or revoking in-flight permits.
+		assert.equal(leafConcurrencyLimit(9), 9);
+		assert.equal(leafConcurrencyLimit(3), 3);
+	});
+
+	it("a grown limit lets previously-blocked waiters acquire", async () => {
+		leafConcurrencyLimit(1);
+		const first = await acquireLeafPermit("a");
+		let secondAcquired = false;
+		const second = acquireLeafPermit("b").then((release) => {
+			secondAcquired = true;
+			return release;
+		});
+		await flushMicrotasks();
+		assert.equal(secondAcquired, false, "second waiter blocked at limit 1");
+		// Growing the pool must wake the parked waiter without freeing the first.
+		leafConcurrencyLimit(2);
+		const releaseSecond = await second;
+		assert.equal(secondAcquired, true, "grow woke the blocked waiter");
+		first();
+		releaseSecond();
 	});
 
 	it("defaults when config is absent or invalid", () => {

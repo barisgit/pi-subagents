@@ -16,7 +16,7 @@ interface Waiter {
  * continuing, so blocked parents do not consume leaf capacity.
  */
 export class ConcurrencySemaphore {
-	private readonly maxPermits: number;
+	private maxPermits: number;
 	private activePermits = 0;
 	private readonly waiters: Waiter[] = [];
 
@@ -33,6 +33,25 @@ export class ConcurrencySemaphore {
 
 	get queuedCount(): number {
 		return this.waiters.length;
+	}
+
+	get limit(): number {
+		return this.maxPermits;
+	}
+
+	/**
+	 * Change the permit ceiling live. Growing wakes queued waiters up to the new
+	 * limit; shrinking only lowers the ceiling — already-active permits are never
+	 * revoked, so the count drains below the new limit as they release (no waiter
+	 * is dispatched while activePermits >= maxPermits). Lets config changes take
+	 * effect on reload without recreating the process-wide pool.
+	 */
+	resize(maxPermits: number): void {
+		if (!Number.isInteger(maxPermits) || maxPermits < 1) {
+			throw new RangeError("ConcurrencySemaphore maxPermits must be a positive integer");
+		}
+		this.maxPermits = maxPermits;
+		this.dispatchWaiters();
 	}
 
 	acquire(): Promise<ConcurrencyPermit> {
