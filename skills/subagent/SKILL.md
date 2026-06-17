@@ -29,7 +29,7 @@ Delegate when work needs any of these:
 
 ## Workflow: orchestration with control flow
 
-`workflow({ script })` runs JavaScript in a sandbox with `agent(role, task)` (returns the child's structured envelope `{status, summary, result, artifacts?}`, rejects on failure), `parallel(thunks)`, and `phase(title)`. Top-level await works; the script's return value is the workflow result. `async:true` backgrounds the whole workflow. Await every `agent()`/`parallel()` call; use `parallel()` for concurrency (not raw `Promise.all`) so failures are attributed; the sandbox has no I/O — subagents do the real work.
+`workflow({ script })` runs JavaScript in a sandbox with `agent(role, task, opts?)`, `parallel(thunks)`, and `phase(title)`. `agent()` returns the child's result directly — a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object the workflow author owns; the child never decides its own shape). It rejects on child failure. Top-level await works; the script's return value is the workflow result. `async:true` backgrounds the whole workflow. Await every `agent()`/`parallel()` call; use `parallel()` to run independent children together (not raw `Promise.all`) so failures are attributed. How many agents run at once is bounded process-wide by `maxConcurrentAgents` (config), not per call. The sandbox has no I/O — subagents do the real work.
 
 ```ts
 workflow({ script: `
@@ -37,9 +37,11 @@ phase("fix");
 const fix = await agent("fixer", "Fix the flaky retry test in net/backoff.test.ts");
 phase("review loop");
 for (let round = 0; round < 2; round++) {
-  const review = await agent("review", "Review this fix for regressions: " + fix.summary);
-  if (review.status === "ok" && review.result?.approved !== false) return { fix, review };
-  await agent("fixer", "Address the review findings: " + review.summary);
+  const review = await agent("review", "Review this fix for regressions: " + fix, {
+    schema: { type: "object", required: ["approved"], properties: { approved: { type: "boolean" } }, additionalProperties: false },
+  });
+  if (review.approved) return { fix, review };
+  await agent("fixer", "Address the review findings.");
 }
 return "escalate: not approved after 2 rounds";
 ` })

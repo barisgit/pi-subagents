@@ -20,8 +20,7 @@ subagent({
     { agent: "<configured-agent>", task: "Find auth tests and summarize exact paths." },
     { agent: "<configured-agent>", task: "Run the auth unit tests and report failures." }
   ],
-  batch: true,
-  concurrency: 2
+  batch: true
 })
 ```
 
@@ -32,8 +31,8 @@ Use `workflow` for sequential or dependent phases. It can pass summaries/results
 ```ts
 workflow({ script: `
 const recon = await agent("explorer", "Trace login state ownership.");
-const fix = await agent("fixer", "Implement the smallest fix using: " + recon.summary);
-return await agent("qa", "Verify the fix: " + fix.summary);
+const fix = await agent("fixer", "Implement the smallest fix using: " + recon);
+return await agent("qa", "Verify the fix: " + fix);
 ` })
 ```
 

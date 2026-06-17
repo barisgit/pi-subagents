@@ -20,7 +20,7 @@ subagent({
 })
 ```
 
-Multiple top-level `run` tasks execute independently. Use `async:true` for background work, `batch:true` for one rollup notification, `concurrency` to cap parallel starts, and `worktree:true` to isolate parallel edits in git worktrees.
+Multiple top-level `run` tasks execute independently. Use `async:true` for background work, `batch:true` for one rollup notification, and `worktree:true` to isolate parallel edits in git worktrees. How many agents run at once is bounded process-wide by `maxConcurrentAgents` (config, default 4), not per call.
 
 Task fields include `agent`, `task`, optional `label`, optional `context:"fresh"|"fork"`, and optional `output`. `context:"fork"` is same-agent self-branching only; use fresh context for role changes.
 
@@ -35,16 +35,16 @@ workflow({ script: `
 phase("inspect");
 const recon = await agent("explorer", "Find the failing path and tests.");
 phase("fix");
-const fix = await agent("fixer", "Patch using this context: " + recon.summary);
+const fix = await agent("fixer", "Patch using this context: " + recon);
 const checks = await parallel([
-  () => agent("review", "Review the patch: " + fix.summary),
-  () => agent("qa", "Run the relevant tests: " + fix.summary)
+  () => agent("review", "Review the patch: " + fix),
+  () => agent("qa", "Run the relevant tests: " + fix)
 ]);
 return { fix, checks };
 ` })
 ```
 
-The workflow sandbox provides `agent(role, task)`, `parallel(thunks)`, and `phase(title)`. Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
+The workflow sandbox provides `agent(role, task, opts?)`, `parallel(thunks)`, and `phase(title)`. `agent()` returns the child's result directly: a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object). Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
 
 ## Slash commands
 
