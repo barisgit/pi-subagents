@@ -37,6 +37,23 @@ describe("parent run id plumbing", () => {
 		assert.equal(runs[0]?.parentRunId, "parent-2");
 	});
 
+	it("renders a foreground run queued until it has started, then running", () => {
+		type Control = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
+		const controls = new Map<string, Control>();
+		// Opened but not yet started (e.g. blocked on the leaf-concurrency pool): the
+		// live dashboard view must read "queued", never "running", or a permit-blocked
+		// run looks active. deriveRunDisplayState maps queued -> quiet (not lost).
+		controls.set("blocked", { runId: "blocked", mode: "single", startedAt: 1, updatedAt: 2 });
+		const blocked = foregroundRunsFromState({ foregroundControls: controls })[0];
+		assert.equal(blocked?.state, "queued");
+		assert.equal(blocked?.displayState, "quiet");
+
+		// Once the run produces progress (started=true), it flips to running.
+		controls.set("active", { runId: "active", mode: "single", startedAt: 1, updatedAt: 2, started: true });
+		const active = foregroundRunsFromState({ foregroundControls: controls }).find((r) => r.id === "active");
+		assert.equal(active?.state, "running");
+	});
+
 	it("emits PI_SUBAGENT_PARENT_RUN_ID from identity env", () => {
 		assert.equal(
 			getSubagentIdentityEnv("fixer", undefined, { parentRunId: "parent-3" }).PI_SUBAGENT_PARENT_RUN_ID,

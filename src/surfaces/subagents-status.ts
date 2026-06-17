@@ -232,8 +232,12 @@ export function foregroundRunsFromState(
 ): ForegroundRunSummary[] {
 	return Array.from(state.foregroundControls.values())
 		.map((control: ForegroundControl) => {
+			// A foreground run is opened before it acquires a leaf permit; it is only
+			// "running" once it has produced progress (control.started). Until then it
+			// renders "queued" so a permit-blocked run is never shown as active.
+			const runState = control.started ? ("running" as const) : ("queued" as const);
 			const displayState = deriveRunDisplayState({
-				state: "running",
+				state: runState,
 				activityState: control.currentActivityState,
 				currentTool: control.currentTool,
 				phase: control.phase,
@@ -246,7 +250,7 @@ export function foregroundRunsFromState(
 				steps: [],
 				...(control.asyncDir ? { asyncDir: control.asyncDir } : {}),
 				...(control.parentRunId ? { parentRunId: control.parentRunId } : {}),
-				state: "running" as const,
+				state: runState,
 				...(control.currentActivityState ? { activityState: control.currentActivityState } : {}),
 				...(displayState ? { displayState } : {}),
 				...(control.lastActivityAt !== undefined ? { lastActivityAt: control.lastActivityAt } : {}),
@@ -351,7 +355,7 @@ function runShapeBadge(run: LiveRun): string {
 function runHasLiveLabel(run: LiveRun): boolean {
 	// Liveness is a data property of the run's state, not its provenance: a
 	// terminal/lost run freezes its label regardless of whether this process owns
-	// it. Foreground runs are always state:'running' => not terminal => live.
+	// it. Foreground runs are state:'queued' or 'running' => not terminal => live.
 	const s = run.run.state;
 	if (s === "complete" || s === "failed" || s === "interrupted" || s === "skipped" || s === "lost" || s === "paused")
 		return false;

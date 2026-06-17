@@ -50,6 +50,10 @@ export function createForegroundRunController(
 		},
 		applyProgress(agent, index, firstProgress, finalOutput) {
 			if (!control) return;
+			// First progress means a child acquired its leaf permit and began
+			// executing: the live dashboard view may now render this run "running"
+			// (before this it is "queued", possibly blocked on the concurrency pool).
+			control.started = true;
 			applyForegroundProgress(control, agent, index, firstProgress, finalOutput);
 			opts?.mirror?.(firstProgress, index, finalOutput);
 		},

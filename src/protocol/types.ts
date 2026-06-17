@@ -426,6 +426,13 @@ export interface SubagentState {
 			mode: "single" | "parallel";
 			startedAt: number;
 			updatedAt: number;
+			/**
+			 * False until the run produces its first progress (i.e. a child acquired a
+			 * leaf permit and began executing). A foreground run is opened before it
+			 * acquires a permit, so the live dashboard view must render it "queued"
+			 * until then — not "running" — or a permit-blocked run looks active.
+			 */
+			started?: boolean;
 			/** Run-level caller-provided label; populated for single runs and uniform-label parallel runs. */
 			label?: string;
 			/** Per-step caller-provided labels aligned by index. */
