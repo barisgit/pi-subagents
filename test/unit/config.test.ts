@@ -4,24 +4,33 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-// Hermetic: point HOME at a temp dir BEFORE importing the config module, so its
-// module-level SUBAGENT_CONFIG_* constants resolve under the temp home. All file
-// IO happens inside the temp dir; the real ~/.pi is never touched.
+// Hermetic: point the Pi agent dir at a temp dir BEFORE importing the config
+// module, so module-level SUBAGENT_CONFIG_* constants resolve under the temp
+// tree. All file IO happens inside the temp dir; real user config is untouched.
 const tmpHome = path.join(os.tmpdir(), "pi-subagent-config-test");
+const tmpAgentDir = path.join(tmpHome, ".pi", "agent");
 const origHome = process.env.HOME;
+const origPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const origFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 type ConfigModule = typeof import("../../src/shared/config.ts");
 let mod: ConfigModule;
 
 before(async () => {
 	process.env.HOME = tmpHome;
-	fs.mkdirSync(path.join(tmpHome, ".pi", "agent", "extensions", "subagent"), { recursive: true });
+	process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
+	process.env.FI_CODING_AGENT_DIR = tmpAgentDir;
+	fs.mkdirSync(path.join(tmpAgentDir, "extensions", "subagent"), { recursive: true });
 	mod = await import("../../src/shared/config.ts");
 });
 
 after(() => {
 	if (origHome === undefined) delete process.env.HOME;
 	else process.env.HOME = origHome;
+	if (origPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = origPiAgentDir;
+	if (origFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+	else process.env.FI_CODING_AGENT_DIR = origFiAgentDir;
 	fs.rmSync(tmpHome, { recursive: true, force: true });
 });
 

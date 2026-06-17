@@ -11,12 +11,16 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPreset = process.env.PI_PRESET;
 const originalLegacyPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 beforeEach(() => {
 	const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-frontmatter-home-"));
 	tempDirs.push(homeDir);
 	process.env.HOME = homeDir;
 	process.env.USERPROFILE = homeDir;
+	process.env.PI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
+	process.env.FI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
 	delete process.env.PI_PRESET;
 	delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 });
@@ -35,6 +39,10 @@ afterEach(() => {
 	else process.env.PI_PRESET = originalPreset;
 	if (originalLegacyPreset === undefined) delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 	else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
+	if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
+	if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+	else process.env.FI_CODING_AGENT_DIR = originalFiAgentDir;
 });
 
 describe("agent frontmatter scope", () => {
@@ -269,10 +277,14 @@ Do work
 		tempDirs.push(homeDir);
 		const previousHome = process.env.HOME;
 		const previousUserProfile = process.env.USERPROFILE;
+		const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const previousFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 		try {
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
+			process.env.PI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
+			process.env.FI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
 
 			const result = discoverAgents(dir, "both");
 			const scout = result.agents.find((agent) => agent.name === "scout");
@@ -286,6 +298,10 @@ Do work
 			else process.env.HOME = previousHome;
 			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 			else process.env.USERPROFILE = previousUserProfile;
+			if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+			if (previousFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+			else process.env.FI_CODING_AGENT_DIR = previousFiAgentDir;
 		}
 	});
 

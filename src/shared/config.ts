@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { logger } from "./logger.ts";
 import type { ExtensionConfig } from "../protocol/types.ts";
 
-export const SUBAGENT_CONFIG_PRIMARY = path.join(os.homedir(), ".pi", "agent", "subagent.json");
-export const SUBAGENT_CONFIG_LEGACY = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
+export const SUBAGENT_CONFIG_PRIMARY = path.join(getAgentDir(), "subagent.json");
+export const SUBAGENT_CONFIG_LEGACY = path.join(getAgentDir(), "extensions", "subagent", "config.json");
 
 export function resolveConfigPath(): string {
 	if (fs.existsSync(SUBAGENT_CONFIG_PRIMARY)) return SUBAGENT_CONFIG_PRIMARY;

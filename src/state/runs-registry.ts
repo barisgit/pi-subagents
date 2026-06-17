@@ -11,8 +11,8 @@
 // writes smaller than PIPE_BUF (~4KB); each record is well below that limit.
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export interface RunsRegistryEntry {
 	runId: string;
@@ -43,7 +43,7 @@ export interface RunsRegistryEntry {
 	startedAt: number;
 }
 
-const DEFAULT_REGISTRY_PATH = path.join(os.homedir(), ".pi", "agent", "pi-subagents", "runs-index.jsonl");
+const DEFAULT_REGISTRY_PATH = path.join(getAgentDir(), "pi-subagents", "runs-index.jsonl");
 
 let registryPathOverride: string | null = null;
 

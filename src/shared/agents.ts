@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { parseFrontmatter } from "./frontmatter.ts";
 import type {
@@ -241,9 +242,10 @@ export interface AgentDiscoveryAllResult {
 }
 
 function getExtensionConfigPaths(): { primary: string; legacy: string } {
+	const agentDir = getAgentDir();
 	return {
-		primary: path.join(os.homedir(), ".pi", "agent", "subagent.json"),
-		legacy: path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json"),
+		primary: path.join(agentDir, "subagent.json"),
+		legacy: path.join(agentDir, "extensions", "subagent", "config.json"),
 	};
 }
 
@@ -495,7 +497,7 @@ function findNearestProjectRoot(cwd: string): string | null {
 }
 
 export function getUserAgentSettingsPath(): string {
-	return path.join(os.homedir(), ".pi", "agent", "settings.json");
+	return path.join(getAgentDir(), "settings.json");
 }
 
 export function getProjectAgentSettingsPath(cwd: string): string | null {
@@ -1019,7 +1021,7 @@ function loadRegisteredPersonaAgents(options?: AgentDiscoveryOptions): AgentConf
 }
 
 export function discoverAgents(cwd: string, scope: AgentScope, options?: AgentDiscoveryOptions): AgentDiscoveryResult {
-	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
+	const userDirOld = path.join(getAgentDir(), "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
 	const { readDirs: projectAgentDirs, preferredDir: projectAgentsDir } = resolveNearestProjectAgentDirs(cwd);
 	const userSettingsPath = getUserAgentSettingsPath();
@@ -1061,7 +1063,7 @@ export function discoverAgents(cwd: string, scope: AgentScope, options?: AgentDi
 }
 
 export function discoverAgentsAll(cwd: string, options?: AgentDiscoveryOptions): AgentDiscoveryAllResult {
-	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
+	const userDirOld = path.join(getAgentDir(), "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
 	const { readDirs: projectDirs, preferredDir: projectDir } = resolveNearestProjectAgentDirs(cwd);
 	const userSettingsPath = getUserAgentSettingsPath();

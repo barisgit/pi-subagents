@@ -159,10 +159,14 @@ describe("skills filesystem fallback", () => {
 		const userPackageRoot = path.join(userAgentDir, "user-pkg");
 		const previousHome = process.env.HOME;
 		const previousUserProfile = process.env.USERPROFILE;
+		const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const previousFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 		try {
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
+			process.env.PI_CODING_AGENT_DIR = userAgentDir;
+			process.env.FI_CODING_AGENT_DIR = userAgentDir;
 			makePackageSkill(userPackageRoot, "user-settings-package-skill", "User settings package skill.");
 			fs.mkdirSync(userAgentDir, { recursive: true });
 			fs.writeFileSync(
@@ -182,6 +186,10 @@ describe("skills filesystem fallback", () => {
 			else process.env.HOME = previousHome;
 			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 			else process.env.USERPROFILE = previousUserProfile;
+			if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+			if (previousFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+			else process.env.FI_CODING_AGENT_DIR = previousFiAgentDir;
 		}
 	});
 
@@ -191,10 +199,14 @@ describe("skills filesystem fallback", () => {
 		const packageRoot = path.join(userAgentDir, "git", "github.com", "user", "repo");
 		const previousHome = process.env.HOME;
 		const previousUserProfile = process.env.USERPROFILE;
+		const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const previousFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 		try {
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
+			process.env.PI_CODING_AGENT_DIR = userAgentDir;
+			process.env.FI_CODING_AGENT_DIR = userAgentDir;
 			makePackageSkill(packageRoot, "user-settings-git-package-skill", "User settings git package skill.");
 			fs.mkdirSync(userAgentDir, { recursive: true });
 			fs.writeFileSync(
@@ -214,6 +226,10 @@ describe("skills filesystem fallback", () => {
 			else process.env.HOME = previousHome;
 			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 			else process.env.USERPROFILE = previousUserProfile;
+			if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+			if (previousFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+			else process.env.FI_CODING_AGENT_DIR = previousFiAgentDir;
 		}
 	});
 
@@ -223,10 +239,14 @@ describe("skills filesystem fallback", () => {
 		const packageRoot = path.join(userAgentDir, "npm", "node_modules", "@scope", "skill-package");
 		const previousHome = process.env.HOME;
 		const previousUserProfile = process.env.USERPROFILE;
+		const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const previousFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 		try {
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
+			process.env.PI_CODING_AGENT_DIR = userAgentDir;
+			process.env.FI_CODING_AGENT_DIR = userAgentDir;
 			makePackageSkill(
 				packageRoot,
 				"user-settings-scoped-npm-package-skill",
@@ -251,6 +271,10 @@ describe("skills filesystem fallback", () => {
 			else process.env.HOME = previousHome;
 			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 			else process.env.USERPROFILE = previousUserProfile;
+			if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+			if (previousFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+			else process.env.FI_CODING_AGENT_DIR = previousFiAgentDir;
 		}
 	});
 

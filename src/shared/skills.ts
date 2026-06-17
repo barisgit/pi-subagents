@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type SkillSource =
 	| "project"
@@ -49,7 +50,7 @@ let loadSkillsCache: { cwd: string; skills: CachedSkillEntry[]; timestamp: numbe
 const LOAD_SKILLS_CACHE_TTL_MS = 5000;
 
 const CONFIG_DIR = ".pi";
-const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
+const AGENT_DIR = getAgentDir();
 
 const SOURCE_PRIORITY: Record<SkillSource, number> = {
 	project: 700,

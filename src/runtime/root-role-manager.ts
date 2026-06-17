@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, discoverAgents } from "../shared/agents.ts";
 import { resolveToolPatterns } from "../dispatch/resolve-tool-patterns.ts";
 import { selectRootRole } from "../shared/root-role-selection.ts";
@@ -31,7 +30,7 @@ export function createRootRoleManager(deps: {
 	let activeRootRoleName: string | undefined;
 	let activeRootRole: AgentConfig | undefined;
 
-	const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+	const settingsPath = path.join(getAgentDir(), "settings.json");
 	const runtimePresetSettingKeys = ["defaultProvider", "defaultModel", "defaultThinkingLevel"] as const;
 
 	function readSettingsFile(): Record<string, unknown> | undefined {

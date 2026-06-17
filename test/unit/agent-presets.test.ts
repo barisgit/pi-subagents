@@ -11,6 +11,8 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPreset = process.env.PI_PRESET;
 const originalLegacyPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 function writeJson(filePath: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -40,6 +42,8 @@ describe("agent presets", () => {
 		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-presets-project-"));
 		process.env.HOME = tempHome;
 		process.env.USERPROFILE = tempHome;
+		process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
+		process.env.FI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 		delete process.env.PI_PRESET;
 		delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 		writeProjectAgent("fixer");
@@ -54,6 +58,10 @@ describe("agent presets", () => {
 		else process.env.PI_PRESET = originalPreset;
 		if (originalLegacyPreset === undefined) delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 		else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
+		if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
+		if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+		else process.env.FI_CODING_AGENT_DIR = originalFiAgentDir;
 		fs.rmSync(tempHome, { recursive: true, force: true });
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
