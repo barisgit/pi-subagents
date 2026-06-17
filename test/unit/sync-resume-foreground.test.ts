@@ -133,7 +133,7 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 	const executor = createSubagentExecutor({
 		pi,
 		state,
-		config: { parallel: { concurrency: 1 } },
+		config: {},
 		asyncByDefault: opts.asyncByDefault ?? false,
 		tempArtifactsDir: tempDir,
 		childRegistry,

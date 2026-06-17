@@ -31,7 +31,6 @@ export const SubagentParams = Type.Object(
 		run: Type.Optional(Type.Array(StepSchema, { minItems: 1, description: "Work to dispatch." })),
 		async: Type.Optional(Type.Boolean({ description: "Run detached (returns immediately)." })),
 		batch: Type.Optional(Type.Boolean({ description: "Collapse completion notifications into one rollup." })),
-		concurrency: Type.Optional(Type.Number({ description: "Max parallel tasks." })),
 		worktree: Type.Optional(Type.Boolean({ description: "Top-level worktree mode for parallel runs." })),
 		message: Type.Optional(Type.String({ description: "Shared dispatch framing or resume follow-up message." })),
 		action: Type.Optional(
@@ -53,7 +52,6 @@ export type SubagentToolInput = {
 	run?: Step[];
 	async?: boolean;
 	batch?: boolean;
-	concurrency?: number;
 	worktree?: boolean;
 	message?: string;
 	action?: "list" | "status" | "interrupt" | "resume";

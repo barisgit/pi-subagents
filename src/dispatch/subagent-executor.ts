@@ -190,7 +190,6 @@ import {
 	SUBAGENT_SPAWN_STARTED_EVENT,
 	type SubagentNeedsAttentionPayload,
 	isInsideChildSession,
-	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
 	truncateOutput,
@@ -233,7 +232,7 @@ function formatForegroundActivity(
 		? `no activity for ${seconds}s`
 		: `active ${seconds}s ago`;
 }
-const SLIM_TOP_LEVEL_KEYS = new Set(["run", "async", "batch", "concurrency", "worktree", "message", "action", "id"]);
+const SLIM_TOP_LEVEL_KEYS = new Set(["run", "async", "batch", "worktree", "message", "action", "id"]);
 const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "output"]);
 const ALLOWED_CONTROL_ACTIONS = ["list", "status", "interrupt", "resume"] as const;
 const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);
@@ -267,7 +266,7 @@ function normalizeRunDispatchParams(params: InternalSubagentParams): {
 } {
 	const slimValidationError = validateSubagentToolInput(params);
 	if (slimValidationError) return { error: slimValidationError };
-	const input = params as InternalSubagentParams & { run?: unknown[]; message?: string; concurrency?: number };
+	const input = params as InternalSubagentParams & { run?: unknown[]; message?: string };
 	if (!Array.isArray(input.run) || input.run.length === 0) {
 		return { error: validationError("`run` must contain at least one task") };
 	}
@@ -323,7 +322,6 @@ function normalizeRunDispatchParams(params: InternalSubagentParams): {
 			tasks: parallelTasks,
 			message: undefined,
 			prompt: undefined,
-			concurrency: input.concurrency ?? parallelTasks.length,
 		},
 	};
 }

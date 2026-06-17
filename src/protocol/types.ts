@@ -566,8 +566,6 @@ export interface IntercomBridgeConfig {
 
 export interface TopLevelParallelConfig {
 	maxTasks?: number;
-	concurrency?: number;
-	maxConcurrency?: number;
 }
 
 export type AgentSurface = "main" | "subagent" | "both" | "internal";
@@ -664,7 +662,6 @@ export const DEFAULT_ARTIFACT_CONFIG: ArtifactConfig = {
 };
 
 export const MAX_PARALLEL = 8;
-export const MAX_CONCURRENCY = 4;
 export const WIDGET_KEY = "subagent-async";
 export const SLASH_RESULT_TYPE = "subagent-slash-result";
 export const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
@@ -690,17 +687,6 @@ function normalizeTopLevelParallelValue(value: unknown): number | undefined {
 
 export function resolveTopLevelParallelMaxTasks(value: unknown): number {
 	return normalizeTopLevelParallelValue(value) ?? MAX_PARALLEL;
-}
-
-export function resolveTopLevelParallelConcurrency(
-	override: unknown,
-	configValue: unknown,
-	maxValue?: unknown,
-): number {
-	const requested =
-		normalizeTopLevelParallelValue(override) ?? normalizeTopLevelParallelValue(configValue) ?? MAX_CONCURRENCY;
-	const max = normalizeTopLevelParallelValue(maxValue);
-	return max === undefined ? requested : Math.min(requested, max);
 }
 
 export function wrapForkTask(task: string, preamble?: string | false): string {

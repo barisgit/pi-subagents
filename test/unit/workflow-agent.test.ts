@@ -172,7 +172,7 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 					lastUiContext: null,
 					poller: null,
 				},
-				config: { parallel: { concurrency: 1 }, control: { enabled: true, needsAttentionAfterMs: 1234 } },
+				config: { control: { enabled: true, needsAttentionAfterMs: 1234 } },
 				asyncByDefault: false,
 				tempArtifactsDir: root,
 				childRegistry: new ChildAgentRegistry(),

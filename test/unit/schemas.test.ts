@@ -96,7 +96,6 @@ describe("SubagentParams schema", () => {
 					{ agent: "main", task: "a" },
 					{ agent: "explorer", task: "b", context: "fresh", output: false },
 				],
-				concurrency: 2,
 			},
 			{ action: "list" },
 			{ action: "status", id: "run-123" },

@@ -63,7 +63,7 @@ function makeHarness(cwd: string) {
 			getAllTools: () => [],
 		},
 		state,
-		config: { parallel: { concurrency: 1 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry,

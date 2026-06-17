@@ -82,7 +82,7 @@ function makeExecutor(cwd: string, emitted: Array<{ event: string; payload: Reco
 			lastUiContext: null,
 			poller: null,
 		},
-		config: { parallel: { concurrency: 2 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry: new ChildAgentRegistry(),

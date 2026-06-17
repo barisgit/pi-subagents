@@ -92,7 +92,7 @@ function makeExecutorWithAnchors(cwd: string) {
 			lastUiContext: null,
 			poller: null,
 		},
-		config: { parallel: { concurrency: 2 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry: new ChildAgentRegistry(),

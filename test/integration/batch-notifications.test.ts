@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { __resetLeafConcurrencyForTest, leafConcurrencyLimit } from "../../src/dispatch/leaf-concurrency.ts";
 import registerSubagentNotify from "../../src/surfaces/notify.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
@@ -172,7 +173,7 @@ function makeHarness(cwd: string) {
 	const executor = createSubagentExecutor({
 		pi,
 		state,
-		config: { parallel: { concurrency: 1 } },
+		config: { maxConcurrentAgents: 1 },
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry,
@@ -206,11 +207,14 @@ describe("batch notifications", () => {
 
 	beforeEach(() => {
 		tempDir = createTempDir("pi-subagent-batch-notifications-");
+		__resetLeafConcurrencyForTest();
+		leafConcurrencyLimit(1);
 	});
 
 	afterEach(() => {
 		restoreRuntime?.();
 		restoreRuntime = undefined;
+		__resetLeafConcurrencyForTest();
 		removeTempDir(tempDir);
 	});
 

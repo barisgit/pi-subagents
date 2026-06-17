@@ -95,7 +95,6 @@ export interface InternalSubagentParams {
 	tasks?: TaskParam[];
 	prompt?: string;
 	message?: string;
-	concurrency?: number;
 	worktree?: boolean;
 	batch?: boolean;
 	context?: "fresh" | "fork";

@@ -76,7 +76,7 @@ function setup(prefix: string) {
 			lastUiContext: null,
 			poller: null,
 		},
-		config: { parallel: { concurrency: 2 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),

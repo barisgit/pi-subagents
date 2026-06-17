@@ -119,7 +119,7 @@ function setup(
 			lastUiContext: null,
 			poller: null,
 		},
-		config: { parallel: { concurrency: 2 } },
+		config: {},
 		asyncByDefault: options.asyncByDefault ?? false,
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),

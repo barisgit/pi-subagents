@@ -23,7 +23,7 @@ describe("schema field set", () => {
 	it("top-level keys are exactly the slim set", () => {
 		assert.deepEqual(
 			sortedKeys(SubagentParams),
-			["action", "async", "batch", "concurrency", "id", "message", "run", "worktree"].sort(),
+			["action", "async", "batch", "id", "message", "run", "worktree"].sort(),
 		);
 	});
 

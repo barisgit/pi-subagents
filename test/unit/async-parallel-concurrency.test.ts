@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { __resetLeafConcurrencyForTest, leafConcurrencyLimit } from "../../src/dispatch/leaf-concurrency.ts";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
@@ -47,6 +48,8 @@ function waitForEvent(events: EventEmitter, channel: string, predicate: (payload
 function setup(prefix: string, concurrency: number) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	roots.push(root);
+	__resetLeafConcurrencyForTest();
+	leafConcurrencyLimit(concurrency);
 	previousHome = process.env.HOME;
 	process.env.HOME = root;
 	setRegistryPathForTests(path.join(root, ".pi", "agent", "pi-subagents", "runs-index.jsonl"));
@@ -116,7 +119,7 @@ function setup(prefix: string, concurrency: number) {
 			lastUiContext: null,
 			poller: null,
 		},
-		config: { parallel: { concurrency } },
+		config: { maxConcurrentAgents: concurrency },
 		asyncByDefault: false,
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),
@@ -141,6 +144,7 @@ function setup(prefix: string, concurrency: number) {
 afterEach(() => {
 	restoreRuntime?.();
 	restoreRuntime = undefined;
+	__resetLeafConcurrencyForTest();
 	setRegistryPathForTests(null);
 	if (previousHome === undefined) delete process.env.HOME;
 	else process.env.HOME = previousHome;
@@ -158,7 +162,7 @@ describe("async parallel concurrency gate", () => {
 		const run = Array.from({ length: total }, (_, i) => ({ agent: `A${i}`, task: `t${i}` }));
 		const result = await harness.executor.execute(
 			"id",
-			{ run, concurrency, async: true } as never,
+			{ run, async: true } as never,
 			new AbortController().signal,
 			undefined,
 			harness.ctx as never,

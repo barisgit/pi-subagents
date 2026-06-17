@@ -19,7 +19,6 @@ import {
 	type ExtensionConfig,
 	type SingleResult,
 	type SubagentState,
-	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
 	wrapForkTask,
@@ -268,11 +267,6 @@ export async function runParallelPath(
 	const allArtifactPaths: ArtifactPaths[] = [];
 	const tasks = params.tasks as TaskParam[];
 	const maxParallelTasks = resolveTopLevelParallelMaxTasks(deps.config.parallel?.maxTasks);
-	const parallelConcurrency = resolveTopLevelParallelConcurrency(
-		params.concurrency,
-		deps.config.parallel?.concurrency,
-		deps.config.parallel?.maxConcurrency,
-	);
 
 	if (tasks.length > maxParallelTasks)
 		return {
@@ -351,7 +345,7 @@ export async function runParallelPath(
 				? (agent, index) => childIntercomTarget(runId, agent, index)
 				: undefined,
 			foregroundControl,
-			concurrencyLimit: parallelConcurrency,
+			concurrencyLimit: tasks.length,
 			maxSubagentDepths,
 			liveResults,
 			liveProgress,

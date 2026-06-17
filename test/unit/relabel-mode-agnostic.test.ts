@@ -58,7 +58,7 @@ describe("mode-agnostic relabel", () => {
 		const executor = createSubagentExecutor({
 			pi,
 			state: s,
-			config: { parallel: { concurrency: 1 } },
+			config: {},
 			asyncByDefault: false,
 			tempArtifactsDir: cwd,
 			childRegistry: new ChildAgentRegistry(),

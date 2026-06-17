@@ -57,7 +57,7 @@ try {
 	const executor = createSubagentExecutor({
 		pi: { events: { emit: () => {} }, getSessionName: () => undefined, setSessionName: () => {}, getAllTools: () => [] },
 		state: { baseCwd: root, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null, poller: null },
-		config: { parallel: { concurrency: 2 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),

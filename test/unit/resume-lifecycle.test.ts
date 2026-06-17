@@ -68,7 +68,7 @@ function setup() {
 	const executor = createSubagentExecutor({
 		pi,
 		state: s,
-		config: { parallel: { concurrency: 1 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: tempDir,
 		childRegistry: new ChildAgentRegistry(),

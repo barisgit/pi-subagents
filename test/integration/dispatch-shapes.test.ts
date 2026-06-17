@@ -130,7 +130,7 @@ function makeExecutor(cwd: string) {
 			getAllTools: () => [],
 		},
 		state: makeState(cwd),
-		config: { parallel: { concurrency: 1 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry: new ChildAgentRegistry(),
