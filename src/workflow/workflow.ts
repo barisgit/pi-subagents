@@ -55,6 +55,14 @@ export interface WorkflowGroupHandle {
 	}): Promise<SingleResult>;
 	finishAsync?(success: boolean, summary?: string): void;
 	failWorkflow?(message: string, tags?: { phaseIndex?: number; phaseTitle?: string }): Promise<void>;
+	/**
+	 * Run `fn` (a SYNC workflow script execution) while the calling agent's leaf
+	 * permit is parked. The agent that invoked the workflow tool is mid-prompt and
+	 * holds a leaf slot; parking it for the span it awaits its workflow children
+	 * keeps the one process-wide concurrency pool deadlock-free. Implemented by the
+	 * dispatch layer (which knows the caller's runId); a no-op when absent.
+	 */
+	parkWhileRunning?<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 export interface WorkflowRuntimeOptions {
@@ -718,7 +726,7 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 						},
 					};
 				}
-				const value = await run();
+				const value = group?.parkWhileRunning ? await group.parkWhileRunning(run) : await run();
 				return {
 					content: [{ type: "text", text: stringifyWorkflowValue(value) }],
 					// `details` must ALWAYS be a real Details (or undefined), never the

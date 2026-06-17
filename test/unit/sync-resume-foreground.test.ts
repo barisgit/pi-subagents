@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { __resetLeafConcurrencyForTest } from "../../src/dispatch/leaf-concurrency.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
@@ -11,11 +12,24 @@ import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../src/prot
 
 let tempDir: string | undefined;
 let restoreDeps: (() => void) | undefined;
+// Detached async-resume children outlive the test body. Track the active fake
+// session + registry so afterEach can settle them BEFORE restoring deps and
+// deleting tempDir; otherwise a late child runs against the next test's mocks
+// and corrupts its status. (The leaf-concurrency gate adds a microtask before a
+// child prompts, which makes this pre-existing race deterministic.)
+let activeSession: { resolvePrompt?: () => void } | undefined;
+let activeRegistry: ChildAgentRegistry | undefined;
 
-afterEach(() => {
+afterEach(async () => {
+	activeSession?.resolvePrompt?.();
+	const inFlight = activeRegistry?.get("resume-run");
+	if (inFlight) await inFlight.completed.catch(() => {});
+	activeSession = undefined;
+	activeRegistry = undefined;
 	restoreDeps?.();
 	restoreDeps = undefined;
 	setRegistryPathForTests(null);
+	__resetLeafConcurrencyForTest();
 	if (tempDir) removeTempDir(tempDir);
 	tempDir = undefined;
 });
@@ -113,6 +127,9 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 		createAgentSession: (async () => ({ session })) as never,
 	});
 	const childRegistry = new ChildAgentRegistry();
+	// Let afterEach settle any detached child this test spawns before teardown.
+	activeSession = session;
+	activeRegistry = childRegistry;
 	const executor = createSubagentExecutor({
 		pi,
 		state,

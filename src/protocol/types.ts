@@ -627,6 +627,13 @@ export interface ExtensionConfig {
 	forceTopLevelAsync?: boolean;
 	defaultSessionDir?: string;
 	maxSubagentDepth?: number;
+	/**
+	 * Per-process ceiling on concurrently executing leaf agents across ALL
+	 * dispatch paths (sync, async, parallel, workflow). This is the single
+	 * concurrency knob; there are no per-invocation or per-batch settings.
+	 * Parents awaiting their own children do not occupy a slot. Default 4.
+	 */
+	maxConcurrentAgents?: number;
 	control?: ControlConfig;
 	parallel?: TopLevelParallelConfig;
 	worktreeSetupHook?: string;

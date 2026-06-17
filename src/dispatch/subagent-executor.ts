@@ -33,6 +33,7 @@ import {
 	dispatchAsyncChild,
 	runChildAgent,
 } from "./in-process-executor.ts";
+import { parkLeafPermit } from "./leaf-concurrency.ts";
 import { prepareChildStep } from "./prepare-child-step.ts";
 import type {
 	AsyncDispatchStep,
@@ -1009,14 +1010,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				// Bare resume (async omitted) follows the host's asyncByDefault, exactly
 				// like normal dispatch (see requestedAsync below) — so the two surfaces
 				// share one mode default instead of resume hard-defaulting to async.
-				return resumeRun(
-					deps.state,
-					deps.childRegistry,
-					paramsWithResolvedCwd.id!,
-					paramsWithResolvedCwd.message!,
-					resumeAsyncMode,
-					resumeData,
-					deps,
+				// A nested foreground resume blocks the calling agent (which holds a leaf
+				// permit) while it awaits the resumed child, so park that permit for the
+				// span — same deadlock-avoidance rule as fresh nested dispatch. Async
+				// resume returns immediately, making the park a trivial no-op span.
+				const resumeParentRunId = resolveDispatchParentRunId(ctx);
+				return parkLeafPermit(resumeParentRunId, () =>
+					resumeRun(
+						deps.state,
+						deps.childRegistry,
+						paramsWithResolvedCwd.id!,
+						paramsWithResolvedCwd.message!,
+						resumeAsyncMode,
+						resumeData,
+						deps,
+					),
 				);
 			}
 			if (!(ALLOWED_CONTROL_ACTIONS as readonly string[]).includes(params.action)) {
@@ -1389,13 +1397,24 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const asyncResult = runAsyncPath(execData, deps);
 			if (asyncResult) return withForkContext(asyncResult, effectiveParams.context);
 
+			// A nested (parentRunId-bearing) dispatch runs while the parent agent is
+			// mid-prompt and holding a leaf permit. Park that permit for the span we
+			// await descendants so a blocked parent never occupies a leaf slot — this
+			// is what keeps the one process-wide pool deadlock-free under nesting.
+			// Top-level dispatches (no parentRunId) hold no permit, so park is a no-op.
 			if (hasTasks && effectiveParams.tasks) {
-				executionResult = withForkContext(await runParallelPath(execData, deps), effectiveParams.context);
+				executionResult = withForkContext(
+					await parkLeafPermit(parentRunId, () => runParallelPath(execData, deps)),
+					effectiveParams.context,
+				);
 				return executionResult;
 			}
 
 			if (hasSingle) {
-				executionResult = withForkContext(await runSinglePath(execData, deps), effectiveParams.context);
+				executionResult = withForkContext(
+					await parkLeafPermit(parentRunId, () => runSinglePath(execData, deps)),
+					effectiveParams.context,
+				);
 				return executionResult;
 			}
 		} catch (error) {
@@ -1526,6 +1545,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				groupRunId: group.runId,
 				async: effectiveAsync,
 				asyncDir: group.runRecordDir,
+				// Park the calling agent's leaf permit while a sync workflow awaits its
+				// children (no-op for a top-level workflow with no parent permit).
+				parkWhileRunning: <T>(fn: () => Promise<T>) => parkLeafPermit(parentRunId, fn),
 				dispatchChild: async ({ role, task, index, phaseIndex, phaseTitle, parallelGroupId, resultSchema }) => {
 					const agentConfig = agents.find((agent) => agent.name === role);
 					let result: SingleResult | undefined;

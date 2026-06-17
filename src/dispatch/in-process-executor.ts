@@ -55,6 +55,7 @@ import {
 } from "../protocol/submit-result.ts";
 import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
+import { acquireLeafPermit } from "./leaf-concurrency.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
 export type { ChildAgentContext, ChildAgentHandle, RunViewSeed } from "./child-agent-registry.ts";
 import type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
@@ -349,17 +350,24 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext, notifyCom
 		},
 	};
 
-	const completed = executeChildAgent(step, teedCtx, combinedSignal, (createdSession) => {
-		session = createdSession;
-	})
-		.then((result) => {
+	// Gate leaf execution on the one per-process concurrency pool. Acquire is the
+	// first await INSIDE the completed-promise chain so the handle below is still
+	// constructed and returned synchronously (the async contract hands back all N
+	// handles before any child runs). The permit is released when the leaf settles.
+	const completed = (async () => {
+		const releasePermit = await acquireLeafPermit(step.runId);
+		try {
+			const result = await executeChildAgent(step, teedCtx, combinedSignal, (createdSession) => {
+				session = createdSession;
+			});
 			// Final usage is NOT carried in the patch stream; land it in memory here.
 			ctx.registry.finalizeView(step.runId, result);
 			return result;
-		})
-		.finally(() => {
+		} finally {
+			releasePermit();
 			ctx.registry.delete(step.runId, step.stepIndex);
-		});
+		}
+	})();
 
 	const handle: ChildAgentHandle = {
 		runId: step.runId,

@@ -22,6 +22,7 @@ import { createHostSubagentApi, registerChildSessionApi } from "../api/exposed-s
 import { createIdleTracker } from "../surfaces/idle-tracker.ts";
 import { logger } from "../shared/logger.ts";
 import { resolveAgentToolPatterns } from "../dispatch/resolve-tool-patterns.ts";
+import { leafConcurrencyLimit } from "../dispatch/leaf-concurrency.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { renderWidget, stopWidgetAnimation } from "../surfaces/render-widget.ts";
 import { stopResultAnimations } from "../surfaces/render-result.ts";
@@ -153,6 +154,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const config = loadConfig();
 	configureXmlStripping(config.stripXmlTags);
+	// Size the one per-process leaf-concurrency pool from config before any
+	// dispatch can run. Sizing is first-win for the process lifetime.
+	leafConcurrencyLimit(config.maxConcurrentAgents);
 	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
