@@ -54,6 +54,39 @@ describe("parent run id plumbing", () => {
 		assert.equal(active?.state, "running");
 	});
 
+	it("copies executionStartedAt from foreground controls when present", () => {
+		type Control = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
+		const controls = new Map<string, Control>();
+		controls.set("started", {
+			runId: "started",
+			mode: "single",
+			startedAt: 1,
+			updatedAt: 2,
+			started: true,
+			executionStartedAt: 5,
+		});
+		controls.set("queued", { runId: "queued", mode: "single", startedAt: 1, updatedAt: 2 });
+		const runs = foregroundRunsFromState({ foregroundControls: controls });
+		assert.equal(runs.find((r) => r.id === "started")?.executionStartedAt, 5);
+		// A queued control has no execution-start instant yet.
+		assert.equal(runs.find((r) => r.id === "queued")?.executionStartedAt, undefined);
+	});
+
+	it("copies executionStartedAt from PersistedRunStatus to RunView (absent stays undefined)", () => {
+		const withStamp: PersistedRunStatus = {
+			runId: "child-x",
+			mode: "single",
+			state: "running",
+			startedAt: 1,
+			executionStartedAt: 9,
+			steps: [{ agent: "fixer", status: "running" }],
+		};
+		assert.equal(statusToRunView("/tmp/child-x", withStamp).executionStartedAt, 9);
+		// Old record lacking the field stays undefined (backward compatible).
+		const noStamp: PersistedRunStatus = { ...withStamp, executionStartedAt: undefined };
+		assert.equal(statusToRunView("/tmp/child-x", noStamp).executionStartedAt, undefined);
+	});
+
 	it("emits PI_SUBAGENT_PARENT_RUN_ID from identity env", () => {
 		assert.equal(
 			getSubagentIdentityEnv("fixer", undefined, { parentRunId: "parent-3" }).PI_SUBAGENT_PARENT_RUN_ID,

@@ -122,6 +122,7 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 		mode: status.mode,
 		cwd: status.cwd,
 		startedAt: status.startedAt,
+		...(status.executionStartedAt !== undefined ? { executionStartedAt: status.executionStartedAt } : {}),
 		lastUpdate: status.lastUpdate,
 		endedAt: status.endedAt,
 		runnerHeartbeatAt: status.runnerHeartbeatAt,

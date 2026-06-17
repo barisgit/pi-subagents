@@ -54,6 +54,9 @@ export function createForegroundRunController(
 			// executing: the live dashboard view may now render this run "running"
 			// (before this it is "queued", possibly blocked on the concurrency pool).
 			control.started = true;
+			// Stamp the queued->running flip once so the elapsed timer measures real
+			// execution time, not queue-wait. The mirror echoes this onto status.json.
+			control.executionStartedAt ??= Date.now();
 			applyForegroundProgress(control, agent, index, firstProgress, finalOutput);
 			opts?.mirror?.(firstProgress, index, finalOutput);
 		},

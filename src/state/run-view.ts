@@ -7,7 +7,7 @@
 // Types-only leaf: no fs imports, no IO. The view's field types mirror the
 // former AsyncRunSummary exactly; the trailing block holds foreground-only
 // optionals (absent on disk-derived views).
-import { type ActivityState, type RunDisplayState, type TokenUsage } from "../protocol/types.ts";
+import type { ActivityState, RunDisplayState, TokenUsage } from "../protocol/types.ts";
 import type { RunPhase } from "./run-phase.ts";
 
 export interface RunViewStep {
@@ -60,6 +60,8 @@ export interface RunView {
 	mode: "single" | "parallel";
 	cwd?: string;
 	startedAt: number;
+	/** Wall time the run actually began executing (queued->running flip); falls back to startedAt when absent. */
+	executionStartedAt?: number;
 	lastUpdate?: number;
 	endedAt?: number;
 	runnerHeartbeatAt?: number;

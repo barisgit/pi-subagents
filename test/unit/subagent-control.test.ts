@@ -30,6 +30,32 @@ describe("subagent control attention state", () => {
 		assert.equal(deriveActivityState({ config, startedAt: 0, now: 400 }), "needs_attention");
 	});
 
+	it("never marks a queued run as needing attention, however long it waits", () => {
+		// A queued child is blocked on a leaf-concurrency permit with no activity yet;
+		// its baseline would otherwise fall back to dispatch time and fire the stall timer.
+		assert.equal(deriveActivityState({ config, startedAt: 0, queued: true, now: 10_000 }), undefined);
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, queued: true, now: 10_000 }),
+			undefined,
+		);
+	});
+
+	it("anchors the stall window on executionStartedAt, not dispatch time", () => {
+		// Dispatched at 0, started executing at 9_900; at now=10_000 only 100ms of
+		// execution has elapsed, well under the 300ms threshold -> not stalled.
+		assert.equal(deriveActivityState({ config, startedAt: 0, executionStartedAt: 9_900, now: 10_000 }), undefined);
+		// Past the threshold measured from executionStartedAt -> stalled.
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, executionStartedAt: 9_900, now: 10_300 }),
+			"needs_attention",
+		);
+		// lastActivityAt still wins over executionStartedAt when present.
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, executionStartedAt: 0, lastActivityAt: 9_900, now: 10_000 }),
+			undefined,
+		);
+	});
+
 	it("suppresses needs-attention while the model is in an engaged phase", () => {
 		for (const phase of ["waiting_model", "thinking", "streaming_text", "retrying"]) {
 			assert.equal(

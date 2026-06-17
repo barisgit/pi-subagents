@@ -139,6 +139,13 @@ export interface PersistedRunStatus {
 	currentTool?: string;
 	currentToolStartedAt?: number;
 	startedAt: number;
+	/**
+	 * Milliseconds since epoch when the child ACTUALLY began executing (the
+	 * queued->running transition), as distinct from startedAt (dispatch/queue
+	 * time). Optional and additive: records written before this field existed
+	 * omit it, and consumers fall back to startedAt.
+	 */
+	executionStartedAt?: number;
 	endedAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
@@ -191,6 +198,10 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 	const validStates = ["queued", "running", "complete", "failed", "paused", "lost", "interrupted", "skipped"];
 	if (typeof o.state !== "string" || !validStates.includes(o.state)) return { ok: false, reason: "invalid-shape" };
 	if (typeof o.startedAt !== "number") return { ok: false, reason: "invalid-shape" };
+	// executionStartedAt is optional and additive: absent is valid (old records),
+	// but a present non-number is a malformed file and fails closed.
+	if (o.executionStartedAt !== undefined && typeof o.executionStartedAt !== "number")
+		return { ok: false, reason: "invalid-shape" };
 	if (o.steps !== undefined && !Array.isArray(o.steps)) return { ok: false, reason: "invalid-shape" };
 	return { ok: true, value: data as PersistedRunStatus };
 }

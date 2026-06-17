@@ -112,6 +112,17 @@ export function findInlineChildRun(
 	return nearby[0] ?? candidates[0];
 }
 
+/**
+ * Count direct children of a parent that are still queued (dispatched but blocked on a
+ * leaf permit, so they have produced no results/progress yet). The compact parallel
+ * card renders one row per started child; queued children are otherwise invisible, so
+ * callers surface this as a `+N queued` rollup line. `used` excludes children already
+ * rendered as their own rows.
+ */
+export function countQueuedInlineChildren(parentRunId: string, used = new Set<string>()): number {
+	return listInlineChildRuns(parentRunId).filter((child) => child.state === "queued" && !used.has(child.id)).length;
+}
+
 function inlineRunLabel(summary: AsyncRunSummary, args?: Record<string, unknown>): string {
 	return (
 		argString(args, "label") ??
@@ -138,13 +149,18 @@ function inlineDuration(summary: AsyncRunSummary): number {
 	const end = isTerminalInlineState(summary.state)
 		? (summary.endedAt ?? summary.lastUpdate ?? Date.now())
 		: Date.now();
-	return Math.max(0, end - summary.startedAt);
+	// Measure from the queued->running flip when known so the elapsed reflects real
+	// execution time, not queue-wait; fall back to startedAt for older records.
+	return Math.max(0, end - (summary.executionStartedAt ?? summary.startedAt));
 }
 
 function inlineMeta(summary: AsyncRunSummary, events: TranscriptLine[]): string {
 	const tools = inlineToolCount(events);
 	const tokens = inlineTokenCount(summary);
-	return `${tools} tools · ${formatTokens(tokens)} tok · ${formatDuration(inlineDuration(summary))}`;
+	// A queued child has not begun executing: omit the running timer (it would count
+	// queue-wait) and state `queued` plainly instead.
+	const tail = summary.state === "queued" ? "queued" : formatDuration(inlineDuration(summary));
+	return `${tools} tools · ${formatTokens(tokens)} tok · ${tail}`;
 }
 
 function inlinePrefix(depth: number): string {

@@ -13,7 +13,7 @@ import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
 import { colorForAgentName } from "../shared/agents.ts";
 import {
 	getTermWidth,
-	multiSpinnerFrame,
+	RUNNING_GLYPH,
 	themeBold,
 	tintAgentName,
 	truncLine,
@@ -40,7 +40,7 @@ function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
 	if (job.status === "lost" || job.displayState === "lost") return theme.fg("error", "!");
 	if (job.displayState === "needs_attention" || job.activityState === "needs_attention")
 		return theme.fg("warning", "!");
-	if (job.status === "running") return theme.fg("accent", multiSpinnerFrame());
+	if (job.status === "running") return theme.fg("accent", RUNNING_GLYPH);
 	if (job.status === "queued") return theme.fg("dim", "·");
 	if (job.status === "paused") return theme.fg("warning", "⏸");
 	if (job.status === "failed") return theme.fg("error", "×");
@@ -120,13 +120,22 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 		current: job.mode === "parallel" ? (completedParallelSteps ?? 0) : (job.currentStep ?? 0) + 1,
 	});
 	if (badge) parts.push(badge);
+	// A queued job is blocked on a leaf permit and has not begun executing: render the
+	// lifecycle state explicitly (not the `quiet` activity discriminant) and skip the
+	// phase chip + running timer below, so it never shows a misleading ticking elapsed.
+	const isQueued = job.status === "queued";
 	// Suppress phase chip for terminal runs so finished jobs don't keep
 	// ticking `streaming Xs` / `tool: bash Xs` (stale phase from status.json
 	// written before the finalize phase-clear lands).
 	const phaseAllowed =
-		job.status !== "complete" && job.status !== "failed" && job.status !== "lost" && job.displayState !== "lost";
+		!isQueued &&
+		job.status !== "complete" &&
+		job.status !== "failed" &&
+		job.status !== "lost" &&
+		job.displayState !== "lost";
 	const phaseLabel = phaseAllowed ? formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool) : "";
-	if (phaseLabel) parts.push(phaseLabel);
+	if (isQueued) parts.push("queued");
+	else if (phaseLabel) parts.push(phaseLabel);
 	else if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
 	else if (job.displayState === "tool_running" && job.currentTool) parts.push(`tool ${job.currentTool}`);
 	else if (job.displayState === "needs_attention") parts.push(theme.fg("warning", "needs attention"));
@@ -136,12 +145,15 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	// only cue was the accent-vs-success checkmark tint; say it outright.
 	if (job.pendingDelivery) parts.push(theme.fg("accent", "delivering…"));
 	if ((job.resumeCount ?? 0) > 0) parts.push(`↻${job.resumeCount}`);
-	if (job.startedAt) {
+	// Skip the elapsed timer entirely for a queued job: it has no execution-start
+	// instant yet, so `now - startedAt` would count queue-wait, not run time.
+	if (job.startedAt && !isQueued) {
 		// A 'lost' run is dead: freeze elapsed at its last known update instead of
 		// ticking live, even though job.status may still read 'running' on disk.
-		const isLive = (job.status === "running" || job.status === "queued") && job.displayState !== "lost";
+		const isLive = job.status === "running" && job.displayState !== "lost";
 		const endTs = isLive ? Date.now() : (job.updatedAt ?? Date.now());
-		parts.push(formatDuration(Math.max(0, endTs - (job.resumedAt ?? job.startedAt))));
+		// Measure from the execution-start flip when known, else dispatch time.
+		parts.push(formatDuration(Math.max(0, endTs - (job.resumedAt ?? job.executionStartedAt ?? job.startedAt))));
 	}
 	return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
 }
@@ -243,7 +255,12 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	}
 
 	if (overflow > 0) {
-		lines.push(truncLine(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${overflow} more`)}`, width));
+		// When every hidden job is queued (the common permit-blocked fan-out case),
+		// label the rollup `+N queued` so the user sees they are waiting, not active.
+		const hidden = sorted.slice(visible.length);
+		const allQueued = hidden.every((job) => job.status === "queued");
+		const overflowLabel = allQueued ? `+${overflow} queued` : `+${overflow} more`;
+		lines.push(truncLine(`${theme.fg("dim", "└─")} ${theme.fg("dim", overflowLabel)}`, width));
 	}
 	// Trailing blank line for vertical breathing room between widget and prompt.
 	lines.push("");

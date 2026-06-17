@@ -263,6 +263,7 @@ export function foregroundRunsFromState(
 				mode: control.mode,
 				...(state.baseCwd ? { cwd: state.baseCwd } : {}),
 				startedAt: control.startedAt,
+				...(control.executionStartedAt !== undefined ? { executionStartedAt: control.executionStartedAt } : {}),
 				lastUpdate: control.updatedAt,
 				...(control.label ? { label: control.label } : {}),
 				...(control.agentLabels ? { agentLabels: control.agentLabels } : {}),
@@ -388,7 +389,12 @@ export function overlayRunsSignature(
 }
 
 export function runElapsed(run: LiveRun, now: number): string {
-	const legStartedAt = run.run.resumedAt ?? run.run.startedAt;
+	// A queued run (dispatched but blocked on a leaf permit) has not begun executing,
+	// so showing a running timer would misleadingly count queue-wait. Render no timer.
+	if (run.run.state === "queued") return "";
+	// Measure execution time from the queued->running flip (executionStartedAt) when
+	// available, falling back to startedAt for records written before that field.
+	const legStartedAt = run.run.resumedAt ?? run.run.executionStartedAt ?? run.run.startedAt;
 	// Terminal runs (lost/complete/failed) must not keep ticking. The freeze is a
 	// data property — endedAt or a terminal/lost state — NOT provenance: an owned
 	// in-process run that has completed (now ownership:'live') must freeze too, or
@@ -596,11 +602,15 @@ export function buildLeftLine(
 	// date stamp only, active = leg elapsed. Resumed rows additionally surface the
 	// current-leg elapsed (and identity age) alongside the terminal date stamp.
 	const resumed = (run.run.resumeCount ?? 0) > 0;
+	// A queued run yields empty `elapsed` (no running timer); drop the would-be
+	// ` · <elapsed>` tail so the row ends cleanly at the queued state instead of a
+	// dangling separator.
+	const activeTail = elapsed ? ` · ${elapsed}${identityPart}` : identityPart;
 	const tail = dateStamp
 		? resumed
 			? ` · ${elapsed}${identityPart} · ${theme.fg("dim", dateStamp)}`
 			: ` · ${theme.fg("dim", dateStamp)}`
-		: ` · ${elapsed}${identityPart}`;
+		: activeTail;
 	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${resumePart}${labelPart}${collapsedPart}${cwdPart}${tail}`;
 	// Hard-clip with no ellipsis — the row already ends at the pane border, so an
 	// ellipsis adds zero information and steals 1–3 columns of label space.

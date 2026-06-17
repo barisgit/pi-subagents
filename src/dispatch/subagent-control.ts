@@ -63,6 +63,10 @@ export interface ActivityTickerOptions {
 	config: ResolvedControlConfig;
 	getStartedAt: () => number;
 	getLastActivityAt: () => number | undefined;
+	/** Execution-start instant (queued->running flip); anchors the stall window past queue-wait. */
+	getExecutionStartedAt?: () => number | undefined;
+	/** True while the run is dispatched but blocked on a leaf permit; suppresses stall checks. */
+	getQueued?: () => boolean;
 	getPhase?: () => string | undefined;
 	onNeedsAttention?: (event: ControlEvent) => void;
 	now?: () => number;
@@ -93,6 +97,8 @@ export function createActivityTicker(options: ActivityTickerOptions): ActivityTi
 				config: options.config,
 				startedAt: options.getStartedAt(),
 				lastActivityAt: options.getLastActivityAt(),
+				executionStartedAt: options.getExecutionStartedAt?.(),
+				queued: options.getQueued?.(),
 				phase: options.getPhase?.(),
 				now: ts,
 			});

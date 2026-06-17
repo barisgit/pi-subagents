@@ -14,7 +14,7 @@ import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
 import { previewArgs, readRunTranscript } from "../state/run-transcript.ts";
 import { formatDuration, formatTokens } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
-import { multiSpinnerFrame, tintAgentName } from "./render-shared.ts";
+import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
 import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
 import { parentRunIdOf } from "./dashboard-row-model.ts";
 import type { LiveRun } from "../state/run-view.ts";
@@ -29,7 +29,7 @@ export function statusGlyph(
 	if (displayState === "needs_attention" || activity === "needs_attention") return theme.fg("warning", "!");
 	switch (state) {
 		case "running":
-			return theme.fg("accent", multiSpinnerFrame());
+			return theme.fg("accent", RUNNING_GLYPH);
 		case "queued":
 			return theme.fg("dim", "○");
 		case "paused":

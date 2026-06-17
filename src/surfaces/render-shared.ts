@@ -72,12 +72,14 @@ export function truncLine(text: string, maxWidth: number): string {
 	return result + activeStyles.join("") + "…";
 }
 
-const SPINNER = ["-", "\\", "|", "/"];
-export const WIDGET_ANIMATION_MS = 80;
+// Live-widget repaint cadence. Animated per-frame spinners (formerly ~80ms,
+// ~12.5 repaints/sec) caused excessive terminal flashing; liveness is now a
+// STATIC glyph and timers only need to advance elapsed at human-readable speed.
+export const WIDGET_ANIMATION_MS = 1000;
 
-function spinnerFrame(): string {
-	return SPINNER[Math.floor(Date.now() / WIDGET_ANIMATION_MS) % SPINNER.length]!;
-}
+// Single static "in progress" glyph. No Date.now() dependency, so rendering a
+// running row does not by itself force a repaint every frame.
+export const RUNNING_GLYPH = "\u25C8"; // ◈
 
 // Named ANSI 256 colors for agent name tinting. Picked from the xterm 256 palette
 // so each color is visually distinct under both dark and light terminal themes.
@@ -116,26 +118,6 @@ export function tintAgentName(name: string, color: string | undefined): string {
 	}
 	if (ansi === undefined) return name;
 	return `\u001b[38;5;${ansi}m${name}\u001b[39m`;
-}
-
-// Distinctive multi-headline spinner: sparkle/star cycle (vs the ASCII '- \ | /').
-// Used only on the top-level parallel/single header so the headline reads as
-// "the container is alive" without making every per-agent row spin too.
-const MULTI_SPINNER = [
-	"\u2733",
-	"\u2734",
-	"\u2735",
-	"\u2736",
-	"\u2737",
-	"\u2738",
-	"\u2739",
-	"\u273A",
-	"\u273B",
-	"\u273C",
-	"\u273D",
-];
-export function multiSpinnerFrame(): string {
-	return MULTI_SPINNER[Math.floor(Date.now() / WIDGET_ANIMATION_MS) % MULTI_SPINNER.length]!;
 }
 
 export function themeBold(theme: Theme, text: string): string {

@@ -714,17 +714,23 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const fg = createForegroundRunController(foregroundControl, {
 		mirror: (firstProgress, index) => {
 			const liveStepTokens = tokenUsageFromTotal(firstProgress?.tokens);
-			mirrorForegroundProgressToStatus(data.foregroundStatusWriter, firstProgress, index, [
-				{
-					agent: firstProgress?.agent ?? params.agent!,
-					status: firstProgress?.status ?? "running",
-					startedAt: firstProgress?.lastActivityAt,
-					lastActivityAt: firstProgress?.lastActivityAt,
-					currentTool: firstProgress?.currentTool,
-					currentToolStartedAt: firstProgress?.currentToolStartedAt,
-					...(liveStepTokens ? { tokens: liveStepTokens } : {}),
-				},
-			]);
+			mirrorForegroundProgressToStatus(
+				data.foregroundStatusWriter,
+				firstProgress,
+				index,
+				[
+					{
+						agent: firstProgress?.agent ?? params.agent!,
+						status: firstProgress?.status ?? "running",
+						startedAt: firstProgress?.lastActivityAt,
+						lastActivityAt: firstProgress?.lastActivityAt,
+						currentTool: firstProgress?.currentTool,
+						currentToolStartedAt: firstProgress?.currentToolStartedAt,
+						...(liveStepTokens ? { tokens: liveStepTokens } : {}),
+					},
+				],
+				foregroundControl?.executionStartedAt,
+			);
 		},
 	});
 	fg.beginStep(params.agent!, 0, (reason?: string) => {

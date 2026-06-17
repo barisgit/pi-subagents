@@ -29,6 +29,10 @@ export function applyPatchToStatus(
 		patch.endedAt !== undefined &&
 		(patch.state === "complete" || patch.state === "failed" || patch.state === "interrupted");
 	if (patch.state && !isTerminalStepPatch) status.state = patch.state;
+	// Stamp the queued->running flip exactly once: executionStartedAt records when
+	// the child actually began executing (after acquiring its leaf permit), so the
+	// dashboard's elapsed timer measures execution time, not queue-wait.
+	if (patch.state === "running" && status.executionStartedAt === undefined) status.executionStartedAt = now;
 	if (patch.endedAt !== undefined) status.endedAt = patch.endedAt;
 	if (patch.outputText !== undefined && !isTerminalStepPatch) status.outputText = patch.outputText;
 	if (patch.activity) {

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
+import { WIDGET_ANIMATION_MS } from "../../src/surfaces/render-shared.ts";
+
+// Wait long enough to observe at least one live repaint at the current cadence
+// (kept relative to the constant so it tracks future cadence changes).
+const ANIM_WAIT = WIDGET_ANIMATION_MS + 200;
 
 const { buildWidgetLines, renderWidget, stopWidgetAnimation } =
 	(await import("../../src/surfaces/render-widget.ts")) as unknown as {
@@ -325,7 +330,7 @@ describe("subagent async widget rendering", () => {
 				{ asyncId: "queued-only", asyncDir: "/tmp/queued", status: "queued", agents: ["planner"] },
 			]);
 			const initialWidgetCount = ui.widgets.length;
-			await new Promise((resolve) => setTimeout(resolve, 190));
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
 			assert.equal(
 				ui.widgets.length,
 				initialWidgetCount,
@@ -356,7 +361,7 @@ describe("subagent async widget rendering", () => {
 				},
 				context,
 			);
-			await new Promise((resolve) => setTimeout(resolve, 190));
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
 			assert.ok(invalidations > 0, "running result should request row redraws");
 			assert.ok(context.state.subagentResultAnimationTimer, "running result should store its timer handle");
 			stopResultAnimations();
@@ -389,7 +394,7 @@ describe("subagent async widget rendering", () => {
 				context,
 			);
 			const afterComplete = invalidations;
-			await new Promise((resolve) => setTimeout(resolve, 190));
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
 			assert.equal(invalidations, afterComplete, "completed result should stop row redraws");
 			assert.equal(context.state.subagentResultAnimationTimer, undefined);
 		} finally {
@@ -408,12 +413,12 @@ describe("subagent async widget rendering", () => {
 			// assert renderRequests grow instead of widgets growing.
 			assert.equal(ui.widgets.length, 1, "factory should be registered exactly once");
 			const initialRenderRequests = ui.renderRequests;
-			await new Promise((resolve) => setTimeout(resolve, 190));
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
 			assert.ok(ui.renderRequests > initialRenderRequests, "animation should request UI renders");
 
 			renderWidget(ui.ctx as never, []);
 			const clearedRenderRequests = ui.renderRequests;
-			await new Promise((resolve) => setTimeout(resolve, 190));
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
 			assert.equal(ui.renderRequests, clearedRenderRequests, "cleared widget should stop animating");
 			assert.equal(ui.widgets.at(-1), undefined, "clearing should send undefined");
 		} finally {

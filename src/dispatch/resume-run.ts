@@ -300,7 +300,13 @@ async function resumeRun(
 						...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
 					},
 				];
-				mirrorForegroundProgressToStatus(statusWriter, firstProgress, index, statusStepPatch);
+				mirrorForegroundProgressToStatus(
+					statusWriter,
+					firstProgress,
+					index,
+					statusStepPatch,
+					foregroundControl.executionStartedAt,
+				);
 			},
 		});
 		fg.beginStep(target.agentName, step.stepIndex, (reason?: string) => {

@@ -40,4 +40,28 @@ describe("parsePersistedRunStatus", () => {
 		const result = parsePersistedRunStatus(JSON.stringify(value));
 		assert.deepEqual(result, { ok: true, value });
 	});
+
+	it("parses an old record that lacks executionStartedAt (backward compatible)", () => {
+		const value = { runId: "x", mode: "single", state: "running", startedAt: 1_000 };
+		const result = parsePersistedRunStatus(JSON.stringify(value));
+		assert.deepEqual(result, { ok: true, value });
+		if (result.ok) assert.equal(result.value.executionStartedAt, undefined);
+	});
+
+	it("copies executionStartedAt through when present", () => {
+		const value = { runId: "x", mode: "single", state: "running", startedAt: 1_000, executionStartedAt: 1_500 };
+		const result = parsePersistedRunStatus(JSON.stringify(value));
+		assert.deepEqual(result, { ok: true, value });
+	});
+
+	it("fails closed when executionStartedAt is present but not a number", () => {
+		const raw = JSON.stringify({
+			runId: "x",
+			mode: "single",
+			state: "running",
+			startedAt: 1,
+			executionStartedAt: "soon",
+		});
+		assert.deepEqual(parsePersistedRunStatus(raw), { ok: false, reason: "invalid-shape" });
+	});
 });

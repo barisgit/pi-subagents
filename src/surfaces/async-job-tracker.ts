@@ -69,6 +69,10 @@ function deriveAsyncJobActivityState(
 		config,
 		startedAt: job.startedAt ?? now,
 		lastActivityAt: job.lastActivityAt,
+		executionStartedAt: job.executionStartedAt,
+		// A queued job is blocked on a leaf permit, not stalled: suppress the stall
+		// timer so the poll loop never fires needs_attention for mere queue-wait.
+		queued: job.status === "queued",
 		phase: job.phase,
 		now,
 	});
@@ -253,6 +257,7 @@ export function createAsyncJobTracker(
 						job.currentStep = status.currentStep ?? job.currentStep;
 						job.stepsTotal = status.steps?.length ?? job.stepsTotal;
 						job.startedAt = status.startedAt ?? job.startedAt;
+						job.executionStartedAt = status.executionStartedAt ?? job.executionStartedAt;
 						job.updatedAt = status.lastUpdate ?? Date.now();
 						job.runnerHeartbeatAt = status.runnerHeartbeatAt ?? job.runnerHeartbeatAt;
 						job.resumedAt = status.resumedAt;
@@ -388,6 +393,7 @@ export function createAsyncJobTracker(
 			agents,
 			stepsTotal: agents?.length,
 			startedAt: status?.startedAt ?? now,
+			...(status?.executionStartedAt !== undefined ? { executionStartedAt: status.executionStartedAt } : {}),
 			updatedAt: status?.lastUpdate ?? now,
 			resumedAt: status?.resumedAt,
 			resumeCount: status?.resumeCount ?? 0,
@@ -546,6 +552,7 @@ export function createAsyncJobTracker(
 				agents,
 				stepsTotal: entry.agentNames?.length ?? status.steps?.length,
 				startedAt: status.startedAt ?? entry.startedAt,
+				...(status.executionStartedAt !== undefined ? { executionStartedAt: status.executionStartedAt } : {}),
 				updatedAt: status.lastUpdate ?? Date.now(),
 				runnerHeartbeatAt: status.runnerHeartbeatAt,
 				resumedAt: status.resumedAt,

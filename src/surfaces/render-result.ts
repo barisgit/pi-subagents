@@ -14,7 +14,7 @@ import { formatPhase } from "../state/run-phase.ts";
 import { getDisplayItems, getSingleResultOutput } from "../shared/utils.ts";
 import {
 	getTermWidth,
-	multiSpinnerFrame,
+	RUNNING_GLYPH,
 	themeBold,
 	tintAgentName,
 	truncLine,
@@ -26,6 +26,7 @@ import {
 	argBoolean,
 	countInlineChildTally,
 	countLiveInlineAsyncChildren,
+	countQueuedInlineChildren,
 	findInlineChildRun,
 	renderNestedChild,
 } from "./render-inline.ts";
@@ -100,6 +101,8 @@ export function syncResultAnimation(result: AgentToolResult<Details>, context: R
 		return;
 	}
 	if (context.state.subagentResultAnimationTimer) return;
+	// Repaints once per WIDGET_ANIMATION_MS (now 1s) only to advance the elapsed
+	// timer; the running glyph is static so this no longer drives spinner frames.
 	const timer = setInterval(() => context.invalidate(), WIDGET_ANIMATION_MS);
 	timer.unref?.();
 	context.state.subagentResultAnimationTimer = timer;
@@ -236,9 +239,8 @@ function resultGlyph(
 	theme: Theme,
 	running = result.progress?.status === "running",
 ): string {
-	// Per-agent running glyph is static (was spinnerFrame()). Spinning every row
-	// alongside the multi headline + tool elapsed timer was too much animation.
-	// The multi headline keeps its sparkle spinner as the single liveness indicator.
+	// Per-agent running glyph is static. The headline carries the single liveness
+	// indicator; per-row glyphs stay calm to avoid excess terminal repaints.
 	if (running) return theme.fg("accent", "◇");
 	if (result.detached) return theme.fg("warning", "■");
 	if (result.interrupted) return theme.fg("warning", "■");
@@ -636,9 +638,9 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 			? buildSparkline(sparkSamples, adaptiveSparkWidth(), theme, sparkNow)
 			: "";
 	// Single-agent block has no parent headline above it, so the row glyph itself
-	// must carry the liveness signal -- use the sparkle spinner instead of the
+	// must carry the liveness signal -- use the accent running glyph instead of the
 	// static ◇ that resultGlyph returns for running multi-block rows.
-	const headGlyph = isRunning ? theme.fg("accent", multiSpinnerFrame()) : resultGlyph(r, output, theme, isRunning);
+	const headGlyph = isRunning ? theme.fg("accent", RUNNING_GLYPH) : resultGlyph(r, output, theme, isRunning);
 	const boldName = themeBold(theme, r.agent);
 	const tintedName = r.progress?.color ? tintAgentName(boldName, r.progress.color) : theme.fg("toolTitle", boldName);
 	const labelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
@@ -782,7 +784,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		: `${itemLabel} ${headerOk}/${totalCount}`;
 	const stats = statJoin(theme, [stepInfo, formatTurnStat(totalTurns), formatProgressStats(theme, totalSummary)]);
 	const glyph = hasRunning
-		? theme.fg("accent", multiSpinnerFrame())
+		? theme.fg("accent", RUNNING_GLYPH)
 		: failed
 			? theme.fg("error", "✗")
 			: paused
@@ -995,6 +997,16 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		// pi-tui's empty Text collapses to 0 height; use Spacer(1) to actually allocate a row.
 		if (rRunning && i < stepsToShow - 1) {
 			c.addChild(new Spacer(1));
+		}
+	}
+	// Queued children (dispatched but blocked on a leaf permit) produce no results yet,
+	// so the per-row loop above omits them entirely. Surface them as a single bounded
+	// `+N queued` rollup line instead of enumerating each, preserving the compact card's
+	// header + one-line-per-started-child structure.
+	if (hasRunning && d.mode === "parallel" && d.runId) {
+		const queued = countQueuedInlineChildren(d.runId);
+		if (queued > 0) {
+			c.addChild(new Text(truncLine(theme.fg("dim", `  ◦ +${queued} queued`), width), 0, 0));
 		}
 	}
 	if (!hasRunning && d.artifacts)

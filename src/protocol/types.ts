@@ -373,6 +373,8 @@ export interface AsyncJobState {
 	currentStep?: number;
 	stepsTotal?: number;
 	startedAt?: number;
+	/** Wall time the run actually began executing (queued->running flip); falls back to startedAt when absent. */
+	executionStartedAt?: number;
 	updatedAt?: number;
 	runnerHeartbeatAt?: number;
 	resumedAt?: number;
@@ -425,6 +427,8 @@ export interface SubagentState {
 			parentRunId?: string;
 			mode: "single" | "parallel";
 			startedAt: number;
+			/** Wall time the run actually began executing (queued->running flip); set once alongside started. */
+			executionStartedAt?: number;
 			updatedAt: number;
 			/**
 			 * False until the run produces its first progress (i.e. a child acquired a
