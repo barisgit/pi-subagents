@@ -150,7 +150,13 @@ export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): Ope
 				});
 	const startedAt = opts.initialize.startedAt ?? Date.now();
 	const flushPolicy: "terminal" | "eager" = opts.variant === "sync-foreground" ? "terminal" : "eager";
-	const state = opts.variant === "async-detached" ? "queued" : "running";
+	// Every gated child (async-detached + group-child for sync/async parallel)
+	// opens "queued": it has a persisted run record before it acquires a leaf
+	// permit, so it must NOT look active while blocked on the concurrency pool.
+	// executeChildAgent emits a state:"running" patch the instant it holds a
+	// permit (in-process-executor), which flips both the run and the step. Only
+	// sync-foreground (the dispatching turn blocks on it) opens "running".
+	const state = opts.variant === "sync-foreground" ? "running" : "queued";
 	// eager OMITS the flushPolicy field to byte-match today's spawnRun (no flushPolicy) + async (default).
 	const statusWriter = new StatusWriter({
 		runRecordDir: paths.runRecordDir,
@@ -164,7 +170,7 @@ export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): Ope
 					{
 						agent: step.agentName,
 						label: step.label,
-						status: "running",
+						status: "queued",
 						startedAt,
 						sessionFile: paths.sessionFile,
 					},

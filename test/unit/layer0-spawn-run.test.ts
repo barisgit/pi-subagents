@@ -75,4 +75,26 @@ describe("Layer-0 spawnRun", () => {
 
 		await Promise.all(handles.map((handle) => awaitRun(handle)));
 	});
+
+	it("opens each group child as queued until it acquires a permit", async () => {
+		const root = setupTempHome("layer0-spawn-queued-test-");
+		const gate = new Promise<void>(() => {}); // never resolves: children stay pre-finalize
+		const runAgent: Layer0RunAgent = async (step) => {
+			await gate;
+			return resultFor(step);
+		};
+
+		const handle = spawnRun(
+			{ agentName: "fixer", task: "queued probe", cwd: root },
+			{ rootRunId: "root-run", notifyPolicy: "silent", runAgent, defaultSessionDir: path.join(root, "runs") },
+		);
+
+		// openRunRecord writes the initial status synchronously during spawnRun. The
+		// bare runAgent emits no status patch, so the record stays at its opened
+		// state: a group child must open "queued" (run + first step), NOT "running",
+		// so it never looks active while blocked on the leaf-concurrency pool.
+		const status = JSON.parse(fs.readFileSync(path.join(handle.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.state, "queued");
+		assert.equal(status.steps[0].status, "queued");
+	});
 });
