@@ -12,7 +12,7 @@ import {
 import type { StatusWriter } from "../state/status-writer.ts";
 import { formatRunHandle } from "../state/run-shape.ts";
 import { resolveChildCwd } from "../shared/utils.ts";
-import { mapConcurrent } from "./parallel-utils.ts";
+import { ConcurrencySemaphore } from "./concurrency-semaphore.ts";
 import { spawnRun, openGroup, openRunRecord, finalizeRun } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
 import {
@@ -166,6 +166,16 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			parentRunId,
 		});
 		const asyncDetachedAbort = new AbortController();
+		// Gate concurrent child starts the same way sync parallel does. spawnRun
+		// reserves the run record + handle eagerly (so we still return all N handles
+		// immediately), but the runAgent body below awaits a permit before launching
+		// executeChildAgent, so at most `concurrency` children run leaf sessions at once.
+		const concurrency = resolveTopLevelParallelConcurrency(
+			params.concurrency,
+			deps.config.parallel?.concurrency,
+			deps.config.parallel?.maxConcurrency,
+		);
+		const gate = new ConcurrencySemaphore(concurrency);
 		const childRuns = steps.map((item, originalStepIndex) => {
 			const handle = spawnRun(
 				{
@@ -187,6 +197,30 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 					...(parentSessionId ? { parentSessionId } : {}),
 					source: "async",
 					runAgent: async (prepared, layer0Ctx) => {
+						const permit = await gate.acquire();
+						// A queued child can be interrupted before its permit frees up
+						// (subagent interrupt aborts the registry controller for its runId).
+						// Honor that here so it never launches a leaf session.
+						const registrySignal = deps.childRegistry.signalForRun(prepared.runId);
+						if (registrySignal.aborted || asyncDetachedAbort.signal.aborted) {
+							permit.release();
+							const now = Date.now();
+							return {
+								runId: prepared.runId,
+								stepIndex: 0,
+								state: "interrupted",
+								exitCode: 1,
+								outputText: "",
+								toolCallCount: 0,
+								toolResultCount: 0,
+								toolErrorCount: 0,
+								durationMs: 0,
+								startedAt: now,
+								endedAt: now,
+								sessionFile: prepared.sessionFile,
+								error: { message: "Child agent interrupted before start", reason: "interrupted" },
+							} satisfies ChildAgentResult;
+						}
 						const childStep: ChildAgentStep = {
 							...item.step,
 							runId: prepared.runId,
@@ -202,7 +236,11 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 							registry: deps.childRegistry,
 							pi: deps.pi,
 						});
-						return childHandle.completed;
+						try {
+							return await childHandle.completed;
+						} finally {
+							permit.release();
+						}
 					},
 					onLifecycle: (event) => {
 						if (event.type === "run.started") {
@@ -525,23 +563,8 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		}
 	};
 
-	let handlesPromise: Promise<ChildAgentHandle[]>;
-	if (mode === "parallel") {
-		const concurrency = hasTasks
-			? resolveTopLevelParallelConcurrency(
-					params.concurrency,
-					deps.config.parallel?.concurrency,
-					deps.config.parallel?.maxConcurrency,
-				)
-			: 4;
-		handlesPromise = mapConcurrent(steps, concurrency, async (item) => {
-			const handle = dispatchAsyncChild(item.step, asyncCtx);
-			await handle.completed;
-			return handle;
-		});
-	} else {
-		handlesPromise = Promise.resolve([dispatchAsyncChild(first.step, asyncCtx)]);
-	}
+	// Only the single-dispatch path reaches here; parallel (hasTasks) returns above.
+	const handlesPromise: Promise<ChildAgentHandle[]> = Promise.resolve([dispatchAsyncChild(first.step, asyncCtx)]);
 	void finalizeAsync(handlesPromise);
 
 	safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {

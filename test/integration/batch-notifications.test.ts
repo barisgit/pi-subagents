@@ -289,9 +289,12 @@ describe("batch notifications", () => {
 	});
 
 	it("interrupt-mid-flight-rollup emits mixed complete and interrupted states", async () => {
+		// concurrency:1 (see makeHarness) means children dispatch serially, so the
+		// first child must complete deterministically before the interrupt rather
+		// than racing a wall-clock margin (fragile under full-suite load). A emits
+		// synchronously and finishes first; B/C are long-running and get interrupted.
 		restoreRuntime = installFakeRuntime([
 			new FakeAgentSession(async (_task, session) => {
-				await delay(20);
 				session.emit(assistantMessage("one"));
 			}),
 			new FakeAgentSession(async (_task, session) => {
