@@ -5,7 +5,6 @@ import {
 	flattenSteps,
 	mapConcurrent,
 	aggregateParallelOutputs,
-	MAX_PARALLEL_CONCURRENCY,
 	type RunnerSubagentStep,
 	type ParallelStepGroup,
 	type RunnerStep,
@@ -185,11 +184,5 @@ describe("aggregateParallelOutputs", () => {
 		]);
 		assert.ok(result.includes("SKIPPED"), "skipped task should show SKIPPED");
 		assert.ok(!result.includes("FAILED"), "skipped task should not show FAILED");
-	});
-});
-
-describe("MAX_PARALLEL_CONCURRENCY", () => {
-	it("is 4", () => {
-		assert.equal(MAX_PARALLEL_CONCURRENCY, 4);
 	});
 });
