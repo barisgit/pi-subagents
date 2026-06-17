@@ -138,8 +138,13 @@ export class StatusWriter {
 		this.ensureInitialized();
 		if (!this.status) return;
 		const now = Date.now();
-		const terminal = patch.state === "complete" || patch.state === "failed" || patch.state === "paused";
-		if (!options.flush && !terminal && this.lastWriteAt > 0 && now - this.lastWriteAt < this.throttleMs) return;
+		// A run-level state TRANSITION must never be throttled away: terminal ends
+		// (complete/failed/paused) and the queued->running flip when a child starts
+		// must reach disk promptly, or the dashboard reads a stale state. Repeated
+		// same-state progress patches still throttle normally.
+		const stateTransition = patch.state !== undefined && patch.state !== this.status.state;
+		if (!options.flush && !stateTransition && this.lastWriteAt > 0 && now - this.lastWriteAt < this.throttleMs)
+			return;
 		mergeValue(this.status as unknown as Record<string, unknown>, {
 			...patch,
 			lastUpdate: patch.lastUpdate ?? now,

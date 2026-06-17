@@ -177,7 +177,12 @@ export function mirrorForegroundProgressToStatus(
 	currentStep: number,
 	steps: unknown,
 ): void {
+	// A foreground run record opens "queued" (it may be blocked on a leaf permit).
+	// This mirror fires only once the child has actually begun executing, so it is
+	// the seam that flips the run-level state to "running". Terminal finalize
+	// (finalizeTerminal) remains authoritative for complete/failed.
 	writer?.mergePatch({
+		state: "running",
 		currentStep,
 		lastActivityAt: firstProgress?.lastActivityAt,
 		currentTool: firstProgress?.currentTool,

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { mirrorForegroundProgressToStatus } from "../../src/dispatch/executor-helpers.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { StatusWriter, __setSyncRunStatusUpdateObserverForTest } from "../../src/state/status-writer.ts";
 import { SUBAGENT_CONTROL_EVENT, SUBAGENT_NEEDS_ATTENTION_EVENT } from "../../src/protocol/types.ts";
@@ -230,6 +231,31 @@ describe("sync run persistence", () => {
 		try {
 			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "worker", status: "pending" }] });
 			writer.finalizeTerminal({});
+			assert.equal(readStatus(writer).state, "complete");
+		} finally {
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
+		}
+	});
+
+	it("flips a queued foreground run to running on the first progress mirror", () => {
+		// A sync-foreground record opens "queued" (it may be blocked on a leaf permit;
+		// a frozen-heartbeat "running" record drifts to "lost"). The progress mirror
+		// fires only once the child actually begins its first step (after the permit
+		// is granted), so it must flip the run-level state to "running".
+		const writer = makeWriter("sync-persist-queued-flip");
+		try {
+			writer.initialize({ mode: "single", state: "queued", steps: [{ agent: "worker", status: "queued" }] });
+			assert.equal(readStatus(writer).state, "queued");
+
+			mirrorForegroundProgressToStatus(writer, { agent: "worker", lastActivityAt: Date.now() } as never, 0, [
+				{ agent: "worker", status: "running" },
+			]);
+			const status = readStatus(writer);
+			assert.equal(status.state, "running");
+			assert.equal(status.steps[0].status, "running");
+
+			// Terminal finalize stays authoritative.
+			writer.finalizeTerminal({ state: "complete" });
 			assert.equal(readStatus(writer).state, "complete");
 		} finally {
 			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });

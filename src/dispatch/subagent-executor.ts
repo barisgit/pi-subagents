@@ -757,10 +757,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		metadata: params.metadata,
 	};
 	emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
+	// Opened "queued": this fires BEFORE runInProcessChildStep reaches
+	// acquireLeafPermit, so the child may still be blocked on the leaf pool. The
+	// run + step flip to "running" via the foreground progress mirror once the
+	// child actually begins its first step (after the permit is granted).
 	data.foregroundStatusWriter?.mergePatch(
 		{
 			currentStep: 0,
-			steps: [{ agent: params.agent!, status: "running", startedAt: Date.now(), lastActivityAt: Date.now() }],
+			steps: [{ agent: params.agent!, status: "queued", startedAt: Date.now(), lastActivityAt: Date.now() }],
 		},
 		{ flush: true },
 	);
