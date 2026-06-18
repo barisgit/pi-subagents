@@ -62,6 +62,28 @@ describe("row phase/displayState contradiction", () => {
 		assert.match(line, /running\/quiet/);
 	});
 
+	it("shows bare `queued` without the always-quiet discriminant", () => {
+		const now = 1_000_000;
+		const run: LiveRun = {
+			ownership: "foreign",
+			run: {
+				id: "queued-run",
+				asyncDir: "/tmp/queued-run",
+				mode: "single",
+				state: "queued",
+				// A queued run's displayState is always 'quiet' (it has not begun executing).
+				displayState: "quiet",
+				startedAt: now - 5_000,
+				lastUpdate: now - 5_000,
+				steps: [{ index: 0, agent: "explorer", status: "queued" }],
+			},
+		};
+		const line = buildLeftLine(theme as never, run, false, now, 240);
+		assert.match(line, /\bqueued\b/);
+		// The redundant `quiet` discriminant must not appear next to `queued`.
+		assert.doesNotMatch(line, /queued\/quiet/);
+	});
+
 	it("keeps lost authoritative over a stale running state", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {

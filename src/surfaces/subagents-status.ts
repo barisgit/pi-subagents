@@ -566,15 +566,18 @@ export function buildLeftLine(
 	// whose heartbeat aged past the quiet threshold would read `finishing · running/quiet`).
 	// Suppress the discriminant in that case; keep bare `state/displayState` when there's
 	// no phase chip (there displayState is the only live-activity signal), and keep `lost`
-	// authoritative always.
+	// authoritative always. A queued run's displayState is ALWAYS `quiet` (it hasn't begun
+	// executing), so the discriminant carries no information there — show bare `queued`.
 	const status =
 		run.run.displayState === "lost"
 			? "lost"
-			: phase && run.run.displayState
-				? run.run.state
-				: run.run.displayState
-					? `${run.run.state}/${run.run.displayState}`
-					: run.run.state;
+			: run.run.state === "queued"
+				? "queued"
+				: phase && run.run.displayState
+					? run.run.state
+					: run.run.displayState
+						? `${run.run.state}/${run.run.displayState}`
+						: run.run.state;
 	const elapsed = runElapsed(run, now);
 	const identityAge = runIdentityAge(run, now);
 	const dateStamp = runEndedStamp(run);
