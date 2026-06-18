@@ -180,6 +180,61 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("reconciles a stale-heartbeat running entry to lost on disk and skips reclaim", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const registryPath = path.join(asyncRoot, "runs-index.jsonl");
+			setRegistryPathForTests(registryPath);
+			const now = Date.now();
+			const hostSessionId = "host-session-1";
+			// status.json frozen at 'running' with a heartbeat older than RUNNER_HARD_DEAD_MS
+			// (30s): an ungracefully killed runner. rehydrate must finalize it to terminal
+			// 'lost' on disk (so it becomes resumable) and take the `continue` branch rather
+			// than re-attaching it as a live async job.
+			const runDir = path.join(asyncRoot, "run-stale");
+			writeStatus(runDir, {
+				version: 1,
+				runId: "run-stale",
+				mode: "single",
+				state: "running",
+				startedAt: now - 120_000,
+				lastUpdate: now - 60_000,
+				runnerHeartbeatAt: now - 60_000,
+				steps: [{ agent: "worker", status: "running" }],
+			});
+			appendRunEntry({
+				runId: "run-stale",
+				runRecordDir: runDir,
+				mode: "single",
+				source: "async",
+				agentName: "worker",
+				rootSessionId: hostSessionId,
+				parentSessionId: hostSessionId,
+				cwd: "/repo",
+				startedAt: now - 120_000,
+			});
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, { pollIntervalMs: 10 });
+			const count = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
+
+			// Not reclaimed: it took the `continue` branch after reconciling.
+			assert.equal(count, 0);
+			assert.equal(state.asyncJobs.has("run-stale"), false);
+			// status.json was finalized to terminal 'lost' on disk.
+			const raw = JSON.parse(fs.readFileSync(path.join(runDir, "status.json"), "utf-8")) as Record<
+				string,
+				unknown
+			>;
+			assert.equal(raw.state, "lost");
+			assert.equal(typeof raw.endedAt, "number");
+		} finally {
+			setRegistryPathForTests(null);
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("excludes interrupted and skipped runs from reclaim (they are terminal exit states)", () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {

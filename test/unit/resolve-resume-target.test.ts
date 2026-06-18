@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { assertCompleteResumeTarget, resolveResumeTarget } from "../../src/dispatch/resume-run.ts";
+import { assertResumableTarget, resolveResumeTarget } from "../../src/dispatch/resume-run.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createTempDir, removeTempDir } from "../support/helpers.ts";
 
@@ -135,7 +135,54 @@ describe("resolveResumeTarget", () => {
 		assert.throws(() => resolveResumeTarget("missing-run"), /Unknown runId 'missing-run'/);
 	});
 
-	it("complete-only gate rejects non-complete disk state", () => {
-		assert.throws(() => assertCompleteResumeTarget({ runId: "running-run", state: "running" }), /not complete/);
+	it("resumable gate rejects a still-live running run", () => {
+		assert.throws(
+			() =>
+				assertResumableTarget({
+					runId: "running-run",
+					state: "running",
+					status: {
+						runId: "running-run",
+						mode: "single",
+						state: "running",
+						startedAt: 0,
+						runnerHeartbeatAt: Date.now(),
+					},
+				}),
+			/still running/,
+		);
+	});
+
+	it("resumable gate accepts a dead 'running' run whose heartbeat is hard-dead", () => {
+		assert.doesNotThrow(() =>
+			assertResumableTarget({
+				runId: "dead-run",
+				state: "running",
+				status: {
+					runId: "dead-run",
+					mode: "single",
+					state: "running",
+					startedAt: 0,
+					runnerHeartbeatAt: Date.now() - 60_000,
+				},
+			}),
+		);
+	});
+
+	it("resumable gate accepts terminal states (lost, failed, interrupted, complete)", () => {
+		for (const state of ["lost", "failed", "interrupted", "complete"] as const) {
+			assert.doesNotThrow(() =>
+				assertResumableTarget({
+					runId: `${state}-run`,
+					state,
+					status: {
+						runId: `${state}-run`,
+						mode: "single",
+						state,
+						startedAt: 0,
+					},
+				}),
+			);
+		}
 	});
 });

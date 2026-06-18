@@ -44,6 +44,28 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
 	return recentAt > 0 && now - recentAt <= recentMs ? "working" : "quiet";
 }
 
+/**
+ * True only for a 'running' record whose newest liveness timestamp
+ * (runnerHeartbeatAt, falling back to lastUpdate) is older than the hard-dead
+ * ceiling. Used to distinguish an ungracefully killed/lost runner from a live
+ * child whose heartbeat is fresh. Reuses the same heartbeat-vs-hardDead read as
+ * deriveRunDisplayState.
+ */
+export function isRunnerHardDead(input: {
+	state: string;
+	runnerHeartbeatAt?: number;
+	lastUpdate?: number;
+	now?: number;
+	hardDeadMs?: number;
+}): boolean {
+	if (input.state !== "running") return false;
+	const now = input.now ?? Date.now();
+	const last = input.runnerHeartbeatAt ?? input.lastUpdate;
+	if (last === undefined) return false;
+	const hardDeadMs = input.hardDeadMs ?? RUNNER_HARD_DEAD_MS;
+	return now - last > hardDeadMs;
+}
+
 export function displayStatePriority(state: RunDisplayState | undefined): number {
 	switch (state) {
 		case "lost":

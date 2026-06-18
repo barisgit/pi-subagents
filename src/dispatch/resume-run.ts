@@ -9,6 +9,7 @@ import {
 	dispatchAsyncChild,
 } from "./in-process-executor.ts";
 import { StatusWriter } from "../state/status-writer.ts";
+import { isRunnerHardDead } from "../state/run-liveness.ts";
 import { readStatus } from "../shared/utils.ts";
 import { tokenUsageFromTotal } from "../state/usage-totals.ts";
 import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
@@ -71,7 +72,9 @@ export function resolveResumeTarget(runId: string, stepIndex = 0): ResumeTarget 
 	// or it would silently reopen step 0's session.
 	const sessionFile =
 		step?.sessionFile ?? status.sessionFile ?? path.join(entry.runRecordDir, `run-${stepIndex}`, "session.jsonl");
-	if (!fs.existsSync(sessionFile))
+	// Require a NON-EMPTY session.jsonl: an empty run-N/ (early-interrupt before any
+	// turn was recorded) has nothing to resume, so treat it as missing.
+	if (!fs.existsSync(sessionFile) || fs.statSync(sessionFile).size === 0)
 		throw new Error(
 			`Session file for run ${runId} is missing at ${sessionFile}; cannot resume without the original session.`,
 		);
@@ -92,11 +95,13 @@ export function resolveResumeTarget(runId: string, stepIndex = 0): ResumeTarget 
 	};
 }
 
-export function assertCompleteResumeTarget(target: Pick<ResumeTarget, "runId" | "state">): void {
-	if (target.state !== "complete") {
-		throw new Error(
-			`Run ${target.runId} is '${target.state}', not complete; disk resume currently supports only completed runs. Wait for it to complete or start a new run.`,
-		);
+export function assertResumableTarget(target: Pick<ResumeTarget, "runId" | "state" | "status">): void {
+	// Reject only a genuinely live run: state 'running' with a fresh heartbeat.
+	// Every terminal state (complete/failed/interrupted/lost/paused) is resumable,
+	// and a dead-'running' record (ungraceful kill a cross-session sweep has not
+	// yet finalized) is resumable too.
+	if (target.state === "running" && !isRunnerHardDead(target.status)) {
+		throw new Error(`Run ${target.runId} is still running; wait for it to finish or interrupt it before resuming.`);
 	}
 }
 
@@ -176,7 +181,7 @@ async function resumeRun(
 	let target: ResumeTarget;
 	try {
 		target = resolveResumeTarget(parsed.dispatchRunId, parsed.stepIndex ?? 0);
-		assertCompleteResumeTarget(target);
+		assertResumableTarget(target);
 	} catch (error) {
 		const messageText = error instanceof Error ? error.message : String(error);
 		return validationError(messageText);

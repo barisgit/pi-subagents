@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type {
-	ChildAgentResult,
-	ChildAgentExitState,
-	PersistedRunStatus,
-	PersistedRunStep,
-	StatusPatch,
+import {
+	type ChildAgentResult,
+	type ChildAgentExitState,
+	type PersistedRunStatus,
+	type PersistedRunStep,
+	type StatusPatch,
+	parsePersistedRunStatus,
 } from "../protocol/status-types.ts";
 import type { TokenUsage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
@@ -265,19 +266,13 @@ export class StatusWriter {
 	 * current tool + activity, stamp the schema version, and persist the run total
 	 * token usage when provided. Mutates this.status in place.
 	 */
-	private applyTerminalScalars(args: { state: string; endedAt: number; totalTokens?: TokenUsage }): void {
+	private applyTerminalScalars(args: {
+		state: PersistedRunStatus["state"];
+		endedAt: number;
+		totalTokens?: TokenUsage;
+	}): void {
 		if (!this.status) return;
-		this.status.state = args.state as StatusState;
-		this.status.endedAt = args.endedAt;
-		this.status.lastUpdate = args.endedAt;
-		this.status.runnerHeartbeatAt = args.endedAt;
-		this.status.phase = "idle";
-		this.status.phaseStartedAt = undefined;
-		this.status.currentTool = undefined;
-		this.status.currentToolStartedAt = undefined;
-		this.status.activityState = undefined;
-		this.status.version = STATUS_JSON_VERSION;
-		if (args.totalTokens) this.status.totalTokens = args.totalTokens;
+		stampTerminalScalars(this.status, args);
 	}
 
 	private ensureInitialized(): void {
@@ -388,6 +383,68 @@ function mergeValue(target: Record<string, unknown>, source: Record<string, unkn
 		}
 	}
 	return target;
+}
+
+/**
+ * Apply the one terminal run-level convention onto a {@link PersistedRunStatus}
+ * in place (ex-StatusWriter.applyTerminalScalars body): set terminal
+ * state/timestamps, bump runnerHeartbeatAt to endedAt, clear the live phase to
+ * 'idle' (with phaseStartedAt undefined so formatPhase yields the empty
+ * string), clear the current tool + activity, stamp the schema version, and
+ * persist the run total token usage when provided.
+ */
+export function stampTerminalScalars(
+	status: PersistedRunStatus,
+	fields: { state: PersistedRunStatus["state"]; endedAt: number; totalTokens?: TokenUsage },
+): void {
+	status.state = fields.state;
+	status.endedAt = fields.endedAt;
+	status.lastUpdate = fields.endedAt;
+	status.runnerHeartbeatAt = fields.endedAt;
+	status.phase = "idle";
+	status.phaseStartedAt = undefined;
+	status.currentTool = undefined;
+	status.currentToolStartedAt = undefined;
+	status.activityState = undefined;
+	status.version = STATUS_JSON_VERSION;
+	if (fields.totalTokens) status.totalTokens = fields.totalTokens;
+}
+
+/**
+ * Read-modify-write a run's status.json to a terminal state through the same
+ * atomic {@link writeStatusJson} the writer uses. Fail-closed: if the file is
+ * absent or fails the validating codec, returns null WITHOUT writing.
+ * Idempotent: if the persisted run is no longer 'running', returns it unchanged
+ * with NO write. Otherwise stamps the terminal convention (preserving the
+ * existing total token usage) and persists atomically.
+ *
+ * Used to finalize an ungracefully killed/lost in-process runner whose frozen
+ * status.json is still pinned at state:'running' so it becomes resumable.
+ */
+export function reconcileRunToTerminalOnDisk(
+	runRecordDir: string,
+	state: "lost" | "interrupted" | "failed",
+	now: number = Date.now(),
+): PersistedRunStatus | null {
+	const statusPath = path.join(runRecordDir, "status.json");
+	let raw: string;
+	try {
+		raw = fs.readFileSync(statusPath, "utf-8");
+	} catch {
+		return null;
+	}
+	const parsed = parsePersistedRunStatus(raw);
+	if (!parsed.ok) return null;
+	const status = parsed.value;
+	if (status.state !== "running") return status;
+	const updated: PersistedRunStatus = { ...status };
+	stampTerminalScalars(updated, {
+		state,
+		endedAt: now,
+		...(updated.totalTokens ? { totalTokens: updated.totalTokens } : {}),
+	});
+	writeStatusJson(statusPath, updated);
+	return updated;
 }
 
 export function writeStatusJson(filePath: string, payload: object): void {

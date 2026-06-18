@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { renderWidget } from "./render-widget.ts";
-import { deriveRunDisplayState, displayStatePriority } from "../state/run-liveness.ts";
+import { deriveRunDisplayState, displayStatePriority, isRunnerHardDead } from "../state/run-liveness.ts";
+import { reconcileRunToTerminalOnDisk } from "../state/status-writer.ts";
 import {
 	DEFAULT_CONTROL_CONFIG,
 	buildControlEvent,
@@ -540,6 +541,18 @@ export function createAsyncJobTracker(
 			}
 			const status = readStatus(entry.runRecordDir);
 			if (!status || isTerminalAsyncStatus(status.state)) continue;
+			// An ungracefully killed runner (SIGKILL/session crash) leaves status.json
+			// frozen at 'running' with a stale heartbeat. Finalize it to terminal-lost
+			// on disk so it becomes resumable, and skip the live-reclaim branch. The
+			// write is best-effort: a recovery sweep must never break session rehydration.
+			if (status.state === "running" && isRunnerHardDead(status)) {
+				try {
+					reconcileRunToTerminalOnDisk(entry.runRecordDir, "lost");
+				} catch {
+					// Swallow fs write failures (ENOSPC/EROFS/EACCES); the next sweep retries.
+				}
+				continue;
+			}
 			const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : undefined);
 			announceReclaimed(entry.runId, entry.runRecordDir, agents?.[0], entry.parentRunId ?? status.parentRunId);
 			state.asyncJobs.set(entry.runId, {
