@@ -43,7 +43,22 @@ function isNotFoundError(error: unknown): boolean {
 }
 
 function reconcileStatus(status: PersistedRunStatus, mtimeMs: number): PersistedRunStatus {
-	if (status.state !== "running") return status;
+	// Reap orphans whose owning activation died, derived read-only (never written to
+	// disk here; callers must not persist the result). Two non-terminal states can
+	// outlive their owner:
+	//   - running: an ungracefully killed runner leaves status.json frozen at running
+	//     with a stale heartbeat.
+	//   - queued: a child blocked on a leaf permit when its per-activation registry was
+	//     lost (reload/crash) stays queued forever — nothing re-adopts it.
+	// A live queued/running run renders from the in-memory registry mirror (deduped
+	// from disk), so only a dead/foreign owner reaches this disk-read path. Heartbeat
+	// staleness cannot tell a permit-starved live-queued run from an orphan (the
+	// heartbeat ticker only starts after the permit is acquired, so a waiting run never
+	// beats), so queued reaping keys on the same mtime ceiling: queued->running rewrites
+	// status.json and bumps mtime, so a queued record untouched for the ceiling has had
+	// zero progress and a dead owner. If an owner is somehow still alive and later starts
+	// it, its own status write flips it back to running (this derive never writes disk).
+	if (status.state !== "running" && status.state !== "queued") return status;
 	if (Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS) {
 		return { ...status, state: "lost" };
 	}
