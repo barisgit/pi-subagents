@@ -358,7 +358,13 @@ describe("registerSubagentNotify", () => {
 				kind?: string;
 				completed?: number;
 				total?: number;
-				children?: Array<{ label?: string; agent?: string; state?: string; runId?: string }>;
+				children?: Array<{
+					label?: string;
+					agent?: string;
+					state?: string;
+					runId?: string;
+					resultPreview?: string;
+				}>;
 			};
 		};
 		const rollupContent = rollupMessage.content ?? "";
@@ -368,18 +374,34 @@ describe("registerSubagentNotify", () => {
 		}
 		assert.ok(!rollupContent.includes("00000000-0000-4000-8000-00000000000a"));
 		assert.ok(rollupContent.includes("✓ Alpha check (A): complete"));
+		for (const summary of ["from child A", "from child B", "from child C"]) {
+			assert.ok(rollupContent.includes(summary), `rollup should include ${summary}`);
+		}
 		assert.deepEqual(rollupMessage.details, {
 			kind: "batch",
 			completed: 3,
 			total: 3,
 			children: [
-				{ label: "Alpha check", agent: "A", state: "complete", runId: "00000000-0000-4000-8000-00000000000a" },
-				{ label: "Bravo check", agent: "B", state: "complete", runId: "00000000-0000-4000-8000-00000000000b" },
+				{
+					label: "Alpha check",
+					agent: "A",
+					state: "complete",
+					runId: "00000000-0000-4000-8000-00000000000a",
+					resultPreview: "from child A",
+				},
+				{
+					label: "Bravo check",
+					agent: "B",
+					state: "complete",
+					runId: "00000000-0000-4000-8000-00000000000b",
+					resultPreview: "from child B",
+				},
 				{
 					label: "Charlie check",
 					agent: "C",
 					state: "complete",
 					runId: "00000000-0000-4000-8000-00000000000c",
+					resultPreview: "from child C",
 				},
 			],
 		});
@@ -431,6 +453,47 @@ describe("registerSubagentNotify", () => {
 			timestamp: Date.now(),
 		});
 		assert.equal(silent.sent.length, 0);
+	});
+
+	it("batch rollup includes child output from aggregate payloads with bounded length", () => {
+		const { events, sent } = createPi();
+		const longOutput = `${"x".repeat(2100)}tail`;
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "group-children-output",
+			runId: "group-children-output",
+			notifyPolicy: "rollup",
+			agent: "A,B",
+			success: true,
+			state: "complete",
+			summary: "group summary",
+			children: [
+				{
+					id: "child-output-a",
+					agent: "A",
+					label: "Alpha check",
+					success: true,
+					state: "complete",
+					output: "output from A",
+				},
+				{
+					id: "child-output-b",
+					agent: "B",
+					label: "Bravo check",
+					success: true,
+					state: "complete",
+					output: longOutput,
+				},
+			],
+			timestamp: Date.now(),
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(content.includes("✓ Alpha check (A): complete"));
+		assert.ok(content.includes("output from A"));
+		assert.ok(content.includes(`${"x".repeat(1999)}…`));
+		assert.ok(!content.includes("tail"));
 	});
 
 	it("a workflow sends exactly one notification carrying the script's return value", () => {

@@ -59,7 +59,7 @@ export interface SubagentBatchNotifyDetails {
 	kind: "batch";
 	completed: number;
 	total: number;
-	children: Array<{ label?: string; agent: string; state: string; runId: string }>;
+	children: Array<{ label?: string; agent: string; state: string; runId: string; resultPreview: string }>;
 }
 
 type NotifyPolicy = "rollup" | "each" | "silent";
@@ -133,18 +133,34 @@ function singleNotificationContent(result: SubagentResult): string {
 		.join("\n");
 }
 
+const BATCH_CHILD_OUTPUT_MAX_CHARS = 2000;
+
 function batchNotificationContent(result: SubagentResult, children: ChildStepResult[]): string {
 	const total = result.total ?? children.length;
 	const completed =
 		result.completed ?? children.filter((child) => child.state === "complete" || child.success).length;
-	const lines = children.map((child) => {
+	const lines = children.flatMap((child) => {
 		const childRunId = child.runId ?? child.id ?? "unknown";
 		const state = child.state ?? (child.success ? "complete" : "failed");
 		const agent = child.agent || "unknown";
 		const name = child.label?.trim() || agent || shortRunId(childRunId);
-		return `- ${stateGlyph(state)} ${name} (${agent}): ${state}`;
+		const output = batchChildDisplayOutput(child);
+		return [
+			`- ${stateGlyph(state)} ${name} (${agent}): ${state}`,
+			...output.split("\n").map((line) => `  ${line}`),
+		];
 	});
 	return [`Background batch completed: **${completed}/${total} tasks complete**`, "", ...lines].join("\n");
+}
+
+function batchChildDisplayOutput(child: ChildStepResult): string {
+	return truncateBatchChildOutput((child.summary ?? child.output ?? "").trim() || "(no output)");
+}
+
+function truncateBatchChildOutput(output: string): string {
+	return output.length > BATCH_CHILD_OUTPUT_MAX_CHARS
+		? `${output.slice(0, BATCH_CHILD_OUTPUT_MAX_CHARS - 1)}…`
+		: output;
 }
 
 function shortRunId(runId: string): string {
@@ -173,6 +189,7 @@ function batchNotificationDetails(result: SubagentResult, children: ChildStepRes
 				agent: child.agent || "unknown",
 				state,
 				runId,
+				resultPreview: batchChildDisplayOutput(child),
 			};
 		}),
 	};
