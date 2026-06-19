@@ -1002,8 +1002,11 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	// Queued children (dispatched but blocked on a leaf permit) produce no results yet,
 	// so the per-row loop above omits them entirely. Surface them as a single bounded
 	// `+N queued` rollup line instead of enumerating each, preserving the compact card's
-	// header + one-line-per-started-child structure.
-	if (hasRunning && d.mode === "parallel" && d.runId) {
+	// header + one-line-per-started-child structure. Not gated on hasRunning: when the
+	// global leaf pool is saturated by OTHER parents, ALL of this parent's children can be
+	// queued with none running yet, and they must still be visible (matching the async
+	// widget). The queued>0 guard prevents a stray `+0 queued`.
+	if (d.mode === "parallel" && d.runId) {
 		const queued = countQueuedInlineChildren(d.runId);
 		if (queued > 0) {
 			c.addChild(new Text(truncLine(theme.fg("dim", `  ◦ +${queued} queued`), width), 0, 0));

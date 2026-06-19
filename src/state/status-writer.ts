@@ -11,6 +11,7 @@ import {
 import type { TokenUsage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 import { applyPatchToStatus } from "./status-patch.ts";
+import { STALE_MTIME_THRESHOLD_MS } from "../shared/utils.ts";
 
 export type FlushPolicy = "terminal" | "eager";
 
@@ -420,6 +421,16 @@ export function stampTerminalScalars(
  *
  * Used to finalize an ungracefully killed/lost in-process runner whose frozen
  * status.json is still pinned at state:'running' so it becomes resumable.
+ *
+ * Also persists a stale QUEUED orphan (a child blocked on a leaf permit when its
+ * owning per-activation registry died) to terminal-lost. A queued record never
+ * advances its heartbeat — the ticker only starts after the permit is acquired —
+ * so queued reaping keys on the SAME mtime-staleness ceiling the read path
+ * ({@link readStatus}) already uses to derive such records to lost: only a queued
+ * record whose status.json mtime is older than {@link STALE_MTIME_THRESHOLD_MS}
+ * had zero progress and a dead owner. A live queued run (fresh mtime, still
+ * waiting for a permit) is returned unchanged with NO write. The 'running' path is
+ * unconditional (callers gate it on a hard-dead heartbeat) and stays byte-stable.
  */
 export function reconcileRunToTerminalOnDisk(
 	runRecordDir: string,
@@ -428,15 +439,21 @@ export function reconcileRunToTerminalOnDisk(
 ): PersistedRunStatus | null {
 	const statusPath = path.join(runRecordDir, "status.json");
 	let raw: string;
+	let mtimeMs: number;
 	try {
 		raw = fs.readFileSync(statusPath, "utf-8");
+		mtimeMs = fs.statSync(statusPath).mtimeMs;
 	} catch {
 		return null;
 	}
 	const parsed = parsePersistedRunStatus(raw);
 	if (!parsed.ok) return null;
 	const status = parsed.value;
-	if (status.state !== "running") return status;
+	if (status.state !== "running" && status.state !== "queued") return status;
+	// A queued record is only reaped once its mtime is stale past the shared ceiling;
+	// a fresh queued run is a live permit-waiter and must never be written. Running is
+	// reaped unconditionally here (the call site gates it on a hard-dead heartbeat).
+	if (status.state === "queued" && now - mtimeMs <= STALE_MTIME_THRESHOLD_MS) return status;
 	const updated: PersistedRunStatus = { ...status };
 	stampTerminalScalars(updated, {
 		state,
