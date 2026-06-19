@@ -16,6 +16,7 @@ import type {
 import type { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { IntercomBridgeState } from "./intercom-bridge.ts";
 import type { StatusWriter } from "../state/status-writer.ts";
+import type { SingleOutputSnapshot } from "../surfaces/single-output.ts";
 
 export interface ModelInfo {
 	provider: string;
@@ -162,4 +163,5 @@ export interface AsyncDispatchStep {
 	step: ChildAgentStep;
 	cleanTask: string;
 	agentConfig: AgentConfig;
+	outputSnapshot?: SingleOutputSnapshot;
 }

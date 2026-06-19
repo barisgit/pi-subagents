@@ -317,14 +317,14 @@ export function __setChildAgentExecutorDepsForTest(deps: Partial<ExecutorRuntime
 }
 
 export function runChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): Promise<ChildAgentResult> {
-	return startChildAgent(step, ctx, false).completed;
+	return startChildAgent(step, ctx).completed;
 }
 
 export function dispatchAsyncChild(step: ChildAgentStep, ctx: ChildAgentContext): ChildAgentHandle {
-	return startChildAgent(step, ctx, true);
+	return startChildAgent(step, ctx);
 }
 
-function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext, notifyCompleted: boolean): ChildAgentHandle {
+function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAgentHandle {
 	let session: AgentSession | undefined;
 	const localAbort = new AbortController();
 	const combinedSignal = combineAbortSignals([
@@ -384,9 +384,6 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext, notifyCom
 	};
 
 	ctx.registry.register(handle);
-	if (notifyCompleted) {
-		void completed.then((result) => ctx.onCompleted?.(result));
-	}
 	return handle;
 }
 

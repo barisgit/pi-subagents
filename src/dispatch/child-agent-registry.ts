@@ -11,7 +11,6 @@ export interface ChildAgentContext {
 	abortSignal: AbortSignal;
 	onEvent?: (stepIndex: number, e: AgentSessionEvent) => void;
 	onStatusUpdate?: (patch: StatusPatch) => void;
-	onCompleted?: (result: ChildAgentResult) => void;
 	registry: ChildAgentRegistry;
 	/** Per-run RunView seed; when present, startChildAgent seeds the registry mirror. */
 	runViewSeed?: RunViewSeed;

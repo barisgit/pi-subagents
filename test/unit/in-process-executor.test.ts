@@ -261,7 +261,7 @@ describe("dispatchAsyncChild", () => {
 		assert.equal(result.state, "interrupted");
 	});
 
-	it("returns a handle without awaiting and fires onCompleted", async () => {
+	it("returns a handle without awaiting", async () => {
 		let release!: () => void;
 		const promptReleased = new Promise<void>((resolve) => {
 			release = resolve;
@@ -272,20 +272,13 @@ describe("dispatchAsyncChild", () => {
 		});
 		let createCalls = 0;
 		installFakeRuntime([session], () => createCalls++);
-		const completed = new Promise((resolve) => {
-			const handle = dispatchAsyncChild(
-				makeStep({ runId: "async-run" }),
-				makeContext({
-					onCompleted: resolve,
-				}),
-			);
-			assert.equal(handle.runId, "async-run");
-			assert.equal(createCalls, 0);
-			assert.equal(session.promptCalls, 0);
-		});
+		const handle = dispatchAsyncChild(makeStep({ runId: "async-run" }), makeContext());
+		assert.equal(handle.runId, "async-run");
+		assert.equal(createCalls, 0);
+		assert.equal(session.promptCalls, 0);
 
 		release();
-		const result = (await completed) as { state: string; outputText: string };
+		const result = await handle.completed;
 		assert.equal(result.state, "complete");
 		assert.equal(result.outputText, "done");
 	});

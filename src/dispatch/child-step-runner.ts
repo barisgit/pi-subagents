@@ -83,7 +83,7 @@ export function buildAsyncChildStep(input: {
 			},
 		};
 	}
-	return { step: prepared.step, cleanTask, agentConfig };
+	return { step: prepared.step, cleanTask, agentConfig, outputSnapshot: captureSingleOutputSnapshot(outputPath) };
 }
 
 function combineOptionalSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {

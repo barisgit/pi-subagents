@@ -52,4 +52,48 @@ describe("run status guidance", () => {
 			setRegistryPathForTests(null);
 		}
 	});
+
+	it("returns completed output in status details", () => {
+		const id = `status-output-${Date.now().toString(36)}`;
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "run-status-output-"));
+		const sessionFile = path.join(dir, "run-0", "session.jsonl");
+		setRegistryPathForTests(path.join(dir, "runs-index.jsonl"));
+		fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+		try {
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			fs.writeFileSync(
+				path.join(dir, "status.json"),
+				JSON.stringify({
+					runId: id,
+					mode: "single",
+					state: "complete",
+					startedAt: Date.now(),
+					lastUpdate: Date.now(),
+					endedAt: Date.now(),
+					outputText: "finished output",
+					sessionFile,
+					steps: [{ agent: "review", status: "complete" }],
+				}),
+				"utf-8",
+			);
+			appendRunEntry({
+				runId: id,
+				runRecordDir: dir,
+				mode: "single",
+				source: "async",
+				agentName: "review",
+				cwd: process.cwd(),
+				startedAt: Date.now(),
+			});
+
+			const result = inspectSubagentStatus({ id });
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			assert.match(text, /Output: available in details\.results\[0\]\.finalOutput/);
+			assert.equal(result.details.results[0]?.finalOutput, "finished output");
+			assert.equal(result.details.results[0]?.sessionFile, sessionFile);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+			setRegistryPathForTests(null);
+		}
+	});
 });

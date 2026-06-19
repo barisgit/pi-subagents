@@ -157,11 +157,28 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 			}
 			if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
 			else if (fs.existsSync(sessionPath)) lines.push(`Session: ${sessionPath}`);
+			if (status.outputFile) lines.push(`Output file: ${status.outputFile}`);
+			if (status.state === "complete" && status.outputText)
+				lines.push("Output: available in details.results[0].finalOutput");
 			if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
 			if (status.state === "running" || status.state === "queued" || status.state === "lost")
 				lines.push("", ASYNC_NO_POLL_GUIDANCE);
 
-			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
+			const results =
+				status.state === "complete" && (status.outputText || status.outputFile)
+					? [
+							{
+								agent: status.steps?.[0]?.agent ?? "unknown",
+								task: status.label ?? "",
+								exitCode: 0,
+								usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+								...(status.sessionFile ? { sessionFile: status.sessionFile } : {}),
+								...(status.outputText ? { finalOutput: status.outputText } : {}),
+								...(status.outputFile ? { savedOutputPath: status.outputFile } : {}),
+							},
+						]
+					: [];
+			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results } };
 		}
 	}
 

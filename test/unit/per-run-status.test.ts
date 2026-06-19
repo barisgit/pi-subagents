@@ -121,6 +121,23 @@ async function execute(
 	)) as { details?: { runId?: string } };
 }
 
+async function executeSingle(
+	cwd: string,
+	emitted: Array<{ event: string; payload: Record<string, unknown> }>,
+	output: string,
+): Promise<{ details?: { runId?: string; asyncDir?: string } }> {
+	return (await makeExecutor(cwd, emitted).execute(
+		"id",
+		{
+			async: true,
+			run: [{ agent: "A", task: "alpha", output }],
+		} as never,
+		new AbortController().signal,
+		undefined,
+		makeCtx(cwd) as never,
+	)) as { details?: { runId?: string; asyncDir?: string } };
+}
+
 async function waitForEntries(count: number): Promise<void> {
 	for (let i = 0; i < 50; i++) {
 		if (readAllEntries().length >= count) return;
@@ -170,5 +187,24 @@ describe("async parallel per-run status", () => {
 			assert.equal(status.mode, "single");
 			assert.equal(status.steps?.length, 1);
 		}
+	});
+
+	it("resolves single-output files before finalizing async single status", async () => {
+		const root = setupTempHome("per-run-output-test-");
+		installFakeRuntime();
+		const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
+		const outputPath = path.join(root, "reports", "result.md");
+
+		const result = await executeSingle(root, emitted, outputPath);
+		assert.ok(result.details?.asyncDir);
+		await waitForCompleteStatus(result.details.asyncDir);
+
+		assert.equal(fs.readFileSync(outputPath, "utf-8"), "done");
+		const status = JSON.parse(fs.readFileSync(path.join(result.details.asyncDir, "status.json"), "utf-8")) as {
+			outputText?: string;
+			steps?: Array<{ live?: { outputText?: string } }>;
+		};
+		assert.equal(status.outputText, "done");
+		assert.equal(status.steps?.[0]?.live?.outputText, "done");
 	});
 });

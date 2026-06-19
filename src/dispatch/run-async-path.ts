@@ -41,6 +41,7 @@ import {
 	safeEmit,
 } from "./executor-helpers.ts";
 import { buildAsyncChildStep } from "./child-step-runner.ts";
+import { resolveSingleOutput } from "../surfaces/single-output.ts";
 
 export function childCompletionRunId(dispatchRunId: string, stepIndex: number, total: number): string {
 	return total > 1 ? `${dispatchRunId}:${stepIndex}` : dispatchRunId;
@@ -447,6 +448,16 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			logger.info("finalizeAsync: handles resolved", { runId, count: handles.length });
 			const settled = await Promise.allSettled(handles.map((handle) => handle.completed));
 			logger.info("finalizeAsync: settled", { runId, states: settled.map((s) => s.status) });
+			for (const entry of settled) {
+				if (entry.status !== "fulfilled" || entry.value.exitCode !== 0) continue;
+				const step = steps.find((candidate) => candidate.step.stepIndex === entry.value.stepIndex);
+				if (!step?.step.outputPath) continue;
+				entry.value.outputText = resolveSingleOutput(
+					step.step.outputPath,
+					entry.value.outputText,
+					step.outputSnapshot,
+				).fullOutput;
+			}
 			const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []));
 			finalResult = results.find((result) => result.state !== "complete") ?? results.at(-1);
 			if (!finalResult && settled[0]?.status === "rejected") {
