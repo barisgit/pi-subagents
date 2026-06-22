@@ -140,6 +140,68 @@ describe("reconcileRunToTerminalOnDisk", () => {
 		}
 	});
 
+	it("rewrites a stale queued orphan to lost on disk (mtime past the staleness ceiling)", () => {
+		const dir = createTempDir("pi-reconcile-queued-stale-");
+		try {
+			const status: PersistedRunStatus = {
+				version: 1,
+				runId: "run-queued-orphan",
+				mode: "single",
+				state: "queued",
+				startedAt: 1000,
+				lastUpdate: 1000,
+				parentRunId: "parent-run-1",
+				steps: [{ agent: "fixer", status: "queued" }],
+			};
+			writeStatusJson(statusPath(dir), status);
+			// Age the file past the 10-min ceiling so it reads as a dead-owner orphan. The
+			// staleness check compares `now` against the real file mtime, so leave `now`
+			// defaulted to Date.now() (matching the live call site) rather than injecting an
+			// artificial clock that would not be relative to the aged mtime.
+			const stale = new Date(Date.now() - 15 * 60 * 1000);
+			fs.utimesSync(statusPath(dir), stale, stale);
+
+			const result = reconcileRunToTerminalOnDisk(dir, "lost");
+			assert.equal(result?.state, "lost");
+			// The on-disk file was REWRITTEN to lost (distinct from readStatus's read-only
+			// derive, which leaves disk at queued).
+			const onDisk = JSON.parse(readRaw(dir)) as PersistedRunStatus;
+			assert.equal(onDisk.state, "lost");
+			assert.equal(typeof onDisk.endedAt, "number");
+			// Rich fields preserved.
+			assert.equal(onDisk.parentRunId, "parent-run-1");
+			assert.deepEqual(onDisk.steps, status.steps);
+		} finally {
+			removeTempDir(dir);
+		}
+	});
+
+	it("leaves a fresh queued run untouched (a live permit-waiter is not an orphan)", () => {
+		const dir = createTempDir("pi-reconcile-queued-fresh-");
+		try {
+			const status: PersistedRunStatus = {
+				version: 1,
+				runId: "run-queued-live",
+				mode: "single",
+				state: "queued",
+				startedAt: 1000,
+				lastUpdate: 1000,
+				steps: [{ agent: "fixer", status: "queued" }],
+			};
+			writeStatusJson(statusPath(dir), status);
+			const before = readRaw(dir);
+			const beforeMtime = fs.statSync(statusPath(dir)).mtimeMs;
+
+			// Fresh mtime (file just written): not stale, so no write.
+			const result = reconcileRunToTerminalOnDisk(dir, "lost");
+			assert.equal(result?.state, "queued");
+			assert.equal(readRaw(dir), before);
+			assert.equal(fs.statSync(statusPath(dir)).mtimeMs, beforeMtime);
+		} finally {
+			removeTempDir(dir);
+		}
+	});
+
 	it("is idempotent: a second call on the now-lost record returns it unchanged with no further write", () => {
 		const dir = createTempDir("pi-reconcile-idempotent-");
 		try {

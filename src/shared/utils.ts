@@ -22,7 +22,14 @@ import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/st
 // ============================================================================
 
 const statusCache = new Map<string, { mtime: number; status: PersistedRunStatus }>();
-const STALE_MTIME_THRESHOLD_MS = 10 * 60 * 1000;
+/**
+ * Ceiling past which a non-terminal status.json with an untouched mtime is treated
+ * as an orphan whose owning activation died. The read-path ({@link reconcileStatus})
+ * derives such records to `lost`; the disk writeback funnel
+ * (`reconcileRunToTerminalOnDisk`) reuses this same discriminant to PERSIST a stale
+ * queued orphan, so the two never disagree about what counts as stale.
+ */
+export const STALE_MTIME_THRESHOLD_MS = 10 * 60 * 1000;
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);

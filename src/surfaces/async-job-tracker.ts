@@ -513,6 +513,24 @@ export function createAsyncJobTracker(
 		let added = 0;
 		for (const entry of readAllEntries()) {
 			if ((entry.rootSessionId ?? entry.parentSessionId) !== hostSessionId) continue;
+			// Persist a stale orphan (sync OR async) whose owning activation died, BEFORE
+			// the async-only reclaim guard so sync foreground singles get reaped too. The
+			// read path (readStatus) derives a non-terminal record untouched past the mtime
+			// ceiling to `lost` read-only; a derived-lost state therefore means the on-disk
+			// file is still non-terminal (queued/running) and must be written through the
+			// funnel so it stops re-deriving on every read and becomes resumable. The funnel
+			// re-checks the same mtime/codec discriminant, so a live registry-owned run
+			// (fresh mtime, still holding/awaiting a permit) is never written. This persists
+			// only; sync orphans stay out of the async widget via the guard just below.
+			try {
+				if (readStatus(entry.runRecordDir)?.state === "lost") {
+					reconcileRunToTerminalOnDisk(entry.runRecordDir, "lost");
+				}
+			} catch {
+				// Swallow fs read/write failures (ENOSPC/EROFS/EACCES) so one bad entry can't
+				// abort the whole sweep; the next sweep retries. (readStatus throws on
+				// non-ENOENT stat/read errors; the funnel can throw on write.)
+			}
 			// The async widget renders state.asyncJobs, so only ASYNC runs may enter it.
 			// A non-terminal sync (foreground) run lives in state.foregroundControls and
 			// renders inline; reclaiming it here would leak it into the async widget.

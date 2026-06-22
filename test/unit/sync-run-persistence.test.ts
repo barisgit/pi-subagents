@@ -226,6 +226,42 @@ describe("sync run persistence", () => {
 		}
 	});
 
+	it("finalizes an interrupted run to terminal 'interrupted', not 'complete'", () => {
+		// An interrupted sync single carries interrupted:true with no isError, so the
+		// run-level finalize must stamp 'interrupted' (a terminal, resumable state) and
+		// drag the step with it -- a regression guard for the run reading 'complete'
+		// over a failed/interrupted step.
+		const writer = makeWriter("sync-persist-interrupted");
+		try {
+			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "worker", status: "running" }] });
+			writer.finalizeTerminal({
+				state: "interrupted",
+				steps: [{ status: "interrupted", error: "Child agent interrupted: This operation was aborted" }],
+			});
+			const status = readStatus(writer);
+			assert.equal(status.state, "interrupted");
+			assert.equal(status.steps[0].status, "interrupted");
+			assert.match(status.steps[0].error, /interrupted/);
+		} finally {
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
+		}
+	});
+
+	it("drags an unpatched step to 'interrupted' when the run-level end is interrupted", () => {
+		// When finalizeTerminal gets no explicit per-step status, a non-complete
+		// run-level end (interrupted) must still pull the step off 'complete'.
+		const writer = makeWriter("sync-persist-interrupted-nostep");
+		try {
+			writer.initialize({ mode: "single", state: "running", steps: [{ agent: "worker", status: "running" }] });
+			writer.finalizeTerminal({ state: "interrupted" });
+			const status = readStatus(writer);
+			assert.equal(status.state, "interrupted");
+			assert.equal(status.steps[0].status, "interrupted");
+		} finally {
+			fs.rmSync(writer.runRecordDir, { recursive: true, force: true });
+		}
+	});
+
 	it("defaults end state to complete", () => {
 		const writer = makeWriter("sync-persist-default");
 		try {
