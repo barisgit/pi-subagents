@@ -522,12 +522,14 @@ export function createAsyncJobTracker(
 			// re-checks the same mtime/codec discriminant, so a live registry-owned run
 			// (fresh mtime, still holding/awaiting a permit) is never written. This persists
 			// only; sync orphans stay out of the async widget via the guard just below.
-			if (readStatus(entry.runRecordDir)?.state === "lost") {
-				try {
+			try {
+				if (readStatus(entry.runRecordDir)?.state === "lost") {
 					reconcileRunToTerminalOnDisk(entry.runRecordDir, "lost");
-				} catch {
-					// Swallow fs write failures (ENOSPC/EROFS/EACCES); the next sweep retries.
 				}
+			} catch {
+				// Swallow fs read/write failures (ENOSPC/EROFS/EACCES) so one bad entry can't
+				// abort the whole sweep; the next sweep retries. (readStatus throws on
+				// non-ENOENT stat/read errors; the funnel can throw on write.)
 			}
 			// The async widget renders state.asyncJobs, so only ASYNC runs may enter it.
 			// A non-terminal sync (foreground) run lives in state.foregroundControls and
