@@ -222,7 +222,7 @@ export type FinalizeRunPayload =
 	| { via: "result"; result: ChildAgentResult; totalUsage?: Usage }
 	| {
 			via: "terminal";
-			state: "complete" | "failed";
+			state: "complete" | "failed" | "interrupted";
 			steps: Array<Partial<PersistedRunStep>>;
 			totalTokens?: TokenUsage;
 	  };

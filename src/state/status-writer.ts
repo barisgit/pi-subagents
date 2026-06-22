@@ -162,7 +162,7 @@ export class StatusWriter {
 	 * convention. Writes immediately.
 	 */
 	finalizeTerminal(end: {
-		state?: "complete" | "failed";
+		state?: "complete" | "failed" | "interrupted";
 		steps?: Array<Partial<StatusStep>>;
 		totalTokens?: TokenUsage;
 		sessionFile?: string;
@@ -172,8 +172,15 @@ export class StatusWriter {
 		const endedAt = Date.now();
 		const steps = this.status.steps.map((step, index) => {
 			const patch = end.steps?.[index] ?? {};
+			// A non-complete run-level end (failed/interrupted) drags an unpatched step to
+			// the same non-complete state; an explicit per-step patch.status always wins.
 			const status =
-				patch.status ?? (end.state === "failed" ? "failed" : step.status === "failed" ? "failed" : "complete");
+				patch.status ??
+				(end.state === "failed" || end.state === "interrupted"
+					? end.state
+					: step.status === "failed"
+						? "failed"
+						: "complete");
 			const startedAt = patch.startedAt ?? step.startedAt ?? this.status!.startedAt;
 			return {
 				...step,

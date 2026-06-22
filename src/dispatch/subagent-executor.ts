@@ -1431,12 +1431,22 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} finally {
 			if (foregroundControl) {
 				if (foregroundMode !== "parallel" && fgWriter && runHandle) {
+					// An interrupted single is neither a clean complete nor an error failure:
+					// its result carries interrupted:true with no isError, so honor that first
+					// (mirrors the workflow/group path) instead of falling through to
+					// 'complete'. 'interrupted' is a terminal, resumable state.
+					const interrupted =
+						executionResult?.details?.results?.some((result) => result.interrupted) ?? false;
 					finalizeRun(runHandle, {
 						via: "terminal",
-						state: executionResult?.isError ? "failed" : "complete",
+						state: interrupted ? "interrupted" : executionResult?.isError ? "failed" : "complete",
 						steps:
 							executionResult?.details?.results?.map((result) => ({
-								status: result.exitCode === 0 ? "complete" : "failed",
+								status: result.interrupted
+									? "interrupted"
+									: result.exitCode === 0
+										? "complete"
+										: "failed",
 								tokens: tokenUsageFromResult(result),
 								durationMs: result.progressSummary?.durationMs,
 								error: result.error,
