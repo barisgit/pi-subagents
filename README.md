@@ -9,12 +9,12 @@ Pi extension for delegating bounded work to configured subagents with single-tas
 Use `subagent` to hand off one bounded task or a fixed set of independent parallel tasks.
 
 ```ts
-subagent({ run: [{ agent: "fixer", task: "Patch the bug" }] })
+subagent({ run: [{ agent: "<configured-role>", task: "Patch the bug" }] })
 
 subagent({
   run: [
-    { agent: "explorer", task: "Find relevant tests." },
-    { agent: "qa", task: "Run the relevant checks." }
+    { agent: "<investigation-role>", task: "Find relevant tests." },
+    { agent: "<verification-role>", task: "Run the relevant checks." }
   ],
   batch: true
 })
@@ -33,18 +33,25 @@ Use `workflow` for sequential or dependent orchestration: branch on a child's st
 ```ts
 workflow({ script: `
 phase("inspect");
-const recon = await agent("explorer", "Find the failing path and tests.");
-phase("fix");
-const fix = await agent("fixer", "Patch using this context: " + recon);
-const checks = await parallel([
-  () => agent("review", "Review the patch: " + fix),
-  () => agent("qa", "Run the relevant tests: " + fix)
-]);
-return { fix, checks };
+const areas = ["api", "ui", "cli", "docs"];
+const findings = await parallel(areas.map((area) => () =>
+  agent("<investigation-role>", "Inspect " + area + " and return concise findings.")
+));
+phase("implement");
+let change = await agent("<implementation-role>", "Patch using this context: " + findings.join("\n"));
+phase("verify");
+for (let round = 0; round < 3; round++) {
+  const verdict = await agent("<verification-role>", "Verify this patch and return approved/blockers: " + change, {
+    schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false },
+  });
+  if (verdict.approved) return { change, findings, verdict };
+  change = await agent("<implementation-role>", "Address these blockers: " + verdict.blockers.join("\n"));
+}
+return { status: "needs-attention", change, findings };
 ` })
 ```
 
-The workflow sandbox provides `agent(role, task, opts?)`, `parallel(thunks)`, and `phase(title)`. `agent()` returns the child's result directly: a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object). Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
+The workflow sandbox provides `agent(role, task, opts?)`, `parallel(thunks)`, and `phase(title)`. `role` is one of the caller's configured agent roles; replace placeholders with real active roles. `agent()` returns the child's result directly: a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object). `parallel()` scales dynamic fan-out to many children, bounded by the process-wide leaf-concurrency pool. Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
 
 ## Slash commands
 
@@ -66,7 +73,7 @@ tools: read, grep, ast_grep
 skills: diagnose
 ---
 
-You are the explorer. Trace code paths, identify tests, and report exact evidence.
+Trace code paths, identify tests, and report exact evidence.
 ```
 
 Project agents override user agents of the same name; user/project agents override bundled examples.

@@ -26,13 +26,33 @@ subagent({
 
 ## Dependent orchestration
 
-Use `workflow` for sequential or dependent phases. It can pass summaries/results between steps, branch, retry, loop, and decide runtime fan-out.
+Use `workflow` for sequential or dependent phases. It can pass summaries/results between steps, branch, retry, loop, and decide runtime fan-out. In `agent(role, task, opts?)`, `role` is one of the caller's configured agent roles; replace placeholders with real roles from the active config. `parallel()` can fan out over a dynamic list and scales to many concurrent children, bounded by the process-wide leaf-concurrency pool.
 
 ```ts
 workflow({ script: `
-const recon = await agent("explorer", "Trace login state ownership.");
-const fix = await agent("fixer", "Implement the smallest fix using: " + recon);
-return await agent("qa", "Verify the fix: " + fix);
+phase("map");
+const packages = ["api", "ui", "cli", "docs"];
+const reports = await parallel(packages.map((pkg) => () =>
+  agent("<investigation-role>", "Inspect " + pkg + " and summarize risks.")
+));
+phase("reduce");
+return await agent("<synthesis-role>", "Combine these reports into prioritized next steps: " + reports.join("\n"));
+` })
+```
+
+```ts
+workflow({ script: `
+phase("produce");
+let change = await agent("<implementation-role>", "Implement the smallest safe patch for the reported failure.");
+phase("verify");
+for (let round = 0; round < 3; round++) {
+  const verdict = await agent("<verification-role>", "Try to disprove this patch and return approved/blockers: " + change, {
+    schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false },
+  });
+  if (verdict.approved) return { change, verdict };
+  change = await agent("<implementation-role>", "Address these blockers: " + verdict.blockers.join("\n"));
+}
+return { status: "needs-attention", change };
 ` })
 ```
 
@@ -40,7 +60,7 @@ return await agent("qa", "Verify the fix: " + fix);
 
 ```ts
 subagent({
-  run: [{ agent: "qa", task: "Run the full test suite and report failures." }],
+  run: [{ agent: "<verification-role>", task: "Run the full test suite and report failures." }],
   async: true
 })
 ```

@@ -620,20 +620,27 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Use whenever the NEXT step depends on a previous step's result: branch on a child's structured output, retry/fallback on failure, loop until a condition holds (e.g. review until approved), decide fan-out width at runtime, or pass data between steps. Prefer this over multiple subagent calls when any decision sits between dispatches; use plain subagent for a single task or a fixed independent batch.
 
 The script runs in a sandbox with three globals:
-- agent(role, task, opts?) -> Promise<result> — dispatch one subagent (same roles as the subagent tool) and get its result DIRECTLY. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape. Example: const r = await agent("review", "Review this fix.", { schema: { type: "object", required: ["approved"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false } }); then branch on r.approved.
-- parallel(thunks) -> Promise<results[]> — run agent calls concurrently: parallel([() => agent("explorer", "..."), () => agent("qa", "...")]).
+- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<implementation-role>" below must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
+- parallel(thunks) -> Promise<results[]> — run agent calls concurrently. It scales to many children, bounded by the process-wide leaf-concurrency pool: parallel(items.map((item) => () => agent("<configured-role>", "Handle " + item))).
 - phase(title) — label the current stage for live status displays.
 
 Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background.
 
-Example (fix, then review-loop until approved, max 2 rounds):
-const fix = await agent("fixer", "Fix the flaky test in foo.test.ts");
-for (let round = 0; round < 2; round++) {
-  const review = await agent("review", "Review the fix and return { approved: boolean }: " + fix, { schema: { type: "object", required: ["approved"], properties: { approved: { type: "boolean" } }, additionalProperties: false } });
-  if (review.approved) return { fix, review };
-  await agent("fixer", "Address review findings.");
+Example (dynamic fan-out, synthesize, then verify-loop until approved):
+phase("inspect");
+const areas = ["auth", "billing", "notifications", "search"];
+const findings = await parallel(areas.map((area) => () =>
+  agent("<investigation-role>", "Inspect " + area + " and return concise findings.")
+));
+phase("implement");
+let change = await agent("<implementation-role>", "Implement the smallest safe change using: " + findings.join("\n"));
+phase("verify");
+for (let round = 0; round < 3; round++) {
+  const verdict = await agent("<verification-role>", "Independently verify this change and return approved/blockers: " + change, { schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false } });
+  if (verdict.approved) return { change, findings, verdict };
+  change = await agent("<implementation-role>", "Address these verification blockers: " + verdict.blockers.join("\n"));
 }
-return "escalate: review did not approve after 2 rounds";
+return { status: "needs-attention", change, findings };
 
 Rules: always await every agent()/parallel() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.`,
 		parameters: WorkflowParams,

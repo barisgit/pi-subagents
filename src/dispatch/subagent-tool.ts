@@ -27,13 +27,13 @@ Async/background contract: after starting an async run, do not wait by default w
 
 Task fields: agent persona; task instruction; label status text; context "fresh"|"fork"; output path/boolean capture override.
 
-Substitution: in message, {task} and {in} become each Task.task; at most one {in} per message. context defaults to "fresh". "fork" is same-agent self-branching only (e.g. fixer→fixer, explorer→explorer, main→main), never role switching; cross-agent delegation uses "fresh".
+Substitution: in message, {task} and {in} become each Task.task; at most one {in} per message. context defaults to "fresh". "fork" is same-agent self-branching only (same configured role continuing in a branch), never role switching; cross-agent delegation uses "fresh".
 
 Examples:
 // single
-{ run:[{ agent:"fixer", task:"Patch the bug" }] }
+{ run:[{ agent:"<configured-role>", task:"Patch the bug" }] }
 // parallel
-{ run:[{ agent:"explorer", task:"Find relevant tests" },{ agent:"qa", task:"Run the checks" }], batch:true }
+{ run:[{ agent:"<investigation-role>", task:"Find relevant tests" },{ agent:"<verification-role>", task:"Run the checks" }], batch:true }
 
 Run management: Use { action: "list" } when available agents are unknown or may have changed; execute only executable/non-disabled agents. Use action:"status" (id optional; lists all when omitted) / action:"interrupt" (id optional; newest running run when omitted) / action:"resume" id message.
 
