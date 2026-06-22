@@ -422,9 +422,10 @@ export function stampTerminalScalars(
  * Read-modify-write a run's status.json to a terminal state through the same
  * atomic {@link writeStatusJson} the writer uses. Fail-closed: if the file is
  * absent or fails the validating codec, returns null WITHOUT writing.
- * Idempotent: if the persisted run is no longer 'running', returns it unchanged
- * with NO write. Otherwise stamps the terminal convention (preserving the
- * existing total token usage) and persists atomically.
+ * Mostly idempotent: a persisted run that is neither 'running' nor a stale
+ * 'queued' orphan (see below) is returned unchanged with NO write. An eligible
+ * record stamps the terminal convention (preserving the existing total token
+ * usage) and persists atomically.
  *
  * Used to finalize an ungracefully killed/lost in-process runner whose frozen
  * status.json is still pinned at state:'running' so it becomes resumable.
