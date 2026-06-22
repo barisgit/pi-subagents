@@ -187,6 +187,26 @@ describe("dispatch shapes", () => {
 		assert.deepEqual(seenTasks, ["x"]);
 	});
 
+	it("prefers the submit_result envelope over the assistant preamble for finalOutput", async () => {
+		// Regression: the child writes a prose preamble in the SAME turn as its final
+		// submit_result call. The parent-visible finalOutput must be the submitted
+		// result ("done", from the fake's compliant toolResult), never the preamble.
+		restoreRuntime = installFakeRuntime([
+			new FakeAgentSession(async (_task, session) => {
+				session.emit(assistantMessage("PREAMBLE: let me compile the findings"));
+			}),
+		]);
+
+		const result = await execute(tempDir, { run: [{ agent: "explorer", task: "x" }] });
+
+		assert.equal(result.isError, undefined, resultText(result));
+		assert.equal(
+			result.details?.results?.[0]?.finalOutput,
+			"done",
+			"finalOutput must be the submit_result envelope, not the assistant preamble",
+		);
+	});
+
 	it("parallel-default dispatches run length concurrently by default", async () => {
 		const starts: number[] = [];
 		restoreRuntime = installFakeRuntime(

@@ -398,7 +398,14 @@ function childResultToSingleResult(
 	result.sessionFile = childResult.sessionFile;
 	result.shareUrl = childResult.shareUrl;
 	result.structuredResult = childResult.structuredResult;
-	let fullOutput = getFinalOutput(result.messages ?? []) || childResult.outputText;
+	// The in-process executor is the SINGLE owner of a child's finish value: across every
+	// exit path it sets childResult.outputText to the resolved submit_result envelope (or
+	// its getLastAssistantText fallback when no compliant submit_result landed). Re-deriving
+	// output here from result.messages via getFinalOutput duplicated that resolution and
+	// diverged from it -- getFinalOutput returns the last assistant TEXT part, i.e. the
+	// preamble the model narrates in the same turn as its final submit_result call, so it
+	// silently replaced the real result with the preamble. Consume the authoritative value.
+	let fullOutput = childResult.outputText;
 	if (input.outputPath && result.exitCode === 0) {
 		const resolvedOutput = resolveSingleOutput(input.outputPath, fullOutput, input.outputSnapshot);
 		fullOutput = resolvedOutput.fullOutput;
