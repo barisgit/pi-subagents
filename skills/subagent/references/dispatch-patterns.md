@@ -28,15 +28,67 @@ subagent({
 
 Use `workflow` for sequential or dependent phases. It can pass summaries/results between steps, branch, retry, loop, and decide runtime fan-out. In `agent(role, task, opts?)`, `role` is one of the caller's configured agent roles; replace placeholders with real roles from the active config. `parallel()` can fan out over a dynamic list and scales to many concurrent children, bounded by the process-wide leaf-concurrency pool.
 
+`parallel()` is a **fail-fast barrier** (it awaits `Promise.all`): the first child that rejects rejects the whole call and the other results are discarded. That is the right default when every branch is required. When partial results are acceptable (survey/recon/fan-out where one dead branch should not sink the batch), catch inside each thunk so every branch resolves to a value.
+
+### Multi-layer runtime fan-out
+
+Each layer's width is decided at runtime from the previous layer's structured output. Schemas force arrays the script can safely map over; per-thunk `.catch` keeps the fail-fast barrier from sinking a whole layer; bounds (`maxItems`, `.slice`) keep fan-out honest against the leaf pool.
+
+```ts
+workflow({ script: `
+phase("scope");
+// Layer 0: one agent decides WHAT to fan out over — size not known up front.
+const { modules } = await agent("<investigation-role>", "List up to 8 modules worth auditing.", {
+  schema: { type: "object", required: ["modules"], properties: { modules: { type: "array", items: { type: "string" }, maxItems: 8 } }, additionalProperties: false },
+});
+if (modules.length === 0) return { status: "needs-attention", reason: "no modules identified" };
+
+phase("survey");
+// Layer 1: fan out over discovered modules; each returns STRUCTURED hotspots.
+const surveys = await parallel(modules.map((mod) => () =>
+  agent("<investigation-role>", "Audit '" + mod + "'. Return riskiest files with a reason each.", {
+    schema: { type: "object", required: ["hotspots"], properties: { hotspots: { type: "array", items: { type: "object", required: ["file", "reason"], properties: { file: { type: "string" }, reason: { type: "string" } }, additionalProperties: false } } }, additionalProperties: false },
+  })
+    .then((r) => r.hotspots.map((h) => ({ mod, ...h })))
+    .catch(() => [])
+));
+
+// Layer 2 work list is DERIVED from layer 1 output, capped so a bad survey can't explode fan-out.
+const hotspots = surveys.flat().slice(0, 24);
+if (hotspots.length === 0) return { status: "needs-attention", reason: "survey found no hotspots" };
+
+phase("deep-dive");
+const findings = await parallel(hotspots.map((h) => () =>
+  agent("<investigation-role>", "Deep-dive " + h.file + " in " + h.mod + " (flagged: " + h.reason + "). Return finding + fix.")
+    .then((finding) => ({ ...h, finding }))
+    .catch(() => null)
+));
+const usable = findings.filter(Boolean);
+if (usable.length === 0) return { status: "needs-attention", reason: "all deep-dives failed" };
+
+phase("synthesize");
+const report = await agent("<synthesis-role>", "Synthesize into a prioritized action list. Note gaps.\n\n" +
+  usable.map((f) => "### " + f.mod + "/" + f.file + "\n" + f.finding).join("\n\n"));
+
+phase("verify");
+const verdict = await agent("<verification-role>", "Does this report cover the highest-risk hotspots? Return approved + gaps.\n\n" + report, {
+  schema: { type: "object", required: ["approved", "gaps"], properties: { approved: { type: "boolean" }, gaps: { type: "array", items: { type: "string" } } }, additionalProperties: false },
+});
+return { report, verdict, covered: { modules: modules.length, hotspots: hotspots.length, analyzed: usable.length } };
+` })
+```
+
+### Map / reduce
+
 ```ts
 workflow({ script: `
 phase("map");
 const packages = ["api", "ui", "cli", "docs"];
 const reports = await parallel(packages.map((pkg) => () =>
-  agent("<investigation-role>", "Inspect " + pkg + " and summarize risks.")
+  agent("<investigation-role>", "Inspect " + pkg + " and summarize risks.").catch(() => null)
 ));
 phase("reduce");
-return await agent("<synthesis-role>", "Combine these reports into prioritized next steps: " + reports.join("\n"));
+return await agent("<synthesis-role>", "Combine these reports into prioritized next steps: " + reports.filter(Boolean).join("\n"));
 ` })
 ```
 

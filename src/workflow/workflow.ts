@@ -620,27 +620,30 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefi
 		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Use whenever the NEXT step depends on a previous step's result: branch on a child's structured output, retry/fallback on failure, loop until a condition holds (e.g. review until approved), decide fan-out width at runtime, or pass data between steps. Prefer this over multiple subagent calls when any decision sits between dispatches; use plain subagent for a single task or a fixed independent batch.
 
 The script runs in a sandbox with three globals:
-- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<implementation-role>" below must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
-- parallel(thunks) -> Promise<results[]> — run agent calls concurrently. It scales to many children, bounded by the process-wide leaf-concurrency pool: parallel(items.map((item) => () => agent("<configured-role>", "Handle " + item))).
+- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
+- parallel(thunks) -> Promise<results[]> — run agent calls concurrently, bounded by the process-wide leaf-concurrency pool (config maxConcurrentAgents), so it scales to many children: parallel(items.map((item) => () => agent("<configured-role>", "Handle " + item))). It is a FAIL-FAST barrier (awaits Promise.all): the first child that rejects rejects the whole call and the other results are lost. When partial results are acceptable, catch inside each thunk (.then(...).catch(...)) so every branch resolves.
 - phase(title) — label the current stage for live status displays.
 
-Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background.
+Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll.
 
-Example (dynamic fan-out, synthesize, then verify-loop until approved):
-phase("inspect");
-const areas = ["auth", "billing", "notifications", "search"];
-const findings = await parallel(areas.map((area) => () =>
-  agent("<investigation-role>", "Inspect " + area + " and return concise findings.")
+Example (two layers of runtime-decided fan-out, then synthesize — each layer's width comes from the previous layer's structured output):
+phase("scope");
+const { modules } = await agent("<investigation-role>", "List up to 8 modules worth auditing.", { schema: { type: "object", required: ["modules"], properties: { modules: { type: "array", items: { type: "string" }, maxItems: 8 } }, additionalProperties: false } });
+phase("survey");
+// Layer 1: fan out over discovered modules; each returns structured hotspots.
+const surveys = await parallel(modules.map((mod) => () =>
+  agent("<investigation-role>", "Audit '" + mod + "'. Return riskiest files with a reason each.", { schema: { type: "object", required: ["hotspots"], properties: { hotspots: { type: "array", items: { type: "object", required: ["file"], properties: { file: { type: "string" } }, additionalProperties: true } } }, additionalProperties: false } })
+    .then((r) => r.hotspots.map((h) => ({ mod, ...h })))
+    .catch(() => [])  // best-effort: one dead branch must not sink the layer
 ));
-phase("implement");
-let change = await agent("<implementation-role>", "Implement the smallest safe change using: " + findings.join("\n"));
-phase("verify");
-for (let round = 0; round < 3; round++) {
-  const verdict = await agent("<verification-role>", "Independently verify this change and return approved/blockers: " + change, { schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false } });
-  if (verdict.approved) return { change, findings, verdict };
-  change = await agent("<implementation-role>", "Address these verification blockers: " + verdict.blockers.join("\n"));
-}
-return { status: "needs-attention", change, findings };
+phase("deep-dive");
+// Layer 2: width comes entirely from layer 1's output (bounded).
+const files = surveys.flat().slice(0, 24);
+const findings = await parallel(files.map((h) => () =>
+  agent("<investigation-role>", "Deep-dive " + h.file + " in " + h.mod + ". Return finding + fix.").catch(() => null)
+));
+phase("synthesize");
+return await agent("<synthesis-role>", "Prioritize these findings:\n" + findings.filter(Boolean).join("\n"));
 
 Rules: always await every agent()/parallel() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.`,
 		parameters: WorkflowParams,
