@@ -53,6 +53,48 @@ class ProseOnlySession {
 	setActiveToolsByName(): void {}
 }
 
+// Streams a prose PREAMBLE via text_delta, then lands a compliant submit_result
+// toolResult -- the exact real-world shape (model narrates in the same turn as its
+// final submit_result). The executor's ChildAgentResult.outputText is what the
+// status.json writer persists, so this pins the async/post-reload channel (which
+// never passes through child-step-runner) to the envelope, not the preamble.
+class PreambleThenSubmitSession {
+	messages: unknown[] = [];
+	prompts: string[] = [];
+	listeners: Array<(event: Record<string, unknown>) => void> = [];
+
+	subscribe(listener: (event: Record<string, unknown>) => void): () => void {
+		this.listeners.push(listener);
+		return () => {};
+	}
+	emit(event: Record<string, unknown>): void {
+		for (const listener of this.listeners) listener(event);
+	}
+	async prompt(text: string): Promise<void> {
+		this.prompts.push(text);
+		this.emit({ type: "text_delta", delta: "PREAMBLE: let me compile the findings." });
+		this.messages.push({
+			role: "assistant",
+			content: [
+				{ type: "text", text: "PREAMBLE: let me compile the findings." },
+				{ type: "toolCall", name: "submit_result", arguments: { result: "REAL RESULT: VERDICT APPROVED" } },
+			],
+		});
+		this.messages.push({
+			role: "toolResult",
+			toolName: "submit_result",
+			isError: false,
+			details: { result: "REAL RESULT: VERDICT APPROVED" },
+		});
+	}
+	getLastAssistantText(): string {
+		return "PREAMBLE: let me compile the findings.";
+	}
+	async abort(): Promise<void> {}
+	dispose(): void {}
+	setActiveToolsByName(): void {}
+}
+
 function tempDir(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sad-path-"));
 	cleanup.push(dir);
@@ -87,7 +129,7 @@ function makeContext(): ChildAgentContext {
 		pi: {} as never,
 	};
 }
-function install(session: ProseOnlySession): void {
+function install(session: { subscribe: unknown }): void {
 	restoreFns.push(
 		__setChildAgentExecutorDepsForTest({
 			DefaultResourceLoader: FakeResourceLoader as never,
@@ -114,5 +156,19 @@ describe("sad-path reprompt", () => {
 			result: "Final prose-only completion after bounded nudges.",
 		});
 		assert.equal(result.outputText, "Final prose-only completion after bounded nudges.");
+	});
+
+	it("surfaces the submit_result envelope over a same-turn preamble (status.json channel)", async () => {
+		const session = new PreambleThenSubmitSession();
+		install(session);
+
+		const result = await runChildAgent(makeStep(tempDir()), makeContext());
+
+		assert.equal(result.state, "complete");
+		// No reprompt: a compliant submit_result is already present.
+		assert.equal(session.prompts.length, 1);
+		assert.deepEqual(result.structuredResult, { result: "REAL RESULT: VERDICT APPROVED" });
+		// The persisted/async-visible field must be the envelope, never the preamble.
+		assert.equal(result.outputText, "REAL RESULT: VERDICT APPROVED");
 	});
 });
