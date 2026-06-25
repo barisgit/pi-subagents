@@ -16,6 +16,7 @@ import type {
 	ToolCallSummary,
 } from "../protocol/types.ts";
 import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
+import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
 
 // ============================================================================
 // File System Utilities
@@ -294,6 +295,29 @@ export function getFinalOutput(messages: Message[]): string {
 
 export function getSingleResultOutput(result: Pick<SingleResult, "finalOutput" | "messages">): string {
 	return result.finalOutput ?? getFinalOutput(result.messages ?? []);
+}
+
+/**
+ * DISPLAY-ONLY output for a finished result: surfaces ONLY the agent's <output>
+ * block, never its preamble/trailing narration. Distinct from getSingleResultOutput
+ * (the semantic parent-visible/persisted text), which deliberately keeps the strict
+ * contract's fail-closed-to-full-text behavior at the data boundary.
+ *
+ * - A structured (non-string) envelope result is pretty-printed as JSON.
+ * - A string result (the clean block, or the strict-contract miss that fell back
+ *   to the full message text with prose around the block) is leniently reduced to
+ *   the last complete <output> block; a clean block has no tags so it passes
+ *   through unchanged.
+ */
+export function getSingleResultDisplayOutput(
+	result: Pick<SingleResult, "finalOutput" | "messages" | "structuredResult">,
+): string {
+	const structured = result.structuredResult?.result;
+	if (structured !== undefined && typeof structured !== "string") {
+		return JSON.stringify(structured, null, 2);
+	}
+	const raw = structured ?? result.finalOutput ?? getFinalOutput(result.messages ?? []);
+	return extractOutputBlockForDisplay(raw) ?? raw;
 }
 
 /**

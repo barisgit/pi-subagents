@@ -387,7 +387,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 
 		const expanded = renderText(final!, true);
 		assert.match(expanded, /workflow/);
-		assert.match(expanded, /\[warning explorer ∥ warning explorer\] → warning synth/);
+		assert.match(expanded, /\[done explorer ∥ done explorer\] → done synth/);
 		assert.match(expanded, /Agent 1\.1∥: explorer/);
 		assert.match(expanded, /Agent 1\.2∥: explorer/);
 		assert.match(expanded, /Agent 2: synth/);

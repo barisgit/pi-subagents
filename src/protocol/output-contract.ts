@@ -59,6 +59,26 @@ export function extractOutputBlock(text: string): string | undefined {
 	return last.trim();
 }
 
+/**
+ * DISPLAY-ONLY lenient variant of extractOutputBlock: returns the content of the
+ * LAST complete <output> block even when prose follows it. The strict contract
+ * (extractOutputBlock) requires the block to be truly trailing and fails closed
+ * otherwise — that failure falls back to the full message text, so a model that
+ * appended a sentence after its <output> block leaks that prose into the result
+ * surface. For rendering we only care about the output, so this strips the
+ * surrounding narration. Returns undefined when no complete block exists; an
+ * empty block yields "" (a deliberate empty result).
+ */
+export function extractOutputBlockForDisplay(text: string): string | undefined {
+	if (!text) return undefined;
+	let last: string | undefined;
+	OUTPUT_BLOCK_RE.lastIndex = 0;
+	for (let match = OUTPUT_BLOCK_RE.exec(text); match !== null; match = OUTPUT_BLOCK_RE.exec(text)) {
+		last = match[1];
+	}
+	return last?.trim();
+}
+
 /** True when `text` contains at least one complete <output> block. */
 export function hasOutputBlock(text: string): boolean {
 	return extractOutputBlock(text) !== undefined;

@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import {
 	buildOutputContractAppend,
 	extractOutputBlock,
+	extractOutputBlockForDisplay,
 	fallbackSubmitResultEnvelope,
 	hasOutputBlock,
 	OUTPUT_REPROMPT,
@@ -26,6 +27,25 @@ describe("output contract", () => {
 
 	it("rejects a complete output block followed by trailing prose", () => {
 		assert.equal(extractOutputBlock("<output>SAMPLE</output>\nLet me know if you need more."), undefined);
+	});
+
+	it("display-lenient extractor returns the last block even when prose follows it", () => {
+		// The strict contract fails closed on trailing prose (falls back to full text),
+		// so the render surface must leniently strip to the last <output> block to avoid
+		// leaking the agent's trailing narration into the result card.
+		assert.equal(
+			extractOutputBlockForDisplay("<output>the answer</output>\nLet me know if you need more."),
+			"the answer",
+		);
+		assert.equal(
+			extractOutputBlockForDisplay("sample <output>not it</output>\nmid\n<output>the answer</output>\ntrailing"),
+			"the answer",
+		);
+		// No block at all -> undefined (caller keeps the raw text).
+		assert.equal(extractOutputBlockForDisplay("no markers here"), undefined);
+		assert.equal(extractOutputBlockForDisplay(""), undefined);
+		// An unterminated final block is ignored; the last COMPLETE block wins.
+		assert.equal(extractOutputBlockForDisplay("<output>complete</output>\n<output>cut off"), "complete");
 	});
 
 	it("handles multiline content inside the block", () => {
@@ -65,18 +85,14 @@ describe("output contract", () => {
 	});
 
 	it("JSON-parses and TypeBox-validates the block against a supplied schema", () => {
-		const schema = Type.Object(
-			{ approved: Type.Boolean(), notes: Type.String() },
-			{ additionalProperties: false },
-		);
+		const schema = Type.Object({ approved: Type.Boolean(), notes: Type.String() }, { additionalProperties: false });
 		const good = parseOutputEnvelope('<output>{"approved": true, "notes": "ok"}</output>', schema);
 		assert.deepEqual(good, { ok: true, envelope: { result: { approved: true, notes: "ok" } } });
 
 		// Schema miss (wrong type) fails closed.
-		assert.deepEqual(
-			parseOutputEnvelope('<output>{"approved": "yes", "notes": "ok"}</output>', schema),
-			{ ok: false },
-		);
+		assert.deepEqual(parseOutputEnvelope('<output>{"approved": "yes", "notes": "ok"}</output>', schema), {
+			ok: false,
+		});
 		// Extra property (additionalProperties:false) fails closed.
 		assert.deepEqual(
 			parseOutputEnvelope('<output>{"approved": true, "notes": "ok", "extra": 1}</output>', schema),

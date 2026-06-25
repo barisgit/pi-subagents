@@ -11,7 +11,7 @@ import type { AgentProgress, Details } from "../protocol/types.ts";
 import { logger } from "../shared/logger.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
 import { formatPhase } from "../state/run-phase.ts";
-import { getDisplayItems, getSingleResultOutput } from "../shared/utils.ts";
+import { getDisplayItems, getSingleResultDisplayOutput } from "../shared/utils.ts";
 import {
 	getTermWidth,
 	RUNNING_GLYPH,
@@ -621,7 +621,7 @@ export function stopResultAnimations(): void {
 }
 
 function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme): Component {
-	const output = r.truncation?.text || getSingleResultOutput(r);
+	const output = r.truncation?.text || getSingleResultDisplayOutput(r);
 	const progress = r.progress || r.progressSummary;
 	const isRunning = r.progress?.status === "running";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
@@ -874,7 +874,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			);
 			continue;
 		}
-		const output = getSingleResultOutput(r);
+		const output = getSingleResultDisplayOutput(r);
 		const progressFromArray =
 			d.progress?.find((p) => p.index === i) ||
 			d.progress?.find((p) => p.agent === r.agent && p.status === "running");
@@ -1097,7 +1097,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 					? theme.fg("success", "ok")
 					: theme.fg("error", "failed");
 		const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
-		const output = r.truncation?.text || getSingleResultOutput(r);
+		const output = r.truncation?.text || getSingleResultDisplayOutput(r);
 
 		const progressInfo =
 			isRunning && r.progress
@@ -1204,7 +1204,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		(r) =>
 			r.exitCode === 0 &&
 			r.progress?.status !== "running" &&
-			hasEmptyTextOutputWithoutOutputTarget(r.task, getSingleResultOutput(r)),
+			hasEmptyTextOutputWithoutOutputTarget(r.task, getSingleResultDisplayOutput(r)),
 	);
 	const icon = hasRunning
 		? theme.fg("warning", "running")
@@ -1264,7 +1264,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 						const isEmptyWithoutTarget =
 							Boolean(result) &&
 							Boolean(isComplete) &&
-							hasEmptyTextOutputWithoutOutputTarget(result!.task, getSingleResultOutput(result!));
+							hasEmptyTextOutputWithoutOutputTarget(result!.task, getSingleResultDisplayOutput(result!));
 						const stepIcon = isFailed
 							? theme.fg("error", "failed")
 							: isEmptyWithoutTarget
@@ -1347,7 +1347,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		const stepNumber: string | number =
 			sequenceStepLabelsFg?.[i] ?? (typeof rProg?.index === "number" ? rProg.index + 1 : i + 1);
 
-		const resultOutput = getSingleResultOutput(r);
+		const resultOutput = getSingleResultDisplayOutput(r);
 		const statusIcon = rRunning
 			? theme.fg("warning", "running")
 			: r.exitCode !== 0
