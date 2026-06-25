@@ -741,7 +741,10 @@ export class SubagentsStatusComponent implements Component {
 			stickyBottom: true,
 			// Press 's' to collapse the run list entirely and give the detail pane the
 			// full width (and back). Mirrors the sidebar toggle in the charter picker.
-			collapse: { key: "s", label: "sidebar", collapsedWidth: 0 },
+			// State-aware label: invites collapsing when open, and (since the primary
+			// legend vanishes when collapsed) the host surfaces the reopen hint in the
+			// detail footer using this same label.
+			collapse: { key: "s", label: (collapsed) => (collapsed ? "show list" : "hide list"), collapsedWidth: 0 },
 			split: {
 				initialFraction: DEFAULT_LEFT_FRACTION,
 				minPrimaryWidth: MIN_LEFT_PANE,
