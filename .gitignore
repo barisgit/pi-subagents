@@ -4,3 +4,5 @@ node_modules/
 .pi
 .Claude Code
 .notes
+# Git worktrees (local dev)
+.worktrees/
