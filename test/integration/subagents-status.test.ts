@@ -257,7 +257,8 @@ describe("SubagentsStatusComponent", () => {
 			try {
 				const output = component.render(120).join("\n");
 				assert.match(output, /Subagent runs · 1 total/);
-				assert.match(output, /> .* waiter · running/);
+				// The running glyph (◈) carries the state; the redundant "running" word is gone.
+				assert.match(output, /> ◈ waiter/);
 				assert.match(output, /─── Step 1: waiter ───/);
 				assert.match(output, /→ bash .* · 400ms/);
 				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
@@ -293,7 +294,7 @@ describe("SubagentsStatusComponent", () => {
 		try {
 			// Expanded: the run list row is visible in the left pane.
 			const expanded = component.render(120).join("\n");
-			assert.match(expanded, /waiter · running/, "list row visible while expanded");
+			assert.match(expanded, /◈ waiter/, "list row visible while expanded");
 			assert.match(expanded, /Subagent runs · 1 total/, "primary title visible while expanded");
 
 			// Collapse the sidebar.
@@ -332,8 +333,9 @@ describe("SubagentsStatusComponent", () => {
 		try {
 			const output = component.render(120);
 			const bodyLines = output.slice(1, -1).map(stripBorders);
-			const runIndex = bodyLines.findIndex((line) => line.includes("running"));
-			const doneIndex = bodyLines.findIndex((line) => line.includes("complete"));
+			// State is conveyed by the row glyph now (◈ running, ✓ complete), not a word.
+			const runIndex = bodyLines.findIndex((line) => line.includes("◈"));
+			const doneIndex = bodyLines.findIndex((line) => line.includes("✓"));
 			assert.ok(runIndex >= 0 && doneIndex >= 0, "both rows present");
 			assert.ok(runIndex < doneIndex, "running row sorts above complete row");
 			assert.match(bodyLines[runIndex]!, /^> /);
@@ -364,9 +366,11 @@ describe("SubagentsStatusComponent", () => {
 
 		try {
 			const lines = component.render(180).map(stripBorders);
-			const row = lines.find((line) => line.includes("waiter · interrupted"));
+			const row = lines.find((line) => line.includes("■") && line.includes("waiter"));
 			assert.ok(row, `interrupted row should render; got:\n${lines.join("\n")}`);
-			assert.match(row, /■ .*waiter · interrupted/);
+			// The ■ glyph carries the interrupted state; the redundant word is dropped.
+			assert.match(row, /■ .*waiter/);
+			assert.doesNotMatch(row, /· interrupted/);
 			assert.doesNotMatch(row, /thinking|streaming|writing|waiting \d/);
 
 			const d = new Date(endedAt);
@@ -475,12 +479,12 @@ describe("SubagentsStatusComponent", () => {
 
 		try {
 			const initial = component.render(120).join("\n");
-			assert.match(initial, /> .*run-a-agent|> .* waiter · running/);
+			assert.match(initial, /> .*run-a-agent|> ◈ waiter/);
 
 			component.handleInput("j");
 			const afterDown = component.render(120);
 			const bodyAfterDown = afterDown.slice(1, -1).map(stripBorders);
-			const completeRow = bodyAfterDown.find((line) => line.includes("complete"));
+			const completeRow = bodyAfterDown.find((line) => line.includes("✓"));
 			assert.ok(
 				completeRow && completeRow.startsWith(">"),
 				`cursor should be on complete row after j; got: ${completeRow}`,
@@ -489,18 +493,18 @@ describe("SubagentsStatusComponent", () => {
 			// j past the end should stay at the bottom.
 			component.handleInput("j");
 			const bodyAfterDown2 = component.render(120).slice(1, -1).map(stripBorders);
-			const completeRow2 = bodyAfterDown2.find((line) => line.includes("complete"));
+			const completeRow2 = bodyAfterDown2.find((line) => line.includes("✓"));
 			assert.ok(completeRow2 && completeRow2.startsWith(">"), "selection bounded at last row");
 
 			component.handleInput("k");
 			const bodyAfterUp = component.render(120).slice(1, -1).map(stripBorders);
-			const runningRow = bodyAfterUp.find((line) => line.includes("running"));
+			const runningRow = bodyAfterUp.find((line) => line.includes("◈"));
 			assert.ok(runningRow && runningRow.startsWith(">"), "k moves selection up");
 
 			// k past the top should stay at row 0.
 			component.handleInput("k");
 			const bodyAfterUp2 = component.render(120).slice(1, -1).map(stripBorders);
-			const runningRow2 = bodyAfterUp2.find((line) => line.includes("running"));
+			const runningRow2 = bodyAfterUp2.find((line) => line.includes("◈"));
 			assert.ok(runningRow2 && runningRow2.startsWith(">"), "selection bounded at first row");
 		} finally {
 			component.dispose();
@@ -582,7 +586,7 @@ describe("SubagentsStatusComponent", () => {
 		try {
 			const output = component.render(120).join("\n");
 			assert.match(output, /\(no events yet\)/);
-			assert.match(output, /reviewer · running/);
+			assert.match(output, /◈ reviewer/);
 		} finally {
 			component.dispose();
 		}
@@ -680,7 +684,7 @@ describe("SubagentsStatusComponent", () => {
 				.slice(1, -1)
 				.map(stripBorders)
 				.map((line) => line.split("│")[0] ?? line)
-				.filter((line) => /running/.test(line));
+				.filter((line) => line.includes("◈"));
 			const parentIndex = rows.findIndex((line) => line.includes("parent"));
 			const childIndex = rows.findIndex((line) => line.includes("child"));
 			assert.equal(childIndex, parentIndex + 1);
@@ -707,12 +711,12 @@ describe("SubagentsStatusComponent", () => {
 		try {
 			component.handleInput("j");
 			const before = component.render(120).join("\n");
-			assert.match(before, />.*run-b agent|> .* waiter · running/);
+			assert.match(before, />.*run-b agent|> ◈ waiter/);
 			snapshot = { active: [createRun("run-c", "running"), b, a], recent: [] };
 			await wait(25);
 			const lines = component.render(120).map(stripBorders);
 			// The previously selected run was run-b (second of two waiter rows). After refresh
-			// the order of rows changes; cursor should still be on a 'waiter · running' row,
+			// the order of rows changes; cursor should still be on a running waiter row,
 			// not on the brand-new run-c row at index 0.
 			const cursorRowIndex = lines.findIndex((line) => line.startsWith(">"));
 			assert.ok(
@@ -772,8 +776,8 @@ describe("SubagentsStatusComponent", () => {
 				const joined = lines.join("\n");
 				assert.match(joined, /Subagent runs · 2 total/);
 				assert.match(joined, /Step 1: scout/);
-				assert.match(joined, /running/);
-				assert.match(joined, /complete/);
+				assert.match(joined, /◈/);
+				assert.match(joined, /✓/);
 			} finally {
 				component.dispose();
 			}

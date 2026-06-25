@@ -313,8 +313,9 @@ describe("workflow dashboard reader overlays", () => {
 		try {
 			void entries;
 			const text = component.render(180).map(stripBorders).join("\n");
-			const phase2Index = text.indexOf("fixer\x1B[39m · P2 patch · complete");
-			const phase1Index = text.indexOf("explorer\x1B[39m · P1 inspect · complete");
+			// Leaf rows drop the redundant state word; the ✓ glyph conveys completion.
+			const phase2Index = text.indexOf("fixer\x1B[39m · P2 patch");
+			const phase1Index = text.indexOf("explorer\x1B[39m · P1 inspect");
 			assert.ok(phase2Index !== -1, "expected newer non-workflow child in status output");
 			assert.ok(phase1Index !== -1, "expected older non-workflow child in status output");
 			assert.ok(phase2Index < phase1Index, "non-workflow children keep the global display order");

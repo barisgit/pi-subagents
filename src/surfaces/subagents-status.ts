@@ -568,8 +568,15 @@ export function buildLeftLine(
 	// no phase chip (there displayState is the only live-activity signal), and keep `lost`
 	// authoritative always. A queued run's displayState is ALWAYS `quiet` (it hasn't begun
 	// executing), so the discriminant carries no information there — show bare `queued`.
-	const status =
-		run.run.displayState === "lost"
+	// The state glyph already encodes the run state for leaf rows, so the bare
+	// state word ("complete", "running", "interrupted", ...) is redundant prose:
+	// drop it. The only thing the glyph can't convey on a running row is *what it
+	// is doing*, so keep the live-activity signal — the displayState discriminant
+	// (working/quiet/tool_running/needs_attention) when a phase chip isn't already
+	// showing it. Container rows render a collapse marker (▾/▸) instead of a state
+	// glyph, so they keep the explicit state word as their only state signal.
+	const status = containerInfo
+		? run.run.displayState === "lost"
 			? "lost"
 			: run.run.state === "queued"
 				? "queued"
@@ -577,7 +584,12 @@ export function buildLeftLine(
 					? run.run.state
 					: run.run.displayState
 						? `${run.run.state}/${run.run.displayState}`
-						: run.run.state;
+						: run.run.state
+		: run.run.displayState === "lost"
+			? "lost"
+			: run.run.state === "running" && !phase && run.run.displayState
+				? run.run.displayState
+				: "";
 	const elapsed = runElapsed(run, now);
 	const identityAge = runIdentityAge(run, now);
 	const dateStamp = runEndedStamp(run);
@@ -614,7 +626,10 @@ export function buildLeftLine(
 			? ` · ${elapsed}${identityPart} · ${theme.fg("dim", dateStamp)}`
 			: ` · ${theme.fg("dim", dateStamp)}`
 		: activeTail;
-	const text = `${cursor}${indent}${glyph} ${agent}${phasePart} · ${status}${badgePart}${resumePart}${labelPart}${collapsedPart}${cwdPart}${tail}`;
+	// status may be empty (leaf rows whose glyph already conveys the state); drop the
+	// would-be ` · ${status}` separator so the row doesn't carry a dangling middot.
+	const statusPart = status ? ` · ${status}` : "";
+	const text = `${cursor}${indent}${glyph} ${agent}${phasePart}${statusPart}${badgePart}${resumePart}${labelPart}${collapsedPart}${cwdPart}${tail}`;
 	// Hard-clip with no ellipsis — the row already ends at the pane border, so an
 	// ellipsis adds zero information and steals 1–3 columns of label space.
 	return truncateToWidth(text, width, "");
