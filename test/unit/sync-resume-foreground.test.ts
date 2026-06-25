@@ -57,7 +57,7 @@ class FakeSession {
 	}
 	setActiveToolsByName() {}
 	getLastAssistantText() {
-		return "resumed output";
+		return "<output>resumed output</output>";
 	}
 	dispose() {}
 	abort() {
@@ -65,11 +65,6 @@ class FakeSession {
 	}
 	prompt(message: string) {
 		this.prompts.push(message);
-		this.messages.push({
-			role: "toolResult",
-			toolName: "submit_result",
-			details: { result: "resumed output" },
-		});
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});

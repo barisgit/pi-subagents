@@ -10,7 +10,6 @@ import {
 	type ChildAgentContext,
 	type ChildAgentStep,
 } from "../../src/dispatch/in-process-executor.ts";
-import { createSubmitResultTool } from "../../src/protocol/submit-result.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -23,12 +22,18 @@ after(() => {
 	for (const dir of cleanup) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+let lastLoaderOptions: { appendSystemPromptOverride?: (base: string[]) => string[] } | undefined;
 class FakeResourceLoader {
+	constructor(options: { appendSystemPromptOverride?: (base: string[]) => string[] }) {
+		lastLoaderOptions = options;
+	}
 	async reload(): Promise<void> {}
 }
 
+// A child that finishes by ending its final assistant message with a trailing
+// <output> block (the contract) AFTER a prose preamble in the SAME turn. There is
+// no finish tool: the runtime must take the block, not the preamble.
 class FakeAgentSession {
-	messages: unknown[] = [];
 	prompts: string[] = [];
 	listeners: Array<(event: Record<string, unknown>) => void> = [];
 
@@ -39,16 +44,10 @@ class FakeAgentSession {
 
 	async prompt(text: string): Promise<void> {
 		this.prompts.push(text);
-		const envelope = { result: "structured payload" };
-		this.messages.push({
-			role: "assistant",
-			content: [{ type: "toolCall", id: "submit", name: "submit_result", arguments: envelope }],
-		});
-		this.messages.push({ role: "toolResult", toolName: "submit_result", details: envelope });
 	}
 
 	getLastAssistantText(): string {
-		return "";
+		return "PREAMBLE: here is my reasoning\n<output>structured payload</output>";
 	}
 	async abort(): Promise<void> {}
 	dispose(): void {}
@@ -61,7 +60,7 @@ function tempDir(): string {
 	return dir;
 }
 
-function makeStep(root: string, session: FakeAgentSession): ChildAgentStep {
+function makeStep(root: string): ChildAgentStep {
 	return {
 		runId: "run-1",
 		stepIndex: 0,
@@ -72,9 +71,10 @@ function makeStep(root: string, session: FakeAgentSession): ChildAgentStep {
 		model: { provider: "mock", id: "model" } as never,
 		modelCandidates: [],
 		thinkingLevel: "off",
-		activeToolNames: ["submit_result"],
-		customTools: [createSubmitResultTool()],
+		activeToolNames: undefined,
+		customTools: [],
 		systemPrompt: "Fix things.",
+		systemPromptAppend: "END WITH <output>...</output>",
 		skillsResolved: [],
 		sessionFile: path.join(root, "session.jsonl"),
 		runRecordDir: root,
@@ -99,15 +99,13 @@ function install(session: FakeAgentSession): void {
 			getAgentDir: () => "/tmp/pi-agent",
 			SessionManager: { open: () => ({}) as never },
 			createAgentSession: (async (options?: { customTools?: unknown[]; tools?: string[] }) => {
+				// The finish tool is gone: no submit_result is injected as a custom tool.
 				assert.equal(
-					options?.customTools?.some(
-						(tool) =>
-							(tool as { name?: string; execute?: unknown }).name === "submit_result" &&
-							typeof (tool as { execute?: unknown }).execute === "function",
+					(options?.customTools ?? []).some(
+						(tool) => (tool as { name?: string }).name === "submit_result",
 					),
-					true,
+					false,
 				);
-				assert.deepEqual(options?.tools, ["submit_result"]);
 				return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
 			}) as never,
 		}),
@@ -115,19 +113,23 @@ function install(session: FakeAgentSession): void {
 }
 
 describe("universal finish", () => {
-	it("sends the task unpolluted and uses the compliant envelope as the child result", async () => {
+	it("sends the task unpolluted and uses the <output> block, not the same-turn preamble", async () => {
 		const root = tempDir();
 		const session = new FakeAgentSession();
 		install(session);
 
-		const result = await runChildAgent(makeStep(root, session), makeContext());
+		const result = await runChildAgent(makeStep(root), makeContext());
 
-		// The finish contract no longer pollutes the task string: it rides on the tool description + system prompt.
+		// The contract rides the additive append channel on the resource loader, not the task or a tool.
+		const appended = lastLoaderOptions?.appendSystemPromptOverride?.(["base"]) ?? [];
+		assert.ok(
+			appended.some((line) => line.includes("<output>")),
+			"output contract delivered through appendSystemPromptOverride",
+		);
+		// The finish contract never pollutes the task string.
 		assert.equal(session.prompts[0], "Do it");
-		assert.doesNotMatch(session.prompts[0] ?? "", /Structured finish/);
+		assert.doesNotMatch(session.prompts[0] ?? "", /<output>/);
 		assert.equal(result.outputText, "structured payload");
-		assert.deepEqual(result.structuredResult, {
-			result: "structured payload",
-		});
+		assert.deepEqual(result.structuredResult, { result: "structured payload" });
 	});
 });

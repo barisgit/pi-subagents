@@ -1,5 +1,6 @@
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentScope } from "../shared/agents.ts";
 import type {
@@ -66,6 +67,18 @@ export interface ChildAgentStep {
 	activeToolNames: string[] | undefined;
 	customTools: ToolDefinition[];
 	systemPrompt: string;
+	/**
+	 * Additive system-prompt text delivered through the loader's append channel
+	 * (never clobbers an inherited/fork-reuse prompt). Carries the output finish
+	 * contract and, on the workflow path, the result-schema shape instruction.
+	 */
+	systemPromptAppend?: string;
+	/**
+	 * Workflow-authored TypeBox schema for the child's <output> result (workflow
+	 * path only). The executor validates the extracted block against it and reprompts
+	 * a non-compliant child; undefined keeps the default string result.
+	 */
+	resultSchema?: TSchema;
 	skillsResolved: string[];
 	sessionFile: string;
 	runRecordDir: string;

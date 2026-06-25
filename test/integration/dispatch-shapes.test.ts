@@ -22,17 +22,11 @@ class FakeResourceLoader {
 class FakeAgentSession {
 	private listeners: Listener[] = [];
 	readonly promptImpl: (task: string, session: FakeAgentSession) => Promise<void>;
-	// A compliant submit_result toolResult so the in-process executor sees a valid
-	// structured submit (hasSubmitResultToolResult) and does NOT inject reprompts,
-	// which would otherwise re-run promptImpl twice per child and inflate counts.
-	readonly messages: unknown[] = [
-		{
-			role: "toolResult",
-			toolName: "submit_result",
-			isError: false,
-			details: { result: "done" },
-		},
-	];
+	// A compliant final assistant text so the in-process executor sees a valid
+	// <output> contract and does NOT inject reprompts, which would otherwise
+	// re-run promptImpl twice per child and inflate counts.
+	readonly messages: unknown[] = [];
+	lastAssistantText = "<output>done</output>";
 
 	constructor(promptImpl: (task: string, session: FakeAgentSession) => Promise<void>) {
 		this.promptImpl = promptImpl;
@@ -54,7 +48,7 @@ class FakeAgentSession {
 	}
 
 	getLastAssistantText(): string {
-		return "";
+		return this.lastAssistantText;
 	}
 
 	async abort(): Promise<void> {}
@@ -187,13 +181,14 @@ describe("dispatch shapes", () => {
 		assert.deepEqual(seenTasks, ["x"]);
 	});
 
-	it("prefers the submit_result envelope over the assistant preamble for finalOutput", async () => {
+	it("prefers the <output> block over the assistant preamble for finalOutput", async () => {
 		// Regression: the child writes a prose preamble in the SAME turn as its final
-		// submit_result call. The parent-visible finalOutput must be the submitted
-		// result ("done", from the fake's compliant toolResult), never the preamble.
+		// <output> block. The parent-visible finalOutput must be the contract result
+		// ("done"), never the preamble.
 		restoreRuntime = installFakeRuntime([
 			new FakeAgentSession(async (_task, session) => {
-				session.emit(assistantMessage("PREAMBLE: let me compile the findings"));
+				session.lastAssistantText = "PREAMBLE: let me compile the findings\n<output>done</output>";
+				session.emit(assistantMessage(session.lastAssistantText));
 			}),
 		]);
 
@@ -203,7 +198,7 @@ describe("dispatch shapes", () => {
 		assert.equal(
 			result.details?.results?.[0]?.finalOutput,
 			"done",
-			"finalOutput must be the submit_result envelope, not the assistant preamble",
+			"finalOutput must be the <output> block, not the assistant preamble",
 		);
 	});
 

@@ -1,53 +1,25 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { validateToolArguments } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { createSubmitResultTool } from "../../src/protocol/submit-result.ts";
+import { parseOutputEnvelope } from "../../src/protocol/output-contract.ts";
 
-describe("submit_result result schema seam", () => {
+describe("output result schema seam", () => {
 	it("defaults result to a string so an unprompted child cannot self-invent structure", () => {
 		// Principle: structure in `result` exists ONLY when a workflow author demands it
-		// via a per-invocation schema. With no schema the default is a string, so a child
-		// cannot decide its own shape — it returns text. A structured submit is rejected
-		// here and the reprompt loop steers the child back to a string.
-		const tool = createSubmitResultTool();
-		assert.deepEqual(
-			validateToolArguments(tool, {
-				type: "toolCall",
-				id: "string",
-				name: "submit_result",
-				arguments: { result: "text" },
-			}),
-			{ result: "text" },
-		);
-		assert.throws(
-			() =>
-				validateToolArguments(tool, {
-					type: "toolCall",
-					id: "object",
-					name: "submit_result",
-					arguments: { result: { value: 1 } },
-				}),
-			/result|Expected string/,
-		);
+		// via a per-invocation schema. With no schema the <output> block IS the string
+		// result — a child cannot decide its own shape, it returns text.
+		const parsed = parseOutputEnvelope("narration\n<output>text</output>");
+		assert.deepEqual(parsed, { ok: true, envelope: { result: "text" } });
 	});
 
-	it("accepts an optional per-invocation TypeBox schema", () => {
-		const tool = createSubmitResultTool(Type.Object({ value: Type.Number() }, { additionalProperties: false }));
-		const envelope = { result: { value: 1 } };
-		assert.deepEqual(
-			validateToolArguments(tool, { type: "toolCall", id: "object", name: "submit_result", arguments: envelope }),
-			envelope,
-		);
-		assert.throws(
-			() =>
-				validateToolArguments(tool, {
-					type: "toolCall",
-					id: "string",
-					name: "submit_result",
-					arguments: { result: "text" },
-				}),
-			/result|Expected object/,
-		);
+	it("validates the <output> block against an optional per-invocation TypeBox schema", () => {
+		const schema = Type.Object({ value: Type.Number() }, { additionalProperties: false });
+		const good = parseOutputEnvelope('<output>{"value": 1}</output>', schema);
+		assert.deepEqual(good, { ok: true, envelope: { result: { value: 1 } } });
+
+		// A plain string where the schema demands an object fails closed (steers a reprompt).
+		assert.deepEqual(parseOutputEnvelope("<output>text</output>", schema), { ok: false });
+		// Wrong field type fails closed.
+		assert.deepEqual(parseOutputEnvelope('<output>{"value": "x"}</output>', schema), { ok: false });
 	});
 });

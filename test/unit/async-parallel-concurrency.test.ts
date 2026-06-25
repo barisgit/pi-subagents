@@ -72,12 +72,11 @@ function setup(prefix: string, concurrency: number) {
 			} finally {
 				tracker.inFlight--;
 			}
-			this.messages = [
-				{ role: "toolResult", toolName: "submit_result", isError: false, details: { result: task } },
-			];
+			this.lastAssistantText = `<output>${task}</output>`;
 		}
+		lastAssistantText = "";
 		getLastAssistantText(): string {
-			return "done";
+			return this.lastAssistantText;
 		}
 		async abort(): Promise<void> {}
 		dispose(): void {}

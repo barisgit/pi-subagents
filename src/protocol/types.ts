@@ -3,7 +3,7 @@
  */
 
 import type { Message } from "@earendil-works/pi-ai";
-import type { SubmitResultEnvelope } from "./submit-result.ts";
+import type { SubmitResultEnvelope } from "./output-contract.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RunPhase } from "./status-types.ts";
 export type { SubagentToolInput, Step, Task } from "./schemas.ts";

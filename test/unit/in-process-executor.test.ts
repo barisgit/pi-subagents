@@ -156,6 +156,7 @@ describe("runChildAgent", () => {
 		const session = new FakeAgentSession(async (self) => {
 			self.emit({ type: "text_delta", delta: "hello " });
 			self.emit({ type: "text_delta", delta: "world" });
+			self.lastAssistantText = "<output>hello world</output>";
 			self.emit({ type: "agent_end" });
 		});
 		installFakeRuntime([session]);
@@ -183,6 +184,7 @@ describe("runChildAgent", () => {
 			self.emit({ type: "tool_execution_end", toolName: "read" });
 			self.emit({ type: "tool_execution_start", toolName: "bash" });
 			self.emit({ type: "tool_execution_end", toolName: "bash", isError: true });
+			self.lastAssistantText = "<output>done</output>";
 		});
 		installFakeRuntime([session]);
 		const patches: unknown[] = [];
@@ -269,6 +271,7 @@ describe("dispatchAsyncChild", () => {
 		const session = new FakeAgentSession(async (self) => {
 			await promptReleased;
 			self.emit({ type: "text_delta", delta: "done" });
+			self.lastAssistantText = "<output>done</output>";
 		});
 		let createCalls = 0;
 		installFakeRuntime([session], () => createCalls++);

@@ -6,7 +6,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { Type, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import { writeWorkflowScript } from "./workflow-group-state.ts";
-import type { SubmitResultEnvelope } from "../protocol/submit-result.ts";
+import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
 import type { AgentProgress, Details, SingleResult } from "../protocol/types.ts";
 
 export const WorkflowParams = Type.Object(

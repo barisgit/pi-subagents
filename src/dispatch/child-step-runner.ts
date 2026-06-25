@@ -29,7 +29,6 @@ import {
 	resolveSingleOutput,
 	resolveSingleOutputPath,
 } from "../surfaces/single-output.ts";
-import { SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
 import { ensureArtifactsDir, getArtifactPaths, writeArtifact, writeMetadata } from "../shared/artifacts.ts";
 import { resolveAgentColor } from "../shared/agents.ts";
 import { extractTextFromContent, getFinalOutput } from "../shared/utils.ts";
@@ -275,18 +274,16 @@ export async function runInProcessChildStep(input: {
 				progress.lastActivityAt = now;
 				if (record.type === "tool_execution_start") {
 					const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-					if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
-						progress.toolCount++;
-						progress.currentTool = toolName;
-						progress.currentToolRawArgs =
-							record.args && typeof record.args === "object" && !Array.isArray(record.args)
-								? (record.args as Record<string, unknown>)
-								: undefined;
-						progress.currentToolArgs = progress.currentToolRawArgs
-							? JSON.stringify(progress.currentToolRawArgs).slice(0, 200)
+					progress.toolCount++;
+					progress.currentTool = toolName;
+					progress.currentToolRawArgs =
+						record.args && typeof record.args === "object" && !Array.isArray(record.args)
+							? (record.args as Record<string, unknown>)
 							: undefined;
-						progress.currentToolStartedAt = now;
-					}
+					progress.currentToolArgs = progress.currentToolRawArgs
+						? JSON.stringify(progress.currentToolRawArgs).slice(0, 200)
+						: undefined;
+					progress.currentToolStartedAt = now;
 					emitUpdate();
 				} else if (record.type === "tool_execution_end") {
 					if (progress.currentTool) {
@@ -399,12 +396,12 @@ function childResultToSingleResult(
 	result.shareUrl = childResult.shareUrl;
 	result.structuredResult = childResult.structuredResult;
 	// The in-process executor is the SINGLE owner of a child's finish value: across every
-	// exit path it sets childResult.outputText to the resolved submit_result envelope (or
-	// its getLastAssistantText fallback when no compliant submit_result landed). Re-deriving
-	// output here from result.messages via getFinalOutput duplicated that resolution and
-	// diverged from it -- getFinalOutput returns the last assistant TEXT part, i.e. the
-	// preamble the model narrates in the same turn as its final submit_result call, so it
-	// silently replaced the real result with the preamble. Consume the authoritative value.
+	// exit path it sets childResult.outputText to the parsed <output> block (or its
+	// getLastAssistantText fallback when no compliant block landed). Re-deriving output here
+	// from result.messages via getFinalOutput duplicated that resolution and diverged from
+	// it -- getFinalOutput returns the last assistant TEXT part verbatim, which still
+	// contains the <output> wrapper and any preamble, so it would silently replace the
+	// extracted result. Consume the authoritative value.
 	let fullOutput = childResult.outputText;
 	if (input.outputPath && result.exitCode === 0) {
 		const resolvedOutput = resolveSingleOutput(input.outputPath, fullOutput, input.outputSnapshot);

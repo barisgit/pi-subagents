@@ -1,4 +1,4 @@
-import type { SubmitResultEnvelope } from "./submit-result.ts";
+import type { SubmitResultEnvelope } from "./output-contract.ts";
 import type { ActivityState, ModelAttempt, RunDisplayState, TokenUsage, Usage } from "./types.ts";
 
 /** Observable execution phase for a child agent run. */

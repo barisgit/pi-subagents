@@ -17,7 +17,7 @@ class FakeResourceLoader {
 	async reload(): Promise<void> {}
 }
 
-// A child session that completes immediately with a submit_result envelope so
+// A child session that completes immediately with an <output> block so
 // async/workflow children reach a terminal state within the test.
 class FakeAgentSession {
 	private listeners: Array<(event: unknown) => void> = [];
@@ -28,16 +28,12 @@ class FakeAgentSession {
 		};
 	}
 	async prompt(task: string): Promise<void> {
-		this.messages.push({
-			role: "toolResult",
-			toolName: "submit_result",
-			isError: false,
-			details: { result: task },
-		});
+		this.lastAssistantText = `<output>${task}</output>`;
 	}
 	messages: unknown[] = [];
+	lastAssistantText = "";
 	getLastAssistantText(): string {
-		return "done";
+		return this.lastAssistantText;
 	}
 	async abort(): Promise<void> {}
 	dispose(): void {}

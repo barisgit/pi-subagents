@@ -42,16 +42,13 @@ class FakeAgentSession {
 	}
 
 	async prompt(task: string): Promise<void> {
-		this.messages.push({
-			role: "toolResult",
-			toolName: "submit_result",
-			details: { result: this.getLastAssistantText() },
-		});
 		await this.promptImpl(task, this);
+		this.lastAssistantText = `<output>${task}</output>`;
 	}
 
+	lastAssistantText = "";
 	getLastAssistantText(): string {
-		return "";
+		return this.lastAssistantText;
 	}
 
 	async abort(): Promise<void> {}

@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition, ToolInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import {
 	type AgentProgress,
@@ -29,8 +29,6 @@ import {
 	formatControlNoticeMessage,
 	shouldNotifyControlEvent,
 } from "./subagent-control.ts";
-import { createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
-import type { TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import type { RunMode } from "../state/run-shape.ts";
 import { tokenUsageFromUsage } from "../state/usage-totals.ts";
@@ -360,14 +358,14 @@ export function sumUsages(...usages: (Usage | undefined)[]): Usage {
 	return total;
 }
 
+function isExecutableToolDefinition(tool: ToolInfo): tool is ToolInfo & ToolDefinition {
+	const candidate = tool as ToolInfo & Partial<ToolDefinition>;
+	return typeof candidate.execute === "function" && typeof candidate.label === "string";
+}
+
 export function resolveChildTools(
 	agentConfig: AgentConfig,
 	pi: ExtensionAPI,
-	// Workflow-authored result schema for this child's submit_result. Supplied ONLY
-	// by the workflow dispatch path (a script's agent(role, task, { schema })), never
-	// by the public subagent tool — the orchestrating workflow owns the contract, the
-	// child never decides it. Undefined keeps the default any-JSON result.
-	resultSchema?: TSchema,
 ): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
 	// Semantics:
 	//   tools frontmatter absent (undefined)  -> no allowlist => session sees ALL tools
@@ -376,8 +374,7 @@ export function resolveChildTools(
 	// Globs/negations were already expanded at registration time via
 	// resolveAgentToolPatterns(discoverAgents(...)) in index.ts, so by the time
 	// we reach here agentConfig.tools is either undefined or a concrete name list.
-	const expanded =
-		agentConfig.tools === undefined ? undefined : [...new Set([...agentConfig.tools, SUBMIT_RESULT_TOOL_NAME])];
+	const expanded = agentConfig.tools === undefined ? undefined : [...new Set(agentConfig.tools)];
 	// A non-delegating agent must never reach a delegation tool, even if its allowlist
 	// (e.g. `*`) expanded to include one. `workflow` spawns child agents exactly like
 	// `subagent`, so both are stripped whenever canDelegate is explicitly false. This is
@@ -388,10 +385,13 @@ export function resolveChildTools(
 			? expanded.filter((name) => name !== "subagent" && name !== "workflow")
 			: expanded;
 	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
-	const customTools = [
-		...pi.getAllTools().filter((tool) => customToolNames.has(tool.name)),
-		resultSchema ? createSubmitResultTool(resultSchema) : createSubmitResultTool(),
-	] as ToolDefinition[];
+	// pi.getAllTools() yields metadata-only ToolInfo (no execute). Custom-tool injection
+	// needs the executable ToolDefinition, so validate at this boundary and pass through
+	// only genuinely runnable tools rather than blindly casting metadata stubs.
+	const customTools = pi
+		.getAllTools()
+		.filter((tool) => customToolNames.has(tool.name))
+		.filter(isExecutableToolDefinition);
 	return { activeToolNames, customTools };
 }
 

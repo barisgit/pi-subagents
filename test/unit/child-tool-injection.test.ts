@@ -18,24 +18,15 @@ function makeAgentConfig(tools?: string[], extra?: Record<string, unknown>) {
 }
 
 describe("child tool injection", () => {
-	it("passes an executable submit_result and makes it active for explicit allowlists", async () => {
+	it("no longer injects a finish tool: the allowlist is exactly the agent's tools", () => {
+		// The submit_result tool was replaced by the <output> end-of-prompt contract, so an
+		// explicit allowlist is passed through verbatim with no extra finish tool appended.
 		const { activeToolNames, customTools } = resolveChildTools(makeAgentConfig(["read"]), {
 			getAllTools: () => [],
 		} as never);
-		const submit = customTools.find((tool) => tool.name === "submit_result");
 
-		assert.deepEqual(activeToolNames, ["read", "submit_result"]);
-		assert.ok(submit, "submit_result custom tool is injected");
-		assert.equal(submit?.label, "Submit result");
-		assert.equal(typeof submit?.execute, "function", "submit_result is executable, not a metadata stub");
-		const result = await submit?.execute?.(
-			"manual",
-			{ result: "payload" },
-			new AbortController().signal,
-			() => {},
-			{} as never,
-		);
-		assert.equal(result?.terminate, true);
+		assert.deepEqual(activeToolNames, ["read"]);
+		assert.deepEqual(customTools, []);
 	});
 
 	it("strips delegation tools (subagent + workflow) when canDelegate is false", () => {
@@ -43,7 +34,7 @@ describe("child tool injection", () => {
 			makeAgentConfig(["read", "bash", "subagent", "workflow"], { canDelegate: false }),
 			{ getAllTools: () => [] } as never,
 		);
-		assert.deepEqual(activeToolNames, ["read", "bash", "submit_result"]);
+		assert.deepEqual(activeToolNames, ["read", "bash"]);
 	});
 
 	it("keeps delegation tools when canDelegate is not false", () => {
@@ -51,6 +42,14 @@ describe("child tool injection", () => {
 			makeAgentConfig(["read", "subagent", "workflow"], { canDelegate: true }),
 			{ getAllTools: () => [] } as never,
 		);
-		assert.deepEqual(activeToolNames, ["read", "subagent", "workflow", "submit_result"]);
+		assert.deepEqual(activeToolNames, ["read", "subagent", "workflow"]);
+	});
+
+	it("undefined tools frontmatter keeps no allowlist (child sees all tools)", () => {
+		const { activeToolNames, customTools } = resolveChildTools(makeAgentConfig(), {
+			getAllTools: () => [],
+		} as never);
+		assert.equal(activeToolNames, undefined);
+		assert.deepEqual(customTools, []);
 	});
 });

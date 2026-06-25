@@ -119,20 +119,16 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 		}
 		class FakeSession {
 			messages: unknown[] = [];
+			lastAssistantText = "";
 			subscribe(): () => void {
 				return () => {};
 			}
 			async prompt(task: string): Promise<void> {
 				if (task === "fail") throw new Error("child boom");
-				this.messages.push({
-					role: "toolResult",
-					toolName: "submit_result",
-					isError: false,
-					details: { result: task },
-				});
+				this.lastAssistantText = `<output>${task}</output>`;
 			}
 			getLastAssistantText(): string {
-				return "done";
+				return this.lastAssistantText;
 			}
 			async abort(): Promise<void> {}
 			dispose(): void {}
@@ -197,10 +193,10 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 			const ok = await group.dispatchChild({ role: "fixer", task: "ok", index: 0 });
 			assert.deepEqual(ok.structuredResult, { result: "ok" });
 			assert.equal(created[0]?.model?.id, "test-model");
-			assert.deepEqual(created[0]?.tools, ["read", "submit_result"]);
+			assert.deepEqual(created[0]?.tools, ["read"]);
 			assert.equal(
 				created[0]?.customTools?.some((tool) => tool.name === "submit_result"),
-				true,
+				false,
 			);
 
 			const failed = await group.dispatchChild({ role: "fixer", task: "fail", index: 1 });
