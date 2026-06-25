@@ -720,9 +720,12 @@ export class SubagentsStatusComponent implements Component {
 			detail: {
 				rows: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);
-					return run
-						? buildRightLines(this.theme, run, Math.max(20, this.lastRightWidth || 80), this.runs)
-						: [];
+					// ctx.detail.width is the overlay's live, drag-adjusted pane width
+					// (pi-extension-utils >= 0.5). Using it keeps the detail lines
+					// reactive to [ / ] resizes; this.lastRightWidth was computed from
+					// the constant DEFAULT_LEFT_FRACTION and went stale after a resize.
+					const detailWidth = Math.max(20, ctx.detail.width || this.lastRightWidth || 80);
+					return run ? buildRightLines(this.theme, run, detailWidth, this.runs) : [];
 				},
 				title: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);

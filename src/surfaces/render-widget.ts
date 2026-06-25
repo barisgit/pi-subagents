@@ -99,8 +99,19 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 	const parts: string[] = [];
 	if (job.kind === "workflow") {
-		// Group row: children-derived progress instead of a shape badge.
-		if ((job.stepsTotal ?? 0) > 0) parts.push(`${job.currentStep ?? 0}/${job.stepsTotal}`);
+		// Group row: durable "X done · Y running · Z queued" tally. A workflow's
+		// child count N is unknowable up front (runtime fan-out), so there is no
+		// "done/total" fraction — only the live breakdown of what's settled vs
+		// in flight. Counts come from the registry so completed children that were
+		// cleaned out of the live map still show as done.
+		const c = job.childCounts;
+		if (c && c.done + c.running + c.queued > 0) {
+			const segs: string[] = [];
+			if (c.done > 0) segs.push(`${c.done} done`);
+			if (c.running > 0) segs.push(`${c.running} running`);
+			if (c.queued > 0) segs.push(`${c.queued} queued`);
+			parts.push(segs.join(" · "));
+		}
 		if (job.pendingDelivery) parts.push(theme.fg("accent", "delivering…"));
 		if (job.startedAt) {
 			const isLive = job.status === "running" || job.status === "queued";

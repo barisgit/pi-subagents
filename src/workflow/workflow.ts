@@ -52,6 +52,9 @@ export interface WorkflowGroupHandle {
 		phaseTitle?: string;
 		parallelGroupId?: string;
 		resultSchema?: TSchema;
+		// Live progress callback fired per child session event (sync path only).
+		// Lets the workflow emitter repaint the running child's widget frame mid-run.
+		onChildProgress?: (progress: AgentProgress) => void;
 	}): Promise<SingleResult>;
 	finishAsync?(success: boolean, summary?: string): void;
 	failWorkflow?(message: string, tags?: { phaseIndex?: number; phaseTitle?: string }): Promise<void>;
@@ -450,6 +453,11 @@ type WorkflowPhaseEmitter = WorkflowPhaseEmit & {
 		meta?: { phaseIndex?: number; parallelGroupId?: string },
 	): void;
 	childSettled(result: SingleResult, index: number): void;
+	// Live progress for a running child: replaces the running placeholder's
+	// progress in results[] and re-emits, so a SYNC workflow's widget reflects
+	// mid-run tool/token activity instead of freezing between childStarted and
+	// childSettled. No-op shape change for async (async mirrors via status.json).
+	childProgress(index: number, progress: AgentProgress): void;
 	// Declares that `size` agents will be dispatched as the parallel group
 	// `groupId`, so the live header denominator counts them before each has
 	// individually registered into results[].
@@ -608,6 +616,15 @@ export function createWorkflowPhaseEmitter(
 		results.set(index, { ...result, ...(label && !result.label ? { label } : {}), progress });
 		emit(phaseTitle || `${result.agent} ${status}`);
 	};
+	phase.childProgress = (index, progress) => {
+		const existing = results.get(index);
+		// Only meaningful while the child is the running placeholder; once settled,
+		// childSettled owns the final progress and a late frame must not resurrect
+		// a "running" status.
+		if (!existing || existing.progress?.status !== "running") return;
+		results.set(index, { ...existing, progress });
+		emit(phaseTitle || `${existing.agent} working`);
+	};
 	phase.snapshot = buildDetails;
 	return phase;
 }
@@ -688,6 +705,7 @@ Rules: always await every agent()/parallel() call — a failed agent surfaces on
 									...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
 									...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
 									...(tags?.resultSchema ? { resultSchema: tags.resultSchema } : {}),
+									onChildProgress: (progress) => emitter!.childProgress(index, progress),
 								});
 								emitter!.childSettled(result, index);
 								return {

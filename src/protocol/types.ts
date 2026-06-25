@@ -357,6 +357,12 @@ export interface AsyncJobState {
 	// Workflow groups render as ONE widget row; their children are tracked for
 	// aggregation (progress, liveness) but hidden from the widget list.
 	kind?: "workflow";
+	// Durable child tally for workflow groups: counted from the runs registry
+	// (children by parentRunId, resolved via status.json) so the widget shows
+	// "X done · Y running · Z queued" instead of a "done/total" fraction that
+	// collapses as completed children are cleaned out of the live job map. N is
+	// unknowable up front (workflows fan out at runtime), so there is no total.
+	childCounts?: { done: number; running: number; queued: number };
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;
 	lastActivityAt?: number;

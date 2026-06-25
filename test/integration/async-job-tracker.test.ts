@@ -396,6 +396,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 						kind?: string;
 						stepsTotal?: number;
 						currentStep?: number;
+						childCounts?: { done: number; running: number; queued: number };
 						label?: string;
 						displayState?: string;
 				  }
@@ -403,8 +404,9 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.ok(group, "group job should exist");
 			assert.equal(group?.kind, "workflow");
 			assert.equal(group?.status, "running", "statusless group must not be marked lost while children run");
-			assert.equal(group?.stepsTotal, 1);
-			assert.equal(group?.currentStep, 0, "no terminal children yet");
+			assert.equal(group?.childCounts?.done, 0, "no terminal children yet");
+			assert.equal(group?.childCounts?.running, 1, "one child running");
+			assert.equal(group?.childCounts?.queued, 0);
 			assert.equal(group?.label, "Phase 1: recon", "group label mirrors the active child's phase label");
 
 			// Workflow finishes: lifecycle flips, group goes pending-delivery.

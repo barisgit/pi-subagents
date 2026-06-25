@@ -486,8 +486,7 @@ describe("subagent async widget rendering", () => {
 					kind: "workflow",
 					agents: ["workflow"],
 					label: "Phase 2: verify",
-					currentStep: 1,
-					stepsTotal: 3,
+					childCounts: { done: 1, running: 1, queued: 0 },
 					startedAt: Date.now() - 5000,
 				},
 				{
@@ -515,7 +514,7 @@ describe("subagent async widget rendering", () => {
 
 		assert.match(body, /workflow/, "workflow group row renders");
 		assert.match(body, /Phase 2: verify/, "group row carries the current phase label");
-		assert.match(body, /1\/3/, "group row carries children-derived progress");
+		assert.match(body, /1 done · 1 running/, "group row carries children-derived done/running/queued counts");
 		assert.doesNotMatch(body, /explorer/, "workflow children must not render as widget rows");
 		assert.doesNotMatch(body, /\bqa\b/, "workflow children must not render as widget rows");
 		assert.match(body, /fixer/, "non-workflow jobs render normally");

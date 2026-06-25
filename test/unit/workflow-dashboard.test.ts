@@ -372,17 +372,18 @@ describe("workflow dashboard reader overlays", () => {
 		assert.match(lines, /─ Steps ─/);
 	});
 
-	it("workflow right pane caps a long script and counts the overflow", () => {
+	it("workflow right pane renders the whole script without truncation", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		const longScript = Array.from({ length: 40 }, (_, i) => `phase("step ${i}");`).join("\n");
 		writeWorkflowScript(group.runRecordDir, longScript);
 
 		const groupSummary = runViewFromRegistryEntry(group, entries);
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, []).join("\n");
+		// No line cap: every phase line renders, including past the former 24-line limit.
 		assert.match(lines, /phase\("step 0"\);/);
-		assert.match(lines, /phase\("step 23"\);/);
-		assert.doesNotMatch(lines, /phase\("step 24"\);/);
-		assert.match(lines, /\(\+16 more lines\)/);
+		assert.match(lines, /phase\("step 24"\);/);
+		assert.match(lines, /phase\("step 39"\);/);
+		assert.doesNotMatch(lines, /more lines\)/);
 	});
 
 	it("workflow group with no script still outlines steps (no transcript fallback noise)", () => {

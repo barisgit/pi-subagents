@@ -7,8 +7,8 @@
  */
 
 import { colorForAgentName } from "../shared/agents.ts";
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, highlightCode, type Theme } from "@earendil-works/pi-coding-agent";
+import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
 import { previewArgs, readRunTranscript } from "../state/run-transcript.ts";
@@ -18,6 +18,21 @@ import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
 import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
 import { parentRunIdOf } from "./dashboard-row-model.ts";
 import type { LiveRun } from "../state/run-view.ts";
+
+// Single ellipsis glyph for every dashboard truncation. pi-tui's
+// truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
+// "…", so clip() pins the dashboard to the same single-glyph ellipsis.
+const ELLIPSIS = "…";
+function clip(text: string, width: number): string {
+	return truncateToWidth(text, width, ELLIPSIS);
+}
+
+// Render prose (agent markdown output / prompts) through pi-tui's Markdown
+// component so headings, lists, and code fences read correctly in the pane.
+function renderMarkdownLines(text: string, width: number): string[] {
+	if (width <= 0) return [];
+	return new Markdown(text, 0, 0, getMarkdownTheme()).render(width);
+}
 
 export function statusGlyph(
 	theme: Theme,
@@ -93,12 +108,8 @@ function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs:
 	const uniqueAgents = Array.from(new Set(agents.filter(Boolean)));
 	const agentWord = children.length === 1 ? "agent" : "agents";
 	const suffix = uniqueAgents.length > 0 ? `: ${uniqueAgents.join(", ")}` : "";
-	return [theme.fg("dim", truncateToWidth(`${children.length} ${agentWord}${suffix}`, width))];
+	return [theme.fg("dim", clip(`${children.length} ${agentWord}${suffix}`, width))];
 }
-
-// Cap the script section so a huge orchestration script can't drown the step
-// outline below it; the outline is the part that changes while a workflow runs.
-const WORKFLOW_SCRIPT_MAX_LINES = 24;
 
 function childTokenTotal(child: AsyncRunSummary): number {
 	if (child.totalTokens) return child.totalTokens.total;
@@ -113,16 +124,18 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 	const out: string[] = [];
 	const script = run.asyncDir ? readWorkflowScript(run.asyncDir) : undefined;
 	if (script) {
-		out.push(theme.fg("accent", truncateToWidth("─── Script ───", width)));
-		const scriptLines = script.replace(/\t/g, "  ").split("\n");
+		out.push(theme.fg("accent", clip("─── Script ───", width)));
+		const scriptLines = script.split("\n");
 		// Trim leading/trailing blank lines but keep interior structure verbatim:
 		// code must not be word-wrap reflowed.
 		while (scriptLines.length > 0 && scriptLines[0]?.trim() === "") scriptLines.shift();
 		while (scriptLines.length > 0 && scriptLines[scriptLines.length - 1]?.trim() === "") scriptLines.pop();
-		const shown = scriptLines.slice(0, WORKFLOW_SCRIPT_MAX_LINES);
-		for (const line of shown) out.push(theme.fg("muted", truncateToWidth(line, width)));
-		if (scriptLines.length > shown.length) {
-			out.push(theme.fg("dim", truncateToWidth(`… (+${scriptLines.length - shown.length} more lines)`, width)));
+		// Whole script, syntax-highlighted; long lines wrap (ANSI-aware) instead of
+		// truncating so no code is hidden. No line cap: the script is the workflow's
+		// identity and the pane scrolls.
+		for (const line of highlightCode(scriptLines.join("\n"), "ts")) {
+			if (visibleWidth(line) <= width) out.push(line);
+			else for (const wrapped of wrapTextWithAnsi(line, width)) out.push(wrapped);
 		}
 	}
 	// Children are selected by structural parent linkage (parentRunId), NOT
@@ -131,7 +144,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 	const children = runs.filter((candidate) => candidate.run.parentRunId === run.id).map((candidate) => candidate.run);
 	if (children.length > 0) {
 		if (out.length > 0) out.push("");
-		out.push(theme.fg("accent", truncateToWidth("─── Steps ───", width)));
+		out.push(theme.fg("accent", clip("─── Steps ───", width)));
 		let lastPhaseKey: number | undefined;
 		let shownPhaseHeader = false;
 		for (const child of sortedWorkflowChildren(children)) {
@@ -139,7 +152,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 				lastPhaseKey = child.phaseIndex;
 				shownPhaseHeader = true;
 				const label = child.phaseIndex === undefined && !child.phaseTitle ? "" : workflowPhaseLabel(child);
-				if (label) out.push(theme.fg("muted", truncateToWidth(label, width)));
+				if (label) out.push(theme.fg("muted", clip(label, width)));
 			}
 			const agent = child.steps.find((step) => step.agent)?.agent ?? child.mode;
 			const glyph = statusGlyph(theme, child.state, child.activityState, child.displayState);
@@ -153,7 +166,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 			if (child.state === "running" && child.currentTool) stats.push(`→ ${child.currentTool}`);
 			const labelPart = child.label ? ` — ${child.label}` : "";
 			const line = `  ${glyph} ${parallelTag}${tintAgentName(agent, colorForAgentName(agent))} · ${stats.join(" · ")}${labelPart}`;
-			out.push(truncateToWidth(line, width));
+			out.push(clip(line, width));
 		}
 	}
 	return out;
@@ -217,7 +230,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
 					if (child) {
 						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
-							step.lines.push(theme.fg("dim", truncateToWidth(line, width)));
+							step.lines.push(theme.fg("dim", clip(line, width)));
 						}
 						continue;
 					}
@@ -230,10 +243,10 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			const argsPart = argsPreview ? ` ${argsPreview}` : "";
 			const base = `${prefix}${argsPart}`;
 			if (suffix) {
-				const baseTrim = truncateToWidth(base, Math.max(0, width - visibleWidth(suffix)));
+				const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
 				step.lines.push(`${baseTrim}${theme.fg("dim", suffix)}`);
 			} else {
-				step.lines.push(truncateToWidth(base, width));
+				step.lines.push(clip(base, width));
 			}
 			continue;
 		}
@@ -245,7 +258,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			if (event.tokens !== undefined) middle.push(`${event.tokens}t`);
 			if (event.durationMs !== undefined) middle.push(`${event.durationMs}ms`);
 			const text = `─── ${middle.join(" · ")} ───`;
-			step.lines.push(theme.fg("dim", truncateToWidth(text, width)));
+			step.lines.push(theme.fg("dim", clip(text, width)));
 			continue;
 		}
 		if (event.kind === "final-text") {
@@ -263,24 +276,20 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	// right pane reads correctly for tasks: [...] async runs.
 	const stepWord = run.run.steps.length > 0 && run.run.mode === "parallel" ? "Task" : "Step";
 	for (const step of ordered) {
-		out.push(
-			theme.fg(
-				"accent",
-				truncateToWidth(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width),
-			),
-		);
+		out.push(theme.fg("accent", clip(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
 		if (step.label) {
-			out.push(theme.fg("muted", truncateToWidth(`Label: ${step.label}`, width)));
+			out.push(theme.fg("muted", clip(`Label: ${step.label}`, width)));
 		}
 		if (step.task) {
-			out.push(theme.fg("dim", truncateToWidth("→ prompt:", width)));
+			out.push(theme.fg("dim", clip("→ prompt:", width)));
 			for (const wrapped of wrapText(step.task, width)) out.push(theme.fg("muted", wrapped));
 		}
 		for (const line of step.lines) out.push(line);
 		if (step.final) {
 			const border = "─".repeat(Math.max(0, width));
 			out.push(theme.fg("dim", border));
-			for (const wrapped of wrapText(step.final, width)) out.push(wrapped);
+			// Agent output is typically markdown; render it as such.
+			for (const wrapped of renderMarkdownLines(step.final, width)) out.push(wrapped);
 			out.push(theme.fg("dim", border));
 		}
 	}

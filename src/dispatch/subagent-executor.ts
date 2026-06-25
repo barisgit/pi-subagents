@@ -1565,7 +1565,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				// Park the calling agent's leaf permit while a sync workflow awaits its
 				// children (no-op for a top-level workflow with no parent permit).
 				parkWhileRunning: <T>(fn: () => Promise<T>) => parkLeafPermit(parentRunId, fn),
-				dispatchChild: async ({ role, task, index, phaseIndex, phaseTitle, parallelGroupId, resultSchema }) => {
+				dispatchChild: async ({
+					role,
+					task,
+					index,
+					phaseIndex,
+					phaseTitle,
+					parallelGroupId,
+					resultSchema,
+					onChildProgress,
+				}) => {
 					const agentConfig = agents.find((agent) => agent.name === role);
 					let result: SingleResult | undefined;
 					const handle = spawnRun(
@@ -1636,6 +1645,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									),
 									mode: "parallel",
 									...(resultSchema ? { resultSchema } : {}),
+									...(onChildProgress
+										? {
+												// Sync workflow live update: surface the running child's per-event
+												// progress so the workflow widget repaints mid-run instead of
+												// freezing between childStarted and childSettled.
+												onUpdate: (update: AgentToolResult<Details>) => {
+													const live = update.details?.progress?.[0];
+													if (live) onChildProgress(live);
+												},
+											}
+										: {}),
 									layer0: {
 										runId: prepared.runId,
 										runRecordDir: prepared.runRecordDir,

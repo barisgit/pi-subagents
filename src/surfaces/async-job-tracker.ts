@@ -25,6 +25,7 @@ import {
 import type { IdleTracker } from "./idle-tracker.ts";
 import { readStatus } from "../shared/utils.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
+import { readLeafRunViewCached } from "../state/async-status.ts";
 import { readWorkflowGroupState } from "../workflow/workflow-group-state.ts";
 import { logger } from "../shared/logger.ts";
 import type { UtilsClient } from "pi-extension-utils";
@@ -58,6 +59,46 @@ function isTerminalAsyncStatus(status: AsyncJobLifecycleStatus): boolean {
 
 function asyncAgentName(job: AsyncJobState): string {
 	return job.currentAgent ?? job.agents?.[job.currentStep ?? 0] ?? job.agents?.[0] ?? "unknown";
+}
+
+// Durable done/running/queued tally for a workflow group. The runs registry
+// holds EVERY child (append-only by parentRunId) and survives the 10s live-map
+// cleanup, so it is the authoritative denominator-free source. Live children
+// (passed in) carry fresher status for the ones still in the map; a registry
+// child absent from the live map is necessarily terminal (only terminal jobs
+// are cleaned), so it counts as done. Terminal child reads are mtime-cached.
+function countWorkflowChildren(
+	groupRunId: string,
+	liveChildren: AsyncJobState[],
+): { done: number; running: number; queued: number } {
+	const liveById = new Map(liveChildren.map((child) => [child.asyncId, child]));
+	const counts = { done: 0, running: 0, queued: 0 };
+	const seen = new Set<string>();
+	const bucket = (status: AsyncJobLifecycleStatus) => {
+		if (isTerminalAsyncStatus(status)) counts.done++;
+		else if (status === "queued") counts.queued++;
+		else counts.running++;
+	};
+	for (const entry of readAllEntries()) {
+		if (entry.parentRunId !== groupRunId || seen.has(entry.runId)) continue;
+		seen.add(entry.runId);
+		const live = liveById.get(entry.runId);
+		if (live) {
+			bucket(live.status);
+			continue;
+		}
+		// Cleaned from the live map -> resolve its terminal state from disk; a
+		// readable status.json gives the precise terminal kind, else treat the
+		// vanished-but-registered child as done (it was cleaned, hence terminal).
+		const summary = readLeafRunViewCached(entry.runRecordDir);
+		bucket((summary?.state as AsyncJobLifecycleStatus) ?? "complete");
+	}
+	// Registry write can lag the live childStarted; never report fewer than the
+	// live map already knows about.
+	for (const child of liveChildren) {
+		if (!seen.has(child.asyncId)) bucket(child.status);
+	}
+	return counts;
 }
 
 function deriveAsyncJobActivityState(
@@ -209,9 +250,15 @@ export function createAsyncJobTracker(
 							continue;
 						}
 						job.status = "running";
-						const done = children.filter((child) => isTerminalAsyncStatus(child.status)).length;
-						job.currentStep = done;
-						job.stepsTotal = Math.max(job.stepsTotal ?? 0, children.length);
+						// Durable child tally from the runs registry (children by parentRunId,
+						// resolved via status.json). The live asyncJobs map is NOT a reliable
+						// source: completed children are cleaned out after completionRetentionMs,
+						// so a live-only "done" collapses toward 0 while the run is still going.
+						job.childCounts = countWorkflowChildren(job.asyncId, children);
+						// Keep currentStep as the durable done count for activity-notice indexing;
+						// drop the meaningless stepsTotal fraction (N is unknowable for workflows).
+						job.currentStep = job.childCounts.done;
+						job.stepsTotal = undefined;
 						// Surface the current phase: the most recently started non-terminal
 						// child carries a 'Phase N: title' label from the workflow dispatcher.
 						const active = children.filter((child) => !isTerminalAsyncStatus(child.status));
