@@ -37,6 +37,20 @@ describe("output contract", () => {
 		assert.equal(extractOutputBlock(""), undefined);
 	});
 
+	it("fails closed when a LATER block opens after the last complete block but is truncated", () => {
+		// An earlier complete sample block, then the real final block cut off before
+		// </output>. Returning the stale sample would surface wrong output as the
+		// result, so treat the whole text as having no valid block (reprompt/fallback).
+		const text = [
+			"Example of the shape:",
+			"<output>SAMPLE-not-the-answer</output>",
+			"Now my real result:",
+			"<output>REAL-ANSWER but the stream was cut off here",
+		].join("\n");
+		assert.equal(extractOutputBlock(text), undefined);
+		assert.equal(hasOutputBlock(text), false);
+	});
+
 	it("defaults to the block text as the string result when no schema is supplied", () => {
 		const parsed = parseOutputEnvelope("narration\n<output>final answer</output>");
 		assert.deepEqual(parsed, { ok: true, envelope: { result: "final answer" } });

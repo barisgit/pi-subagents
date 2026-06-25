@@ -39,11 +39,26 @@ const OUTPUT_BLOCK_RE = /<output>([\s\S]*?)<\/output>/g;
 export function extractOutputBlock(text: string): string | undefined {
 	if (!text) return undefined;
 	let last: string | undefined;
+	let lastEnd = 0;
 	OUTPUT_BLOCK_RE.lastIndex = 0;
 	for (let match = OUTPUT_BLOCK_RE.exec(text); match !== null; match = OUTPUT_BLOCK_RE.exec(text)) {
 		last = match[1];
+		lastEnd = match.index + match[0].length;
 	}
-	return last === undefined ? undefined : last.trim();
+	if (last === undefined) return undefined;
+	// Fail closed on a truncated LATER block: if a new <output> opens after the last
+	// complete block but is never closed (model cut off mid-stream), the real final
+	// result is unrecoverable. Returning the earlier (stale sample) block would
+	// surface wrong output as authoritative, so treat the whole text as having no
+	// valid block and let the caller reprompt / fall back.
+	if (text.indexOf(OUTPUT_OPEN, lastEnd) !== -1) return undefined;
+	// A present-but-empty block (`<output></output>`) is a DELIBERATE empty result, not a
+	// miss: we return "" rather than undefined. Mapping empty -> undefined would drive the
+	// reprompt loop to exhaustion and then fall back to the last assistant text (the prose
+	// preamble) -- reintroducing the exact preamble-leak this contract exists to prevent.
+	// The schema path is unaffected: an empty block fails JSON.parse, so parseOutputEnvelope
+	// still returns { ok: false } and reprompts/fails closed under a schema.
+	return last.trim();
 }
 
 /** True when `text` contains at least one complete <output> block. */

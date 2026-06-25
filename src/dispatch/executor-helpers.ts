@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ToolDefinition, ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import {
 	type AgentProgress,
@@ -358,11 +358,6 @@ export function sumUsages(...usages: (Usage | undefined)[]): Usage {
 	return total;
 }
 
-function isExecutableToolDefinition(tool: ToolInfo): tool is ToolInfo & ToolDefinition {
-	const candidate = tool as ToolInfo & Partial<ToolDefinition>;
-	return typeof candidate.execute === "function" && typeof candidate.label === "string";
-}
-
 export function resolveChildTools(
 	agentConfig: AgentConfig,
 	pi: ExtensionAPI,
@@ -385,13 +380,18 @@ export function resolveChildTools(
 			? expanded.filter((name) => name !== "subagent" && name !== "workflow")
 			: expanded;
 	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
-	// pi.getAllTools() yields metadata-only ToolInfo (no execute). Custom-tool injection
-	// needs the executable ToolDefinition, so validate at this boundary and pass through
-	// only genuinely runnable tools rather than blindly casting metadata stubs.
+	// getAllTools() is typed as metadata-only ToolInfo, but the runtime objects the host
+	// registers carry the executable definition; the session resolves these mcpDirectTools
+	// by name. Preserve the host's long-standing resolution (cast at this single boundary)
+	// rather than guarding on execute/label, which would silently drop every entry.
+	// The SDK types getAllTools() as metadata-only ToolInfo (no execute/label), but the
+	// runtime objects the host registers ARE the executable ToolDefinitions and the child
+	// session resolves these mcpDirectTools by name. The dist type is narrower than reality,
+	// so this single localized cast bridges it. A guard on execute/label would instead drop
+	// every entry (ToolInfo lacks both), silently denying children their requested MCP tools.
 	const customTools = pi
 		.getAllTools()
-		.filter((tool) => customToolNames.has(tool.name))
-		.filter(isExecutableToolDefinition);
+		.filter((tool) => customToolNames.has(tool.name)) as unknown as ToolDefinition[];
 	return { activeToolNames, customTools };
 }
 
