@@ -46,12 +46,10 @@ export function extractOutputBlock(text: string): string | undefined {
 		lastEnd = match.index + match[0].length;
 	}
 	if (last === undefined) return undefined;
-	// Fail closed on a truncated LATER block: if a new <output> opens after the last
-	// complete block but is never closed (model cut off mid-stream), the real final
-	// result is unrecoverable. Returning the earlier (stale sample) block would
-	// surface wrong output as authoritative, so treat the whole text as having no
-	// valid block and let the caller reprompt / fall back.
-	if (text.indexOf(OUTPUT_OPEN, lastEnd) !== -1) return undefined;
+	// The final block must be truly trailing: only whitespace may follow. Any
+	// trailing non-whitespace means the block is not authoritative (it may be a
+	// sample), so fail closed and let the caller reprompt or fall back.
+	if (text.slice(lastEnd).trim() !== "") return undefined;
 	// A present-but-empty block (`<output></output>`) is a DELIBERATE empty result, not a
 	// miss: we return "" rather than undefined. Mapping empty -> undefined would drive the
 	// reprompt loop to exhaustion and then fall back to the last assistant text (the prose
@@ -102,7 +100,7 @@ export function fallbackSubmitResultEnvelope(text: string): SubmitResultEnvelope
 // channel, so it is present uniformly for fresh and fork-reuse children without
 // clobbering an inherited prompt. The reactive OUTPUT_REPROMPT below still catches
 // a child that finishes without a compliant block.
-export const OUTPUT_SYSTEM_INSTRUCTION = `Finish every run by ending your final message with your output wrapped in a trailing ${OUTPUT_OPEN}...${OUTPUT_CLOSE} block. The LAST ${OUTPUT_OPEN} block in your final message is taken as your result; everything outside it (narration, earlier fenced samples) is ignored. Put a string there by default, or the exact shape requested. Do not stop with prose only and do not call any finish tool. If you are waiting on an async/background run result, do not wait on it by default with sleep/status loops; Pi will send a completion or needs-attention message and trigger a new turn. Continue independent work or stop if blocked on that result. Use status/sleep checks only when immediate inspection is genuinely necessary.`;
+export const OUTPUT_SYSTEM_INSTRUCTION = `Finish every run by ending your final message with your output wrapped in a trailing ${OUTPUT_OPEN}...${OUTPUT_CLOSE} block. The output block must be the LAST thing in your final message; earlier narration and fenced samples are ignored, but nothing may follow the final block. Put a string there by default, or the exact shape requested. Do not stop with prose only and do not call any finish tool. If you are waiting on an async/background run result, do not wait on it by default with sleep/status loops; Pi will send a completion or needs-attention message and trigger a new turn. Continue independent work or stop if blocked on that result. Use status/sleep checks only when immediate inspection is genuinely necessary.`;
 
 /**
  * Render a schema-specific contract instruction telling the child the exact JSON

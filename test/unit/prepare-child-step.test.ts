@@ -106,7 +106,6 @@ describe("prepareChildStep", () => {
 		// tools: explicit allowlist stays unchanged; no finish tool is injected
 		assert.ok(step.activeToolNames?.includes("read"));
 		assert.equal(step.activeToolNames?.includes("submit_result"), false);
-		assert.equal(step.customTools.some((t) => t.name === "submit_result"), false);
 		// session paths derive from runId + stepIndex
 		assert.ok(step.sessionFile.includes("run-abc"));
 		assert.ok(step.sessionFile.includes("run-0"));

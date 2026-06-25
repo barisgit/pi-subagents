@@ -72,7 +72,6 @@ function makeStep(root: string): ChildAgentStep {
 		modelCandidates: [],
 		thinkingLevel: "off",
 		activeToolNames: undefined,
-		customTools: [],
 		systemPrompt: "Fix things.",
 		systemPromptAppend: "END WITH <output>...</output>",
 		skillsResolved: [],
@@ -98,14 +97,7 @@ function install(session: FakeAgentSession): void {
 			DefaultResourceLoader: FakeResourceLoader as never,
 			getAgentDir: () => "/tmp/pi-agent",
 			SessionManager: { open: () => ({}) as never },
-			createAgentSession: (async (options?: { customTools?: unknown[]; tools?: string[] }) => {
-				// The finish tool is gone: no submit_result is injected as a custom tool.
-				assert.equal(
-					(options?.customTools ?? []).some(
-						(tool) => (tool as { name?: string }).name === "submit_result",
-					),
-					false,
-				);
+			createAgentSession: (async () => {
 				return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
 			}) as never,
 		}),

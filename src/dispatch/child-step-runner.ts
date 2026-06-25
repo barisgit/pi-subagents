@@ -141,7 +141,7 @@ export async function runInProcessChildStep(input: {
 	wrapUpdateDetails?: (update: AgentToolResult<Details>) => AgentToolResult<Details>;
 	layer0?: { runId: string; runRecordDir: string; sessionFile: string; rootRunId: string };
 	onLayer0StatusUpdate?: (patch: StatusPatch) => void;
-	/** Workflow-authored result schema for submit_result (workflow path only). */
+	/** Workflow-authored result schema enforced via the child's trailing <output> block (workflow path only). */
 	resultSchema?: TSchema;
 }): Promise<SingleResult> {
 	const { data, deps, agentConfig, stepIndex } = input;

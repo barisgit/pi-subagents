@@ -786,7 +786,6 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 					// Pass undefined to leave _allowedToolNames unset (= all tools).
 					// Pass a list to restrict to exactly those names.
 					tools: step.activeToolNames,
-					customTools: step.customTools,
 					resourceLoader: loader,
 					sessionManager,
 				});

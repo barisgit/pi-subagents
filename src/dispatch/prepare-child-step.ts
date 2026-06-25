@@ -88,7 +88,7 @@ export function prepareChildStep(input: {
 	maxSubagentDepth: number;
 	/** Foreground layer-0 override for run identity + session paths. */
 	layer0?: { runId: string; sessionFile: string; runRecordDir: string; rootRunId: string };
-	/** Workflow-authored result schema for submit_result (workflow path only). */
+	/** Workflow-authored result schema enforced via the child's trailing <output> block (workflow path only). */
 	resultSchema?: TSchema;
 }): PrepareChildStepResult {
 	const { data, deps, agentConfig, stepIndex } = input;
@@ -150,7 +150,7 @@ export function prepareChildStep(input: {
 			: {}),
 		...(data.forkReuse ? { forkContextFile: data.sessionFileForIndex(stepIndex) } : {}),
 	});
-	const { activeToolNames, customTools } = resolveChildTools(agentConfig, deps.pi);
+	const { activeToolNames } = resolveChildTools(agentConfig);
 	const step: ChildAgentStep = {
 		runId: input.layer0?.runId ?? data.runId,
 		stepIndex,
@@ -162,7 +162,6 @@ export function prepareChildStep(input: {
 		modelCandidates,
 		thinkingLevel: parsedPrimary.thinkingLevel,
 		activeToolNames,
-		customTools,
 		systemPrompt,
 		systemPromptAppend,
 		...(input.resultSchema ? { resultSchema: input.resultSchema } : {}),

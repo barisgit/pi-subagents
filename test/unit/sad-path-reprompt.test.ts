@@ -125,7 +125,6 @@ function makeStep(root: string, resultSchema?: TSchema): ChildAgentStep {
 		modelCandidates: [],
 		thinkingLevel: "off",
 		activeToolNames: [],
-		customTools: [],
 		systemPrompt: "Fix things.",
 		skillsResolved: [],
 		sessionFile: path.join(root, "session.jsonl"),

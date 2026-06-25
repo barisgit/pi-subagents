@@ -1,7 +1,7 @@
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentScope } from "../shared/agents.ts";
 import type {
 	ArtifactConfig,
@@ -65,7 +65,6 @@ export interface ChildAgentStep {
 	 * - string[]: exact allowlist (use empty array for zero tools)
 	 */
 	activeToolNames: string[] | undefined;
-	customTools: ToolDefinition[];
 	systemPrompt: string;
 	/**
 	 * Additive system-prompt text delivered through the loader's append channel

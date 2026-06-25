@@ -24,6 +24,10 @@ describe("output contract", () => {
 		assert.equal(hasOutputBlock(text), true);
 	});
 
+	it("rejects a complete output block followed by trailing prose", () => {
+		assert.equal(extractOutputBlock("<output>SAMPLE</output>\nLet me know if you need more."), undefined);
+	});
+
 	it("handles multiline content inside the block", () => {
 		const text = "prefix\n<output>line one\nline two\nline three</output>";
 		assert.equal(extractOutputBlock(text), "line one\nline two\nline three");

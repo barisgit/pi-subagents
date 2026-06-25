@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import {
 	type AgentProgress,
@@ -358,10 +358,7 @@ export function sumUsages(...usages: (Usage | undefined)[]): Usage {
 	return total;
 }
 
-export function resolveChildTools(
-	agentConfig: AgentConfig,
-	pi: ExtensionAPI,
-): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
+export function resolveChildTools(agentConfig: AgentConfig): { activeToolNames: string[] | undefined } {
 	// Semantics:
 	//   tools frontmatter absent (undefined)  -> no allowlist => session sees ALL tools
 	//   tools frontmatter explicit list       -> allowlist exactly those names
@@ -375,24 +372,17 @@ export function resolveChildTools(
 	// `subagent`, so both are stripped whenever canDelegate is explicitly false. This is
 	// the process-independent gate for in-process children (the env-based
 	// checkNestedDelegationGuard only covers separate-process dispatch).
-	const activeToolNames =
+	const baseAllow =
 		agentConfig.canDelegate === false && expanded !== undefined
 			? expanded.filter((name) => name !== "subagent" && name !== "workflow")
 			: expanded;
-	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
-	// getAllTools() is typed as metadata-only ToolInfo, but the runtime objects the host
-	// registers carry the executable definition; the session resolves these mcpDirectTools
-	// by name. Preserve the host's long-standing resolution (cast at this single boundary)
-	// rather than guarding on execute/label, which would silently drop every entry.
-	// The SDK types getAllTools() as metadata-only ToolInfo (no execute/label), but the
-	// runtime objects the host registers ARE the executable ToolDefinitions and the child
-	// session resolves these mcpDirectTools by name. The dist type is narrower than reality,
-	// so this single localized cast bridges it. A guard on execute/label would instead drop
-	// every entry (ToolInfo lacks both), silently denying children their requested MCP tools.
-	const customTools = pi
-		.getAllTools()
-		.filter((tool) => customToolNames.has(tool.name)) as unknown as ToolDefinition[];
-	return { activeToolNames, customTools };
+	const mcpDirect = agentConfig.mcpDirectTools ?? [];
+	// With no allowlist, the child sees all tools including mcpDirectTools. With an
+	// explicit allowlist, include mcpDirectTools by name so the child's own executable
+	// tool definition is enabled; host getAllTools() metadata stubs lack execute and
+	// would clobber the child's real registered tool if passed as customTools.
+	const activeToolNames = baseAllow === undefined ? undefined : [...new Set([...baseAllow, ...mcpDirect])];
+	return { activeToolNames };
 }
 
 export function buildParallelWorktreeTaskCwdError(

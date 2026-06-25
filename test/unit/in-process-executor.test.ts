@@ -113,7 +113,6 @@ function makeStep(overrides: Partial<ChildAgentStep> = {}): ChildAgentStep {
 		model: { provider: "test", id: "model-a" } as never,
 		modelCandidates: [],
 		activeToolNames: ["read", "bash"],
-		customTools: [],
 		systemPrompt: "You fix things.",
 		skillsResolved: [],
 		sessionFile: path.join(root, "run-1", "run-0", "session.jsonl"),
