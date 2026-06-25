@@ -72,15 +72,11 @@ function setup(
 			if (options.blockPrompt) await promptGate.promise;
 			const delayMs = options.promptDelayMs?.(task) ?? 0;
 			if (delayMs > 0) await sleep(delayMs);
-			this.messages.push({
-				role: "toolResult",
-				toolName: "submit_result",
-				isError: false,
-				details: { result: task },
-			});
+			this.lastAssistantText = `<output>${task}</output>`;
 		}
+		lastAssistantText = "";
 		getLastAssistantText(): string {
-			return "done";
+			return this.lastAssistantText;
 		}
 		async abort(): Promise<void> {}
 		dispose(): void {}

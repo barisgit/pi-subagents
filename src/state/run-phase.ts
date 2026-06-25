@@ -1,6 +1,5 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { formatDuration } from "../shared/formatting.ts";
-import { SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
 import type { RunPhase } from "../protocol/status-types.ts";
 
 export type { RunPhase } from "../protocol/status-types.ts";
@@ -74,12 +73,6 @@ export function advanceRunPhase(prev: RunPhaseState, event: AgentSessionEvent, n
 			if (assistantType === "text_delta") {
 				return nextState(prev, "streaming_text", now, { afterTurnEnd: boundary });
 			}
-			if (
-				(assistantType === "toolcall_start" || assistantType === "toolcall_delta") &&
-				streamingToolName(record) === SUBMIT_RESULT_TOOL_NAME
-			) {
-				return nextState(prev, "finishing", now, { afterTurnEnd: boundary });
-			}
 			return nextState(prev, prev.phase, now, {
 				afterTurnEnd: boundary,
 				toolName: phaseKeepsToolName(prev.phase) ? prev.toolName : undefined,
@@ -94,17 +87,11 @@ export function advanceRunPhase(prev: RunPhaseState, event: AgentSessionEvent, n
 			}
 			return nextState(prev, "idle", now, { afterTurnEnd: boundary });
 		case "tool_execution_start":
-			if (stringField(record, "toolName") === SUBMIT_RESULT_TOOL_NAME) {
-				return nextState(prev, "finishing", now, { afterTurnEnd: boundary });
-			}
 			return nextState(prev, "tool_running", now, {
 				afterTurnEnd: boundary,
 				toolName: stringField(record, "toolName"),
 			});
 		case "tool_execution_update":
-			if (stringField(record, "toolName") === SUBMIT_RESULT_TOOL_NAME) {
-				return nextState(prev, "finishing", now, { afterTurnEnd: boundary });
-			}
 			return nextState(prev, "tool_streaming", now, {
 				afterTurnEnd: boundary,
 				toolName: prev.toolName ?? stringField(record, "toolName"),
@@ -194,26 +181,6 @@ function assistantMessageEventType(record: Record<string, unknown>): string | un
 	return assistantMessageEvent && typeof assistantMessageEvent === "object"
 		? stringField(assistantMessageEvent as Record<string, unknown>, "type")
 		: undefined;
-}
-
-function streamingToolName(record: Record<string, unknown>): string | undefined {
-	const assistantMessageEvent = record.assistantMessageEvent;
-	if (!assistantMessageEvent || typeof assistantMessageEvent !== "object") return undefined;
-
-	const contentIndex = (assistantMessageEvent as Record<string, unknown>).contentIndex;
-	if (typeof contentIndex !== "number") return undefined;
-
-	const message = record.message;
-	if (!message || typeof message !== "object") return undefined;
-
-	const content = (message as Record<string, unknown>).content;
-	if (!Array.isArray(content)) return undefined;
-
-	const part = content[contentIndex];
-	if (!part || typeof part !== "object") return undefined;
-
-	const partRecord = part as Record<string, unknown>;
-	return stringField(partRecord, "type") === "toolCall" ? stringField(partRecord, "name") : undefined;
 }
 
 function hasFollowUp(record: Record<string, unknown>): boolean {

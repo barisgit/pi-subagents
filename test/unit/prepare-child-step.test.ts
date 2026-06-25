@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { prepareChildStep } from "../../src/dispatch/prepare-child-step.ts";
-import { SUBMIT_RESULT_SYSTEM_INSTRUCTION, SUBMIT_RESULT_TOOL_NAME } from "../../src/protocol/submit-result.ts";
+import { OUTPUT_OPEN, OUTPUT_SYSTEM_INSTRUCTION } from "../../src/protocol/output-contract.ts";
 
 // A realistic fake model the registry hands back. The shape only needs the
 // fields prepareChildStep reads/copies onto the step (provider/id), but we keep
@@ -99,13 +99,13 @@ describe("prepareChildStep", () => {
 		// model resolved from the registry by bare id
 		assert.equal(step.model.provider, "anthropic");
 		assert.equal(step.model.id, "claude-sonnet");
-		// non-fork systemPrompt carries the submit-result finish contract
+		// non-fork systemPrompt stays agent-authored; the finish contract is appended separately
 		assert.ok(step.systemPrompt.includes("You are a tester."));
-		assert.ok(step.systemPrompt.includes(SUBMIT_RESULT_SYSTEM_INSTRUCTION));
-		// tools: explicit allowlist gains submit_result; submit_result tool injected as a custom tool
+		assert.ok(step.systemPromptAppend?.includes(OUTPUT_SYSTEM_INSTRUCTION));
+		assert.ok(step.systemPromptAppend?.includes(OUTPUT_OPEN));
+		// tools: explicit allowlist stays unchanged; no finish tool is injected
 		assert.ok(step.activeToolNames?.includes("read"));
-		assert.ok(step.activeToolNames?.includes(SUBMIT_RESULT_TOOL_NAME));
-		assert.ok(step.customTools.some((t) => t.name === SUBMIT_RESULT_TOOL_NAME));
+		assert.equal(step.activeToolNames?.includes("submit_result"), false);
 		// session paths derive from runId + stepIndex
 		assert.ok(step.sessionFile.includes("run-abc"));
 		assert.ok(step.sessionFile.includes("run-0"));

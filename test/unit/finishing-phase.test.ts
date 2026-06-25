@@ -24,77 +24,23 @@ after(() => {
 });
 
 describe("finishing phase", () => {
-	it("enters finishing while submit_result tool call starts streaming", () => {
-		const state = advanceRunPhase(
-			initialRunPhaseState(1000),
-			toolCallUpdate("toolcall_start", "submit_result"),
-			2000,
-		);
-
-		assert.equal(state.phase, "finishing");
-		assert.equal(state.phaseStartedAt, 2000);
-		assert.equal(state.previousPhase, "idle");
-	});
-
 	it("does not enter finishing for ordinary tool calls", () => {
-		const state = advanceRunPhase(initialRunPhaseState(1000), toolCallUpdate("toolcall_start", "bash"), 2000);
+		const state = advanceRunPhase(initialRunPhaseState(1000), toolCallUpdate("toolcall_start", "read"), 2000);
 
 		assert.notEqual(state.phase, "finishing");
 		assert.equal(state.phase, "idle");
 	});
 
-	it("enters finishing when submit_result name appears on a toolcall_delta", () => {
-		const state = advanceRunPhase(
-			initialRunPhaseState(1000),
-			toolCallUpdate("toolcall_delta", "submit_result"),
-			2000,
-		);
-
-		assert.equal(state.phase, "finishing");
-	});
-
-	it("stays finishing when submit_result starts executing", () => {
-		const finishing = advanceRunPhase(
-			initialRunPhaseState(1000),
-			toolCallUpdate("toolcall_start", "submit_result"),
-			2000,
-		);
-		const state = advanceRunPhase(
-			finishing,
-			event({ type: "tool_execution_start", toolName: "submit_result" }),
-			3000,
-		);
-
-		assert.equal(state.phase, "finishing");
-		assert.equal(state.phaseStartedAt, 2000);
-	});
-
 	it("enters tool_running when an ordinary tool starts executing", () => {
-		const finishing = advanceRunPhase(
+		const state = advanceRunPhase(
 			initialRunPhaseState(1000),
-			toolCallUpdate("toolcall_start", "submit_result"),
+			event({ type: "tool_execution_start", toolName: "read" }),
 			2000,
 		);
-		const state = advanceRunPhase(finishing, event({ type: "tool_execution_start", toolName: "bash" }), 3000);
 
 		assert.equal(state.phase, "tool_running");
-		assert.equal(state.toolName, "bash");
-	});
-
-	it("stays finishing when submit_result execution streams updates", () => {
-		const finishing = advanceRunPhase(
-			initialRunPhaseState(1000),
-			toolCallUpdate("toolcall_start", "submit_result"),
-			2000,
-		);
-		const state = advanceRunPhase(
-			finishing,
-			event({ type: "tool_execution_update", toolName: "submit_result" }),
-			3000,
-		);
-
-		assert.equal(state.phase, "finishing");
 		assert.equal(state.phaseStartedAt, 2000);
+		assert.equal(state.previousPhase, "idle");
 	});
 
 	it("formats finishing with elapsed duration", () => {

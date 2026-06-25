@@ -6,7 +6,7 @@ import type { AgentConfig } from "../shared/agents.ts";
 import type { ResolvedSkill } from "../shared/skills.ts";
 import { buildModelCandidates, normalizeAvailableModels, resolveModelRef } from "./model-fallback.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../shared/skills.ts";
-import { appendSubmitResultSystemInstruction } from "../protocol/submit-result.ts";
+import { buildOutputContractAppend } from "../protocol/output-contract.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import type { ChildAgentStep, ExecutionContextData, ExecutorDeps } from "./executor-types.ts";
 import { resolveChildTools, resolveDispatchRootSessionId } from "./executor-helpers.ts";
@@ -88,7 +88,7 @@ export function prepareChildStep(input: {
 	maxSubagentDepth: number;
 	/** Foreground layer-0 override for run identity + session paths. */
 	layer0?: { runId: string; sessionFile: string; runRecordDir: string; rootRunId: string };
-	/** Workflow-authored result schema for submit_result (workflow path only). */
+	/** Workflow-authored result schema enforced via the child's trailing <output> block (workflow path only). */
 	resultSchema?: TSchema;
 }): PrepareChildStepResult {
 	const { data, deps, agentConfig, stepIndex } = input;
@@ -132,10 +132,11 @@ export function prepareChildStep(input: {
 			: skillInjection
 		: systemPromptBase;
 	// Fork-reuse keeps an empty systemPrompt to preserve the inherited session's prompt; don't clobber it.
-	// Those children still get the finish contract from the always-present submit_result tool description.
-	const systemPrompt = data.forkReuse
-		? systemPromptWithSkills
-		: appendSubmitResultSystemInstruction(systemPromptWithSkills);
+	// The output finish contract is delivered uniformly through the loader's additive append channel
+	// (systemPromptAppend below), so fresh and fork-reuse children both get it without baking it into the
+	// base prompt — the former tool description that carried it for fork-reuse children is gone.
+	const systemPrompt = systemPromptWithSkills;
+	const systemPromptAppend = buildOutputContractAppend(input.resultSchema);
 	const sessionPaths = resolveChildSessionFile({
 		parentCwd: data.effectiveCwd,
 		parentSessionFile: data.ctx.sessionManager.getSessionFile() ?? null,
@@ -149,7 +150,7 @@ export function prepareChildStep(input: {
 			: {}),
 		...(data.forkReuse ? { forkContextFile: data.sessionFileForIndex(stepIndex) } : {}),
 	});
-	const { activeToolNames, customTools } = resolveChildTools(agentConfig, deps.pi, input.resultSchema);
+	const { activeToolNames } = resolveChildTools(agentConfig);
 	const step: ChildAgentStep = {
 		runId: input.layer0?.runId ?? data.runId,
 		stepIndex,
@@ -161,8 +162,9 @@ export function prepareChildStep(input: {
 		modelCandidates,
 		thinkingLevel: parsedPrimary.thinkingLevel,
 		activeToolNames,
-		customTools,
 		systemPrompt,
+		systemPromptAppend,
+		...(input.resultSchema ? { resultSchema: input.resultSchema } : {}),
 		skillsResolved: resolvedSkills.map((skill) => skill.name),
 		sessionFile: input.layer0?.sessionFile ?? sessionPaths.sessionFile,
 		runRecordDir: input.layer0?.runRecordDir ?? sessionPaths.runRecordDir,

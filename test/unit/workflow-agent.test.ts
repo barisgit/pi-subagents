@@ -66,8 +66,8 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 			script: "return await agent('review', 'check', { schema: { type: 'object', required: ['approved'], properties: { approved: { type: 'boolean' } }, additionalProperties: false } });",
 		});
 		assert.deepEqual(value, { approved: true });
-		// The plain JSON Schema is wrapped at the boundary; the child's submit_result
-		// tool enforces it. We assert the tag carries a usable schema object with the
+		// The plain JSON Schema is wrapped at the boundary; the child's trailing <output>
+		// block enforces it. We assert the tag carries a usable schema object with the
 		// author's keywords intact (Type.Unsafe preserves type/required/properties).
 		// The schema object is authored inside the VM realm, so its array prototype
 		// differs from the host's; compare values, not prototype-strict structure.
@@ -112,27 +112,22 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 		const created: Array<{
 			model?: { provider: string; id: string };
 			tools?: string[];
-			customTools?: Array<{ name: string }>;
 		}> = [];
 		class FakeResourceLoader {
 			async reload(): Promise<void> {}
 		}
 		class FakeSession {
 			messages: unknown[] = [];
+			lastAssistantText = "";
 			subscribe(): () => void {
 				return () => {};
 			}
 			async prompt(task: string): Promise<void> {
 				if (task === "fail") throw new Error("child boom");
-				this.messages.push({
-					role: "toolResult",
-					toolName: "submit_result",
-					isError: false,
-					details: { result: task },
-				});
+				this.lastAssistantText = `<output>${task}</output>`;
 			}
 			getLastAssistantText(): string {
-				return "done";
+				return this.lastAssistantText;
 			}
 			async abort(): Promise<void> {}
 			dispose(): void {}
@@ -145,7 +140,6 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 			createAgentSession: (async (options: {
 				model?: { provider: string; id: string };
 				tools?: string[];
-				customTools?: Array<{ name: string }>;
 			}) => {
 				created.push(options);
 				return {
@@ -197,12 +191,7 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 			const ok = await group.dispatchChild({ role: "fixer", task: "ok", index: 0 });
 			assert.deepEqual(ok.structuredResult, { result: "ok" });
 			assert.equal(created[0]?.model?.id, "test-model");
-			assert.deepEqual(created[0]?.tools, ["read", "submit_result"]);
-			assert.equal(
-				created[0]?.customTools?.some((tool) => tool.name === "submit_result"),
-				true,
-			);
-
+			assert.deepEqual(created[0]?.tools, ["read"]);
 			const failed = await group.dispatchChild({ role: "fixer", task: "fail", index: 1 });
 			assert.notEqual(failed.exitCode, 0);
 			await assert.rejects(

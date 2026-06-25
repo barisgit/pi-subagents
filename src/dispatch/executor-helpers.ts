@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import {
 	type AgentProgress,
@@ -29,8 +29,6 @@ import {
 	formatControlNoticeMessage,
 	shouldNotifyControlEvent,
 } from "./subagent-control.ts";
-import { createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
-import type { TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import type { RunMode } from "../state/run-shape.ts";
 import { tokenUsageFromUsage } from "../state/usage-totals.ts";
@@ -360,15 +358,7 @@ export function sumUsages(...usages: (Usage | undefined)[]): Usage {
 	return total;
 }
 
-export function resolveChildTools(
-	agentConfig: AgentConfig,
-	pi: ExtensionAPI,
-	// Workflow-authored result schema for this child's submit_result. Supplied ONLY
-	// by the workflow dispatch path (a script's agent(role, task, { schema })), never
-	// by the public subagent tool — the orchestrating workflow owns the contract, the
-	// child never decides it. Undefined keeps the default any-JSON result.
-	resultSchema?: TSchema,
-): { activeToolNames: string[] | undefined; customTools: ToolDefinition[] } {
+export function resolveChildTools(agentConfig: AgentConfig): { activeToolNames: string[] | undefined } {
 	// Semantics:
 	//   tools frontmatter absent (undefined)  -> no allowlist => session sees ALL tools
 	//   tools frontmatter explicit list       -> allowlist exactly those names
@@ -376,23 +366,23 @@ export function resolveChildTools(
 	// Globs/negations were already expanded at registration time via
 	// resolveAgentToolPatterns(discoverAgents(...)) in index.ts, so by the time
 	// we reach here agentConfig.tools is either undefined or a concrete name list.
-	const expanded =
-		agentConfig.tools === undefined ? undefined : [...new Set([...agentConfig.tools, SUBMIT_RESULT_TOOL_NAME])];
+	const expanded = agentConfig.tools === undefined ? undefined : [...new Set(agentConfig.tools)];
 	// A non-delegating agent must never reach a delegation tool, even if its allowlist
 	// (e.g. `*`) expanded to include one. `workflow` spawns child agents exactly like
 	// `subagent`, so both are stripped whenever canDelegate is explicitly false. This is
 	// the process-independent gate for in-process children (the env-based
 	// checkNestedDelegationGuard only covers separate-process dispatch).
-	const activeToolNames =
+	const baseAllow =
 		agentConfig.canDelegate === false && expanded !== undefined
 			? expanded.filter((name) => name !== "subagent" && name !== "workflow")
 			: expanded;
-	const customToolNames = new Set(agentConfig.mcpDirectTools ?? []);
-	const customTools = [
-		...pi.getAllTools().filter((tool) => customToolNames.has(tool.name)),
-		resultSchema ? createSubmitResultTool(resultSchema) : createSubmitResultTool(),
-	] as ToolDefinition[];
-	return { activeToolNames, customTools };
+	const mcpDirect = agentConfig.mcpDirectTools ?? [];
+	// With no allowlist, the child sees all tools including mcpDirectTools. With an
+	// explicit allowlist, include mcpDirectTools by name so the child's own executable
+	// tool definition is enabled; host getAllTools() metadata stubs lack execute and
+	// would clobber the child's real registered tool if passed as customTools.
+	const activeToolNames = baseAllow === undefined ? undefined : [...new Set([...baseAllow, ...mcpDirect])];
+	return { activeToolNames };
 }
 
 export function buildParallelWorktreeTaskCwdError(

@@ -124,7 +124,6 @@ import {
 	resolveSingleOutput,
 	resolveSingleOutputPath,
 } from "../surfaces/single-output.ts";
-import { createSubmitResultTool, SUBMIT_RESULT_TOOL_NAME } from "../protocol/submit-result.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import type { StatusWriter } from "../state/status-writer.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";

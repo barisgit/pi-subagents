@@ -35,11 +35,12 @@ const { makeAgent } = await import(moduleUrl("test/support/helpers.ts"));
 class FakeResourceLoader { async reload() {} }
 class FakeSession {
 	messages = [];
+	lastAssistantText = "";
 	subscribe() { return () => {}; }
 	async prompt(task) {
-		this.messages.push({ role: "toolResult", toolName: "submit_result", isError: false, details: { result: task } });
+		this.lastAssistantText = "<output>" + task + "</output>";
 	}
-	getLastAssistantText() { return "done"; }
+	getLastAssistantText() { return this.lastAssistantText; }
 	async abort() {}
 	dispose() {}
 	setActiveToolsByName() {}

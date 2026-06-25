@@ -21,6 +21,7 @@ class FakeResourceLoader {
 }
 class FakeSession {
 	messages: unknown[] = [];
+	lastAssistantText = "";
 	private listeners: Array<(event: unknown) => void> = [];
 	subscribe(listener: (event: unknown) => void): () => void {
 		this.listeners.push(listener);
@@ -31,15 +32,10 @@ class FakeSession {
 	async prompt(task: string): Promise<void> {
 		for (const listener of this.listeners)
 			listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
-		this.messages.push({
-			role: "toolResult",
-			toolName: "submit_result",
-			isError: false,
-			details: { result: task },
-		});
+		this.lastAssistantText = `<output>${task}</output>`;
 	}
 	getLastAssistantText(): string {
-		return "done";
+		return this.lastAssistantText;
 	}
 	async abort(): Promise<void> {}
 	dispose(): void {}

@@ -46,13 +46,13 @@ export type {
 	StatusPatch,
 } from "../protocol/status-types.ts";
 import {
-	extractSubmitResultEnvelope,
 	fallbackSubmitResultEnvelope,
-	hasSubmitResultToolResult,
-	SUBMIT_RESULT_REPROMPT,
-	SUBMIT_RESULT_TOOL_NAME,
+	hasOutputBlock,
+	OUTPUT_REPROMPT,
+	parseOutputEnvelope,
+	schemaReprompt,
 	type SubmitResultEnvelope,
-} from "../protocol/submit-result.ts";
+} from "../protocol/output-contract.ts";
 import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 import { acquireLeafPermit } from "./leaf-concurrency.ts";
@@ -511,15 +511,17 @@ async function executeChildAgent(
 			outputText = session.getLastAssistantText?.() ?? "";
 		}
 
-		const shouldRequireSubmitResult =
-			step.activeToolNames?.includes("submit_result") === true ||
-			step.customTools.some((tool) => tool.name === "submit_result");
-		for (
-			let reprompt = 0;
-			shouldRequireSubmitResult && reprompt < 2 && !hasSubmitResultToolResult(getSessionMessages(session));
-			reprompt++
-		) {
-			const repromptPromise = session.prompt(SUBMIT_RESULT_REPROMPT, {
+		// The output contract is unconditional for every child: the final assistant
+		// message must end with a trailing <output>...</output> block carrying the
+		// result. The former submit_result tool is gone, so the source is the final
+		// assistant TEXT (getLastAssistantText), not a toolResult. The accumulated
+		// outputText is the streamed-delta fallback when no last-assistant text exists.
+		const activeSession = session;
+		const finalAssistantText = (): string => activeSession.getLastAssistantText?.() || outputText;
+		for (let reprompt = 0; reprompt < 2 && !parseOutputEnvelope(finalAssistantText(), step.resultSchema).ok; reprompt++) {
+			const text = finalAssistantText();
+			const repromptMessage = step.resultSchema && hasOutputBlock(text) ? schemaReprompt(step.resultSchema) : OUTPUT_REPROMPT;
+			const repromptPromise = session.prompt(repromptMessage, {
 				expandPromptTemplates: false,
 				source: "extension",
 			});
@@ -540,24 +542,40 @@ async function executeChildAgent(
 				return result;
 			}
 			await repromptPromise;
-			if (!outputText.trim()) {
-				outputText = session.getLastAssistantText?.() ?? "";
-			}
 		}
-		if (shouldRequireSubmitResult) {
-			structuredResult = extractSubmitResultEnvelope(getSessionMessages(session));
-			if (structuredResult) {
-				// result is the parent-visible output. A string passes through; a typed
-				// object (workflow-schema'd) is JSON-stringified so the text surface stays
-				// a string while workflow scripts read the object off structuredResult.result.
+		{
+			// Codec at the finish boundary: extract the LAST <output> block and resolve it.
+			// Three outcomes: (1) valid -> structured result (a typed object is
+			// JSON-stringified for the text surface while workflow scripts read the object
+			// off structuredResult.result); (2) a schema was required but the block is
+			// missing/invalid after reprompts -> FAIL CLOSED (exit 1, reason
+			// "schema_validation") so the workflow throws rather than receive unvalidated
+			// text; (3) no schema (default string contract) -> text fallback.
+			const text = finalAssistantText();
+			const parsed = parseOutputEnvelope(text, step.resultSchema);
+			if (parsed.ok) {
+				structuredResult = parsed.envelope;
 				outputText =
 					typeof structuredResult.result === "string"
 						? structuredResult.result
 						: JSON.stringify(structuredResult.result);
+			} else if (step.resultSchema) {
+				outputText = text;
+				const result = baseResult("failed", {
+					message: "Child agent output did not match the required schema.",
+					reason: "schema_validation",
+				});
+				ctx.onStatusUpdate?.({
+					runId: step.runId,
+					stepIndex: step.stepIndex,
+					state: result.state,
+					endedAt: result.endedAt,
+					outputText: result.outputText,
+				});
+				return result;
 			} else {
-				const fallbackText = session.getLastAssistantText?.() || outputText;
-				structuredResult = fallbackSubmitResultEnvelope(fallbackText);
-				outputText = fallbackText;
+				structuredResult = fallbackSubmitResultEnvelope(text);
+				outputText = text;
 			}
 		}
 
@@ -733,7 +751,8 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 			agentDir: runtimeDeps.getAgentDir(),
 			systemPrompt: step.systemPrompt,
 			systemPromptOverride: () => step.systemPrompt,
-			appendSystemPromptOverride: () => [],
+			appendSystemPromptOverride: (base: string[]) =>
+				step.systemPromptAppend ? [...base, step.systemPromptAppend] : base,
 		});
 		await loader.reload();
 
@@ -767,7 +786,6 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 					// Pass undefined to leave _allowedToolNames unset (= all tools).
 					// Pass a list to restrict to exactly those names.
 					tools: step.activeToolNames,
-					customTools: step.customTools,
 					resourceLoader: loader,
 					sessionManager,
 				});
@@ -867,29 +885,21 @@ function handleSessionEvent(
 		};
 	} else if (type === "tool_execution_start") {
 		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-		if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
-			counters.incrementToolCall();
-			patchBody = {
-				toolCallDelta: 1,
-				activity: { state: "tool_running", toolName, updatedAt: now },
-			};
-		}
+		counters.incrementToolCall();
+		patchBody = {
+			toolCallDelta: 1,
+			activity: { state: "tool_running", toolName, updatedAt: now },
+		};
 	} else if (type === "tool_execution_end") {
 		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-		// submit_result is the structured-finish call, surfaced via the `finishing`
-		// phase rather than a tool line. Skip its result-counting and activity patch
-		// symmetrically with tool_execution_start so it never re-sets currentTool nor
-		// inflates the tool-result count on the async surface.
-		if (toolName !== SUBMIT_RESULT_TOOL_NAME) {
-			counters.incrementToolResult();
-			const isError = record.isError === true;
-			if (isError) counters.incrementToolError();
-			patchBody = {
-				toolResultDelta: 1,
-				...(isError ? { toolErrorDelta: 1 } : {}),
-				activity: { state: "running", toolName, updatedAt: now },
-			};
-		}
+		counters.incrementToolResult();
+		const isError = record.isError === true;
+		if (isError) counters.incrementToolError();
+		patchBody = {
+			toolResultDelta: 1,
+			...(isError ? { toolErrorDelta: 1 } : {}),
+			activity: { state: "running", toolName, updatedAt: now },
+		};
 	}
 
 	return phaseEvents.handle(event, now, patchBody);
@@ -908,13 +918,6 @@ function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
 		signal.addEventListener("abort", () => abort(signal), { once: true });
 	}
 	return controller.signal;
-}
-
-function getSessionMessages(session: AgentSession): unknown[] {
-	const direct = (session as unknown as { messages?: unknown[] }).messages;
-	if (Array.isArray(direct)) return direct;
-	const stateMessages = (session as unknown as { state?: { messages?: unknown[] } }).state?.messages;
-	return Array.isArray(stateMessages) ? stateMessages : [];
 }
 
 async function promptOrAbort(promptPromise: Promise<void>, signal: AbortSignal): Promise<boolean> {

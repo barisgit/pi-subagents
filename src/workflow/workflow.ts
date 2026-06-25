@@ -6,7 +6,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { Type, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import { writeWorkflowScript } from "./workflow-group-state.ts";
-import type { SubmitResultEnvelope } from "../protocol/submit-result.ts";
+import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
 import type { AgentProgress, Details, SingleResult } from "../protocol/types.ts";
 
 export const WorkflowParams = Type.Object(
@@ -28,7 +28,7 @@ export interface WorkflowDispatchOutcome {
 export type WorkflowDispatchResult = SubmitResultEnvelope | WorkflowDispatchOutcome;
 export interface WorkflowDispatchTags {
 	parallelGroupId?: string;
-	// Workflow-authored result schema for this child's submit_result. The script
+	// Workflow-authored result schema for this child's trailing <output> block. The script
 	// owns the contract via agent(role, task, { schema }); the child never decides
 	// its own shape and the public subagent tool never receives a schema.
 	resultSchema?: TSchema;
@@ -308,7 +308,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	const parallelGroupStore = new AsyncLocalStorage<string>();
 	// A workflow script runs in a VM with no imports, so it cannot author a TypeBox
 	// schema. It passes a PLAIN JSON Schema object via agent(role, task, { schema }).
-	// We wrap it with Type.Unsafe at this boundary so the child's submit_result tool
+	// We wrap it with Type.Unsafe at this boundary so the child's trailing <output> block
 	// (Compile().Check()) enforces it — verified to reject missing/typed/extra fields.
 	// Fail closed: a non-object schema is a script bug, so we throw rather than
 	// silently drop the contract down to the default any-JSON result.

@@ -44,18 +44,13 @@ class BlockingSession {
 	}
 	setActiveToolsByName() {}
 	getLastAssistantText() {
-		return "done after block";
+		return "<output>done after block</output>";
 	}
 	dispose() {}
 	async abort() {
 		this.resolvePrompt?.();
 	}
 	async prompt() {
-		this.messages.push({
-			role: "toolResult",
-			toolName: "submit_result",
-			details: { result: "done after block" },
-		});
 		await new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});

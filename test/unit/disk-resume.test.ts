@@ -43,7 +43,7 @@ class FakeSession {
 	}
 	setActiveToolsByName() {}
 	getLastAssistantText() {
-		return "resumed output";
+		return "<output>resumed output</output>";
 	}
 	dispose() {}
 	abort() {
@@ -51,11 +51,6 @@ class FakeSession {
 	}
 	prompt(message: string) {
 		this.prompts.push(message);
-		this.messages.push({
-			role: "toolResult",
-			toolName: "submit_result",
-			details: { result: "resumed output" },
-		});
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
@@ -170,7 +165,7 @@ describe("disk resume", () => {
 		assert.equal(h.opened, run.sessionFile);
 		assert.equal(h.session.prompts.length, 1);
 		// Resume carries the clean continuation message; the finish contract is no longer appended to the
-		// prompt (it lives on the always-present submit_result tool description + the original system prompt).
+		// prompt (it lives on the appended <output> contract + the original system prompt).
 		assert.equal(h.session.prompts[0], "continue");
 	});
 
