@@ -739,6 +739,9 @@ export class SubagentsStatusComponent implements Component {
 			legendPlacement: "primary",
 			perSelectionScroll: true,
 			stickyBottom: true,
+			// Press 's' to collapse the run list entirely and give the detail pane the
+			// full width (and back). Mirrors the sidebar toggle in the charter picker.
+			collapse: { key: "s", label: "sidebar", collapsedWidth: 0 },
 			split: {
 				initialFraction: DEFAULT_LEFT_FRACTION,
 				minPrimaryWidth: MIN_LEFT_PANE,
@@ -781,7 +784,11 @@ export class SubagentsStatusComponent implements Component {
 		if (row.kind === "empty") return this.theme.fg("dim", "No subagent runs");
 		const isSelected = this.overlayRowKey(row) === ctx.selectedKey;
 		const showCwd = this.showAllSessions || !(this.sessionId || this.sessionCwd);
-		const lineWidth = Math.max(20, this.lastLeftWidth || 80);
+		// ctx.primary.width is the overlay's live, drag-adjusted left-pane width
+		// (pi-extension-utils >= 0.5). Using it keeps the list rows reactive to
+		// [ / ] resizes; this.lastLeftWidth came from the constant DEFAULT_LEFT_FRACTION
+		// and went stale after a resize (the same defect fixed for the detail pane).
+		const lineWidth = Math.max(20, ctx.primary.width || this.lastLeftWidth || 80);
 		if (row.kind === "phase") return buildPhaseLine(this.theme, row, isSelected, lineWidth);
 		const containerInfo = this.containerRowInfo(row.run);
 		return buildLeftLine(

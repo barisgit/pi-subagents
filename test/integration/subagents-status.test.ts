@@ -268,12 +268,48 @@ describe("SubagentsStatusComponent", () => {
 				assert.doesNotMatch(output, /pgup\/pgdn\s+page/);
 				assert.match(output, /return\/o\s+collapse group/);
 				assert.match(output, /a\s+all sessions/);
+				assert.match(output, /s\s+sidebar/);
 				assert.match(output, /q\/esc\s+close/);
 			} finally {
 				component.dispose();
 			}
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("collapses the run list with 's' and gives the detail pane full width", () => {
+		const running = createRun("run-collapse", "running", { startedAt: 2000 });
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [running], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			// Expanded: the run list row is visible in the left pane.
+			const expanded = component.render(120).join("\n");
+			assert.match(expanded, /waiter · running/, "list row visible while expanded");
+			assert.match(expanded, /Subagent runs · 1 total/, "primary title visible while expanded");
+
+			// Collapse the sidebar.
+			component.handleInput("s");
+			const collapsed = component.render(120).join("\n");
+			// The left list (its primary title) is gone; the detail pane remains.
+			assert.doesNotMatch(collapsed, /Subagent runs · 1 total/, "primary title hidden when collapsed");
+			// The detail pane still renders (its title carries the selected run's agent + state).
+			assert.match(collapsed, /waiter \[running\]/, "detail pane title still renders when collapsed");
+
+			// Toggle back: the list returns.
+			component.handleInput("s");
+			const reexpanded = component.render(120).join("\n");
+			assert.match(reexpanded, /Subagent runs · 1 total/, "primary title returns after re-expand");
+		} finally {
+			component.dispose();
 		}
 	});
 
