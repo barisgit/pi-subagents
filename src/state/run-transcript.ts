@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { PersistedRunStatus } from "../protocol/status-types.ts";
+import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
 
 export type TranscriptLine =
 	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string; label?: string }
@@ -319,7 +320,12 @@ function parseSessionFile(input: {
 			...(status ? { status } : {}),
 		});
 	}
-	if (finalText) lines.push({ kind: "final-text", stepIndex: input.stepIndex, agent, text: finalText });
+	// The last assistant text is the full final message, which carries the agent's
+	// preamble/narration around its trailing <output> block. The dashboard final-text
+	// surface only wants the result, so leniently strip to the last <output> block
+	// (a message with no block passes through unchanged).
+	const finalDisplay = finalText ? (extractOutputBlockForDisplay(finalText) ?? finalText) : finalText;
+	if (finalDisplay) lines.push({ kind: "final-text", stepIndex: input.stepIndex, agent, text: finalDisplay });
 	return lines;
 }
 

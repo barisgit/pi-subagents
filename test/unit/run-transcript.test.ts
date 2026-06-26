@@ -104,6 +104,45 @@ describe("readRunTranscript", () => {
 		}
 	});
 
+	it("strips the agent preamble to the trailing <output> block in final-text", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:02.000Z", [
+					{
+						type: "text",
+						text: "Let me compile the findings.\nHere is what I found.\n<output>the clean result</output>",
+					},
+				]),
+			]);
+			const finalLine = readRunTranscript(dir).find((line) => line.kind === "final-text");
+			// The dashboard final-text surface shows ONLY the result, never the preamble.
+			assert.deepEqual(finalLine, { kind: "final-text", stepIndex: 0, agent: "fixer", text: "the clean result" });
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the full final message when it has no <output> block", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:02.000Z", [{ type: "text", text: "Plain prose answer, no block." }]),
+			]);
+			const finalLine = readRunTranscript(dir).find((line) => line.kind === "final-text");
+			assert.deepEqual(finalLine, {
+				kind: "final-text",
+				stepIndex: 0,
+				agent: "fixer",
+				text: "Plain prose answer, no block.",
+			});
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("reads multiple run-N transcripts using N as stepIndex", () => {
 		const dir = makeRunDir();
 		try {
