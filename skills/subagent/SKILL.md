@@ -26,6 +26,7 @@ Delegate when work needs any of these:
 - Use the `workflow` tool for sequential or dependent orchestration: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps.
 - Set `batch:true` when several children should return one rollup notification.
 - Use `action:"list"` if agent names are uncertain; use status/interrupt/resume only for live run management.
+- A child's findings return **in JS** (shaped by `opts.schema`), not through files: never route fan-out reports through the filesystem for a synthesis child to re-read. For a report you need **verbatim**, use `workflow` + `schema` — a plain `subagent` `finalOutput` is a summary, not a transcript. See `references/dispatch-patterns.md`.
 
 ## Workflow: orchestration with control flow
 

@@ -30,6 +30,26 @@ Use `workflow` for sequential or dependent phases. It can pass summaries/results
 
 `parallel()` is a **fail-fast barrier** (it awaits `Promise.all`): the first child that rejects rejects the whole call and the other results are discarded. That is the right default when every branch is required. When partial results are acceptable (survey/recon/fan-out where one dead branch should not sink the batch), catch inside each thunk so every branch resolves to a value.
 
+### Knowledge channel: the return value, not the filesystem
+
+A fan-out's findings flow back through each child's **return value**, not through files. `agent(role, task, opts?)` returns the child's output directly into your script — that return value IS the knowledge channel, and `opts.schema` forces it into a structured shape your code can map over. The synthesis child then reads those returned values in-process; it never re-reads files the leaves wrote.
+
+```ts
+const findings = await parallel(items.map((it) => () =>
+  agent("<investigation-role>", taskFor(it), { schema: FINDING_SCHEMA })
+    .then((r) => r.findings)
+    .catch(() => [])
+));
+const master = await agent("<synthesis-role>", "Synthesize: " + JSON.stringify(findings.flat()));
+```
+
+Two anti-patterns to avoid:
+
+- **Routing reports through the filesystem.** Telling leaves to write a report file and having the synthesis child re-read those files defeats the design — the return value already carried the knowledge. Use `schema` to shape it, not the disk.
+- **"Don't compress" instructions.** That is a workaround for the wrong channel, not a fix. It arises when a bounded `subagent` (not `workflow`) self-compacts its final turn, leaving a `[compressed]` stub as `finalOutput`. The fix is the channel, not a gag order.
+
+When you need a child's report **verbatim**, use `workflow` + `schema` so the structured return is guaranteed. A plain `subagent` `finalOutput` is a **summary, not a transcript** — a bounded child may compact its own final turn, so never depend on `subagent` `finalOutput` for output you need word-for-word.
+
 ### Multi-layer runtime fan-out
 
 Each layer's width is decided at runtime from the previous layer's structured output. Schemas force arrays the script can safely map over; per-thunk `.catch` keeps the fail-fast barrier from sinking a whole layer; bounds (`maxItems`, `.slice`) keep fan-out honest against the leaf pool.
