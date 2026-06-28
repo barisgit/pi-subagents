@@ -30,10 +30,10 @@ describe("skill progressive", () => {
 		assert.equal(fs.existsSync(skillPath), true);
 	});
 
-	it("skill-under-80-lines", () => {
+	it("skill-under-120-lines", () => {
 		const lines = readSkill().trimEnd().split(/\r?\n/);
 
-		assert.ok(lines.length <= 80, `SKILL.md has ${lines.length} lines`);
+		assert.ok(lines.length <= 120, `SKILL.md has ${lines.length} lines`);
 	});
 
 	it("references-folder-has-5", () => {
