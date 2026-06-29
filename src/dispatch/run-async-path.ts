@@ -35,6 +35,7 @@ import {
 	buildParallelWorktreeTaskCwdError,
 	emitRunAnchor,
 	emptyUsage,
+	publishSubagentUsage,
 	resolveDispatchParentRunId,
 	resolveDispatchRootRunId,
 	resolveDispatchRootSessionId,
@@ -306,6 +307,20 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						];
 					})
 					.sort((a, b) => a.stepIndex - b.stepIndex);
+				if (!parentRunId) {
+					publishSubagentUsage(deps.pi, deps.state, {
+						runId: groupRunId,
+						rootRunId: groupRootRunId,
+						...(() => {
+							const rootSessionId = resolveDispatchRootSessionId(ctx);
+							return rootSessionId ? { rootSessionId } : {};
+						})(),
+						mode: "parallel",
+						source: "async",
+						totalUsage,
+						timestamp: Date.now(),
+					});
+				}
 				safeEmit(
 					SUBAGENT_ASYNC_COMPLETE_EVENT,
 					buildAsyncAggregateCompletePayload({
@@ -521,6 +536,20 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						sessionFile: r.sessionFile,
 					};
 				});
+			if (!parentRunId) {
+				publishSubagentUsage(deps.pi, deps.state, {
+					runId,
+					rootRunId,
+					...(() => {
+						const rootSessionId = resolveDispatchRootSessionId(ctx);
+						return rootSessionId ? { rootSessionId } : {};
+					})(),
+					mode,
+					source: "async",
+					totalUsage,
+					timestamp: Date.now(),
+				});
+			}
 			safeEmit(
 				SUBAGENT_ASYNC_COMPLETE_EVENT,
 				buildAsyncAggregateCompletePayload({

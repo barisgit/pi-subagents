@@ -55,6 +55,7 @@ import {
 } from "../protocol/output-contract.ts";
 import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
+import { addUsageInto, nestedSubagentUsageFromToolEvent } from "./executor-helpers.ts";
 import { acquireLeafPermit } from "./leaf-concurrency.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
 export type { ChildAgentContext, ChildAgentHandle, RunViewSeed } from "./child-agent-registry.ts";
@@ -518,9 +519,14 @@ async function executeChildAgent(
 		// outputText is the streamed-delta fallback when no last-assistant text exists.
 		const activeSession = session;
 		const finalAssistantText = (): string => activeSession.getLastAssistantText?.() || outputText;
-		for (let reprompt = 0; reprompt < 2 && !parseOutputEnvelope(finalAssistantText(), step.resultSchema).ok; reprompt++) {
+		for (
+			let reprompt = 0;
+			reprompt < 2 && !parseOutputEnvelope(finalAssistantText(), step.resultSchema).ok;
+			reprompt++
+		) {
 			const text = finalAssistantText();
-			const repromptMessage = step.resultSchema && hasOutputBlock(text) ? schemaReprompt(step.resultSchema) : OUTPUT_REPROMPT;
+			const repromptMessage =
+				step.resultSchema && hasOutputBlock(text) ? schemaReprompt(step.resultSchema) : OUTPUT_REPROMPT;
 			const repromptPromise = session.prompt(repromptMessage, {
 				expandPromptTemplates: false,
 				source: "extension",
@@ -821,8 +827,8 @@ function handleSessionEvent(
 	let patchBody: StatusPatchBody | undefined;
 
 	// Token + cost accumulation. Equivalent to subagent-executor's sync path:
-	// add per-assistant-message usage, then add any nested subagent
-	// tool_result's `details.totalUsage` so the descendant tree bubbles up.
+	// add per-assistant-message usage, then add any nested subagent usage so
+	// the descendant tree bubbles up.
 	if (counters.accumulateUsage) {
 		if (type === "message_end" && record.message && typeof record.message === "object") {
 			const msg = record.message as {
@@ -844,31 +850,10 @@ function handleSessionEvent(
 				counters.accumulateUsage.cost += u.cost?.total || 0;
 				counters.accumulateUsage.turns += 1;
 			}
-		} else if (
-			type === "tool_execution_end" &&
-			record.toolName === "subagent" &&
-			record.result &&
-			typeof record.result === "object"
-		) {
-			const result = record.result as {
-				details?: {
-					totalUsage?: {
-						input?: number;
-						output?: number;
-						cacheRead?: number;
-						cacheWrite?: number;
-						cost?: number;
-						turns?: number;
-					};
-				};
-			};
-			const nested = result.details?.totalUsage;
+		} else if (type === "tool_execution_end") {
+			const nested = nestedSubagentUsageFromToolEvent(record);
 			if (nested) {
-				counters.accumulateUsage.input += nested.input || 0;
-				counters.accumulateUsage.output += nested.output || 0;
-				counters.accumulateUsage.cacheRead += nested.cacheRead || 0;
-				counters.accumulateUsage.cacheWrite += nested.cacheWrite || 0;
-				counters.accumulateUsage.cost += nested.cost || 0;
+				addUsageInto(counters.accumulateUsage, nested);
 			}
 		}
 	}

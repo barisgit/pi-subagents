@@ -167,6 +167,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		asyncJobs: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
+		usageByRun: new Map(),
 		cleanupTimers: new Map(),
 		lastUiContext: null,
 		poller: null,

@@ -17,7 +17,12 @@ import {
 } from "../protocol/types.ts";
 import type { ChildAgentResult, StatusPatch } from "../protocol/status-types.ts";
 import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps } from "./executor-types.ts";
-import { emptyUsage, getRequestedModeLabel } from "./executor-helpers.ts";
+import {
+	addUsageInto,
+	emptyUsage,
+	getRequestedModeLabel,
+	nestedSubagentUsageFromToolEvent,
+} from "./executor-helpers.ts";
 import { prepareChildStep } from "./prepare-child-step.ts";
 import { runChildAgent } from "./in-process-executor.ts";
 import { resolveSubagentIntercomTarget } from "./intercom-bridge.ts";
@@ -299,25 +304,13 @@ export async function runInProcessChildStep(input: {
 							durationMs,
 						});
 					}
-					// Bubble nested subagent usage into the parent's accumulator. When a
-					// child agent invokes the `subagent` tool, the tool_result carries
-					// `details.totalUsage` representing the full descendant tree. Adding
-					// it here means parent SingleResult.usage (and therefore
-					// details.totalUsage on the foreground return) includes nested work
-					// even though the descendant's message_end events fire on a
-					// different AgentSession's bus.
-					const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-					if (toolName === "subagent" && record.result && typeof record.result === "object") {
-						const result = record.result as { details?: { totalUsage?: Usage } };
-						const nested = result.details?.totalUsage;
-						if (nested) {
-							usage.input += nested.input || 0;
-							usage.output += nested.output || 0;
-							usage.cacheRead = (usage.cacheRead ?? 0) + (nested.cacheRead || 0);
-							usage.cacheWrite = (usage.cacheWrite ?? 0) + (nested.cacheWrite || 0);
-							usage.cost = (usage.cost ?? 0) + (nested.cost || 0);
-							progress.tokens = totalUsageTokens(usage);
-						}
+					// Bubble nested subagent usage into the parent's accumulator. Normal
+					// sessions surface it on a direct `subagent` tool result; fo sessions
+					// hide that result inside the `run` sandbox envelope timeline.
+					const nested = nestedSubagentUsageFromToolEvent(record);
+					if (nested) {
+						addUsageInto(usage, nested);
+						progress.tokens = totalUsageTokens(usage);
 					}
 					progress.currentTool = undefined;
 					progress.currentToolArgs = undefined;

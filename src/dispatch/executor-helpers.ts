@@ -9,10 +9,13 @@ import {
 	type SingleResult,
 	type SubagentMetadata,
 	type SubagentNeedsAttentionPayload,
+	type SubagentState,
+	type SubagentUsageRecord,
 	type Usage,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
+	SUBAGENT_USAGE_EVENT,
 } from "../protocol/types.ts";
 import type {
 	ExecutionContextData,
@@ -105,6 +108,25 @@ export function emitRunAnchor(
 		});
 	} catch {
 		// disposed pi during session replacement — drop the anchor rather than crash
+	}
+}
+
+export function publishSubagentUsage(
+	pi: ExtensionAPI,
+	state: Pick<SubagentState, "usageByRun">,
+	record: SubagentUsageRecord,
+): void {
+	state.usageByRun ??= new Map();
+	state.usageByRun.set(record.runId, record);
+	try {
+		pi.events.emit(SUBAGENT_USAGE_EVENT, record);
+	} catch {
+		// Usage events are observational; never fail a completed run on listener errors.
+	}
+	try {
+		pi.appendEntry("subagent_usage", record);
+	} catch {
+		// Session replacement may dispose the pi while async completion is publishing.
 	}
 }
 
@@ -356,6 +378,66 @@ export function sumUsages(...usages: (Usage | undefined)[]): Usage {
 	const total = emptyUsage();
 	for (const u of usages) addUsageInto(total, u);
 	return total;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function usageFromValue(value: unknown): Usage | undefined {
+	if (!isRecord(value)) return undefined;
+	const usage = emptyUsage();
+	let found = false;
+	const addNumber = (key: keyof Usage): void => {
+		const n = value[key];
+		if (typeof n !== "number" || !Number.isFinite(n)) return;
+		usage[key] = n;
+		found = true;
+	};
+	addNumber("input");
+	addNumber("output");
+	addNumber("cacheRead");
+	addNumber("cacheWrite");
+	addNumber("cost");
+	addNumber("turns");
+	return found ? usage : undefined;
+}
+
+function subagentUsageFromToolResult(result: unknown): Usage | undefined {
+	if (!isRecord(result) || !isRecord(result.details)) return undefined;
+	return usageFromValue(result.details.totalUsage);
+}
+
+function subagentUsageFromRunEnvelope(envelope: unknown): Usage | undefined {
+	if (!isRecord(envelope) || !Array.isArray(envelope.timeline)) return undefined;
+	const total = emptyUsage();
+	let found = false;
+	for (const event of envelope.timeline) {
+		if (!isRecord(event)) continue;
+		const toolName = typeof event.toolName === "string" ? event.toolName : undefined;
+		if (toolName !== "subagent") continue;
+		const usage = subagentUsageFromToolResult(event.result);
+		if (!usage) continue;
+		addUsageInto(total, usage);
+		found = true;
+	}
+	return found ? total : undefined;
+}
+
+/**
+ * Extract descendant usage from a completed tool event.
+ *
+ * Normal Pi sessions emit a `subagent` tool result directly. fo routes all
+ * extension calls through `run`, so the same subagent result sits inside the
+ * sandbox envelope timeline instead. Treat both shapes identically so nested
+ * delegation keeps bubbling usage into its parent run.
+ */
+export function nestedSubagentUsageFromToolEvent(record: Record<string, unknown>): Usage | undefined {
+	if (record.type !== "tool_execution_end") return undefined;
+	const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
+	if (toolName === "subagent") return subagentUsageFromToolResult(record.result);
+	if (toolName !== "run" || !isRecord(record.result)) return undefined;
+	return subagentUsageFromRunEnvelope(record.result.details);
 }
 
 export function resolveChildTools(agentConfig: AgentConfig): { activeToolNames: string[] | undefined } {

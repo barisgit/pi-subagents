@@ -195,9 +195,28 @@ export interface SubagentLineage {
 	rootRunId?: string | null;
 }
 
+export interface SubagentUsageRecord {
+	runId: string;
+	rootRunId?: string;
+	parentRunId?: string;
+	rootSessionId?: string;
+	mode: "single" | "parallel" | "workflow";
+	source: "sync" | "async";
+	totalUsage: Usage;
+	timestamp: number;
+}
+
+export interface SubagentUsageSnapshot {
+	records: SubagentUsageRecord[];
+	totalUsage: Usage;
+	updatedAt?: number;
+}
+
 export interface SubagentExposedAPI {
 	spawnRaw(input: SpawnRawInput): Promise<SpawnResult>;
 	list(options?: { includeInternal?: boolean }): PersonaInfo[];
+	/** Current-session subagent usage, sourced from stable subagent_usage records. */
+	usageSnapshot(): SubagentUsageSnapshot;
 	/**
 	 * Identity + lineage for the session this API publication belongs to.
 	 * - Host session: `{ role: "host", currentAgent: <active root role>, depth: 0, ... }`.
@@ -470,6 +489,7 @@ export interface SubagentState {
 		}
 	>;
 	lastForegroundControlId: string | null;
+	usageByRun?: Map<string, SubagentUsageRecord>;
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
 	lastUiContext: ExtensionContext | null;
 	poller: NodeJS.Timeout | null;
@@ -501,6 +521,7 @@ export interface IntercomEventBus {
 
 export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
 export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
+export const SUBAGENT_REQUEST_API_EVENT = "subagent:request-api";
 export const SUBAGENT_EXPOSE_API_EVENT = "subagent:expose-api";
 /**
  * Push-style lineage notification carrying a `SubagentLineage` payload.
@@ -527,6 +548,8 @@ export const SUBAGENT_REGISTER_PERSONA_DIR_ERROR_EVENT = "subagent:register-pers
 export const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
 export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
 export const SUBAGENT_ASYNC_RUN_COMPLETE_EVENT = "subagent:async-run-complete";
+/** Carries a terminal SubagentUsageRecord for consumers that need token totals. */
+export const SUBAGENT_USAGE_EVENT = "subagent:usage";
 // Emitted by notify.ts when a completion notification has actually been
 // delivered to the host turn (or was deduped as already delivered). Carries
 // every runId the notification covered so the widget can retire those rows.

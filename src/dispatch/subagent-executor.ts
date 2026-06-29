@@ -66,6 +66,7 @@ import {
 	getRequestedModeLabel,
 	interruptForegroundOnNeedsAttention,
 	mirrorForegroundProgressToStatus,
+	publishSubagentUsage,
 	resolveChildTools,
 	resolveDispatchParentRunId,
 	resolveDispatchRootRunId,
@@ -90,6 +91,7 @@ export {
 	getRequestedModeLabel,
 	interruptForegroundOnNeedsAttention,
 	mirrorForegroundProgressToStatus,
+	publishSubagentUsage,
 	resolveChildTools,
 	resolveDispatchParentRunId,
 	resolveDispatchRootRunId,
@@ -1428,6 +1430,24 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			executionResult = toExecutionErrorResult(normalizedParams, error);
 			return executionResult;
 		} finally {
+			const details = executionResult?.details;
+			const totalUsage = details?.totalUsage;
+			if (!parentRunId && details && totalUsage) {
+				if (details.mode === "single" || details.mode === "parallel") {
+					publishSubagentUsage(deps.pi, deps.state, {
+						runId,
+						rootRunId,
+						...(() => {
+							const rootSessionId = resolveDispatchRootSessionId(ctx);
+							return rootSessionId ? { rootSessionId } : {};
+						})(),
+						mode: details.workflow ? "workflow" : details.mode,
+						source: "sync",
+						totalUsage,
+						timestamp: Date.now(),
+					});
+				}
+			}
 			if (foregroundControl) {
 				if (foregroundMode !== "parallel" && fgWriter && runHandle) {
 					// An interrupted single is neither a clean complete nor an error failure:
@@ -1783,6 +1803,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					if (!effectiveAsync) return;
 					writeWorkflowGroupState(group.runRecordDir, success ? "complete" : "failed");
 					const ordered = [...childResults].sort((a, b) => a.index - b.index);
+					const totalUsage = sumUsages(...ordered.map(({ result }) => result.usage));
 					const children = ordered.map(({ runId, result: r, index }) => ({
 						id: runId,
 						runId,
@@ -1797,6 +1818,20 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						durationMs: r.progressSummary?.durationMs,
 						sessionFile: r.sessionFile,
 					}));
+					if (!parentRunId) {
+						publishSubagentUsage(deps.pi, deps.state, {
+							runId: group.runId,
+							rootRunId: groupRootRunId,
+							...(() => {
+								const rootSessionId = resolveDispatchRootSessionId(ctx);
+								return rootSessionId ? { rootSessionId } : {};
+							})(),
+							mode: "workflow",
+							source: "async",
+							totalUsage,
+							timestamp: Date.now(),
+						});
+					}
 					safeEmit(
 						SUBAGENT_ASYNC_COMPLETE_EVENT,
 						buildAsyncAggregateCompletePayload({

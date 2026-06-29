@@ -4,13 +4,20 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import registerSubagentExtension from "../../index.ts";
-import { SUBAGENT_EXPOSE_API_EVENT, type SubagentExposedAPI } from "../../src/protocol/types.ts";
+import { createHostSubagentApi } from "../../src/api/exposed-subagent-api.ts";
+import {
+	SUBAGENT_EXPOSE_API_EVENT,
+	SUBAGENT_REQUEST_API_EVENT,
+	type SubagentExposedAPI,
+} from "../../src/protocol/types.ts";
+import { getShardPath, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
 
 function createPiHarness() {
 	const events = new EventEmitter();
 	let exposed: SubagentExposedAPI | undefined;
+	let exposeCount = 0;
 	const tools: Array<{ name: string }> = [
 		{ name: "read" },
 		{ name: "grep" },
@@ -35,6 +42,7 @@ function createPiHarness() {
 		registerShortcut: () => {},
 		registerMessageRenderer: () => {},
 		getAllTools: () => tools,
+		getFlag: () => undefined,
 		getSessionName: () => undefined,
 		setSessionName: () => {},
 		sendMessage: () => {},
@@ -42,8 +50,9 @@ function createPiHarness() {
 	};
 	events.on(SUBAGENT_EXPOSE_API_EVENT, (api) => {
 		exposed = api as SubagentExposedAPI;
+		exposeCount += 1;
 	});
-	return { pi, getExposed: () => exposed, sessionHandlers };
+	return { pi, events, getExposed: () => exposed, getExposeCount: () => exposeCount, sessionHandlers };
 }
 
 function readLastCallArgs(mockPi: MockPi): string[] {
@@ -77,6 +86,7 @@ describe("spawnRaw API exposure", () => {
 	});
 
 	afterEach(() => {
+		setRegistryPathForTests(null);
 		removeTempDir(tempDir);
 	});
 
@@ -101,5 +111,81 @@ describe("spawnRaw API exposure", () => {
 		const toolsArg = args[args.indexOf("--tools") + 1] ?? "";
 		assert.ok(extensionArgs.some((arg) => arg.endsWith("subagent-prompt-runtime.ts")));
 		assert.equal(toolsArg, "read,grep,find,ls");
+	});
+
+	it("re-publishes the exposed API when requested", () => {
+		const { pi, events, getExposed, getExposeCount } = createPiHarness();
+		registerSubagentExtension(pi as never);
+		const initialCount = getExposeCount();
+		assert.ok(getExposed(), "expected initial exposed subagent API");
+
+		events.emit(SUBAGENT_REQUEST_API_EVENT);
+
+		assert.equal(getExposeCount(), initialCount + 1);
+		assert.ok(getExposed()?.usageSnapshot, "expected requested API to include usageSnapshot");
+	});
+
+	it("hydrates usage snapshots from persisted run status after restart", () => {
+		const sessionId = "session-restarted";
+		const registryPath = path.join(tempDir, "runs-index.jsonl");
+		const runRecordDir = path.join(tempDir, "run-a");
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		setRegistryPathForTests(registryPath);
+		const entry = {
+			runId: "run-a",
+			runRecordDir,
+			mode: "single",
+			source: "sync",
+			agentName: "test-agent",
+			rootRunId: "run-a",
+			parentSessionId: sessionId,
+			rootSessionId: sessionId,
+			cwd: tempDir,
+			startedAt: 10,
+		};
+		fs.writeFileSync(registryPath, JSON.stringify(entry) + "\n");
+		fs.mkdirSync(path.dirname(getShardPath(sessionId)), { recursive: true });
+		fs.writeFileSync(getShardPath(sessionId), JSON.stringify(entry) + "\n");
+		fs.writeFileSync(
+			path.join(runRecordDir, "status.json"),
+			JSON.stringify({
+				version: 1,
+				runId: "run-a",
+				mode: "single",
+				state: "complete",
+				startedAt: 10,
+				endedAt: 20,
+				steps: [{ status: "complete", tokens: { input: 11, output: 7, cacheRead: 13, total: 31 } }],
+			}),
+		);
+
+		const { pi, events, getExposed } = createPiHarness();
+		createHostSubagentApi({
+			pi: pi as never,
+			executor: { executeInternal: async () => ({}) } as never,
+			config: {} as never,
+			state: {
+				baseCwd: tempDir,
+				currentSessionId: sessionId,
+				asyncJobs: new Map(),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				cleanupTimers: new Map(),
+				lastUiContext: null,
+				poller: null,
+			} as never,
+			getRegisteredPersonaDirs: () => [],
+			discoverAgents: () => ({ agents: [] }) as never,
+		});
+		events.emit(SUBAGENT_REQUEST_API_EVENT);
+
+		assert.deepEqual(getExposed()?.usageSnapshot().totalUsage, {
+			input: 11,
+			output: 7,
+			cacheRead: 13,
+			cacheWrite: 0,
+			cost: 0,
+			turns: 0,
+		});
 	});
 });
