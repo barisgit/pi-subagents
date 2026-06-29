@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
+import { readWorkflowGroupState, writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
 
 interface AsyncJobTrackerModule {
 	createAsyncJobTracker(
@@ -229,6 +229,89 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			>;
 			assert.equal(raw.state, "lost");
 			assert.equal(typeof raw.endedAt, "number");
+		} finally {
+			setRegistryPathForTests(null);
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("finalizes a dead reclaimed workflow group from its children instead of reviving it as running", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const registryPath = path.join(asyncRoot, "runs-index.jsonl");
+			setRegistryPathForTests(registryPath);
+			const now = Date.now();
+			const hostSessionId = "host-session-1";
+			// A workflow group whose in-process orchestrator died (host reload) leaves its
+			// statusless lifecycle marker frozen at 'running' forever (no resume path, so
+			// finishAsync never runs). Reaching the reclaim sweep therefore means it is
+			// dead: it must be finalized from its children (computeGroupStatus), not revived
+			// as a live 'running' row that clocks up indefinitely.
+			const groupDir = path.join(asyncRoot, "wf-group");
+			writeWorkflowGroupState(groupDir, "running");
+			appendRunEntry({
+				runId: "wf-group",
+				runRecordDir: groupDir,
+				mode: "parallel",
+				source: "async",
+				kind: "workflow",
+				rootSessionId: hostSessionId,
+				parentSessionId: hostSessionId,
+				cwd: "/repo",
+				startedAt: now - 5_000_000,
+			});
+			// One failed child + one complete child -> computeGroupStatus = failed.
+			for (const [runId, childState] of [
+				["wf-child-failed", "failed"],
+				["wf-child-done", "complete"],
+			] as const) {
+				const dir = path.join(asyncRoot, runId);
+				writeStatus(dir, {
+					runId,
+					mode: "single",
+					state: childState as never,
+					agent: "operator",
+					parentRunId: "wf-group",
+					startedAt: now - 5_000_000,
+					lastUpdate: now - 4_000_000,
+					endedAt: now - 4_000_000,
+				});
+				appendRunEntry({
+					runId,
+					runRecordDir: dir,
+					mode: "single",
+					source: "async",
+					agentName: "operator",
+					parentRunId: "wf-group",
+					rootSessionId: hostSessionId,
+					parentSessionId: hostSessionId,
+					cwd: "/repo",
+					startedAt: now - 5_000_000,
+				});
+			}
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, { pollIntervalMs: 10 });
+			const count = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
+
+			// Not revived onto the live widget; finalized on disk instead.
+			assert.equal(count, 0);
+			assert.equal(
+				state.asyncJobs.has("wf-group"),
+				false,
+				"dead workflow group must not be reclaimed as running",
+			);
+			assert.equal(
+				readWorkflowGroupState(groupDir),
+				"failed",
+				"marker is finalized from the children (one failed child => failed)",
+			);
+
+			// A second sweep is now a no-op: the marker is terminal, so the group is skipped.
+			const secondCount = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
+			assert.equal(secondCount, 0);
+			assert.equal(state.asyncJobs.has("wf-group"), false);
 		} finally {
 			setRegistryPathForTests(null);
 			removeTempDir(asyncRoot);

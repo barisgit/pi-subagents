@@ -26,7 +26,8 @@ import type { IdleTracker } from "./idle-tracker.ts";
 import { readStatus } from "../shared/utils.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
 import { readLeafRunViewCached } from "../state/async-status.ts";
-import { readWorkflowGroupState } from "../workflow/workflow-group-state.ts";
+import { readWorkflowGroupState, writeWorkflowGroupState } from "../workflow/workflow-group-state.ts";
+import { computeGroupStatus } from "../state/group-status.ts";
 import { logger } from "../shared/logger.ts";
 import type { UtilsClient } from "pi-extension-utils";
 
@@ -531,13 +532,7 @@ export function createAsyncJobTracker(
 	// and the bus are notified; state.asyncJobs is still populated by the caller
 	// (this tracker's own handleStarted listener tolerates the self-emitted
 	// event — it overwrites the same runId key and the poller corrects status).
-	const announceReclaimed = (
-		runId: string,
-		asyncDir: string,
-		agent?: string,
-		parentRunId?: string,
-		kind?: string,
-	): void => {
+	const announceReclaimed = (runId: string, asyncDir: string, agent?: string, parentRunId?: string): void => {
 		idleTracker?.onAsyncStarted(runId);
 		try {
 			pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
@@ -547,7 +542,6 @@ export function createAsyncJobTracker(
 				reclaimed: true,
 				...(agent ? { agent } : {}),
 				...(parentRunId ? { parentRunId } : {}),
-				...(kind ? { kind } : {}),
 			});
 		} catch {
 			// Bus listeners must not break session rehydration.
@@ -584,24 +578,18 @@ export function createAsyncJobTracker(
 			if (entry.source !== "async") continue;
 			if (state.asyncJobs.has(entry.runId)) continue;
 			// Workflow groups are statusless; their liveness comes from the
-			// lifecycle marker. Reclaim still-running groups so the widget keeps
-			// its single workflow row across a host reload.
+			// lifecycle marker. A reclaimed group's orchestrator ran in-process and
+			// has no resume path, so reaching this sweep means it died: its
+			// "running" marker is permanently stale. Finalize it from the children
+			// (the same computeGroupStatus the dashboard uses) and persist the
+			// terminal marker so it stops re-deriving as a zombie on every reload —
+			// the symmetric counterpart to the hard-dead leaf finalize below.
 			if (entry.kind === "workflow") {
 				if (readWorkflowGroupState(entry.runRecordDir) !== "running") continue;
-				announceReclaimed(entry.runId, entry.runRecordDir, "workflow", undefined, "workflow");
-				state.asyncJobs.set(entry.runId, {
-					asyncId: entry.runId,
-					asyncDir: entry.runRecordDir,
-					status: "running",
-					displayState: "quiet",
-					kind: "workflow",
-					agents: ["workflow"],
-					startedAt: entry.startedAt,
-					updatedAt: Date.now(),
-					resumeCount: 0,
-					controlConfig: undefined,
-				});
-				added++;
+				const childStates = readAllEntries()
+					.filter((child) => child.parentRunId === entry.runId)
+					.map((child) => readLeafRunViewCached(child.runRecordDir)?.state ?? "complete");
+				writeWorkflowGroupState(entry.runRecordDir, computeGroupStatus(childStates));
 				continue;
 			}
 			const status = readStatus(entry.runRecordDir);
