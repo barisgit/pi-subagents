@@ -257,10 +257,10 @@ describe("workflow dashboard reader overlays", () => {
 
 		try {
 			const text = component.render(180).map(stripBorders).join("\n");
-			assert.match(text, /─ workflow .*\[complete\]/);
+			assert.match(text, /┬─ workflow /);
 			// Container row: collapse marker + done/total child progress.
 			assert.match(text, /▾ workflow · complete · 3\/3/);
-			assert.doesNotMatch(text, /─ parallel .*\[complete\]/);
+			assert.doesNotMatch(text, /┬─ parallel /);
 			assert.doesNotMatch(text, /▾ parallel · complete/);
 			// Phase labels are tree rows; children no longer carry P1/P2 chips.
 			const phase1RowIndex = text.indexOf("Phase 1: inspect · 2/2");

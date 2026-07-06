@@ -819,7 +819,7 @@ export class SubagentsStatusComponent implements Component {
 					run: (ctx) => this.copySelectedRunId(ctx.selectedRow),
 				},
 				{
-					keys: "D",
+					keys: "f",
 					label: "copy dir",
 					run: (ctx) => this.copySelectedRunDir(ctx.selectedRow),
 				},
