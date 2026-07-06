@@ -12,8 +12,10 @@ export type TranscriptLine =
 			argsPreview: string;
 			rawArgs?: Record<string, unknown>;
 			durationMs?: number;
+			resultHint?: string;
 			ts: number;
 	  }
+	| { kind: "assistant-text"; stepIndex: number; text: string; ts: number }
 	| {
 			kind: "step-end";
 			stepIndex: number;
@@ -140,6 +142,18 @@ function rawArgsFrom(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
+// First non-empty line of a tool result, bounded, for the dim "↳ …" hint the
+// detail pane renders under each tool line.
+const RESULT_HINT_MAX = 120;
+function firstResultLine(text: string): string {
+	for (const line of text.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		return trimmed.length > RESULT_HINT_MAX ? `${trimmed.slice(0, RESULT_HINT_MAX - 1)}…` : trimmed;
+	}
+	return "";
+}
+
 function textFromToolResultContent(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (!Array.isArray(value)) return "";
@@ -184,7 +198,7 @@ function parseSessionFile(input: {
 	}
 	const out: TranscriptLine[] = [];
 	const toolStartIndex = new Map<string, number>();
-	let finalText = "";
+	let lastAssistantTextIndex = -1;
 	let firstMessageTs: number | undefined;
 	// First user-role message's plain text is the initial prompt the subagent received.
 	// Captured once and threaded onto step-start so the right pane can render it.
@@ -207,14 +221,18 @@ function parseSessionFile(input: {
 		const role = message.role;
 		const content = Array.isArray(message.content) ? message.content : [];
 		if (role === "assistant") {
-			let latestText = "";
 			for (const part of content) {
 				const item = objectRecord(part);
 				if (!item) continue;
 				const type = item.type;
 				if (type === "text") {
 					const text = item.text;
-					if (typeof text === "string" && text.trim()) latestText = text;
+					if (typeof text === "string" && text.trim()) {
+						// Every non-empty assistant text survives as narration; the LAST one
+						// is peeled off below as the run's final-text.
+						out.push({ kind: "assistant-text", stepIndex: input.stepIndex, text, ts });
+						lastAssistantTextIndex = out.length - 1;
+					}
 					continue;
 				}
 				if (type === "tool_use" || type === "toolUse" || type === "toolCall") {
@@ -239,7 +257,6 @@ function parseSessionFile(input: {
 					if (id) toolStartIndex.set(id, out.length - 1);
 				}
 			}
-			if (latestText) finalText = latestText;
 			continue;
 		}
 		if (role === "user") {
@@ -269,14 +286,26 @@ function parseSessionFile(input: {
 									? item.id
 									: "";
 				if (!id) continue;
-				void textFromToolResultContent(item.content);
 				const idx = toolStartIndex.get(id);
 				if (idx === undefined) continue;
 				const start = out[idx];
-				if (start?.kind === "tool") start.durationMs = Math.max(0, ts - start.ts);
+				if (start?.kind === "tool") {
+					start.durationMs = Math.max(0, ts - start.ts);
+					const hint = firstResultLine(textFromToolResultContent(item.content));
+					if (hint) start.resultHint = hint;
+				}
 				toolStartIndex.delete(id);
 			}
 		}
+	}
+
+	// The LAST assistant text is the run's final message: peel it out of the feed
+	// so final-text semantics stay unchanged and narration is never doubled.
+	let finalText = "";
+	if (lastAssistantTextIndex >= 0) {
+		const last = out[lastAssistantTextIndex];
+		if (last?.kind === "assistant-text") finalText = last.text;
+		out.splice(lastAssistantTextIndex, 1);
 	}
 
 	const step = stepInfo(input.status, input.stepIndex);

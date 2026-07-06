@@ -173,14 +173,11 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 }
 
 // ── Tool-call humanization ─────────────────────────────────────────────────
-// Raw JSON args are too faithful for code-carrying tools: a `run {code:"\n…"}`
-// call would render as escaped noise. The right pane wants a CI-log style hint
-// instead: the first meaningful line of code/command for run/bash-like tools,
-// the pattern/path for file tools, else the first non-empty string value.
-// Display concern only, so it lives inside the renderer.
-const COMMAND_ARG_KEYS = ["command", "cmd", "code", "script"] as const;
-const PATH_ARG_KEYS = ["path", "file_path", "filePath", "file", "url"] as const;
-const PATTERN_ARG_KEYS = ["pattern", "query", "regex"] as const;
+// Raw JSON args are too faithful for the pane: a `run {code:"\n…"}` call would
+// render as escaped noise. Instead each tool gets a CI-log style hint from a
+// data-driven table. Host builtins are only read/edit/write/grep/ls/find;
+// everything else is an extension tool with its own salient field. Display
+// concern only, so it lives inside the renderer.
 
 function firstMeaningfulLine(text: string): string {
 	for (const line of text.split("\n")) {
@@ -190,58 +187,99 @@ function firstMeaningfulLine(text: string): string {
 	return "";
 }
 
-function stringArg(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
+function str(args: Record<string, unknown>, key: string): string | undefined {
+	const value = args[key];
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function firstStr(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
 	for (const key of keys) {
-		const value = args[key];
-		if (typeof value === "string" && value.trim()) return value;
+		const value = str(args, key);
+		if (value !== undefined) return value;
 	}
 	return undefined;
 }
 
-export function humanizeToolArgs(args: Record<string, unknown> | undefined): string {
-	if (!args) return "";
-	const command = stringArg(args, COMMAND_ARG_KEYS);
-	if (command !== undefined) return firstMeaningfulLine(command);
-	const pattern = stringArg(args, PATTERN_ARG_KEYS);
-	const target = stringArg(args, PATH_ARG_KEYS);
-	if (pattern) {
-		const head = firstMeaningfulLine(pattern);
-		return target ? `${head} ${shortenPath(target)}` : head;
-	}
-	if (target) return shortenPath(target);
+const CODE_KEYS = ["code", "command", "cmd", "script"] as const;
+const SALIENT_KEYS = ["path", "file", "url", "query", "pattern", "command", "task", "prompt", "name", "id"] as const;
+
+function pathHint(args: Record<string, unknown>): string {
+	const target = firstStr(args, ["path", "file_path", "filePath", "file"]);
+	return target ? shortenPath(target) : "";
+}
+
+function patternPathHint(args: Record<string, unknown>): string {
+	const pattern = firstStr(args, ["pattern", "query", "regex"]);
+	const target = pathHint(args);
+	if (pattern) return target ? `${firstMeaningfulLine(pattern)} ${target}` : firstMeaningfulLine(pattern);
+	return target;
+}
+
+function codeHint(args: Record<string, unknown>): string {
+	const code = firstStr(args, CODE_KEYS);
+	return code ? firstMeaningfulLine(code) : "";
+}
+
+// Per-tool hint table. Builtins first, then the extension tools this repo ships.
+const TOOL_HINTS: Record<string, (args: Record<string, unknown>) => string> = {
+	read: pathHint,
+	edit: pathHint,
+	write: pathHint,
+	ls: pathHint,
+	grep: patternPathHint,
+	find: patternPathHint,
+	run: codeHint,
+	bash: codeHint,
+	subagent: (args) => {
+		const agent = str(args, "agent");
+		const task = str(args, "task");
+		if (agent || task) return [agent, task ? firstMeaningfulLine(task) : undefined].filter(Boolean).join(" ");
+		const action = str(args, "action");
+		const id = str(args, "id");
+		return [action, id].filter(Boolean).join(" ");
+	},
+	workflow: (args) => {
+		const script = str(args, "script");
+		if (script) return firstMeaningfulLine(script);
+		return str(args, "phase") ?? "";
+	},
+	process: (args) => [str(args, "action"), str(args, "name")].filter(Boolean).join(" "),
+	fetch: (args) => str(args, "url") ?? "",
+	ast_grep: (args) => {
+		const pattern = str(args, "pattern");
+		return pattern ? firstMeaningfulLine(pattern) : "";
+	},
+	mcp: (args) => str(args, "tool") ?? str(args, "describe") ?? str(args, "search") ?? str(args, "server") ?? "",
+	task: (args) => str(args, "action") ?? "",
+	apply_patch: pathHint,
+};
+
+// Fallback for unknown tools: first string among salient keys, else the first
+// short string prop — never raw JSON.
+function genericHint(args: Record<string, unknown>): string {
+	const salient = firstStr(args, SALIENT_KEYS);
+	if (salient !== undefined) return firstMeaningfulLine(salient);
 	for (const value of Object.values(args)) {
-		if (typeof value === "string" && value.trim()) return firstMeaningfulLine(value);
+		if (typeof value === "string" && value.trim() && value.length <= 200) return firstMeaningfulLine(value);
 	}
 	return "";
 }
 
-// Consecutive same-tool calls at or above this count collapse into a single
-// "→ tool ×N" line (last hint + summed duration). Below it they stay one-per-line.
-const TOOL_GROUP_MIN = 3;
+export function humanizeToolArgs(toolName: string, args: Record<string, unknown> | undefined): string {
+	if (!args) return "";
+	const hinter = TOOL_HINTS[toolName];
+	if (hinter) {
+		const hint = hinter(args);
+		if (hint) return hint;
+	}
+	return genericHint(args);
+}
+
 // The prompt is context, not content: show only its first wrapped lines with a
 // dim "(N more lines)" marker instead of a wall of muted prose.
 const PROMPT_PREVIEW_LINES = 3;
-
-type ToolEntry = { toolName: string; hint: string; durationMs?: number };
-
-function toolLine(theme: Theme, entry: ToolEntry, width: number): string {
-	const suffix = entry.durationMs !== undefined ? ` · ${entry.durationMs}ms` : "";
-	const base = `→ ${entry.toolName}${entry.hint ? ` ${entry.hint}` : ""}`;
-	if (!suffix) return clip(base, width);
-	const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
-	return `${baseTrim}${theme.fg("dim", suffix)}`;
-}
-
-function groupedToolLine(theme: Theme, entries: ToolEntry[], width: number): string {
-	const last = entries.at(-1);
-	if (!last) return "";
-	const total = entries.reduce((sum, entry) => sum + (entry.durationMs ?? 0), 0);
-	const suffix = total > 0 ? ` · ${formatDuration(total)}` : "";
-	const base = `→ ${last.toolName} ×${entries.length}${last.hint ? ` ${last.hint}` : ""}`;
-	if (!suffix) return clip(base, width);
-	const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
-	return `${baseTrim}${theme.fg("dim", suffix)}`;
-}
+// Result hints render dim under the tool line, clipped hard.
+const RESULT_HINT_COLS = 60;
 
 export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
@@ -260,12 +298,11 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	// Parallel runs share one run record with N session transcripts, one per step.
 	// Render order chronological-within-step
 	// so each step reads as a coherent block instead of interleaved noise.
-	type StepItem = { kind: "line"; text: string } | { kind: "tool"; entry: ToolEntry };
 	type Step = {
 		index: number;
 		agent: string;
 		startTs?: number;
-		items: StepItem[];
+		lines: string[];
 		toolCount: number;
 		final?: string;
 		task?: string;
@@ -277,7 +314,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	const ensureStep = (index: number, agent: string): Step => {
 		let s = steps.get(index);
 		if (!s) {
-			s = { index, agent, items: [], toolCount: 0 };
+			s = { index, agent, lines: [], toolCount: 0 };
 			steps.set(index, s);
 		}
 		if (!s.agent && agent) s.agent = agent;
@@ -292,6 +329,13 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			if (event.label && !step.label) step.label = event.label;
 			continue;
 		}
+		if (event.kind === "assistant-text") {
+			const step = ensureStep(event.stepIndex, "");
+			// Mid-run narration: markdown-rendered but dimmed, so it reads as the
+			// agent's running commentary rather than competing with the final block.
+			for (const line of renderMarkdownLines(event.text, width)) step.lines.push(theme.fg("muted", line));
+			continue;
+		}
 		if (event.kind === "tool") {
 			const step = ensureStep(event.stepIndex, "");
 			// charter inline-nested-fix: suppress plain `subagent` raw-args lines in the
@@ -304,21 +348,25 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
 					if (child) {
 						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
-							step.items.push({ kind: "line", text: theme.fg("dim", clip(line, width)) });
+							step.lines.push(theme.fg("dim", clip(line, width)));
 						}
+						step.toolCount++;
 						continue;
 					}
 				}
 			}
-			const hint = event.rawArgs ? humanizeToolArgs(event.rawArgs) : event.argsPreview;
-			step.items.push({
-				kind: "tool",
-				entry: {
-					toolName: event.toolName,
-					hint,
-					...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
-				},
-			});
+			const hint = event.rawArgs ? humanizeToolArgs(event.toolName, event.rawArgs) : event.argsPreview;
+			const suffix = event.durationMs !== undefined ? ` · ${event.durationMs}ms` : "";
+			const base = `→ ${event.toolName}${hint ? ` ${hint}` : ""}`;
+			if (suffix) {
+				const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
+				step.lines.push(`${baseTrim}${theme.fg("dim", suffix)}`);
+			} else {
+				step.lines.push(clip(base, width));
+			}
+			if (event.resultHint) {
+				step.lines.push(theme.fg("dim", clip(`  ↳ ${event.resultHint}`, Math.min(width, RESULT_HINT_COLS))));
+			}
 			step.toolCount++;
 			continue;
 		}
@@ -331,7 +379,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			if (event.tokens !== undefined) middle.push(`${event.tokens}t`);
 			if (event.durationMs !== undefined) middle.push(`${event.durationMs}ms`);
 			const text = `─── ${middle.join(" · ")} ───`;
-			step.items.push({ kind: "line", text: theme.fg("dim", clip(text, width)) });
+			step.lines.push(theme.fg("dim", clip(text, width)));
 			continue;
 		}
 		if (event.kind === "final-text") {
@@ -369,23 +417,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			const hidden = wrapped.length - preview.length;
 			if (hidden > 0) out.push(theme.fg("dim", clip(`… (${hidden} more lines)`, width)));
 		}
-		const pending: ToolEntry[] = [];
-		const flushPending = (): void => {
-			if (pending.length === 0) return;
-			if (pending.length >= TOOL_GROUP_MIN) out.push(groupedToolLine(theme, pending, width));
-			else for (const entry of pending) out.push(toolLine(theme, entry, width));
-			pending.length = 0;
-		};
-		for (const item of step.items) {
-			if (item.kind === "tool") {
-				if (pending.length > 0 && pending[0]?.toolName !== item.entry.toolName) flushPending();
-				pending.push(item.entry);
-				continue;
-			}
-			flushPending();
-			out.push(item.text);
-		}
-		flushPending();
+		for (const line of step.lines) out.push(line);
 		if (step.final) {
 			const border = "─".repeat(Math.max(0, width));
 			out.push(theme.fg("dim", border));

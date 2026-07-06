@@ -86,6 +86,7 @@ describe("readRunTranscript", () => {
 					argsPreview: '{"path":"/abs/a.ts"}',
 					rawArgs: { path: "/abs/a.ts" },
 					durationMs: 250,
+					resultHint: "ok",
 					ts: Date.parse("2026-05-20T00:00:01.100Z"),
 				},
 				{
