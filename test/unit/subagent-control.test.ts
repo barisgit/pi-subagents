@@ -75,6 +75,15 @@ describe("subagent control attention state", () => {
 		);
 	});
 
+	it("never marks an in-flight tool phase as needing attention", () => {
+		for (const phase of ["tool_running", "tool_streaming"]) {
+			assert.equal(
+				deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000_000 }),
+				undefined,
+			);
+		}
+	});
+
 	it("emits only needs-attention transitions", () => {
 		assert.equal(shouldEmitControlEvent(config, undefined, undefined), false);
 		assert.equal(shouldEmitControlEvent(config, undefined, "needs_attention"), true);

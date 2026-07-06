@@ -8,7 +8,14 @@ import type {
 export const CONTROL_EVENT_TYPES: ControlEventType[] = ["needs_attention"];
 export const CONTROL_NOTIFICATION_CHANNELS: ControlNotificationChannel[] = ["event", "async", "intercom"];
 export const DEFAULT_NOTIFY_ON: ControlEventType[] = ["needs_attention"];
-export const ENGAGED_PHASES = new Set<string>(["waiting_model", "thinking", "streaming_text", "retrying"]);
+export const ENGAGED_PHASES = new Set<string>([
+	"waiting_model",
+	"thinking",
+	"streaming_text",
+	"tool_running",
+	"tool_streaming",
+	"retrying",
+]);
 export const DEFAULT_NEEDS_ATTENTION_AFTER_MS = 15 * 60 * 1000;
 
 export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
