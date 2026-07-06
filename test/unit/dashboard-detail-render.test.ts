@@ -293,6 +293,9 @@ describe("dashboard selected-run status section", () => {
 	it("renders a compact separator section without background bleed", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
+			const runId = "123e4567-e89b-12d3-a456-426614174000";
+			const startedAt = new Date(2026, 6, 5, 14, 0).getTime();
+			const now = new Date(2026, 6, 6, 15, 0).getTime();
 			writeSession(dir, [
 				assistant("2026-05-20T00:00:01.000Z", [
 					{ type: "tool_use", id: "t1", name: "read", input: { path: "/abs/test.ts" } },
@@ -304,9 +307,10 @@ describe("dashboard selected-run status section", () => {
 				user("2026-05-20T00:00:02.300Z", [{ type: "tool_result", tool_use_id: "t2", content: "edited" }]),
 			]);
 			const summary: AsyncRunSummary = {
-				...makeRun("run-status-box", dir, "polish dashboard"),
+				...makeRun(runId, dir, "polish dashboard"),
 				mode: "parallel",
-				endedAt: 1000 + 838449,
+				startedAt,
+				endedAt: startedAt + 838449,
 				totalTokens: { input: 1_000_000, output: 3_240_235, total: 4_240_235 },
 			};
 			const width = 44;
@@ -314,15 +318,33 @@ describe("dashboard selected-run status section", () => {
 				statusTheme,
 				{ ownership: "foreign", run: summary } satisfies LiveRun,
 				width,
+				now,
 			);
 			const plainLines = lines.map(stripAnsi);
 			const joined = plainLines.join("\n");
 
-			assert.equal(lines.length, 3, "status section stays tight");
+			assert.equal(lines.length, 4, "status section wraps metadata without padding");
 			assert.match(plainLines[0]!, /^polish dashboard +complete · 13m58s$/);
 			assert.doesNotMatch(plainLines[0]!, /─/, "status header carries no rule dashes");
 			assert.match(plainLines[1]!, /^ {2}2 tools · 4\.2Mt · 13m58s$/);
-			assert.match(plainLines[2]!, /^ {2}parallel · id run-stat · started \d\d:\d\d$/);
+			assert.match(plainLines[2]!, /^ {2}parallel · started Jul 5 14:00$/);
+			assert.match(plainLines[3]!, new RegExp(`^ {2}id ${runId}$`));
+			assert.doesNotMatch(joined, /123e4567\.\.\./, "full run id is not truncated");
+			const narrowLines = buildSelectedRunStatusBox(
+				statusTheme,
+				{ ownership: "foreign", run: summary } satisfies LiveRun,
+				28,
+				now,
+			).map(stripAnsi);
+			assert.equal(narrowLines.length, 5, "narrow status section uses the full row budget");
+			assert.equal(
+				narrowLines
+					.slice(3)
+					.map((line) => line.trim())
+					.join(""),
+				`id ${runId}`,
+				"full run id wraps instead of truncating",
+			);
 			assert.doesNotMatch(joined, /[╭╮╰╯│]/, "status section is not boxed");
 			for (const line of lines) {
 				assert.ok(
@@ -345,6 +367,26 @@ describe("dashboard selected-run status section", () => {
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it("keeps today's start time short when the id fits on one metadata line", () => {
+		const runId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+		const startedAt = new Date(2026, 6, 6, 9, 5).getTime();
+		const summary: AsyncRunSummary = {
+			...makeRun(runId, "/tmp/status-box-today", "today run"),
+			startedAt,
+			endedAt: startedAt + 1000,
+		};
+		const lines = buildSelectedRunStatusBox(
+			statusTheme,
+			{ ownership: "foreign", run: summary } satisfies LiveRun,
+			80,
+			new Date(2026, 6, 6, 12, 0).getTime(),
+		).map(stripAnsi);
+
+		assert.equal(lines.length, 3, "wide status section stays compact");
+		assert.match(lines[2]!, new RegExp(`^ {2}single · id ${runId} · started 09:05$`));
+		assert.doesNotMatch(lines[2]!, /Jul 6/);
 	});
 });
 

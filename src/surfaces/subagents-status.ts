@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { colorForAgentName } from "../shared/agents.ts";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { copyToClipboard, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -70,7 +70,7 @@ const MIN_RIGHT_PANE = 24;
 const DEFAULT_LEFT_FRACTION = 0.4;
 const SPLIT_STEP_COLS = 4;
 const MIN_VIEWPORT_HEIGHT = 12;
-const SELECTED_STATUS_BOX_ROWS = 3;
+const SELECTED_STATUS_BOX_ROWS = 5;
 // Shared legend lives in the left pane's bottom section, charter-picker style.
 // Only the two titled chrome rows (top border + bottom border) consume vertical
 // space inside the overlay region. We fill the rest with body rows so the
@@ -694,6 +694,7 @@ export class SubagentsStatusComponent implements Component {
 	// guessing from the right pane's height.
 	private lastLeftListHeight = 0;
 	private errorMessage?: string;
+	private actionNotice?: string;
 	private sessionCwd: string | undefined;
 	private sessionId: string | undefined;
 	private readonly getBranchAnchorRunIds: (() => Set<string>) | undefined;
@@ -761,9 +762,11 @@ export class SubagentsStatusComponent implements Component {
 				infoTitle: "",
 				footer: (ctx) => {
 					const visibleCount = this.displayRows().length;
-					return visibleCount > 0
-						? `${ctx.selectedIndex + 1}/${visibleCount}${this.showAllSessions ? "  [all sessions]" : ""}`
-						: "(no runs)";
+					const base =
+						visibleCount > 0
+							? `${ctx.selectedIndex + 1}/${visibleCount}${this.showAllSessions ? "  [all sessions]" : ""}`
+							: "(no runs)";
+					return this.actionNotice ? `${base}  ${this.actionNotice}` : base;
 				},
 			},
 			detail: {
@@ -797,6 +800,16 @@ export class SubagentsStatusComponent implements Component {
 				stepCols: SPLIT_STEP_COLS,
 			},
 			customActions: [
+				{
+					keys: "y",
+					label: "copy id",
+					run: (ctx) => this.copySelectedRunId(ctx.selectedRow),
+				},
+				{
+					keys: "D",
+					label: "open dir",
+					run: (ctx) => this.showSelectedRunDir(ctx.selectedRow),
+				},
 				{
 					keys: ["return", "o"],
 					label: "collapse group",
@@ -864,6 +877,35 @@ export class SubagentsStatusComponent implements Component {
 		if (!row || row.kind === "empty") return undefined;
 		if (row.kind === "run") return row.run;
 		return this.runs.find((run) => run.run.id === row.workflowId);
+	}
+
+	private setActionNotice(message: string): void {
+		this.actionNotice = message;
+		this.tui.requestRender();
+	}
+
+	private copySelectedRunId(row: OverlayDisplayRow | undefined): void {
+		const run = this.runForOverlayRow(row);
+		if (!run) return;
+		const id = run.run.id;
+		void copyToClipboard(id).then(
+			() => this.setActionNotice(`copied id ${id}`),
+			(error: unknown) => {
+				const message = error instanceof Error ? error.message : String(error);
+				this.setActionNotice(`copy failed: ${message}`);
+			},
+		);
+	}
+
+	private showSelectedRunDir(row: OverlayDisplayRow | undefined): void {
+		const run = this.runForOverlayRow(row);
+		if (!run) return;
+		const dir = run.run.asyncDir ?? run.run.sessionDir;
+		if (!dir) {
+			this.setActionNotice("no run record dir");
+			return;
+		}
+		this.setActionNotice(`dir ${path.resolve(dir)}`);
 	}
 
 	// render ONLY when the structural signature changed OR a live run still needs
@@ -1205,11 +1247,22 @@ function runToolCount(run: LiveRun): number {
 	return run.run.recentTools?.length ?? 0;
 }
 
-function formatStartedTime(ms: number): string {
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function formatStartedTime(ms: number, now: number): string {
 	const date = new Date(ms);
+	const today = new Date(now);
 	const hours = date.getHours().toString().padStart(2, "0");
 	const minutes = date.getMinutes().toString().padStart(2, "0");
-	return `${hours}:${minutes}`;
+	const time = `${hours}:${minutes}`;
+	if (
+		date.getFullYear() === today.getFullYear() &&
+		date.getMonth() === today.getMonth() &&
+		date.getDate() === today.getDate()
+	) {
+		return time;
+	}
+	return `${MONTH_LABELS[date.getMonth()] ?? ""} ${date.getDate()} ${time}`;
 }
 
 function clipPlain(text: string, width: number): string {
@@ -1234,6 +1287,41 @@ function renderStatusBoxLine(theme: Theme, width: number, text: string): string 
 	return theme.fg("dim", `  ${clipPlain(text, Math.max(0, width - 2))}`);
 }
 
+function selectedRunCurrentLine(run: LiveRun, now: number): string | undefined {
+	const phase = formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
+	if (phase) return `now ${phase}`;
+	if (!run.run.currentTool) return undefined;
+	const duration =
+		run.run.currentToolStartedAt !== undefined
+			? ` ${formatDuration(Math.max(0, now - run.run.currentToolStartedAt))}`
+			: "";
+	return `now tool: ${run.run.currentTool}${duration}`;
+}
+
+function metaFits(width: number, text: string): boolean {
+	return visibleWidth(`  ${text}`) <= width;
+}
+
+function wrapPlainStatusText(text: string, width: number, maxLines: number): string[] {
+	if (maxLines <= 0) return [];
+	const textWidth = Math.max(1, width - 2);
+	const lines: string[] = [];
+	for (let offset = 0; offset < text.length && lines.length < maxLines; offset += textWidth) {
+		lines.push(text.slice(offset, offset + textWidth));
+	}
+	return lines;
+}
+
+function selectedRunMetaLines(run: LiveRun, width: number, now: number, maxLines: number): string[] {
+	if (maxLines <= 0) return [];
+	const started = formatStartedTime(run.run.startedAt, now);
+	const combined = `${run.run.mode} · id ${run.run.id} · started ${started}`;
+	if (metaFits(width, combined)) return [combined];
+	const lines = [`${run.run.mode} · started ${started}`];
+	lines.push(...wrapPlainStatusText(`id ${run.run.id}`, width, maxLines - 1));
+	return lines;
+}
+
 export function buildSelectedRunStatusBox(
 	theme: Theme,
 	run: LiveRun,
@@ -1252,12 +1340,14 @@ export function buildSelectedRunStatusBox(
 	const tokens = runTokenTotal(run);
 	if (tokens > 0) stats.push(formatTokenCounter(tokens));
 	if (!lostStamp) stats.push(formatDuration(durationMs));
-	const meta = `${run.run.mode} · id ${run.run.id.slice(0, 8)} · started ${formatStartedTime(run.run.startedAt)}`;
-	return [
-		renderStatusBoxHeader(theme, boxWidth, selectedRunTitle(run), tail, color),
-		renderStatusBoxLine(theme, boxWidth, stats.length > 0 ? stats.join(" · ") : meta),
-		renderStatusBoxLine(theme, boxWidth, meta),
-	];
+	const lines = [renderStatusBoxHeader(theme, boxWidth, selectedRunTitle(run), tail, color)];
+	if (stats.length > 0) lines.push(renderStatusBoxLine(theme, boxWidth, stats.join(" · ")));
+	const current = selectedRunCurrentLine(run, now);
+	if (current) lines.push(renderStatusBoxLine(theme, boxWidth, current));
+	for (const meta of selectedRunMetaLines(run, boxWidth, now, SELECTED_STATUS_BOX_ROWS - lines.length)) {
+		lines.push(renderStatusBoxLine(theme, boxWidth, meta));
+	}
+	return lines.slice(0, SELECTED_STATUS_BOX_ROWS);
 }
 
 function selectedRunTailPlain(run: LiveRun): string {
