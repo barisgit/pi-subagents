@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { readAllEntries, appendRunEntry } from "../state/runs-registry.ts";
+import { readStatus } from "../shared/utils.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import { StatusWriter, type StatusMeta } from "../state/status-writer.ts";
-import type { ChildAgentResult, PersistedRunStep } from "../protocol/status-types.ts";
-import type { TokenUsage, Usage } from "../protocol/types.ts";
+import type { ChildAgentResult, PersistedRunStatus, PersistedRunStep } from "../protocol/status-types.ts";
+import type { PipelineMetadata, TokenUsage, Usage } from "../protocol/types.ts";
 import { computeGroupStatus, type Layer0ChildStatus, type Layer0GroupStatus } from "../state/group-status.ts";
+import { processGlobal } from "../shared/process-global.ts";
 
 export { computeGroupStatus, type Layer0ChildStatus, type Layer0GroupStatus } from "../state/group-status.ts";
 
@@ -58,6 +60,7 @@ export interface SpawnRunOpts {
 	phaseIndex?: number;
 	phaseTitle?: string;
 	parallelGroupId?: string;
+	pipeline?: PipelineMetadata;
 	source?: "sync" | "async";
 	onLifecycle?: RunLifecycleSink;
 }
@@ -100,7 +103,23 @@ export interface InterruptRunResult {
 	interruptedRunIds: string[];
 }
 
-const controllersByRunId = new Map<string, AbortController>();
+// Shared across module instances via processGlobal: interruptRun must find
+// controllers registered by a PRE-RELOAD module instance, or a still-running
+// async child spawned before the reload becomes uninterruptible.
+const controllersByRunId = processGlobal("pi.subagents.runControllers", () => new Map<string, AbortController>());
+
+// Narrow registration seam for dispatch paths that create their own detached
+// controllers instead of going through spawnRun (the async dispatch paths).
+// Every interruptible run's controller must land in this one shared map, or a
+// reload orphans the run: the per-activation childRegistry does not survive a
+// reload, so interruptRun's map lookup is the only post-reload abort path.
+export function registerRunController(runId: string, controller: AbortController): void {
+	controllersByRunId.set(runId, controller);
+}
+
+export function releaseRunController(runId: string): void {
+	controllersByRunId.delete(runId);
+}
 
 export type RunRecordVariant = "group-child" | "sync-foreground" | "async-detached";
 // maps: group-child->(eager,running,finalize(result)); sync-foreground->(terminal,running,finalizeTerminal); async-detached->(eager,queued,finalize(result,{totalUsage}))
@@ -121,6 +140,7 @@ export interface OpenRunRecordOpts {
 	phaseIndex?: number;
 	phaseTitle?: string;
 	parallelGroupId?: string;
+	pipeline?: PipelineMetadata;
 	variant: RunRecordVariant;
 	// caller-built initialize meta MINUS state; funnel forces state per variant.
 	initialize: Omit<StatusMeta, "state">;
@@ -201,6 +221,14 @@ export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): Ope
 		...(opts.phaseIndex !== undefined ? { phaseIndex: opts.phaseIndex } : {}),
 		...(opts.phaseTitle ? { phaseTitle: opts.phaseTitle } : {}),
 		...(opts.parallelGroupId ? { parallelGroupId: opts.parallelGroupId } : {}),
+		...(opts.pipeline
+			? {
+					pipelineId: opts.pipeline.id,
+					pipelineItemIndex: opts.pipeline.itemIndex,
+					pipelineStageIndex: opts.pipeline.stageIndex,
+					...(opts.pipeline.itemLabel ? { pipelineItemLabel: opts.pipeline.itemLabel } : {}),
+				}
+			: {}),
 		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
 		rootRunId: opts.rootRunId ?? runId,
 		...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
@@ -262,6 +290,7 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 		...(opts.phaseIndex !== undefined ? { phaseIndex: opts.phaseIndex } : {}),
 		...(opts.phaseTitle ? { phaseTitle: opts.phaseTitle } : {}),
 		...(opts.parallelGroupId ? { parallelGroupId: opts.parallelGroupId } : {}),
+		...(opts.pipeline ? { pipeline: opts.pipeline } : {}),
 		variant: "group-child",
 		initialize: {
 			mode: "single",
@@ -277,7 +306,7 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 	const startedAt = handle.startedAt;
 
 	const controller = new AbortController();
-	controllersByRunId.set(runId, controller);
+	registerRunController(runId, controller);
 	const preparedStep: Layer0PreparedRunStep = {
 		...step,
 		runId,
@@ -320,7 +349,7 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 			},
 		)
 		.finally(() => {
-			controllersByRunId.delete(runId);
+			releaseRunController(runId);
 			handle.statusWriter.dispose();
 		});
 
@@ -388,4 +417,108 @@ export function interruptRun(runId: string, opts: InterruptRunOpts): InterruptRu
 		interruptedRunIds.push(targetRunId);
 	}
 	return { interruptedRunIds };
+}
+
+export interface AwaitRunTerminalOpts {
+	/** Absolute epoch-ms deadline; past it the wait gives up with terminal:false. */
+	deadline: number;
+	/** Same-activation completion promise (registry handle); preferred over polling. */
+	completed?: Promise<ChildAgentResult>;
+	/** Run-record dir for the disk-poll source; resolved from the runs registry when omitted. */
+	runRecordDir?: string;
+	pollIntervalMs?: number;
+}
+
+export type AwaitRunTerminalOutcome = { terminal: true; state: string } | { terminal: false };
+
+const RUN_TERMINAL_STATES: ReadonlySet<string> = new Set([
+	"complete",
+	"failed",
+	"interrupted",
+	"skipped",
+	"paused",
+	"lost",
+]);
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		timer.unref?.();
+	});
+}
+
+interface RunTerminalProbe {
+	/** False when there is no watchable source at all (no status.json, no registered children). */
+	observable: boolean;
+	state?: string;
+}
+
+function probeRunTerminal(runId: string, runRecordDir: string | undefined): RunTerminalProbe {
+	const dir = runRecordDir ?? readAllEntries().find((entry) => entry.runId === runId)?.runRecordDir;
+	if (!dir) return { observable: false };
+	let status: PersistedRunStatus | null = null;
+	try {
+		status = readStatus(dir);
+	} catch {
+		// Transient read failure: the file exists but is momentarily unreadable;
+		// keep polling rather than degrading.
+		return { observable: true };
+	}
+	if (status) {
+		return RUN_TERMINAL_STATES.has(status.state) ? { observable: true, state: status.state } : { observable: true };
+	}
+	// Statusless container (parallel/workflow group): the group itself never writes
+	// a status.json, so its terminal moment is "every registered child is terminal".
+	const children = readAllEntries().filter((entry) => entry.parentRunId === runId);
+	if (children.length === 0) return { observable: false };
+	const childStates: string[] = [];
+	for (const child of children) {
+		let childStatus: PersistedRunStatus | null = null;
+		try {
+			childStatus = readStatus(child.runRecordDir);
+		} catch {
+			return { observable: true };
+		}
+		if (!childStatus || !RUN_TERMINAL_STATES.has(childStatus.state)) return { observable: true };
+		childStates.push(childStatus.state);
+	}
+	return {
+		observable: true,
+		state: childStates.includes("interrupted") ? "interrupted" : computeGroupStatus(childStates),
+	};
+}
+
+/**
+ * Wait until a run reaches a terminal state, bounded by an absolute deadline.
+ * Two sources, one helper: a same-activation registry handle resolves through
+ * its completed promise; a cross-instance run (post-reload, no reachable
+ * promise) is polled from its persisted status.json until terminal. Statusless
+ * group containers derive their terminal state from their registered children.
+ * A run with no watchable source at all (no run record, no children) returns
+ * terminal:false immediately — polling could never observe it flipping.
+ */
+export async function awaitRunTerminal(runId: string, opts: AwaitRunTerminalOpts): Promise<AwaitRunTerminalOutcome> {
+	const pollIntervalMs = opts.pollIntervalMs ?? 250;
+	if (opts.completed) {
+		const raced = await Promise.race([
+			opts.completed.then(
+				(result): AwaitRunTerminalOutcome => ({ terminal: true, state: result.state }),
+				(): AwaitRunTerminalOutcome => ({
+					terminal: true,
+					state: probeRunTerminal(runId, opts.runRecordDir).state ?? "failed",
+				}),
+			),
+			sleep(Math.max(0, opts.deadline - Date.now())).then(() => undefined),
+		]);
+		return raced ?? { terminal: false };
+	}
+	let probe = probeRunTerminal(runId, opts.runRecordDir);
+	if (!probe.observable) return { terminal: false };
+	while (probe.state === undefined) {
+		const remaining = opts.deadline - Date.now();
+		if (remaining <= 0) return { terminal: false };
+		await sleep(Math.min(pollIntervalMs, remaining));
+		probe = probeRunTerminal(runId, opts.runRecordDir);
+	}
+	return { terminal: true, state: probe.state };
 }

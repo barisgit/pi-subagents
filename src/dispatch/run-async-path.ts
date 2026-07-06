@@ -12,7 +12,14 @@ import {
 import type { StatusWriter } from "../state/status-writer.ts";
 import { formatRunHandle } from "../state/run-shape.ts";
 import { resolveChildCwd } from "../shared/utils.ts";
-import { spawnRun, openGroup, openRunRecord, finalizeRun } from "./layer0-runs.ts";
+import {
+	spawnRun,
+	openGroup,
+	openRunRecord,
+	finalizeRun,
+	registerRunController,
+	releaseRunController,
+} from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
 import {
 	type Details,
@@ -166,6 +173,10 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 			parentRunId,
 		});
 		const asyncDetachedAbort = new AbortController();
+		// This dispatch does not go through spawnRun, so the detached controller
+		// must be registered in the shared layer0 map here or a reload leaves the
+		// group uninterruptible (the per-activation childRegistry dies on reload).
+		registerRunController(groupRunId, asyncDetachedAbort);
 		// spawnRun reserves the run record + handle eagerly (so we still return all N
 		// handles immediately). The per-process leaf-concurrency pool inside
 		// startChildAgent bounds how many children run leaf sessions at once.
@@ -358,6 +369,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 					{ runId: groupRunId },
 				);
 			} finally {
+				releaseRunController(groupRunId);
 				deps.childRegistry.delete(groupRunId);
 			}
 		})();
@@ -447,6 +459,10 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 	// Cancellation is still possible via childRegistry per-run controllers, exposed
 	// through subagent({ action: "interrupt", runId }) and { runId: "all" }.
 	const asyncDetachedAbort = new AbortController();
+	// This dispatch does not go through spawnRun, so the detached controller
+	// must be registered in the shared layer0 map here or a reload leaves the
+	// run uninterruptible (the per-activation childRegistry dies on reload).
+	registerRunController(runId, asyncDetachedAbort);
 	const asyncCtx = {
 		extensionCtx: ctx,
 		abortSignal: asyncDetachedAbort.signal,
@@ -583,6 +599,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 		} catch (err) {
 			logger.error("finalizeAsync: threw", err instanceof Error ? err : new Error(String(err)), { runId });
 		} finally {
+			releaseRunController(runId);
 			statusWriter.dispose();
 			deps.childRegistry.delete(runId);
 		}
