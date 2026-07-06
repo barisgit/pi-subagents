@@ -63,7 +63,9 @@ export function createSlashResultComponent(
 export function parseSubagentNotifyContent(content: string): SubagentNotifyDetails | undefined {
 	const lines = content.split("\n");
 	const header = lines[0] ?? "";
-	const match = header.match(/^Background task (completed|failed|paused): \*\*(.+?)\*\*(?:\s+(\([^)]*\)))?$/);
+	const match = header.match(
+		/^Background task (completed|failed|paused|interrupted): \*\*(.+?)\*\*(?:\s+(\([^)]*\)))?$/,
+	);
 	if (!match) return undefined;
 	const body = lines.slice(2);
 	let sessionIndex = -1;
@@ -140,7 +142,7 @@ export class SubagentNotifyNoticeComponent implements Component {
 				const glyph =
 					child.state === "complete" || child.state === "completed"
 						? this.theme.fg("success", "✓")
-						: child.state === "paused"
+						: child.state === "paused" || child.state === "interrupted"
 							? this.theme.fg("warning", "■")
 							: this.theme.fg("error", "✗");
 				const name = child.label?.trim() || child.agent || child.runId.slice(0, 8);
@@ -152,7 +154,7 @@ export class SubagentNotifyNoticeComponent implements Component {
 		const icon =
 			this.details.status === "completed"
 				? this.theme.fg("success", "✓")
-				: this.details.status === "paused"
+				: this.details.status === "paused" || this.details.status === "interrupted"
 					? this.theme.fg("warning", "■")
 					: this.theme.fg("error", "✗");
 		const parts: string[] = [];

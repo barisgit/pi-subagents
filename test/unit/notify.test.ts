@@ -645,4 +645,87 @@ describe("registerSubagentNotify", () => {
 		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
 		assert.equal(sent.length, 1, "idle-time sends are not interrupt-droppable and must not resend");
 	});
+
+	it("labels an interrupted run as interrupted, not failed", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "notify-interrupted-1",
+			agent: "fixer",
+			success: false,
+			state: "interrupted",
+			exitCode: 1,
+			summary: "Child agent interrupted: interrupt requested",
+			timestamp: 456,
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(
+			content.startsWith("Background task interrupted: **fixer**"),
+			`expected interrupted header, got: ${content.split("\n")[0]}`,
+		);
+		assert.ok(!content.includes("failed"), "interrupted run must not be announced as failed");
+	});
+
+	it("batch rollup shows an interrupted child with the square glyph and interrupted wording", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "group-interrupted-child",
+			runId: "group-interrupted-child",
+			notifyPolicy: "rollup",
+			agent: "A,B",
+			success: false,
+			state: "interrupted",
+			summary: "",
+			children: [
+				{
+					id: "child-int-a",
+					agent: "A",
+					label: "Alpha check",
+					success: true,
+					state: "complete",
+					output: "done",
+				},
+				{
+					id: "child-int-b",
+					agent: "B",
+					label: "Bravo check",
+					success: false,
+					state: "interrupted",
+					exitCode: 1,
+					output: "Child agent interrupted: interrupt requested",
+				},
+			],
+			timestamp: Date.now(),
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(
+			content.includes("\u25a0 Bravo check (B): interrupted"),
+			`missing square interrupted line in: ${content}`,
+		);
+		assert.ok(!content.includes("\u2717"), "interrupted child must not get the failure glyph");
+		assert.ok(content.includes("1/2 tasks complete"));
+	});
+
+	it("still labels a genuine failure as failed", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "notify-failed-1",
+			agent: "worker",
+			success: false,
+			state: "failed",
+			exitCode: 1,
+			summary: "Something broke",
+			timestamp: 789,
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(content.startsWith("Background task failed: **worker**"));
+	});
 });

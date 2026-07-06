@@ -47,7 +47,7 @@ function dedupeChildrenByRunIdKeepLatest(children: ChildStepResult[]): ChildStep
 export interface SubagentNotifyDetails {
 	kind?: "single";
 	agent: string;
-	status: "completed" | "failed" | "paused";
+	status: "completed" | "failed" | "paused" | "interrupted";
 	taskInfo?: string;
 	resultPreview: string;
 	durationMs?: number;
@@ -95,12 +95,15 @@ interface SubagentResult {
 
 function statusFor(
 	result: Pick<SubagentResult, "success" | "exitCode" | "state" | "summary">,
-): "completed" | "failed" | "paused" {
+): "completed" | "failed" | "paused" | "interrupted" {
 	const summary = typeof result.summary === "string" ? result.summary : "";
 	const paused =
 		!result.success &&
 		(result.exitCode === 0 || result.state === "paused" || summary.startsWith("Paused after interrupt."));
-	return paused ? "paused" : result.success ? "completed" : "failed";
+	if (paused) return "paused";
+	// Interruption is a deliberate user/parent action, not a failure.
+	if (!result.success && result.state === "interrupted") return "interrupted";
+	return result.success ? "completed" : "failed";
 }
 
 function singleNotificationContent(result: SubagentResult): string {
@@ -169,7 +172,7 @@ function shortRunId(runId: string): string {
 
 function stateGlyph(state: string): string {
 	if (state === "complete" || state === "completed") return "✓";
-	if (state === "paused") return "■";
+	if (state === "paused" || state === "interrupted") return "■";
 	return "✗";
 }
 
