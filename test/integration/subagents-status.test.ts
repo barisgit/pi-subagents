@@ -260,7 +260,7 @@ describe("SubagentsStatusComponent", () => {
 				// The running glyph (◈) carries the state; the redundant "running" word is gone.
 				assert.match(output, /> ◈ waiter/);
 				assert.doesNotMatch(output, /─── Step 1: waiter ───/);
-				assert.match(output, /╭─ waiter .* running ·/);
+				assert.match(output, /─ waiter .* running ·/);
 				assert.match(output, /→ bash · 400ms/);
 				assert.match(output, /│ {2}ls\s/);
 				assert.doesNotMatch(output, /─── done · completed · 150t · 1000ms ───/);

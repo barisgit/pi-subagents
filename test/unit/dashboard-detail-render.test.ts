@@ -289,8 +289,8 @@ const statusTheme = {
 	bg: (_name: string, text: string) => text,
 } as never;
 
-describe("dashboard selected-run status box", () => {
-	it("renders a compact pi-charter-style box at exact width without background bleed", () => {
+describe("dashboard selected-run status section", () => {
+	it("renders a compact separator section without background bleed", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
 			writeSession(dir, [
@@ -318,23 +318,24 @@ describe("dashboard selected-run status box", () => {
 			const plainLines = lines.map(stripAnsi);
 			const joined = plainLines.join("\n");
 
-			assert.equal(lines.length, 4, "box stays tight");
-			assert.match(plainLines[0]!, /^╭─ polish dashboard ─+ complete · 13m58s ─╮$/);
-			assert.match(plainLines[1]!, /│ 2 tools · 4\.2Mt · 13m58s +│/);
-			assert.match(plainLines[2]!, /│ parallel · id run-stat · started \d\d:\d\d +│/);
-			assert.match(plainLines[3]!, /^╰─+╯$/);
+			assert.equal(lines.length, 3, "status section stays tight");
+			assert.match(plainLines[0]!, /^─ polish dashboard ─+ complete · 13m58s ─$/);
+			assert.match(plainLines[1]!, /^ {2}2 tools · 4\.2Mt · 13m58s$/);
+			assert.match(plainLines[2]!, /^ {2}parallel · id run-stat · started \d\d:\d\d$/);
+			assert.doesNotMatch(joined, /[╭╮╰╯│]/, "status section is not boxed");
 			for (const line of lines) {
-				assert.equal(
-					visibleWidth(line),
-					width,
-					`status box line must fit sidebar width: ${JSON.stringify(line)}`,
+				assert.ok(
+					visibleWidth(line) <= width,
+					`status section line must fit sidebar width: ${JSON.stringify(line)}`,
 				);
 				assert.doesNotMatch(
 					line,
 					/\x1b\[(?:4[0-9]|10[0-7]|49)m/,
-					`status box must use fg only, no bg bleed: ${JSON.stringify(line)}`,
+					`status section must use fg only, no bg bleed: ${JSON.stringify(line)}`,
 				);
 			}
+			assert.equal(visibleWidth(lines[0]!), width, "separator fills the sidebar width");
+			assert.match(lines[0]!, /\x1b\[32mpolish dashboard\x1b\[39m/, `label is success-colored:\n${joined}`);
 			assert.match(
 				lines[0]!,
 				/\x1b\[32mcomplete · 13m58s\x1b\[39m/,

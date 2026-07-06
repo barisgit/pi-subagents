@@ -70,15 +70,7 @@ const MIN_RIGHT_PANE = 24;
 const DEFAULT_LEFT_FRACTION = 0.4;
 const SPLIT_STEP_COLS = 4;
 const MIN_VIEWPORT_HEIGHT = 12;
-const SELECTED_STATUS_BOX_ROWS = 5;
-const STATUS_BORDER = {
-	topLeft: "╭",
-	topRight: "╮",
-	bottomLeft: "╰",
-	bottomRight: "╯",
-	horizontal: "─",
-	vertical: "│",
-};
+const SELECTED_STATUS_BOX_ROWS = 3;
 // Shared legend lives in the left pane's bottom section, charter-picker style.
 // Only the two titled chrome rows (top border + bottom border) consume vertical
 // space inside the overlay region. We fill the rest with body rows so the
@@ -1230,8 +1222,8 @@ function clipPlain(text: string, width: number): string {
 }
 
 function renderStatusBoxHeader(theme: Theme, width: number, name: string, tail: string, color: ThemeFg): string {
-	const border = (text: string) => theme.fg("dim", text);
-	const availableText = Math.max(0, width - 9);
+	const rule = (text: string) => theme.fg("dim", text);
+	const availableText = Math.max(0, width - 7);
 	let tailText = tail;
 	let nameText = name;
 	if (visibleWidth(nameText) + visibleWidth(tailText) > availableText) {
@@ -1239,22 +1231,13 @@ function renderStatusBoxHeader(theme: Theme, width: number, name: string, tail: 
 		tailText = clipPlain(tailText, tailBudget);
 		nameText = clipPlain(nameText, Math.max(0, availableText - visibleWidth(tailText)));
 	}
-	const dashCount = Math.max(1, width - 8 - visibleWidth(nameText) - visibleWidth(tailText));
-	const line = `${border(STATUS_BORDER.topLeft)}${border(STATUS_BORDER.horizontal)} ${theme.fg(color, nameText)} ${border(STATUS_BORDER.horizontal.repeat(dashCount))} ${theme.fg(color, tailText)} ${border(STATUS_BORDER.horizontal)}${border(STATUS_BORDER.topRight)}`;
+	const dashCount = Math.max(1, width - 6 - visibleWidth(nameText) - visibleWidth(tailText));
+	const line = `${rule("─")} ${theme.fg(color, nameText)} ${rule("─".repeat(dashCount))} ${theme.fg(color, tailText)} ${rule("─")}`;
 	return truncateToWidth(line, width, "");
 }
 
 function renderStatusBoxLine(theme: Theme, width: number, text: string): string {
-	const innerWidth = Math.max(0, width - 2);
-	const content = ` ${clipPlain(text, Math.max(0, innerWidth - 2))} `;
-	const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
-	const border = theme.fg("dim", STATUS_BORDER.vertical);
-	return `${border}${theme.fg("dim", content)}${padding}${border}`;
-}
-
-function renderStatusBoxFooter(theme: Theme, width: number): string {
-	const border = (text: string) => theme.fg("dim", text);
-	return `${border(STATUS_BORDER.bottomLeft)}${border(STATUS_BORDER.horizontal.repeat(Math.max(0, width - 2)))}${border(STATUS_BORDER.bottomRight)}`;
+	return theme.fg("dim", `  ${clipPlain(text, Math.max(0, width - 2))}`);
 }
 
 export function buildSelectedRunStatusBox(
@@ -1280,7 +1263,6 @@ export function buildSelectedRunStatusBox(
 		renderStatusBoxHeader(theme, boxWidth, selectedRunTitle(run), tail, color),
 		renderStatusBoxLine(theme, boxWidth, stats.length > 0 ? stats.join(" · ") : meta),
 		renderStatusBoxLine(theme, boxWidth, meta),
-		renderStatusBoxFooter(theme, boxWidth),
 	];
 }
 

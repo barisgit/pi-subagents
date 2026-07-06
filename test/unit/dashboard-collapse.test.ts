@@ -136,13 +136,12 @@ describe("dashboard collapse and container rows", () => {
 		});
 		try {
 			const lines = component.render(120).map(stripAnsi);
-			const boxTop = lines.findIndex((line) => line.includes("╭─ polish dashboard"));
-			const boxBottom = lines.findIndex((line) => line.includes("╰") && line.indexOf("╰") > 0);
+			const statusTop = lines.findIndex((line) => line.includes("─ polish dashboard"));
 			const actions = lines.findIndex((line) => line.includes("─ hide list ─"));
 
-			assert.ok(boxTop >= 0, `selected-run status box missing:\n${lines.join("\n")}`);
-			assert.ok(boxBottom > boxTop, `status box footer missing:\n${lines.join("\n")}`);
-			assert.ok(actions > boxBottom, `action legend must sit below status box:\n${lines.join("\n")}`);
+			assert.ok(statusTop >= 0, `selected-run status separator missing:\n${lines.join("\n")}`);
+			assert.ok(actions > statusTop + 2, `action legend must sit below status details:\n${lines.join("\n")}`);
+			assert.doesNotMatch(lines.join("\n"), /╭─ polish dashboard/, "selected status is not boxed");
 		} finally {
 			component.dispose();
 		}
