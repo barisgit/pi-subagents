@@ -12,6 +12,7 @@ import type { TokenUsage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 import { applyPatchToStatus } from "./status-patch.ts";
 import { STALE_MTIME_THRESHOLD_MS } from "../shared/utils.ts";
+import { currentRunnerToken } from "./run-liveness.ts";
 
 export type FlushPolicy = "terminal" | "eager";
 
@@ -67,6 +68,11 @@ export function statusFromMeta(runId: string, meta: StatusMeta): PersistedRunSta
 		mode: meta.mode ?? "single",
 		state: meta.state ?? "queued",
 		startedAt,
+		// Runner identity: pid + per-process token so readers can detect a dead
+		// runner immediately (kill+restart) instead of waiting out the heartbeat
+		// ceiling. Old records lack these; readers fall back to heartbeat age.
+		runnerPid: process.pid,
+		runnerToken: currentRunnerToken(),
 		lastUpdate: meta.lastActivityAt ?? startedAt,
 		...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
 		...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),

@@ -64,4 +64,26 @@ describe("parsePersistedRunStatus", () => {
 		});
 		assert.deepEqual(parsePersistedRunStatus(raw), { ok: false, reason: "invalid-shape" });
 	});
+
+	it("parses an old record that lacks runnerPid/runnerToken (backward compatible)", () => {
+		const value = { runId: "x", mode: "single", state: "running", startedAt: 1_000 };
+		const result = parsePersistedRunStatus(JSON.stringify(value));
+		assert.deepEqual(result, { ok: true, value });
+		if (result.ok) {
+			assert.equal(result.value.runnerPid, undefined);
+			assert.equal(result.value.runnerToken, undefined);
+		}
+	});
+
+	it("rejects wrong-typed runnerPid/runnerToken (fails closed)", () => {
+		const base = { runId: "x", mode: "single", state: "running", startedAt: 1 };
+		assert.deepEqual(parsePersistedRunStatus(JSON.stringify({ ...base, runnerPid: "123" })), {
+			ok: false,
+			reason: "invalid-shape",
+		});
+		assert.deepEqual(parsePersistedRunStatus(JSON.stringify({ ...base, runnerToken: 42 })), {
+			ok: false,
+			reason: "invalid-shape",
+		});
+	});
 });

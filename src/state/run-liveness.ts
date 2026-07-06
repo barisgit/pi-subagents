@@ -1,9 +1,50 @@
+import { randomUUID } from "node:crypto";
 import type { RunPhase } from "./run-phase.ts";
 import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
+import { processGlobal } from "../shared/process-global.ts";
 
 export const RUNNER_HEARTBEAT_STALE_MS = 15_000;
 export const RUNNER_HARD_DEAD_MS = 30_000;
 export const RUNNER_WORKING_RECENT_MS = 5_000;
+
+/**
+ * Per-PROCESS runner identity token. Lives on globalThis (processGlobal) so it
+ * survives an extension reload (same process, re-imported modules) but NOT a
+ * process restart. Stamped into status.json next to runnerPid so liveness
+ * checks can tell "reloaded but alive" apart from "killed and restarted"
+ * without waiting out the heartbeat ceiling.
+ */
+export function currentRunnerToken(): string {
+	return processGlobal("pi.subagents.runnerToken", () => randomUUID());
+}
+
+/**
+ * Definitive dead-runner detection from persisted runner identity. Returns
+ * true ONLY when the record's owning process provably no longer runs:
+ * - runnerPid is stamped and that pid no longer exists (ESRCH), or
+ * - runnerPid equals OUR pid while runnerToken is someone else's — pids are
+ *   unique among live processes, so the record's true owner died and the OS
+ *   reused its pid for us.
+ * A matching runnerToken means the record is ours (possibly written before an
+ * in-process reload) and is never identity-dead. Absent fields (records
+ * written by older versions) yield false — callers fall back to the
+ * heartbeat-ceiling behavior unchanged. A live foreign pid (another host
+ * process legitimately owning the run) also yields false; EPERM on the probe
+ * means the pid exists.
+ */
+export function isRunnerIdentityDead(input: { runnerPid?: number; runnerToken?: string }): boolean {
+	if (input.runnerToken !== undefined && input.runnerToken === currentRunnerToken()) return false;
+	if (input.runnerPid === undefined) return false;
+	if (input.runnerPid === process.pid) return input.runnerToken !== undefined;
+	try {
+		process.kill(input.runnerPid, 0);
+		return false;
+	} catch (error) {
+		// EPERM: pid exists but is not signalable by us => alive. Anything else
+		// (ESRCH/ERANGE) => no such process => dead.
+		return (error as NodeJS.ErrnoException).code !== "EPERM";
+	}
+}
 
 export interface RunDisplayStateInput {
 	state: "queued" | "running" | "complete" | "failed" | "paused" | string;
@@ -14,6 +55,8 @@ export interface RunDisplayStateInput {
 	lastActivityAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
+	runnerPid?: number;
+	runnerToken?: string;
 	now?: number;
 	heartbeatStaleMs?: number;
 	hardDeadMs?: number;
@@ -23,6 +66,10 @@ export interface RunDisplayStateInput {
 export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplayState | undefined {
 	if (input.state === "queued") return "quiet";
 	if (input.state !== "running") return undefined;
+
+	// Identity check first: a provably dead runner is lost IMMEDIATELY, no
+	// heartbeat-age wait (kill + quick restart leaves a fresh heartbeat behind).
+	if (isRunnerIdentityDead(input)) return "lost";
 
 	const now = input.now ?? Date.now();
 	const heartbeatAt = input.runnerHeartbeatAt ?? input.lastUpdate;
@@ -45,20 +92,25 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
 }
 
 /**
- * True only for a 'running' record whose newest liveness timestamp
- * (runnerHeartbeatAt, falling back to lastUpdate) is older than the hard-dead
- * ceiling. Used to distinguish an ungracefully killed/lost runner from a live
- * child whose heartbeat is fresh. Reuses the same heartbeat-vs-hardDead read as
- * deriveRunDisplayState.
+ * True for a 'running' record whose runner is provably dead: either its runner
+ * identity (pid/token) fails {@link isRunnerIdentityDead} — immediate, no
+ * heartbeat wait — or its newest liveness timestamp (runnerHeartbeatAt,
+ * falling back to lastUpdate) is older than the hard-dead ceiling. The
+ * heartbeat path remains for records written by older versions (no identity
+ * fields) and for a same-process wedged executor. Reuses the same
+ * heartbeat-vs-hardDead read as deriveRunDisplayState.
  */
 export function isRunnerHardDead(input: {
 	state: string;
 	runnerHeartbeatAt?: number;
 	lastUpdate?: number;
+	runnerPid?: number;
+	runnerToken?: string;
 	now?: number;
 	hardDeadMs?: number;
 }): boolean {
 	if (input.state !== "running") return false;
+	if (isRunnerIdentityDead(input)) return true;
 	const now = input.now ?? Date.now();
 	const last = input.runnerHeartbeatAt ?? input.lastUpdate;
 	if (last === undefined) return false;

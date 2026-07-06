@@ -323,6 +323,8 @@ export function createAsyncJobTracker(
 							lastActivityAt: job.lastActivityAt,
 							lastUpdate: status.lastUpdate,
 							runnerHeartbeatAt: status.runnerHeartbeatAt,
+							runnerPid: status.runnerPid,
+							runnerToken: status.runnerToken,
 						});
 						if (status.steps?.length) {
 							job.agents = status.steps.map((step) => step.agent ?? "");

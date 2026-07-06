@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -134,6 +135,61 @@ describe("rehydrate re-announce", () => {
 			const added = tracker.rehydrateFromRegistry(ctx as never);
 			assert.equal(added, 0);
 			assert.equal(emitted.filter((e) => e.channel === SUBAGENT_ASYNC_STARTED_EVENT).length, 0);
+		} finally {
+			if (state.poller) clearInterval(state.poller);
+		}
+	});
+
+	it("finalizes a kill+restarted zombie (dead runner identity, FRESH heartbeat) to lost on the first sweep", () => {
+		const root = tmpRegistry();
+		const sessionId = "host-session-3";
+		const runId = "zombie-run";
+		const runRecordDir = path.join(root, "runs", runId);
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		// A process kill + quick restart leaves status.json frozen at running with a
+		// heartbeat only seconds old — but the runner identity (pid+token) is dead.
+		const child = spawnSync(process.execPath, ["-e", ""], { stdio: "ignore" });
+		fs.writeFileSync(
+			path.join(runRecordDir, "status.json"),
+			JSON.stringify({
+				runId,
+				mode: "single",
+				state: "running",
+				startedAt: Date.now() - 5_000,
+				lastUpdate: Date.now(),
+				runnerHeartbeatAt: Date.now(),
+				runnerPid: child.pid,
+				runnerToken: "token-of-the-killed-process",
+				cwd: root,
+				currentStep: 0,
+				steps: [{ agent: "explorer", status: "running", startedAt: Date.now() - 5_000 }],
+			}),
+			"utf8",
+		);
+		appendRunEntry({
+			runId,
+			runRecordDir,
+			mode: "single",
+			source: "async",
+			agentName: "explorer",
+			cwd: root,
+			rootSessionId: sessionId,
+			startedAt: Date.now() - 5_000,
+		} as RunsRegistryEntry);
+
+		const emitted: Array<{ channel: string; data: unknown }> = [];
+		const state = createState();
+		const tracker = createAsyncJobTracker(createPi(emitted) as never, state as never, { pollIntervalMs: 60_000 });
+		const ctx = { hasUI: false, sessionManager: { getSessionId: () => sessionId } };
+
+		try {
+			const added = tracker.rehydrateFromRegistry(ctx as never);
+			assert.equal(added, 0, "zombie must not be reclaimed into asyncJobs");
+			assert.equal(emitted.filter((e) => e.channel === SUBAGENT_ASYNC_STARTED_EVENT).length, 0);
+			const persisted = JSON.parse(fs.readFileSync(path.join(runRecordDir, "status.json"), "utf8")) as {
+				state: string;
+			};
+			assert.equal(persisted.state, "lost", "first sweep must finalize the zombie to lost on disk");
 		} finally {
 			if (state.poller) clearInterval(state.poller);
 		}

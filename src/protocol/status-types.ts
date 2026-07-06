@@ -149,6 +149,15 @@ export interface PersistedRunStatus {
 	endedAt?: number;
 	lastUpdate?: number;
 	runnerHeartbeatAt?: number;
+	/**
+	 * Identity of the in-process runner that owns this record: the host process
+	 * pid and a per-process random token (survives extension reload, not process
+	 * restart). Liveness checks use these to detect a dead runner IMMEDIATELY
+	 * instead of waiting out the heartbeat ceiling. Optional and additive: old
+	 * records omit them and consumers fall back to heartbeat-age behavior.
+	 */
+	runnerPid?: number;
+	runnerToken?: string;
 	resumedAt?: number;
 	resumeCount?: number;
 	/** Current execution phase, written by status-writer on every patch. */
@@ -202,6 +211,10 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 	// but a present non-number is a malformed file and fails closed.
 	if (o.executionStartedAt !== undefined && typeof o.executionStartedAt !== "number")
 		return { ok: false, reason: "invalid-shape" };
+	// runnerPid/runnerToken are optional and additive (old records omit them);
+	// a present wrong-typed value is a malformed file and fails closed.
+	if (o.runnerPid !== undefined && typeof o.runnerPid !== "number") return { ok: false, reason: "invalid-shape" };
+	if (o.runnerToken !== undefined && typeof o.runnerToken !== "string") return { ok: false, reason: "invalid-shape" };
 	if (o.steps !== undefined && !Array.isArray(o.steps)) return { ok: false, reason: "invalid-shape" };
 	return { ok: true, value: data as PersistedRunStatus };
 }
