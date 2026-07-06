@@ -23,15 +23,21 @@ import type { LiveRun } from "../state/run-view.ts";
 // truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
 // "…", so clip() pins the dashboard to the same single-glyph ellipsis.
 const ELLIPSIS = "…";
+const TAB_WIDTH = 4;
+
+function normalizePaneText(text: string): string {
+	return text.replace(/\t/g, " ".repeat(TAB_WIDTH));
+}
+
 function clip(text: string, width: number): string {
-	return truncateToWidth(text, width, ELLIPSIS);
+	return truncateToWidth(normalizePaneText(text), width, ELLIPSIS);
 }
 
 // Render prose (agent markdown output / prompts) through pi-tui's Markdown
 // component so headings, lists, and code fences read correctly in the pane.
 function renderMarkdownLines(text: string, width: number): string[] {
 	if (width <= 0) return [];
-	return new Markdown(text, 0, 0, getMarkdownTheme()).render(width);
+	return new Markdown(normalizePaneText(text), 0, 0, getMarkdownTheme()).render(width);
 }
 
 export function statusGlyph(
@@ -66,7 +72,7 @@ export function statusGlyph(
 function wrapText(text: string, width: number): string[] {
 	if (width <= 0) return [];
 	const out: string[] = [];
-	for (const paragraph of text.split("\n")) {
+	for (const paragraph of normalizePaneText(text).split("\n")) {
 		if (!paragraph) {
 			out.push("");
 			continue;
@@ -107,8 +113,9 @@ function wrapText(text: string, width: number): string[] {
 type ThemeBg = Parameters<Theme["bg"]>[0];
 
 function bgLine(theme: Theme, color: ThemeBg, text: string, width: number): string {
-	const pad = Math.max(0, width - visibleWidth(text));
-	return theme.bg(color, `${text}${" ".repeat(pad)}`);
+	const normalized = normalizePaneText(text);
+	const pad = Math.max(0, width - visibleWidth(normalized));
+	return theme.bg(color, `${normalized}${" ".repeat(pad)}`);
 }
 
 type ToolEvent = Extract<TranscriptLine, { kind: "tool" }>;
@@ -125,7 +132,8 @@ function withoutFullReset(line: string): string {
 
 function fitAnsiLines(lines: string[], width: number): string[] {
 	const fitted: string[] = [];
-	for (const line of lines) {
+	for (const sourceLine of lines) {
+		const line = normalizePaneText(sourceLine);
 		if (visibleWidth(line) <= width) fitted.push(line);
 		else fitted.push(...wrapTextWithAnsi(line, width));
 	}
@@ -156,7 +164,7 @@ function appendFoldedLines(
 }
 
 function buildArgLines(theme: Theme, arg: ToolArgDisplay, width: number): string[] {
-	const source = trimBlankEdges(arg.text.split("\n"));
+	const source = trimBlankEdges(normalizePaneText(arg.text).split("\n"));
 	if (source.length === 0) return [];
 	const shownSource = source.slice(0, 4);
 	const hiddenSourceLines = source.length - shownSource.length;
@@ -168,7 +176,7 @@ function buildArgLines(theme: Theme, arg: ToolArgDisplay, width: number): string
 
 function buildResultLines(theme: Theme, event: ToolEvent, width: number): string[] {
 	if (!event.resultHint) return [];
-	const allSource = event.resultHint.split("\n");
+	const allSource = normalizePaneText(event.resultHint).split("\n");
 	const source = allSource.slice(0, 3);
 	const totalSourceLines = event.resultLineCount ?? allSource.length;
 	const fitted = fitAnsiLines(source, Math.max(1, width - 4));
@@ -224,7 +232,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 	const script = run.asyncDir ? readWorkflowScript(run.asyncDir) : undefined;
 	if (script) {
 		out.push(theme.fg("accent", clip("─── Script ───", width)));
-		const scriptLines = script.split("\n");
+		const scriptLines = normalizePaneText(script).split("\n");
 		// Trim leading/trailing blank lines but keep interior structure verbatim:
 		// code must not be word-wrap reflowed.
 		while (scriptLines.length > 0 && scriptLines[0]?.trim() === "") scriptLines.shift();
@@ -380,10 +388,6 @@ export function selectToolArg(toolName: string, args: Record<string, unknown> | 
 	return genericHint(args);
 }
 
-// The prompt is context, not content: show only its first wrapped lines with a
-// dim "(N more lines)" marker instead of a wall of muted prose.
-const PROMPT_PREVIEW_LINES = 3;
-
 export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
 	if (run.run.workflow) {
@@ -522,20 +526,9 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			// Host convention: user prompts render on userMessageBg — same pad-then-bg
 			// pattern as the tool cards so the block spans the pane width.
 			const wrapped = wrapText(step.task, Math.max(1, width - 2));
-			const preview = wrapped.slice(0, PROMPT_PREVIEW_LINES);
-			out.push(theme.fg("dim", clip("prompt:", width)));
-			for (const line of preview) out.push(bgLine(theme, "userMessageBg", ` ${line}`, width));
-			const hidden = wrapped.length - preview.length;
-			if (hidden > 0) {
-				out.push(
-					bgLine(
-						theme,
-						"userMessageBg",
-						theme.fg("dim", clip(` ${ELLIPSIS} (${hidden} more lines)`, width)),
-						width,
-					),
-				);
-			}
+			out.push(bgLine(theme, "userMessageBg", "", width));
+			for (const line of wrapped) out.push(bgLine(theme, "userMessageBg", `  ${line}`, width));
+			out.push(bgLine(theme, "userMessageBg", "", width));
 		}
 		// One blank line of breathing room between the header area and the feed.
 		if (step.lines.length > 0) out.push("");

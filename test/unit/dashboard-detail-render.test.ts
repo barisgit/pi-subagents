@@ -84,7 +84,7 @@ function user(iso: string, content: unknown[]): Record<string, unknown> {
 }
 
 describe("dashboard detail pane redesign", () => {
-	it("clips the prompt, renders every tool call on its own card, and keeps the final block", () => {
+	it("renders the full prompt, every tool call on its own card, and keeps the final block", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
 			writeStatus(dir, "run-detail");
@@ -115,14 +115,14 @@ describe("dashboard detail pane redesign", () => {
 			const plainLines = lines.map(stripAnsi);
 			const joined = plainLines.join("\n");
 
-			// Prompt: preview + marker, never the whole wall of prose.
-			const promptIdx = plainLines.findIndex((line) => line === "prompt:");
-			assert.ok(promptIdx >= 0, `prompt label missing:\n${joined}`);
-			assert.ok(
-				plainLines.some((line) => /^\s*… \(\d+ more lines\)\s*$/.test(line)),
-				`prompt clip marker missing:\n${joined}`,
+			// Prompt: full text, no label and no clip marker.
+			assert.equal(
+				plainLines.findIndex((line) => line === "prompt:"),
+				-1,
+				`prompt label must be hidden:\n${joined}`,
 			);
-			assert.doesNotMatch(joined, /final block behavior/, "full prompt tail must be hidden");
+			assert.doesNotMatch(joined, /\(\d+ more lines\)/, "prompt must not show a clip marker");
+			assert.match(joined, /final block behavior/, "full prompt tail must be visible");
 
 			// NO ×N grouping: all 15 run calls render their own card. The primary
 			// code arg is verbatim multi-line content, not a collapsed first line.
@@ -294,10 +294,14 @@ describe("dashboard detail pane tool cards", () => {
 			assert.ok(errorPlain.some((line) => line.includes("↳ FAIL 3 tests")));
 			assert.equal(errorPlain.at(-1)!.trim(), "", "last error card line is empty padded content");
 
-			// Prompt block renders on the host's user-message background and keeps its
-			// existing no-extra-padding contract.
+			// Prompt block renders on the host's user-message background with empty
+			// top/bottom padding, matching tool-card padding.
 			const promptCard = lines.filter((line) => line.startsWith(BG_OPEN.userMessageBg!));
-			assert.equal(promptCard.length, 4, `3 preview lines + clip marker on userMessageBg:\n${joined}`);
+			const promptPlain = promptCard.map(stripAnsi);
+			assert.ok(promptCard.length > 4, `full prompt + padding on userMessageBg:\n${joined}`);
+			assert.equal(promptPlain[0]!.trim(), "", "first prompt card line is empty padded content");
+			assert.equal(promptPlain.at(-1)!.trim(), "", "last prompt card line is empty padded content");
+			assert.match(promptPlain.join("\n"), /final block behavior/);
 
 			// ANSI hygiene for EVERY bg line: padded to exactly the pane width and the
 			// bg reset is the line's final escape — no bleed into the next row.
@@ -311,6 +315,50 @@ describe("dashboard detail pane tool cards", () => {
 				lines.some((line) => line === ""),
 				"cards are separated by plain blank lines",
 			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("normalizes tabs before padding bg lines", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
+		try {
+			writeStatus(dir, "run-tabs");
+			writeSession(dir, [
+				user("2026-05-20T00:00:00.050Z", [{ type: "text", text: "Fix\tthis prompt with\ttabs." }]),
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "t1", name: "run", input: { code: "if (ok) {\n\treturn 1;\n}" } },
+				]),
+				user("2026-05-20T00:00:01.200Z", [
+					{
+						type: "tool_result",
+						tool_use_id: "t1",
+						content: "\x1b[31mred\tresult\x1b[39m\nplain\tline",
+					},
+				]),
+			]);
+
+			const width = 36;
+			const lines = buildRightLines(styledTheme, { ownership: "foreign", run: makeRun("run-tabs", dir) }, width);
+			const bgLines = lines.filter(
+				(line) => line.startsWith(BG_OPEN.userMessageBg!) || line.startsWith(BG_OPEN.toolSuccessBg!),
+			);
+			const plainLines = bgLines.map(stripAnsi);
+			const joined = plainLines.join("\n");
+
+			assert.ok(joined.includes("Fix this prompt"), `prompt tabbed text missing:\n${joined}`);
+			assert.ok(joined.includes("    return 1;"), `code tab not expanded:\n${joined}`);
+			assert.ok(joined.includes("↳ red    result"), `ANSI result tab not expanded:\n${joined}`);
+			assert.doesNotMatch(joined, /\t/, "tabs must not reach bg-rendered lines");
+
+			const codeIdx = plainLines.findIndex((line) => line.includes("return 1;"));
+			const resultIdx = plainLines.findIndex((line) => line.includes("↳ red    result"));
+			assert.ok(codeIdx >= 0 && resultIdx > codeIdx, `result hint must follow code block:\n${joined}`);
+
+			for (const line of bgLines) {
+				assert.equal(visibleWidth(line), width, `bg line must pad to pane width: ${JSON.stringify(line)}`);
+				assert.ok(line.endsWith("\x1b[49m"), `bg must close at line end: ${JSON.stringify(line)}`);
+			}
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
