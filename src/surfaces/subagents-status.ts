@@ -71,6 +71,9 @@ const DEFAULT_LEFT_FRACTION = 0.4;
 const SPLIT_STEP_COLS = 4;
 const MIN_VIEWPORT_HEIGHT = 12;
 const SELECTED_STATUS_BOX_ROWS = 5;
+// Transient key-action feedback (copy id / open dir) shown under the selected-run
+// status section; cleared automatically so the sidebar returns to its baseline.
+const ACTION_NOTICE_MS = 4000;
 // Shared legend lives in the left pane's bottom section, charter-picker style.
 // Only the two titled chrome rows (top border + bottom border) consume vertical
 // space inside the overlay region. We fill the rest with body rows so the
@@ -695,6 +698,7 @@ export class SubagentsStatusComponent implements Component {
 	private lastLeftListHeight = 0;
 	private errorMessage?: string;
 	private actionNotice?: string;
+	private actionNoticeTimer?: ReturnType<typeof setTimeout>;
 	private sessionCwd: string | undefined;
 	private sessionId: string | undefined;
 	private readonly getBranchAnchorRunIds: (() => Set<string>) | undefined;
@@ -757,7 +761,16 @@ export class SubagentsStatusComponent implements Component {
 				info: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);
 					const width = Math.max(1, ctx.primary.width || this.lastLeftWidth || MIN_LEFT_PANE);
-					return run ? buildSelectedRunStatusBox(this.theme, run, width, Date.now()) : [];
+					const lines = run ? buildSelectedRunStatusBox(this.theme, run, width, Date.now()) : [];
+					if (this.actionNotice) {
+						lines.push(
+							this.theme.fg(
+								"accent",
+								`  ${truncateToWidth(this.actionNotice, Math.max(0, width - 2), "…")}`,
+							),
+						);
+					}
+					return lines;
 				},
 				infoTitle: "",
 				footer: (ctx) => {
@@ -766,7 +779,7 @@ export class SubagentsStatusComponent implements Component {
 						visibleCount > 0
 							? `${ctx.selectedIndex + 1}/${visibleCount}${this.showAllSessions ? "  [all sessions]" : ""}`
 							: "(no runs)";
-					return this.actionNotice ? `${base}  ${this.actionNotice}` : base;
+					return base;
 				},
 			},
 			detail: {
@@ -881,6 +894,12 @@ export class SubagentsStatusComponent implements Component {
 
 	private setActionNotice(message: string): void {
 		this.actionNotice = message;
+		if (this.actionNoticeTimer) clearTimeout(this.actionNoticeTimer);
+		this.actionNoticeTimer = setTimeout(() => {
+			this.actionNotice = undefined;
+			this.actionNoticeTimer = undefined;
+			this.tui.requestRender();
+		}, ACTION_NOTICE_MS);
 		this.tui.requestRender();
 	}
 
@@ -1175,7 +1194,7 @@ export class SubagentsStatusComponent implements Component {
 		this.lastLeftWidth = layout.leftWidth;
 		this.lastRightWidth = Math.max(MIN_RIGHT_PANE, layout.rightWidth);
 		this.lastRightHeight = computeBodyHeight(this.tui);
-		const statusBoxRows = this.selectedRun() ? SELECTED_STATUS_BOX_ROWS : 0;
+		const statusBoxRows = (this.selectedRun() ? SELECTED_STATUS_BOX_ROWS : 0) + (this.actionNotice ? 1 : 0);
 		this.lastLeftListHeight = Math.max(1, this.lastRightHeight - 9 - statusBoxRows);
 		return this.overlay.render(width);
 	}
@@ -1183,6 +1202,8 @@ export class SubagentsStatusComponent implements Component {
 	dispose(): void {
 		if (this.refreshTimer) clearTimeout(this.refreshTimer);
 		this.refreshTimer = undefined;
+		if (this.actionNoticeTimer) clearTimeout(this.actionNoticeTimer);
+		this.actionNoticeTimer = undefined;
 		this.overlay.dispose();
 	}
 }
