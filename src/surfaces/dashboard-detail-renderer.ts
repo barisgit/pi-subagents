@@ -11,8 +11,8 @@ import { getMarkdownTheme, highlightCode, type Theme } from "@earendil-works/pi-
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
-import { previewArgs, readRunTranscript } from "../state/run-transcript.ts";
-import { formatDuration, formatTokens } from "./formatters.ts";
+import { readRunTranscript } from "../state/run-transcript.ts";
+import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
 import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
@@ -172,6 +172,77 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 	return out;
 }
 
+// ── Tool-call humanization ─────────────────────────────────────────────────
+// Raw JSON args are too faithful for code-carrying tools: a `run {code:"\n…"}`
+// call would render as escaped noise. The right pane wants a CI-log style hint
+// instead: the first meaningful line of code/command for run/bash-like tools,
+// the pattern/path for file tools, else the first non-empty string value.
+// Display concern only, so it lives inside the renderer.
+const COMMAND_ARG_KEYS = ["command", "cmd", "code", "script"] as const;
+const PATH_ARG_KEYS = ["path", "file_path", "filePath", "file", "url"] as const;
+const PATTERN_ARG_KEYS = ["pattern", "query", "regex"] as const;
+
+function firstMeaningfulLine(text: string): string {
+	for (const line of text.split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed) return trimmed.replace(/\s+/g, " ");
+	}
+	return "";
+}
+
+function stringArg(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
+	for (const key of keys) {
+		const value = args[key];
+		if (typeof value === "string" && value.trim()) return value;
+	}
+	return undefined;
+}
+
+export function humanizeToolArgs(args: Record<string, unknown> | undefined): string {
+	if (!args) return "";
+	const command = stringArg(args, COMMAND_ARG_KEYS);
+	if (command !== undefined) return firstMeaningfulLine(command);
+	const pattern = stringArg(args, PATTERN_ARG_KEYS);
+	const target = stringArg(args, PATH_ARG_KEYS);
+	if (pattern) {
+		const head = firstMeaningfulLine(pattern);
+		return target ? `${head} ${shortenPath(target)}` : head;
+	}
+	if (target) return shortenPath(target);
+	for (const value of Object.values(args)) {
+		if (typeof value === "string" && value.trim()) return firstMeaningfulLine(value);
+	}
+	return "";
+}
+
+// Consecutive same-tool calls at or above this count collapse into a single
+// "→ tool ×N" line (last hint + summed duration). Below it they stay one-per-line.
+const TOOL_GROUP_MIN = 3;
+// The prompt is context, not content: show only its first wrapped lines with a
+// dim "(N more lines)" marker instead of a wall of muted prose.
+const PROMPT_PREVIEW_LINES = 3;
+
+type ToolEntry = { toolName: string; hint: string; durationMs?: number };
+
+function toolLine(theme: Theme, entry: ToolEntry, width: number): string {
+	const suffix = entry.durationMs !== undefined ? ` · ${entry.durationMs}ms` : "";
+	const base = `→ ${entry.toolName}${entry.hint ? ` ${entry.hint}` : ""}`;
+	if (!suffix) return clip(base, width);
+	const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
+	return `${baseTrim}${theme.fg("dim", suffix)}`;
+}
+
+function groupedToolLine(theme: Theme, entries: ToolEntry[], width: number): string {
+	const last = entries.at(-1);
+	if (!last) return "";
+	const total = entries.reduce((sum, entry) => sum + (entry.durationMs ?? 0), 0);
+	const suffix = total > 0 ? ` · ${formatDuration(total)}` : "";
+	const base = `→ ${last.toolName} ×${entries.length}${last.hint ? ` ${last.hint}` : ""}`;
+	if (!suffix) return clip(base, width);
+	const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
+	return `${baseTrim}${theme.fg("dim", suffix)}`;
+}
+
 export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
 	if (run.run.workflow) {
@@ -189,21 +260,24 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	// Parallel runs share one run record with N session transcripts, one per step.
 	// Render order chronological-within-step
 	// so each step reads as a coherent block instead of interleaved noise.
+	type StepItem = { kind: "line"; text: string } | { kind: "tool"; entry: ToolEntry };
 	type Step = {
 		index: number;
 		agent: string;
 		startTs?: number;
-		lines: string[];
+		items: StepItem[];
+		toolCount: number;
 		final?: string;
-		ended?: boolean;
 		task?: string;
 		label?: string;
+		endTokens?: number;
+		endDurationMs?: number;
 	};
 	const steps = new Map<number, Step>();
 	const ensureStep = (index: number, agent: string): Step => {
 		let s = steps.get(index);
 		if (!s) {
-			s = { index, agent, lines: [] };
+			s = { index, agent, items: [], toolCount: 0 };
 			steps.set(index, s);
 		}
 		if (!s.agent && agent) s.agent = agent;
@@ -230,35 +304,34 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
 					if (child) {
 						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
-							step.lines.push(theme.fg("dim", clip(line, width)));
+							step.items.push({ kind: "line", text: theme.fg("dim", clip(line, width)) });
 						}
 						continue;
 					}
 				}
 			}
-			const suffix = event.durationMs !== undefined ? ` · ${event.durationMs}ms` : "";
-			const prefix = `→ ${event.toolName}`;
-			const argsBudget = Math.max(1, width - visibleWidth(prefix) - 1 - visibleWidth(suffix));
-			const argsPreview = event.rawArgs ? previewArgs(event.rawArgs, argsBudget) : event.argsPreview;
-			const argsPart = argsPreview ? ` ${argsPreview}` : "";
-			const base = `${prefix}${argsPart}`;
-			if (suffix) {
-				const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
-				step.lines.push(`${baseTrim}${theme.fg("dim", suffix)}`);
-			} else {
-				step.lines.push(clip(base, width));
-			}
+			const hint = event.rawArgs ? humanizeToolArgs(event.rawArgs) : event.argsPreview;
+			step.items.push({
+				kind: "tool",
+				entry: {
+					toolName: event.toolName,
+					hint,
+					...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+				},
+			});
+			step.toolCount++;
 			continue;
 		}
 		if (event.kind === "step-end") {
 			const step = ensureStep(event.stepIndex, event.agent);
-			step.ended = true;
+			if (event.tokens !== undefined) step.endTokens = event.tokens;
+			if (event.durationMs !== undefined) step.endDurationMs = event.durationMs;
 			const middle: string[] = ["done"];
 			if (event.status) middle.push(event.status);
 			if (event.tokens !== undefined) middle.push(`${event.tokens}t`);
 			if (event.durationMs !== undefined) middle.push(`${event.durationMs}ms`);
 			const text = `─── ${middle.join(" · ")} ───`;
-			step.lines.push(theme.fg("dim", clip(text, width)));
+			step.items.push({ kind: "line", text: theme.fg("dim", clip(text, width)) });
 			continue;
 		}
 		if (event.kind === "final-text") {
@@ -280,11 +353,39 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 		if (step.label) {
 			out.push(theme.fg("muted", clip(`Label: ${step.label}`, width)));
 		}
-		if (step.task) {
-			out.push(theme.fg("dim", clip("→ prompt:", width)));
-			for (const wrapped of wrapText(step.task, width)) out.push(theme.fg("muted", wrapped));
+		// Compact activity gist near the header so the reader doesn't have to scroll
+		// through the tool feed to size up the step.
+		if (step.toolCount > 0) {
+			const gist = [`${step.toolCount} tool${step.toolCount === 1 ? "" : "s"}`];
+			if (step.endTokens !== undefined) gist.push(`${step.endTokens}t`);
+			if (step.endDurationMs !== undefined) gist.push(formatDuration(step.endDurationMs));
+			out.push(theme.fg("dim", clip(gist.join(" · "), width)));
 		}
-		for (const line of step.lines) out.push(line);
+		if (step.task) {
+			const wrapped = wrapText(step.task, width);
+			const preview = wrapped.slice(0, PROMPT_PREVIEW_LINES);
+			out.push(theme.fg("dim", clip("prompt:", width)));
+			for (const line of preview) out.push(theme.fg("muted", line));
+			const hidden = wrapped.length - preview.length;
+			if (hidden > 0) out.push(theme.fg("dim", clip(`… (${hidden} more lines)`, width)));
+		}
+		const pending: ToolEntry[] = [];
+		const flushPending = (): void => {
+			if (pending.length === 0) return;
+			if (pending.length >= TOOL_GROUP_MIN) out.push(groupedToolLine(theme, pending, width));
+			else for (const entry of pending) out.push(toolLine(theme, entry, width));
+			pending.length = 0;
+		};
+		for (const item of step.items) {
+			if (item.kind === "tool") {
+				if (pending.length > 0 && pending[0]?.toolName !== item.entry.toolName) flushPending();
+				pending.push(item.entry);
+				continue;
+			}
+			flushPending();
+			out.push(item.text);
+		}
+		flushPending();
 		if (step.final) {
 			const border = "─".repeat(Math.max(0, width));
 			out.push(theme.fg("dim", border));

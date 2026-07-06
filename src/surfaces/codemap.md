@@ -10,7 +10,7 @@ Presentation/surface layer for the pi-subagents pi-coding-agent extension. This 
 - `subagents-status.ts` is the fullscreen dashboard component. It owns TUI lifecycle, paneOverlay integration, refresh cadence, selection/collapse state, split sizing, and scope controls.
 - `dashboard-row-model.ts` is the pure row-derivation model: `deriveDisplayRows`, session-tree filtering, parent/child ordering, container detection, pending-delivery metadata, and live/foreign ownership assignment. It encodes the display taxonomy where workflow groups are durable orchestration entities and parallel groups are receipt/container rows around child work.
 - `dashboard-run-source.ts` is the narrow adapter from fetched async overlay plus in-memory foreground runs to scoped/sorted `LiveRun[]`; the dashboard fetches, this module derives.
-- `dashboard-detail-renderer.ts` renders right-pane details from `LiveRun`: workflow script plus phase/step outline for workflow groups, transcript/tool lines for ordinary runs, and nested child summaries.
+- `dashboard-detail-renderer.ts` renders right-pane details from `LiveRun`: workflow script plus phase/step outline for workflow groups, a CI-log style transcript for ordinary runs (clipped prompt preview, per-step activity gist, humanized one-line tool hints via `humanizeToolArgs` with consecutive same-tool grouping, bordered final markdown block), and nested child summaries.
 - Notifications are separated by concern: `notify.ts` sends host transcript notifications and delivery events, `control-notices.ts` renders attention/control notices, and `idle-tracker.ts` detects all-idle transitions.
 - Slash commands are event-bridged: `slash-commands.ts` parses `/run` and `/parallel`, emits bridge requests, and opens `/subagents-status`; `slash-bridge.ts` executes requests against the active extension context with abort/update/response events.
 - Agent CRUD is surfaced through `agent-management.ts` and `agent-serializer.ts`; formatting shims (`formatters.ts`, `async-guidance.ts`) keep old surface import paths stable while delegating to `shared/formatting.ts`.
@@ -43,7 +43,7 @@ Presentation/surface layer for the pi-subagents pi-coding-agent extension. This 
 - `async-guidance.ts` — compatibility shim for async guidance text and `/subagents-status` hint formatting.
 - `async-job-tracker.ts` — maintains async widget job lifecycle, polling, rehydration, activity attention, pending-delivery, and cleanup.
 - `control-notices.ts` — registers custom control notice rendering and formats attention/control transition messages.
-- `dashboard-detail-renderer.ts` — renders selected dashboard row details, including workflow scripts/steps and transcript/tool output.
+- `dashboard-detail-renderer.ts` — renders selected dashboard row details, including workflow scripts/steps and humanized/grouped transcript tool output.
 - `dashboard-row-model.ts` — pure transform from `LiveRun[]` plus collapse/scope state to ordered dashboard display rows and metadata.
 - `dashboard-run-source.ts` — combines async overlay and foreground runs, removes duplicates, applies ownership and session/branch scope.
 - `formatters.ts` — re-exports shared duration/token/tool/path formatters and formats compact usage strings.
