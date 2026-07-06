@@ -11,7 +11,7 @@ import { getMarkdownTheme, highlightCode, type Theme } from "@earendil-works/pi-
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
-import { readRunTranscript } from "../state/run-transcript.ts";
+import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
@@ -95,6 +95,56 @@ function wrapText(text: string, width: number): string[] {
 		if (line) out.push(line);
 	}
 	return out;
+}
+
+// ── Tool call cards ────────────────────────────────────────────────────────
+// Each tool call renders as a mini card on the host's tool-card palette
+// (toolSuccessBg, or toolErrorBg when the transcript recorded a failed call).
+// Pattern matches pi-tui's Box.applyBg: pad the styled line to the pane width
+// FIRST, then wrap the whole padded line in theme.bg. theme.bg closes every
+// line with a background-only reset, so the color never bleeds into the pane
+// border or the following row.
+type ThemeBg = Parameters<Theme["bg"]>[0];
+const ARG_HINT_MAX_LINES = 2;
+const RESULT_HINT_MAX_LINES = 2;
+
+function bgLine(theme: Theme, color: ThemeBg, text: string, width: number): string {
+	const pad = Math.max(0, width - visibleWidth(text));
+	return theme.bg(color, `${text}${" ".repeat(pad)}`);
+}
+
+// Word-wrap capped at maxLines; a clipped tail gets the shared ellipsis so the
+// reader can tell the hint continues.
+function wrapCapped(text: string, width: number, maxLines: number): string[] {
+	if (width <= 0) return [];
+	const lines = wrapText(text, width);
+	if (lines.length <= maxLines) return lines;
+	const capped = lines.slice(0, maxLines);
+	const last = capped[capped.length - 1] ?? "";
+	capped[capped.length - 1] = truncateToWidth(`${last}${ELLIPSIS}`, width, ELLIPSIS);
+	return capped;
+}
+
+type ToolEvent = Extract<TranscriptLine, { kind: "tool" }>;
+
+// Line 1: tool name (toolTitle) + duration; line 2+: arg hint wrapped to a
+// small cap; then the result hint (↳, toolOutput) inside the same bg block.
+function buildToolBlock(theme: Theme, event: ToolEvent, hint: string, width: number): string[] {
+	const color: ThemeBg = event.isError ? "toolErrorBg" : "toolSuccessBg";
+	const inner: string[] = [];
+	const duration = event.durationMs !== undefined ? theme.fg("dim", ` · ${formatDuration(event.durationMs)}`) : "";
+	const title = theme.fg("toolTitle", clip(`→ ${event.toolName}`, Math.max(1, width - visibleWidth(duration))));
+	inner.push(`${title}${duration}`);
+	if (hint) {
+		for (const line of wrapCapped(hint, Math.max(1, width - 2), ARG_HINT_MAX_LINES)) inner.push(`  ${line}`);
+	}
+	if (event.resultHint) {
+		const lines = wrapCapped(event.resultHint, Math.max(1, width - 4), RESULT_HINT_MAX_LINES);
+		for (let i = 0; i < lines.length; i++) {
+			inner.push(theme.fg("toolOutput", i === 0 ? `  ↳ ${lines[i]}` : `    ${lines[i]}`));
+		}
+	}
+	return inner.map((line) => bgLine(theme, color, line, width));
 }
 
 function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs: LiveRun[]): string[] {
@@ -278,8 +328,6 @@ export function humanizeToolArgs(toolName: string, args: Record<string, unknown>
 // The prompt is context, not content: show only its first wrapped lines with a
 // dim "(N more lines)" marker instead of a wall of muted prose.
 const PROMPT_PREVIEW_LINES = 3;
-// Result hints render dim under the tool line, clipped hard.
-const RESULT_HINT_COLS = 60;
 
 export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
@@ -309,6 +357,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 		label?: string;
 		endTokens?: number;
 		endDurationMs?: number;
+		lastKind?: "tool" | "narration" | "other";
 	};
 	const steps = new Map<number, Step>();
 	const ensureStep = (index: number, agent: string): Step => {
@@ -319,6 +368,16 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 		}
 		if (!s.agent && agent) s.agent = agent;
 		return s;
+	};
+	// Breathing room: tool cards are background blocks, so a plain blank line
+	// separates a card from adjacent narration or another card. Narration after
+	// narration stays contiguous (markdown owns its own spacing).
+	const pushStepLines = (step: Step, kind: "tool" | "narration" | "other", lines: string[]): void => {
+		if (lines.length === 0) return;
+		const last = step.lines[step.lines.length - 1];
+		if (last !== undefined && last !== "" && (kind === "tool" || step.lastKind === "tool")) step.lines.push("");
+		step.lines.push(...lines);
+		step.lastKind = kind;
 	};
 
 	for (const event of events) {
@@ -333,7 +392,11 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			const step = ensureStep(event.stepIndex, "");
 			// Mid-run narration: markdown-rendered but dimmed, so it reads as the
 			// agent's running commentary rather than competing with the final block.
-			for (const line of renderMarkdownLines(event.text, width)) step.lines.push(theme.fg("muted", line));
+			pushStepLines(
+				step,
+				"narration",
+				renderMarkdownLines(event.text, width).map((line) => theme.fg("muted", line)),
+			);
 			continue;
 		}
 		if (event.kind === "tool") {
@@ -347,26 +410,17 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 				if (!isAsync) {
 					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
 					if (child) {
-						for (const line of renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed)) {
-							step.lines.push(theme.fg("dim", clip(line, width)));
-						}
+						const nested = renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed).map((line) =>
+							theme.fg("dim", clip(line, width)),
+						);
+						pushStepLines(step, "tool", nested);
 						step.toolCount++;
 						continue;
 					}
 				}
 			}
 			const hint = event.rawArgs ? humanizeToolArgs(event.toolName, event.rawArgs) : event.argsPreview;
-			const suffix = event.durationMs !== undefined ? ` · ${event.durationMs}ms` : "";
-			const base = `→ ${event.toolName}${hint ? ` ${hint}` : ""}`;
-			if (suffix) {
-				const baseTrim = clip(base, Math.max(0, width - visibleWidth(suffix)));
-				step.lines.push(`${baseTrim}${theme.fg("dim", suffix)}`);
-			} else {
-				step.lines.push(clip(base, width));
-			}
-			if (event.resultHint) {
-				step.lines.push(theme.fg("dim", clip(`  ↳ ${event.resultHint}`, Math.min(width, RESULT_HINT_COLS))));
-			}
+			pushStepLines(step, "tool", buildToolBlock(theme, event, hint, width));
 			step.toolCount++;
 			continue;
 		}
@@ -379,7 +433,7 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			if (event.tokens !== undefined) middle.push(`${event.tokens}t`);
 			if (event.durationMs !== undefined) middle.push(`${event.durationMs}ms`);
 			const text = `─── ${middle.join(" · ")} ───`;
-			step.lines.push(theme.fg("dim", clip(text, width)));
+			pushStepLines(step, "other", [theme.fg("dim", clip(text, width))]);
 			continue;
 		}
 		if (event.kind === "final-text") {
@@ -410,13 +464,26 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			out.push(theme.fg("dim", clip(gist.join(" · "), width)));
 		}
 		if (step.task) {
-			const wrapped = wrapText(step.task, width);
+			// Host convention: user prompts render on userMessageBg — same pad-then-bg
+			// pattern as the tool cards so the block spans the pane width.
+			const wrapped = wrapText(step.task, Math.max(1, width - 2));
 			const preview = wrapped.slice(0, PROMPT_PREVIEW_LINES);
 			out.push(theme.fg("dim", clip("prompt:", width)));
-			for (const line of preview) out.push(theme.fg("muted", line));
+			for (const line of preview) out.push(bgLine(theme, "userMessageBg", ` ${line}`, width));
 			const hidden = wrapped.length - preview.length;
-			if (hidden > 0) out.push(theme.fg("dim", clip(`… (${hidden} more lines)`, width)));
+			if (hidden > 0) {
+				out.push(
+					bgLine(
+						theme,
+						"userMessageBg",
+						theme.fg("dim", clip(` ${ELLIPSIS} (${hidden} more lines)`, width)),
+						width,
+					),
+				);
+			}
 		}
+		// One blank line of breathing room between the header area and the feed.
+		if (step.lines.length > 0) out.push("");
 		for (const line of step.lines) out.push(line);
 		if (step.final) {
 			const border = "─".repeat(Math.max(0, width));

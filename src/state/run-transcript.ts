@@ -13,6 +13,7 @@ export type TranscriptLine =
 			rawArgs?: Record<string, unknown>;
 			durationMs?: number;
 			resultHint?: string;
+			isError?: boolean;
 			ts: number;
 	  }
 	| { kind: "assistant-text"; stepIndex: number; text: string; ts: number }
@@ -167,6 +168,28 @@ function textFromToolResultContent(value: unknown): string {
 	return texts.join("");
 }
 
+// Resolve a tool result against its pending tool_use entry: duration, first
+// result line for the ↳ hint, and the error flag when the record carries one.
+function resolveToolResult(
+	out: TranscriptLine[],
+	toolStartIndex: Map<string, number>,
+	id: string,
+	ts: number,
+	content: unknown,
+	isError: unknown,
+): void {
+	const idx = toolStartIndex.get(id);
+	if (idx === undefined) return;
+	const start = out[idx];
+	if (start?.kind === "tool") {
+		start.durationMs = Math.max(0, ts - start.ts);
+		const hint = firstResultLine(textFromToolResultContent(content));
+		if (hint) start.resultHint = hint;
+		if (isError === true) start.isError = true;
+	}
+	toolStartIndex.delete(id);
+}
+
 function stepInfo(
 	status: PersistedRunStatus | undefined,
 	stepIndex: number,
@@ -259,6 +282,15 @@ function parseSessionFile(input: {
 			}
 			continue;
 		}
+		// Real pi session files persist tool results as dedicated `toolResult`
+		// messages (toolCallId + content + isError) rather than user-role
+		// tool_result parts; resolve them through the same funnel.
+		if (role === "toolResult") {
+			const id = typeof message.toolCallId === "string" ? message.toolCallId : "";
+			if (id) resolveToolResult(out, toolStartIndex, id, ts, message.content, message.isError);
+			continue;
+		}
+
 		if (role === "user") {
 			if (initialPrompt === undefined) {
 				const texts: string[] = [];
@@ -286,15 +318,7 @@ function parseSessionFile(input: {
 									? item.id
 									: "";
 				if (!id) continue;
-				const idx = toolStartIndex.get(id);
-				if (idx === undefined) continue;
-				const start = out[idx];
-				if (start?.kind === "tool") {
-					start.durationMs = Math.max(0, ts - start.ts);
-					const hint = firstResultLine(textFromToolResultContent(item.content));
-					if (hint) start.resultHint = hint;
-				}
-				toolStartIndex.delete(id);
+				resolveToolResult(out, toolStartIndex, id, ts, item.content, item.isError ?? item.is_error);
 			}
 		}
 	}

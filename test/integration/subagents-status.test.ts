@@ -260,7 +260,8 @@ describe("SubagentsStatusComponent", () => {
 				// The running glyph (◈) carries the state; the redundant "running" word is gone.
 				assert.match(output, /> ◈ waiter/);
 				assert.match(output, /─── Step 1: waiter ───/);
-				assert.match(output, /→ bash .* · 400ms/);
+				assert.match(output, /→ bash · 400ms/);
+				assert.match(output, /│ {2}ls\s/);
 				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
 				// paneOverlay owns standard action legend rows; custom dashboard actions are appended.
 				assert.match(output, /tab\/←\/→\s+focus/);
@@ -556,7 +557,7 @@ describe("SubagentsStatusComponent", () => {
 				const lines = component.render(160).map(stripBorders);
 				const joined = lines.join("\n");
 				const stepIdx = lines.findIndex((line) => line.includes("Step 1: planner"));
-				const toolIdx = lines.findIndex((line) => /→ read .* · 250ms/.test(line));
+				const toolIdx = lines.findIndex((line) => /→ read · 250ms/.test(line));
 				const finalIdx = lines.findIndex((line) => line.includes("Wrapped final answer text."));
 				const endIdx = lines.findIndex((line) => line.includes("done · completed · 42t · 400ms"));
 				assert.ok(

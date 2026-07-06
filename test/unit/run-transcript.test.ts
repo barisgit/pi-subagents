@@ -105,6 +105,38 @@ describe("readRunTranscript", () => {
 		}
 	});
 
+	it("resolves dedicated toolResult-role messages, including the isError flag", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.100Z", [
+					{ type: "tool_use", id: "tool-1", name: "bash", input: { command: "npm test" } },
+				]),
+				{
+					type: "message",
+					timestamp: "2026-05-20T00:00:01.400Z",
+					message: {
+						role: "toolResult",
+						toolCallId: "tool-1",
+						toolName: "bash",
+						content: [{ type: "text", text: "FAIL 3 tests" }],
+						isError: true,
+					},
+				},
+				assistant("2026-05-20T00:00:02.000Z", [{ type: "text", text: "Done." }]),
+			]);
+
+			const tool = readRunTranscript(dir).find((line) => line.kind === "tool");
+			assert.ok(tool && tool.kind === "tool");
+			assert.equal(tool.durationMs, 300);
+			assert.equal(tool.resultHint, "FAIL 3 tests");
+			assert.equal(tool.isError, true);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("strips the agent preamble to the trailing <output> block in final-text", () => {
 		const dir = makeRunDir();
 		try {

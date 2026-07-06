@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { AsyncRunSummary } from "../../src/state/async-status.ts";
 import { buildRightLines, humanizeToolArgs } from "../../src/surfaces/dashboard-detail-renderer.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 // The final-text and narration blocks render through pi-tui Markdown, whose
@@ -113,18 +114,22 @@ describe("dashboard detail pane redesign", () => {
 			const promptIdx = lines.findIndex((line) => line === "prompt:");
 			assert.ok(promptIdx >= 0, `prompt label missing:\n${joined}`);
 			assert.ok(
-				lines.some((line) => /^… \(\d+ more lines\)$/.test(line)),
+				lines.some((line) => /^\s*… \(\d+ more lines\)\s*$/.test(line)),
 				`prompt clip marker missing:\n${joined}`,
 			);
 			assert.doesNotMatch(joined, /final block behavior/, "full prompt tail must be hidden");
 
-			// NO ×N grouping: all 15 run calls render their own humanized line.
+			// NO ×N grouping: all 15 run calls render their own card. Line 1 of each
+			// card is the tool name + duration; the humanized arg hint follows on its
+			// own line inside the card instead of being clipped onto the title.
 			const runLines = lines.filter((line) => line.startsWith("→ run"));
-			assert.equal(runLines.length, 15, `expected 15 individual run lines:\n${joined}`);
+			assert.equal(runLines.length, 15, `expected 15 individual run cards:\n${joined}`);
 			assert.doesNotMatch(joined, /×\d/, "consecutive same-tool calls must NOT collapse");
 			for (const line of runLines) {
-				assert.match(line, /^→ run const lessons = await r\(/);
+				assert.match(line, /^→ run · \d+ms/);
 			}
+			const hintArgLines = lines.filter((line) => line.includes("const lessons = await r("));
+			assert.equal(hintArgLines.length, 15, `expected one arg-hint line per card:\n${joined}`);
 			assert.doesNotMatch(joined, /[{}]|\\n|\\"/, "no raw JSON braces or escapes in the pane");
 
 			// Result hints: each tool line is followed by a dim "↳" preview.
@@ -167,20 +172,26 @@ describe("dashboard detail pane redesign", () => {
 			const joined = lines.join("\n");
 
 			const narr1 = lines.findIndex((line) => line.includes("Let me look at the failing test first."));
-			const tool1 = lines.findIndex((line) => line.startsWith("→ read /abs/test.ts"));
+			const tool1 = lines.findIndex((line) => line.startsWith("→ read"));
+			const arg1 = lines.findIndex((line) => line.trim() === "/abs/test.ts");
 			const hint1 = lines.findIndex((line) => line.trimStart().startsWith("↳ 34 matches"));
 			const narr2 = lines.findIndex((line) => line.includes("The assertion is inverted; patching now."));
-			const tool2 = lines.findIndex((line) => line.startsWith("→ edit /abs/src.ts"));
+			const tool2 = lines.findIndex((line) => line.startsWith("→ edit"));
 			const finalIdx = lines.findIndex((line) => line.includes("Fixed the inverted assertion."));
 			assert.ok(
 				narr1 >= 0 &&
 					tool1 > narr1 &&
-					hint1 === tool1 + 1 &&
+					arg1 === tool1 + 1 &&
+					hint1 === arg1 + 1 &&
 					narr2 > hint1 &&
 					tool2 > narr2 &&
 					finalIdx > tool2,
-				`chat order wrong (${narr1}/${tool1}/${hint1}/${narr2}/${tool2}/${finalIdx}):\n${joined}`,
+				`chat order wrong (${narr1}/${tool1}/${arg1}/${hint1}/${narr2}/${tool2}/${finalIdx}):\n${joined}`,
 			);
+			// Breathing room: a blank line separates the tool card from the narration
+			// before and after it.
+			assert.equal(lines[tool1 - 1], "", "blank line before the tool card");
+			assert.equal(lines[hint1 + 1], "", "blank line after the tool card");
 			// The last assistant text is the FINAL block (bordered), not narration:
 			// it appears exactly once.
 			assert.equal(
@@ -190,6 +201,96 @@ describe("dashboard detail pane redesign", () => {
 			);
 			const border = "─".repeat(80);
 			assert.equal(lines.filter((line) => line === border).length, 2, "final block bordered");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+// Background cards: pad-then-wrap like pi-tui's Box.applyBg. A styled theme
+// stub with REAL ANSI escapes proves the bg opens at line start, closes at
+// line end (no bleed into the next row), and the padded visible width is
+// exactly the pane width.
+const BG_OPEN: Record<string, string> = {
+	toolSuccessBg: "\x1b[42m",
+	toolErrorBg: "\x1b[41m",
+	userMessageBg: "\x1b[44m",
+};
+const styledTheme = {
+	fg: (_name: string, text: string) => text,
+	bg: (name: string, text: string) => `${BG_OPEN[name] ?? "\x1b[40m"}${text}\x1b[49m`,
+} as never;
+
+describe("dashboard detail pane tool cards", () => {
+	it("renders tool calls as multi-line bg cards: padded width, closed bg, wrapped args, inner result hint", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
+		try {
+			writeStatus(dir, "run-cards");
+			writeSession(dir, [
+				user("2026-05-20T00:00:00.050Z", [{ type: "text", text: LONG_PROMPT }]),
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "text", text: "Reading the lessons file." },
+					{ type: "tool_use", id: "t1", name: "run", input: { code: RUN_CODE } },
+				]),
+				user("2026-05-20T00:00:01.200Z", [{ type: "tool_result", tool_use_id: "t1", content: "ok" }]),
+				// Failed call recorded via the host's dedicated toolResult message shape.
+				assistant("2026-05-20T00:00:02.000Z", [
+					{ type: "tool_use", id: "t2", name: "bash", input: { command: "npm test" } },
+				]),
+				{
+					type: "message",
+					timestamp: "2026-05-20T00:00:02.500Z",
+					message: {
+						role: "toolResult",
+						toolCallId: "t2",
+						toolName: "bash",
+						content: [{ type: "text", text: "FAIL 3 tests" }],
+						isError: true,
+					},
+				},
+				assistant("2026-05-20T00:00:03.000Z", [{ type: "text", text: "Done." }]),
+			]);
+
+			const width = 48;
+			const lines = buildRightLines(styledTheme, { ownership: "foreign", run: makeRun("run-cards", dir) }, width);
+			const joined = lines.join("\n");
+
+			// Success card: green bg, title line with duration, arg hint WRAPPED onto
+			// following lines (not clipped into the title), result hint inside the card.
+			const successCard = lines.filter((line) => line.startsWith(BG_OPEN.toolSuccessBg!));
+			assert.ok(successCard.length >= 3, `expected a multi-line success card:\n${joined}`);
+			assert.match(successCard[0]!, /→ run · \d+ms/);
+			assert.match(successCard[1]!, /const lessons = await r\(/);
+			assert.ok(
+				successCard.some((line) => line.includes("↳ ok")),
+				`result hint must render inside the bg card:\n${joined}`,
+			);
+			// Arg hint wraps to a bounded number of lines instead of one hard clip.
+			const argLines = successCard.filter((line) => !/→ run/.test(line) && !line.includes("↳"));
+			assert.ok(argLines.length >= 1 && argLines.length <= 2, `arg hint wraps to ≤2 lines:\n${joined}`);
+
+			// Error card: the toolResult isError flag flips the palette to toolErrorBg.
+			const errorCard = lines.filter((line) => line.startsWith(BG_OPEN.toolErrorBg!));
+			assert.ok(errorCard.length >= 2, `expected an error card for the failed bash call:\n${joined}`);
+			assert.match(errorCard[0]!, /→ bash · \d+ms/);
+			assert.ok(errorCard.some((line) => line.includes("↳ FAIL 3 tests")));
+
+			// Prompt block renders on the host's user-message background.
+			const promptCard = lines.filter((line) => line.startsWith(BG_OPEN.userMessageBg!));
+			assert.equal(promptCard.length, 4, `3 preview lines + clip marker on userMessageBg:\n${joined}`);
+
+			// ANSI hygiene for EVERY bg line: padded to exactly the pane width and the
+			// bg reset is the line's final escape — no bleed into the next row.
+			for (const line of [...successCard, ...errorCard, ...promptCard]) {
+				assert.equal(visibleWidth(line), width, `bg line must pad to pane width: ${JSON.stringify(line)}`);
+				assert.ok(line.endsWith("\x1b[49m"), `bg must close at line end: ${JSON.stringify(line)}`);
+			}
+
+			// Blank separator lines between cards and narration carry NO background.
+			assert.ok(
+				lines.some((line) => line === ""),
+				"cards are separated by plain blank lines",
+			);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
