@@ -270,7 +270,7 @@ describe("SubagentsStatusComponent", () => {
 				assert.match(output, /u\/d\s+half-page/);
 				assert.doesNotMatch(output, /pgup\/pgdn\s+page/);
 				assert.match(output, /y\s+copy id/);
-				assert.match(output, /D\s+open dir/);
+				assert.match(output, /D\s+copy dir/);
 				assert.match(output, /return\/o\s+collapse group/);
 				assert.match(output, /a\s+all sessions/);
 				assert.match(output, /s\s+sidebar/);

@@ -71,7 +71,7 @@ const DEFAULT_LEFT_FRACTION = 0.4;
 const SPLIT_STEP_COLS = 4;
 const MIN_VIEWPORT_HEIGHT = 12;
 const SELECTED_STATUS_BOX_ROWS = 5;
-// Transient key-action feedback (copy id / open dir) shown under the selected-run
+// Transient key-action feedback (copy id / copy dir) shown under the selected-run
 // status section; cleared automatically so the sidebar returns to its baseline.
 const ACTION_NOTICE_MS = 4000;
 // Shared legend lives in the left pane's bottom section, charter-picker style.
@@ -820,8 +820,8 @@ export class SubagentsStatusComponent implements Component {
 				},
 				{
 					keys: "D",
-					label: "open dir",
-					run: (ctx) => this.showSelectedRunDir(ctx.selectedRow),
+					label: "copy dir",
+					run: (ctx) => this.copySelectedRunDir(ctx.selectedRow),
 				},
 				{
 					keys: ["return", "o"],
@@ -916,7 +916,7 @@ export class SubagentsStatusComponent implements Component {
 		);
 	}
 
-	private showSelectedRunDir(row: OverlayDisplayRow | undefined): void {
+	private copySelectedRunDir(row: OverlayDisplayRow | undefined): void {
 		const run = this.runForOverlayRow(row);
 		if (!run) return;
 		const dir = run.run.asyncDir ?? run.run.sessionDir;
@@ -924,7 +924,14 @@ export class SubagentsStatusComponent implements Component {
 			this.setActionNotice("no run record dir");
 			return;
 		}
-		this.setActionNotice(`dir ${path.resolve(dir)}`);
+		const resolved = path.resolve(dir);
+		void copyToClipboard(resolved).then(
+			() => this.setActionNotice(`copied dir ${resolved}`),
+			(error: unknown) => {
+				const message = error instanceof Error ? error.message : String(error);
+				this.setActionNotice(`copy failed: ${message}`);
+			},
+		);
 	}
 
 	// render ONLY when the structural signature changed OR a live run still needs
