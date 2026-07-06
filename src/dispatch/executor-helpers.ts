@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import {
 	type AgentProgress,
+	type ArtifactPaths,
 	type ControlEvent,
 	type Details,
 	type ResolvedControlConfig,
@@ -24,7 +25,8 @@ import type {
 	InternalSubagentParams,
 } from "./executor-types.ts";
 import type { ChildAgentResult } from "../protocol/status-types.ts";
-import { getSingleResultOutput } from "../shared/utils.ts";
+import { compactForegroundDetails, getSingleResultOutput } from "../shared/utils.ts";
+import { finalizeSingleOutput } from "../surfaces/single-output.ts";
 import { resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
 import {
 	formatControlInterruptReason,
@@ -575,5 +577,67 @@ export function singleResultToChildAgentResult(
 			cost: result.usage.cost ?? 0,
 			turns: result.usage.turns ?? 0,
 		},
+	};
+}
+
+/**
+ * Shape a finished sync single-step SingleResult into the tool result the
+ * parent sees. Single source of truth for the foreground single result shape:
+ * the sync single dispatch tail AND sync resume both route through here, so
+ * the two cannot drift (detached/interrupted/failed/success branches, display
+ * output finalization, compact single-mode details).
+ */
+export function shapeSingleForegroundResult(args: {
+	r: SingleResult;
+	runId: string;
+	agent: string;
+	outputPath?: string;
+	progress?: AgentProgress[];
+	artifacts?: { dir: string; files: ArtifactPaths[] };
+}): AgentToolResult<Details> {
+	const { r, runId, agent } = args;
+	const fullOutput = getSingleResultOutput(r);
+	const finalizedOutput = finalizeSingleOutput({
+		fullOutput,
+		truncatedOutput: r.truncation?.text,
+		outputPath: args.outputPath,
+		exitCode: r.exitCode,
+		savedPath: r.savedOutputPath,
+		saveError: r.outputSaveError,
+	});
+	const details = compactForegroundDetails({
+		mode: "single",
+		runId,
+		results: [r],
+		progress: args.progress,
+		artifacts: args.artifacts,
+		truncation: r.truncation,
+	});
+	if (r.detached) {
+		return {
+			content: [{ type: "text", text: `Detached for intercom coordination: ${agent}` }],
+			details,
+		};
+	}
+	if (r.interrupted) {
+		return {
+			content: [
+				{
+					type: "text",
+					text: `Run paused after interrupt (${agent}). Waiting for explicit next action.`,
+				},
+			],
+			details,
+		};
+	}
+	if (r.exitCode !== 0)
+		return {
+			content: [{ type: "text", text: r.error || "Failed" }],
+			details,
+			isError: true,
+		};
+	return {
+		content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
+		details,
 	};
 }

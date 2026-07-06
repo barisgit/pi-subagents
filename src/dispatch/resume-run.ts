@@ -16,6 +16,7 @@ import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.t
 import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
 import { logger } from "../shared/logger.ts";
 import { createForegroundRunController } from "./foreground-run-controller.ts";
+import { registerRunController, releaseRunController } from "./layer0-runs.ts";
 import {
 	type Details,
 	type SingleResult,
@@ -35,6 +36,7 @@ import {
 	interruptForegroundOnNeedsAttention,
 	mirrorForegroundProgressToStatus,
 	safeEmit,
+	shapeSingleForegroundResult,
 	tokenUsageFromResult,
 	validationError,
 } from "./executor-helpers.ts";
@@ -380,10 +382,14 @@ async function resumeRun(
 				exitCode: result.exitCode,
 				error: result.error,
 			});
-			return {
-				content: [{ type: "text", text: `Resume completed for run ${runId}.` }],
-				details: { mode: "management", results: [] },
-			};
+			// Same result shape as a normal sync single dispatch: the parent gets the
+			// agent's output and the finished widget renders a single result card, not
+			// a bland management row. Shared shaping helper prevents call-site drift.
+			return shapeSingleForegroundResult({
+				r: result,
+				runId: target.runId,
+				agent: target.agentName,
+			});
 		} catch (error) {
 			failureMessage = error instanceof Error ? error.message : String(error);
 			emitSyncLifecycleEvent(deps.pi, SUBAGENT_FAILED_EVENT, {
@@ -424,6 +430,10 @@ async function resumeRun(
 		}
 	}
 	const detachedAbort = new AbortController();
+	// Same invariant as the async dispatch paths: this resume does not go
+	// through spawnRun, so its detached controller must live in the shared
+	// layer0 map or the resumed run is uninterruptible after a reload.
+	registerRunController(target.runId, detachedAbort);
 	const asyncCtx = {
 		extensionCtx: data.ctx,
 		abortSignal: detachedAbort.signal,
@@ -455,6 +465,7 @@ async function resumeRun(
 				asyncDir: target.runRecordDir,
 			});
 		} finally {
+			releaseRunController(target.runId);
 			statusWriter.dispose();
 			resumeInFlight.delete(resumeKey);
 		}

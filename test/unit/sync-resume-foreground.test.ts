@@ -143,7 +143,11 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 			sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => null },
 			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
 			model: { provider: "mock" },
-		} as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+		} as never) as Promise<{
+			isError?: boolean;
+			content: Array<{ text?: string }>;
+			details?: { mode?: string; runId?: string; results: Array<{ exitCode?: number }> };
+		}>;
 	return {
 		execute,
 		session,
@@ -257,8 +261,15 @@ describe("sync resume foreground", () => {
 		h.session.resolvePrompt?.();
 		const result = await pending;
 		assert.equal(result.isError, undefined, result.content[0]?.text);
-		assert.match(result.content[0]?.text ?? "", /Resume completed for run resume-run\./);
+		// Sync resume returns the SAME shape as a normal sync single dispatch: the
+		// child's output in content and a populated single-mode details envelope,
+		// not the old management stub.
+		assert.match(result.content[0]?.text ?? "", /resumed output/);
 		assert.doesNotMatch(result.content[0]?.text ?? "", /Async resume/);
+		assert.equal(result.details?.mode, "single");
+		assert.equal(result.details?.runId, "resume-run");
+		assert.equal(result.details?.results.length, 1);
+		assert.equal(result.details?.results[0]?.exitCode, 0);
 		assert.equal(h.state.foregroundControls.size, 0);
 	});
 
@@ -286,7 +297,9 @@ describe("sync resume foreground", () => {
 		);
 		h.session.resolvePrompt?.();
 		const result = await pending;
-		assert.match(result.content[0]?.text ?? "", /Resume completed for run resume-run\./);
+		assert.match(result.content[0]?.text ?? "", /resumed output/);
+		assert.equal(result.details?.mode, "single");
+		assert.equal(result.details?.results.length, 1);
 	});
 
 	it("bare resume (async omitted) follows asyncByDefault=true as background", async () => {
