@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { AsyncRunSummary } from "../../src/state/async-status.ts";
 import { buildRightLines, selectToolArg } from "../../src/surfaces/dashboard-detail-renderer.ts";
+import { buildSelectedRunStatusBox, type LiveRun } from "../../src/surfaces/subagents-status.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
@@ -20,7 +21,7 @@ const LONG_PROMPT = [
 	"Redesign the dashboard right pane into a simple scannable renderer.",
 	"The current pane dumps the full prompt as a wall of muted prose and prints raw JSON args.",
 	"Collapse the prompt, humanize tool lines, interleave assistant narration,",
-	"keep the step-end separators and the final markdown block intact.",
+	"keep the step feed chrome-free and the final markdown block intact.",
 	"Verify with unit tests that feed a synthetic transcript and assert the clipping,",
 	"humanization, narration, and final block behavior all hold under a narrow width.",
 ].join(" ");
@@ -152,10 +153,10 @@ describe("dashboard detail pane redesign", () => {
 			assert.equal(hintLines.length, 15, `expected one result hint per tool card:\n${joined}`);
 			assert.match(hintLines[0]!, /↳ ok/);
 
-			// Step separator and bordered final markdown block stay intact.
-			assert.match(joined, /─── Step 1: fixer ───/);
-			assert.match(joined, /15 tools · 4\.2Mt · 13m58s/);
-			assert.match(joined, /─── done · complete · 4\.2Mt · 13m58s ───/);
+			// Deleted step chrome stays out of the feed; the bordered final markdown block remains.
+			assert.doesNotMatch(joined, /─── Step 1: fixer ───/);
+			assert.doesNotMatch(joined, /15 tools · 4\.2Mt · 13m58s/);
+			assert.doesNotMatch(joined, /─── done · complete · 4\.2Mt · 13m58s ───/);
 			assert.match(joined, /Verdict/);
 			assert.match(joined, /All good\./);
 			const border = "─".repeat(60);
@@ -165,7 +166,7 @@ describe("dashboard detail pane redesign", () => {
 		}
 	});
 
-	it("hides duplicate run labels but keeps distinct step labels", () => {
+	it("removes run and step label chrome from the feed", () => {
 		const duplicateDir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		const distinctDir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
@@ -190,9 +191,10 @@ describe("dashboard detail pane redesign", () => {
 				{ ownership: "foreign", run: makeRun("run-label-distinct", distinctDir, "run label") },
 				80,
 			).map(stripAnsi);
-			assert.ok(
-				distinctLines.includes("Label: distinct step label"),
-				`distinct step label must remain visible:\n${distinctLines.join("\n")}`,
+			assert.equal(
+				distinctLines.findIndex((line) => line === "Label: distinct step label"),
+				-1,
+				`distinct step label must be hidden:\n${distinctLines.join("\n")}`,
 			);
 		} finally {
 			fs.rmSync(duplicateDir, { recursive: true, force: true });
@@ -274,6 +276,75 @@ const styledTheme = {
 	fg: (_name: string, text: string) => text,
 	bg: (name: string, text: string) => `${BG_OPEN[name] ?? "\x1b[40m"}${text}\x1b[49m`,
 } as never;
+
+const STATUS_FG: Record<string, string> = {
+	dim: "\x1b[2m",
+	success: "\x1b[32m",
+	accent: "\x1b[36m",
+	warning: "\x1b[33m",
+	error: "\x1b[31m",
+};
+const statusTheme = {
+	fg: (name: string, text: string) => `${STATUS_FG[name] ?? "\x1b[37m"}${text}\x1b[39m`,
+	bg: (_name: string, text: string) => text,
+} as never;
+
+describe("dashboard selected-run status box", () => {
+	it("renders a compact pi-charter-style box at exact width without background bleed", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
+		try {
+			writeSession(dir, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "t1", name: "read", input: { path: "/abs/test.ts" } },
+				]),
+				user("2026-05-20T00:00:01.200Z", [{ type: "tool_result", tool_use_id: "t1", content: "ok" }]),
+				assistant("2026-05-20T00:00:02.000Z", [
+					{ type: "tool_use", id: "t2", name: "edit", input: { path: "/abs/src.ts" } },
+				]),
+				user("2026-05-20T00:00:02.300Z", [{ type: "tool_result", tool_use_id: "t2", content: "edited" }]),
+			]);
+			const summary: AsyncRunSummary = {
+				...makeRun("run-status-box", dir, "polish dashboard"),
+				mode: "parallel",
+				endedAt: 1000 + 838449,
+				totalTokens: { input: 1_000_000, output: 3_240_235, total: 4_240_235 },
+			};
+			const width = 44;
+			const lines = buildSelectedRunStatusBox(
+				statusTheme,
+				{ ownership: "foreign", run: summary } satisfies LiveRun,
+				width,
+			);
+			const plainLines = lines.map(stripAnsi);
+			const joined = plainLines.join("\n");
+
+			assert.equal(lines.length, 4, "box stays tight");
+			assert.match(plainLines[0]!, /^╭─ polish dashboard ─+ complete · 13m58s ─╮$/);
+			assert.match(plainLines[1]!, /│ 2 tools · 4\.2Mt · 13m58s +│/);
+			assert.match(plainLines[2]!, /│ parallel · id run-stat · started \d\d:\d\d +│/);
+			assert.match(plainLines[3]!, /^╰─+╯$/);
+			for (const line of lines) {
+				assert.equal(
+					visibleWidth(line),
+					width,
+					`status box line must fit sidebar width: ${JSON.stringify(line)}`,
+				);
+				assert.doesNotMatch(
+					line,
+					/\x1b\[(?:4[0-9]|10[0-7]|49)m/,
+					`status box must use fg only, no bg bleed: ${JSON.stringify(line)}`,
+				);
+			}
+			assert.match(
+				lines[0]!,
+				/\x1b\[32mcomplete · 13m58s\x1b\[39m/,
+				`complete tail is success-colored:\n${joined}`,
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("dashboard detail pane tool cards", () => {
 	it("renders tool calls as padded multi-line bg cards with verbatim args and inner result hints", () => {
@@ -361,14 +432,7 @@ describe("dashboard detail pane tool cards", () => {
 				"cards are separated by plain blank lines",
 			);
 
-			const footerLine = lines.find((line) => stripAnsi(line).includes("─── done · complete"));
-			assert.ok(footerLine, `step footer missing:\n${joined}`);
-			assert.equal(visibleWidth(footerLine), width, "step footer overwrites the full pane row");
-			assert.doesNotMatch(
-				footerLine,
-				/\x1b\[(?:4[0-9]|10[0-7]|49)m/,
-				`step footer must not carry background codes: ${JSON.stringify(footerLine)}`,
-			);
+			assert.doesNotMatch(joined, /─── done · complete/, "step footer must be removed");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

@@ -259,10 +259,11 @@ describe("SubagentsStatusComponent", () => {
 				assert.match(output, /Subagent runs · 1 total/);
 				// The running glyph (◈) carries the state; the redundant "running" word is gone.
 				assert.match(output, /> ◈ waiter/);
-				assert.match(output, /─── Step 1: waiter ───/);
+				assert.doesNotMatch(output, /─── Step 1: waiter ───/);
+				assert.match(output, /╭─ waiter .* running ·/);
 				assert.match(output, /→ bash · 400ms/);
 				assert.match(output, /│ {2}ls\s/);
-				assert.match(output, /─── done · completed · 150t · 1000ms ───/);
+				assert.doesNotMatch(output, /─── done · completed · 150t · 1000ms ───/);
 				// paneOverlay owns standard action legend rows; custom dashboard actions are appended.
 				assert.match(output, /tab\/←\/→\s+focus/);
 				assert.match(output, /j\/k\s+select/);
@@ -560,10 +561,9 @@ describe("SubagentsStatusComponent", () => {
 				const toolIdx = lines.findIndex((line) => /→ read · 250ms/.test(line));
 				const finalIdx = lines.findIndex((line) => line.includes("Wrapped final answer text."));
 				const endIdx = lines.findIndex((line) => line.includes("done · completed · 42t · 400ms"));
-				assert.ok(
-					stepIdx >= 0 && toolIdx > stepIdx && finalIdx > toolIdx && endIdx > toolIdx,
-					`order wrong: ${stepIdx}/${toolIdx}/${finalIdx}/${endIdx}\n${joined}`,
-				);
+				assert.equal(stepIdx, -1, `step header must be removed:\n${joined}`);
+				assert.equal(endIdx, -1, `step footer must be removed:\n${joined}`);
+				assert.ok(toolIdx >= 0 && finalIdx > toolIdx, `order wrong: ${toolIdx}/${finalIdx}\n${joined}`);
 			} finally {
 				component.dispose();
 			}
@@ -776,7 +776,7 @@ describe("SubagentsStatusComponent", () => {
 				}
 				const joined = lines.join("\n");
 				assert.match(joined, /Subagent runs · 2 total/);
-				assert.match(joined, /Step 1: scout/);
+				assert.doesNotMatch(joined, /Step 1: scout/);
 				assert.match(joined, /◈/);
 				assert.match(joined, /✓/);
 			} finally {

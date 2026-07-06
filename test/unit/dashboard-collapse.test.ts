@@ -42,6 +42,10 @@ function stripBorders(line: string): string {
 	return line.replace(/^│/, "").replace(/│$/, "").trim();
 }
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 function leftOnly(lines: string[]): string[] {
 	return lines.map((line) => line.split("│")[0] ?? line);
 }
@@ -117,6 +121,33 @@ afterEach(() => {
 });
 
 describe("dashboard collapse and container rows", () => {
+	it("renders the selected run status box in the sidebar directly above the action legend", () => {
+		const root = tmpRegistry();
+		seedRun(root, {
+			runId: "run-status-box",
+			agentName: "fixer",
+			label: "polish dashboard",
+			startedAt: 1000,
+		});
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, {
+			refreshMs: 0,
+			sessionCwd: root,
+		});
+		try {
+			const lines = component.render(120).map(stripAnsi);
+			const boxTop = lines.findIndex((line) => line.includes("╭─ polish dashboard"));
+			const boxBottom = lines.findIndex((line) => line.includes("╰") && line.indexOf("╰") > 0);
+			const actions = lines.findIndex((line) => line.includes("─ hide list ─"));
+
+			assert.ok(boxTop >= 0, `selected-run status box missing:\n${lines.join("\n")}`);
+			assert.ok(boxBottom > boxTop, `status box footer missing:\n${lines.join("\n")}`);
+			assert.ok(actions > boxBottom, `action legend must sit below status box:\n${lines.join("\n")}`);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("enter collapses a workflow container: phase rows and children hide", () => {
 		const root = tmpRegistry();
 		seedRun(root, {

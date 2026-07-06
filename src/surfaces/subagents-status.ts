@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { colorForAgentName } from "../shared/agents.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	computeSplitPaneLayout,
 	endCursor,
@@ -25,9 +25,10 @@ import {
 	readLeafRunViewCached,
 	sortRuns,
 } from "../state/async-status.ts";
-import { formatDuration } from "./formatters.ts";
+import { formatDuration, formatTokenCounter } from "./formatters.ts";
 import { tintAgentName } from "./render-shared.ts";
 import { buildRightLines, statusGlyph } from "./dashboard-detail-renderer.ts";
+import { readRunTranscript } from "../state/run-transcript.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
@@ -69,6 +70,15 @@ const MIN_RIGHT_PANE = 24;
 const DEFAULT_LEFT_FRACTION = 0.4;
 const SPLIT_STEP_COLS = 4;
 const MIN_VIEWPORT_HEIGHT = 12;
+const SELECTED_STATUS_BOX_ROWS = 5;
+const STATUS_BORDER = {
+	topLeft: "╭",
+	topRight: "╮",
+	bottomLeft: "╰",
+	bottomRight: "╯",
+	horizontal: "─",
+	vertical: "│",
+};
 // Shared legend lives in the left pane's bottom section, charter-picker style.
 // Only the two titled chrome rows (top border + bottom border) consume vertical
 // space inside the overlay region. We fill the rest with body rows so the
@@ -751,6 +761,12 @@ export class SubagentsStatusComponent implements Component {
 				},
 				renderRow: (row, ctx) => this.renderOverlayPrimaryRow(row, ctx),
 				title: () => this.overlayPrimaryTitle(),
+				info: (ctx) => {
+					const run = this.runForOverlayRow(ctx.selectedRow);
+					const width = Math.max(1, ctx.primary.width || this.lastLeftWidth || MIN_LEFT_PANE);
+					return run ? buildSelectedRunStatusBox(this.theme, run, width, Date.now()) : [];
+				},
+				infoTitle: "",
 				footer: (ctx) => {
 					const visibleCount = this.displayRows().length;
 					return visibleCount > 0
@@ -1130,7 +1146,8 @@ export class SubagentsStatusComponent implements Component {
 		this.lastLeftWidth = layout.leftWidth;
 		this.lastRightWidth = Math.max(MIN_RIGHT_PANE, layout.rightWidth);
 		this.lastRightHeight = computeBodyHeight(this.tui);
-		this.lastLeftListHeight = Math.max(1, this.lastRightHeight - 9);
+		const statusBoxRows = this.selectedRun() ? SELECTED_STATUS_BOX_ROWS : 0;
+		this.lastLeftListHeight = Math.max(1, this.lastRightHeight - 9 - statusBoxRows);
 		return this.overlay.render(width);
 	}
 
@@ -1158,6 +1175,113 @@ function selectedRunTitle(run: LiveRun): string {
 	const running = run.run.steps?.find((s) => s.status === "running");
 	const step = running ?? run.run.steps?.[0];
 	return step?.agent ?? run.run.mode ?? "(run)";
+}
+
+type ThemeFg = Parameters<Theme["fg"]>[0];
+
+function selectedRunStatusColor(run: LiveRun): ThemeFg {
+	if (run.run.displayState === "lost") return "error";
+	if (run.run.displayState === "needs_attention" || run.run.activityState === "needs_attention") return "warning";
+	switch (run.run.state) {
+		case "running":
+			return "accent";
+		case "complete":
+			return "success";
+		case "failed":
+		case "lost":
+			return "error";
+		case "paused":
+		case "interrupted":
+			return "warning";
+		case "queued":
+		case "skipped":
+			return "dim";
+	}
+}
+
+function runTokenTotal(run: LiveRun): number {
+	if (run.run.totalTokens) return run.run.totalTokens.total;
+	return run.run.steps.reduce((sum, step) => sum + (step.tokens?.total ?? 0), 0);
+}
+
+function runDurationMs(run: LiveRun, now: number): number {
+	const end = run.run.endedAt ?? now;
+	return Math.max(0, end - (run.run.executionStartedAt ?? run.run.startedAt));
+}
+
+function runIsLost(run: LiveRun): boolean {
+	return run.run.state === "lost" || run.run.displayState === "lost";
+}
+
+function runToolCount(run: LiveRun): number {
+	if (run.run.asyncDir) return readRunTranscript(run.run.asyncDir).filter((event) => event.kind === "tool").length;
+	return run.run.recentTools?.length ?? 0;
+}
+
+function formatStartedTime(ms: number): string {
+	const date = new Date(ms);
+	const hours = date.getHours().toString().padStart(2, "0");
+	const minutes = date.getMinutes().toString().padStart(2, "0");
+	return `${hours}:${minutes}`;
+}
+
+function clipPlain(text: string, width: number): string {
+	return truncateToWidth(text, Math.max(0, width), "…").replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function renderStatusBoxHeader(theme: Theme, width: number, name: string, tail: string, color: ThemeFg): string {
+	const border = (text: string) => theme.fg("dim", text);
+	const availableText = Math.max(0, width - 9);
+	let tailText = tail;
+	let nameText = name;
+	if (visibleWidth(nameText) + visibleWidth(tailText) > availableText) {
+		const tailBudget = Math.min(visibleWidth(tailText), Math.max(0, Math.floor(availableText / 2)));
+		tailText = clipPlain(tailText, tailBudget);
+		nameText = clipPlain(nameText, Math.max(0, availableText - visibleWidth(tailText)));
+	}
+	const dashCount = Math.max(1, width - 8 - visibleWidth(nameText) - visibleWidth(tailText));
+	const line = `${border(STATUS_BORDER.topLeft)}${border(STATUS_BORDER.horizontal)} ${theme.fg(color, nameText)} ${border(STATUS_BORDER.horizontal.repeat(dashCount))} ${theme.fg(color, tailText)} ${border(STATUS_BORDER.horizontal)}${border(STATUS_BORDER.topRight)}`;
+	return truncateToWidth(line, width, "");
+}
+
+function renderStatusBoxLine(theme: Theme, width: number, text: string): string {
+	const innerWidth = Math.max(0, width - 2);
+	const content = ` ${clipPlain(text, Math.max(0, innerWidth - 2))} `;
+	const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(content)));
+	const border = theme.fg("dim", STATUS_BORDER.vertical);
+	return `${border}${theme.fg("dim", content)}${padding}${border}`;
+}
+
+function renderStatusBoxFooter(theme: Theme, width: number): string {
+	const border = (text: string) => theme.fg("dim", text);
+	return `${border(STATUS_BORDER.bottomLeft)}${border(STATUS_BORDER.horizontal.repeat(Math.max(0, width - 2)))}${border(STATUS_BORDER.bottomRight)}`;
+}
+
+export function buildSelectedRunStatusBox(
+	theme: Theme,
+	run: LiveRun,
+	width: number,
+	now: number = Date.now(),
+): string[] {
+	const boxWidth = Math.max(8, width);
+	const durationMs = runDurationMs(run, now);
+	const color = selectedRunStatusColor(run);
+	const lostStamp = runIsLost(run) ? runEndedStamp(run) : "";
+	const durationLabel = lostStamp ? lostStamp : formatDuration(durationMs);
+	const tail = `${run.run.displayState ?? run.run.state} · ${durationLabel}`;
+	const stats: string[] = [];
+	const tools = runToolCount(run);
+	if (tools > 0) stats.push(`${tools} tool${tools === 1 ? "" : "s"}`);
+	const tokens = runTokenTotal(run);
+	if (tokens > 0) stats.push(formatTokenCounter(tokens));
+	if (!lostStamp) stats.push(formatDuration(durationMs));
+	const meta = `${run.run.mode} · id ${run.run.id.slice(0, 8)} · started ${formatStartedTime(run.run.startedAt)}`;
+	return [
+		renderStatusBoxHeader(theme, boxWidth, selectedRunTitle(run), tail, color),
+		renderStatusBoxLine(theme, boxWidth, stats.length > 0 ? stats.join(" · ") : meta),
+		renderStatusBoxLine(theme, boxWidth, meta),
+		renderStatusBoxFooter(theme, boxWidth),
+	];
 }
 
 function selectedRunTailPlain(run: LiveRun): string {

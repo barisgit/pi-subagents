@@ -33,20 +33,6 @@ function clip(text: string, width: number): string {
 	return truncateToWidth(normalizePaneText(text), width, ELLIPSIS);
 }
 
-function padPlainLine(text: string, width: number): string {
-	const normalized = normalizePaneText(text);
-	const pad = Math.max(0, width - visibleWidth(normalized));
-	return `${normalized}${" ".repeat(pad)}`;
-}
-
-function normalizedLabel(text: string): string {
-	return normalizePaneText(text).trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function shouldShowStepLabel(run: LiveRun, label: string): boolean {
-	return !run.run.label || normalizedLabel(label) !== normalizedLabel(run.run.label);
-}
-
 // Render prose (agent markdown output / prompts) through pi-tui's Markdown
 // component so headings, lists, and code fences read correctly in the pane.
 function renderMarkdownLines(text: string, width: number): string[] {
@@ -424,19 +410,15 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 		agent: string;
 		startTs?: number;
 		lines: string[];
-		toolCount: number;
 		final?: string;
 		task?: string;
-		label?: string;
-		endTokens?: number;
-		endDurationMs?: number;
 		lastKind?: "tool" | "narration" | "other";
 	};
 	const steps = new Map<number, Step>();
 	const ensureStep = (index: number, agent: string): Step => {
 		let s = steps.get(index);
 		if (!s) {
-			s = { index, agent, lines: [], toolCount: 0 };
+			s = { index, agent, lines: [] };
 			steps.set(index, s);
 		}
 		if (!s.agent && agent) s.agent = agent;
@@ -458,7 +440,6 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			const step = ensureStep(event.stepIndex, event.agent);
 			if (!step.startTs) step.startTs = event.ts;
 			if (event.task && !step.task) step.task = event.task;
-			if (event.label && !step.label) step.label = event.label;
 			continue;
 		}
 		if (event.kind === "assistant-text") {
@@ -487,26 +468,16 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 							theme.fg("dim", clip(line, width)),
 						);
 						pushStepLines(step, "tool", nested);
-						step.toolCount++;
 						continue;
 					}
 				}
 			}
 			const arg = event.rawArgs ? selectToolArg(event.toolName, event.rawArgs) : { text: event.argsPreview };
 			pushStepLines(step, "tool", buildToolBlock(theme, event, arg, width));
-			step.toolCount++;
 			continue;
 		}
 		if (event.kind === "step-end") {
-			const step = ensureStep(event.stepIndex, event.agent);
-			if (event.tokens !== undefined) step.endTokens = event.tokens;
-			if (event.durationMs !== undefined) step.endDurationMs = event.durationMs;
-			const middle: string[] = ["done"];
-			if (event.status) middle.push(event.status);
-			if (event.tokens !== undefined) middle.push(formatTokenCounter(event.tokens));
-			if (event.durationMs !== undefined) middle.push(formatDuration(event.durationMs));
-			const text = `─── ${middle.join(" · ")} ───`;
-			pushStepLines(step, "other", [theme.fg("dim", padPlainLine(clip(text, width), width))]);
+			ensureStep(event.stepIndex, event.agent);
 			continue;
 		}
 		if (event.kind === "final-text") {
@@ -520,22 +491,9 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 		return a.index - b.index;
 	});
 	const out: string[] = [];
-	// Parallel children aren't 'steps' -- they race concurrently. Use 'Task N' so the
-	// right pane reads correctly for tasks: [...] async runs.
-	const stepWord = run.run.steps.length > 0 && run.run.mode === "parallel" ? "Task" : "Step";
 	for (const step of ordered) {
-		out.push(theme.fg("accent", clip(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
-		if (step.label && shouldShowStepLabel(run, step.label)) {
-			out.push(theme.fg("muted", clip(`Label: ${step.label}`, width)));
-		}
-		// Compact activity gist near the header so the reader doesn't have to scroll
-		// through the tool feed to size up the step.
-		if (step.toolCount > 0) {
-			const gist = [`${step.toolCount} tool${step.toolCount === 1 ? "" : "s"}`];
-			if (step.endTokens !== undefined) gist.push(formatTokenCounter(step.endTokens));
-			if (step.endDurationMs !== undefined) gist.push(formatDuration(step.endDurationMs));
-			out.push(theme.fg("dim", clip(gist.join(" · "), width)));
-		}
+		if (ordered.length > 1 && out.length > 0)
+			out.push(theme.fg("dim", clip(`── ${step.agent || "agent"} ──`, width)));
 		if (step.task) {
 			// Host convention: user prompts render on userMessageBg — same pad-then-bg
 			// pattern as the tool cards so the block spans the pane width.
