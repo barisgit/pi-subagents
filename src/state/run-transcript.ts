@@ -13,6 +13,7 @@ export type TranscriptLine =
 			rawArgs?: Record<string, unknown>;
 			durationMs?: number;
 			resultHint?: string;
+			resultLineCount?: number;
 			isError?: boolean;
 			ts: number;
 	  }
@@ -143,16 +144,18 @@ function rawArgsFrom(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-// First non-empty line of a tool result, bounded, for the dim "↳ …" hint the
-// detail pane renders under each tool line.
-const RESULT_HINT_MAX = 120;
-function firstResultLine(text: string): string {
-	for (const line of text.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		return trimmed.length > RESULT_HINT_MAX ? `${trimmed.slice(0, RESULT_HINT_MAX - 1)}…` : trimmed;
-	}
-	return "";
+// First result lines for the dim "↳ …" hint the detail pane renders under
+// each tool card. Trim only blank edge lines; content lines stay verbatim.
+const RESULT_HINT_MAX = 400;
+function resultPreview(text: string): { hint: string; lineCount: number } | undefined {
+	const lines = text.split("\n");
+	while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
+	while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") lines.pop();
+	if (lines.length === 0) return undefined;
+	const shown = lines
+		.slice(0, 3)
+		.map((line) => (line.length > RESULT_HINT_MAX ? `${line.slice(0, RESULT_HINT_MAX - 1)}…` : line));
+	return { hint: shown.join("\n"), lineCount: lines.length };
 }
 
 function textFromToolResultContent(value: unknown): string {
@@ -183,8 +186,11 @@ function resolveToolResult(
 	const start = out[idx];
 	if (start?.kind === "tool") {
 		start.durationMs = Math.max(0, ts - start.ts);
-		const hint = firstResultLine(textFromToolResultContent(content));
-		if (hint) start.resultHint = hint;
+		const preview = resultPreview(textFromToolResultContent(content));
+		if (preview) {
+			start.resultHint = preview.hint;
+			start.resultLineCount = preview.lineCount;
+		}
 		if (isError === true) start.isError = true;
 	}
 	toolStartIndex.delete(id);

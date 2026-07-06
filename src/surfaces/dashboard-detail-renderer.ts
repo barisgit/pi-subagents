@@ -105,45 +105,94 @@ function wrapText(text: string, width: number): string[] {
 // line with a background-only reset, so the color never bleeds into the pane
 // border or the following row.
 type ThemeBg = Parameters<Theme["bg"]>[0];
-const ARG_HINT_MAX_LINES = 2;
-const RESULT_HINT_MAX_LINES = 2;
 
 function bgLine(theme: Theme, color: ThemeBg, text: string, width: number): string {
 	const pad = Math.max(0, width - visibleWidth(text));
 	return theme.bg(color, `${text}${" ".repeat(pad)}`);
 }
 
-// Word-wrap capped at maxLines; a clipped tail gets the shared ellipsis so the
-// reader can tell the hint continues.
-function wrapCapped(text: string, width: number, maxLines: number): string[] {
-	if (width <= 0) return [];
-	const lines = wrapText(text, width);
-	if (lines.length <= maxLines) return lines;
-	const capped = lines.slice(0, maxLines);
-	const last = capped[capped.length - 1] ?? "";
-	capped[capped.length - 1] = truncateToWidth(`${last}${ELLIPSIS}`, width, ELLIPSIS);
-	return capped;
-}
-
 type ToolEvent = Extract<TranscriptLine, { kind: "tool" }>;
 
-// Line 1: tool name (toolTitle) + duration; line 2+: arg hint wrapped to a
-// small cap; then the result hint (↳, toolOutput) inside the same bg block.
-function buildToolBlock(theme: Theme, event: ToolEvent, hint: string, width: number): string[] {
+function trimBlankEdges(lines: string[]): string[] {
+	while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
+	while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") lines.pop();
+	return lines;
+}
+
+function withoutFullReset(line: string): string {
+	return line.replace(/\x1b\[0m/g, "\x1b[39m");
+}
+
+function fitAnsiLines(lines: string[], width: number): string[] {
+	const fitted: string[] = [];
+	for (const line of lines) {
+		if (visibleWidth(line) <= width) fitted.push(line);
+		else fitted.push(...wrapTextWithAnsi(line, width));
+	}
+	return fitted;
+}
+
+function appendFoldedLines(
+	out: string[],
+	lines: string[],
+	hiddenSourceLines: number,
+	maxLines: number,
+	indent: string,
+	theme: Theme,
+): void {
+	let hidden = hiddenSourceLines;
+	let shown = lines;
+	if (hidden > 0) {
+		const keep = Math.min(lines.length, Math.max(0, maxLines - 1));
+		hidden += lines.length - keep;
+		shown = lines.slice(0, keep);
+	} else if (lines.length > maxLines) {
+		const keep = Math.max(0, maxLines - 1);
+		hidden = lines.length - keep;
+		shown = lines.slice(0, keep);
+	}
+	for (const line of shown) out.push(`${indent}${line}`);
+	if (hidden > 0) out.push(`${indent}${theme.fg("dim", `${ELLIPSIS} (+${hidden} lines)`)}`);
+}
+
+function buildArgLines(theme: Theme, arg: ToolArgDisplay, width: number): string[] {
+	const source = trimBlankEdges(arg.text.split("\n"));
+	if (source.length === 0) return [];
+	const shownSource = source.slice(0, 4);
+	const hiddenSourceLines = source.length - shownSource.length;
+	const rendered = arg.lang ? highlightCode(shownSource.join("\n"), arg.lang).map(withoutFullReset) : shownSource;
+	const out: string[] = [];
+	appendFoldedLines(out, fitAnsiLines(rendered, Math.max(1, width - 2)), hiddenSourceLines, 5, "  ", theme);
+	return out;
+}
+
+function buildResultLines(theme: Theme, event: ToolEvent, width: number): string[] {
+	if (!event.resultHint) return [];
+	const allSource = event.resultHint.split("\n");
+	const source = allSource.slice(0, 3);
+	const totalSourceLines = event.resultLineCount ?? allSource.length;
+	const fitted = fitAnsiLines(source, Math.max(1, width - 4));
+	let hidden = Math.max(0, totalSourceLines - source.length);
+	let shown = fitted;
+	if (fitted.length > 3) {
+		shown = fitted.slice(0, 3);
+		hidden += fitted.length - shown.length;
+	}
+	const out = shown.map((line, index) => theme.fg("toolOutput", index === 0 ? `  ↳ ${line}` : `    ${line}`));
+	if (hidden > 0) out.push(theme.fg("dim", `    ${ELLIPSIS} (+${hidden} lines)`));
+	return out;
+}
+
+// Top padding, title, verbatim primary arg block, result preview, bottom padding.
+function buildToolBlock(theme: Theme, event: ToolEvent, arg: ToolArgDisplay, width: number): string[] {
 	const color: ThemeBg = event.isError ? "toolErrorBg" : "toolSuccessBg";
-	const inner: string[] = [];
+	const inner: string[] = [""];
 	const duration = event.durationMs !== undefined ? theme.fg("dim", ` · ${formatDuration(event.durationMs)}`) : "";
 	const title = theme.fg("toolTitle", clip(`→ ${event.toolName}`, Math.max(1, width - visibleWidth(duration))));
 	inner.push(`${title}${duration}`);
-	if (hint) {
-		for (const line of wrapCapped(hint, Math.max(1, width - 2), ARG_HINT_MAX_LINES)) inner.push(`  ${line}`);
-	}
-	if (event.resultHint) {
-		const lines = wrapCapped(event.resultHint, Math.max(1, width - 4), RESULT_HINT_MAX_LINES);
-		for (let i = 0; i < lines.length; i++) {
-			inner.push(theme.fg("toolOutput", i === 0 ? `  ↳ ${lines[i]}` : `    ${lines[i]}`));
-		}
-	}
+	inner.push(...buildArgLines(theme, arg, width));
+	inner.push(...buildResultLines(theme, event, width));
+	inner.push("");
 	return inner.map((line) => bgLine(theme, color, line, width));
 }
 
@@ -222,19 +271,14 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 	return out;
 }
 
-// ── Tool-call humanization ─────────────────────────────────────────────────
+// ── Tool-call primary arg selection ────────────────────────────────────────
 // Raw JSON args are too faithful for the pane: a `run {code:"\n…"}` call would
-// render as escaped noise. Instead each tool gets a CI-log style hint from a
-// data-driven table. Host builtins are only read/edit/write/grep/ls/find;
-// everything else is an extension tool with its own salient field. Display
-// concern only, so it lives inside the renderer.
+// render as escaped noise. Instead each tool selects the string argument that
+// best identifies the call. Rendering keeps that string verbatim and owns caps.
 
-function firstMeaningfulLine(text: string): string {
-	for (const line of text.split("\n")) {
-		const trimmed = line.trim();
-		if (trimmed) return trimmed.replace(/\s+/g, " ");
-	}
-	return "";
+export interface ToolArgDisplay {
+	text: string;
+	lang?: string;
 }
 
 function str(args: Record<string, unknown>, key: string): string | undefined {
@@ -242,85 +286,96 @@ function str(args: Record<string, unknown>, key: string): string | undefined {
 	return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function firstStr(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
+function display(text: string | undefined, key?: string): ToolArgDisplay | undefined {
+	if (text === undefined) return undefined;
+	if (key === "code" || key === "script") return { text, lang: "javascript" };
+	if (key === "command" || key === "cmd") return { text, lang: "bash" };
+	return { text };
+}
+
+function firstDisplay(args: Record<string, unknown>, keys: readonly string[]): ToolArgDisplay | undefined {
 	for (const key of keys) {
-		const value = str(args, key);
-		if (value !== undefined) return value;
+		const selected = display(str(args, key), key);
+		if (selected !== undefined) return selected;
 	}
 	return undefined;
 }
 
-const CODE_KEYS = ["code", "command", "cmd", "script"] as const;
-const SALIENT_KEYS = ["path", "file", "url", "query", "pattern", "command", "task", "prompt", "name", "id"] as const;
+const PRIMARY_CODE_KEYS = ["code", "command", "cmd", "script"] as const;
+const SALIENT_KEYS = [
+	"path",
+	"file",
+	"url",
+	"query",
+	"pattern",
+	"command",
+	"cmd",
+	"task",
+	"prompt",
+	"name",
+	"id",
+] as const;
 
-function pathHint(args: Record<string, unknown>): string {
-	const target = firstStr(args, ["path", "file_path", "filePath", "file"]);
-	return target ? shortenPath(target) : "";
+function textOnly(text: string): ToolArgDisplay {
+	return { text };
 }
 
-function patternPathHint(args: Record<string, unknown>): string {
-	const pattern = firstStr(args, ["pattern", "query", "regex"]);
-	const target = pathHint(args);
-	if (pattern) return target ? `${firstMeaningfulLine(pattern)} ${target}` : firstMeaningfulLine(pattern);
-	return target;
+function pathHint(args: Record<string, unknown>): ToolArgDisplay {
+	const target = firstDisplay(args, ["path", "file_path", "filePath", "file"]);
+	return textOnly(target ? shortenPath(target.text) : "");
 }
 
-function codeHint(args: Record<string, unknown>): string {
-	const code = firstStr(args, CODE_KEYS);
-	return code ? firstMeaningfulLine(code) : "";
+function patternPathHint(args: Record<string, unknown>): ToolArgDisplay {
+	const pattern = firstDisplay(args, ["pattern", "query", "regex"]);
+	const target = pathHint(args).text;
+	if (pattern) return textOnly(target ? `${pattern.text} ${target}` : pattern.text);
+	return textOnly(target);
 }
 
-// Per-tool hint table. Builtins first, then the extension tools this repo ships.
-const TOOL_HINTS: Record<string, (args: Record<string, unknown>) => string> = {
+// Per-tool selector table. Builtins first, then the extension tools this repo ships.
+const TOOL_ARG_SELECTORS: Record<string, (args: Record<string, unknown>) => ToolArgDisplay> = {
 	read: pathHint,
 	edit: pathHint,
 	write: pathHint,
 	ls: pathHint,
 	grep: patternPathHint,
 	find: patternPathHint,
-	run: codeHint,
-	bash: codeHint,
+	run: (args) => firstDisplay(args, PRIMARY_CODE_KEYS) ?? textOnly(""),
+	bash: (args) => firstDisplay(args, PRIMARY_CODE_KEYS) ?? textOnly(""),
 	subagent: (args) => {
 		const agent = str(args, "agent");
 		const task = str(args, "task");
-		if (agent || task) return [agent, task ? firstMeaningfulLine(task) : undefined].filter(Boolean).join(" ");
-		const action = str(args, "action");
-		const id = str(args, "id");
-		return [action, id].filter(Boolean).join(" ");
+		if (agent || task) return textOnly([agent, task].filter(Boolean).join(" "));
+		return textOnly([str(args, "action"), str(args, "id")].filter(Boolean).join(" "));
 	},
-	workflow: (args) => {
-		const script = str(args, "script");
-		if (script) return firstMeaningfulLine(script);
-		return str(args, "phase") ?? "";
-	},
-	process: (args) => [str(args, "action"), str(args, "name")].filter(Boolean).join(" "),
-	fetch: (args) => str(args, "url") ?? "",
-	ast_grep: (args) => {
-		const pattern = str(args, "pattern");
-		return pattern ? firstMeaningfulLine(pattern) : "";
-	},
-	mcp: (args) => str(args, "tool") ?? str(args, "describe") ?? str(args, "search") ?? str(args, "server") ?? "",
-	task: (args) => str(args, "action") ?? "",
+	workflow: (args) => firstDisplay(args, ["script"]) ?? textOnly(str(args, "phase") ?? ""),
+	process: (args) => textOnly([str(args, "action"), str(args, "name")].filter(Boolean).join(" ")),
+	fetch: (args) => textOnly(str(args, "url") ?? ""),
+	ast_grep: (args) => textOnly(str(args, "pattern") ?? ""),
+	mcp: (args) =>
+		textOnly(str(args, "tool") ?? str(args, "describe") ?? str(args, "search") ?? str(args, "server") ?? ""),
+	task: (args) => textOnly(str(args, "action") ?? ""),
 	apply_patch: pathHint,
 };
 
 // Fallback for unknown tools: first string among salient keys, else the first
 // short string prop — never raw JSON.
-function genericHint(args: Record<string, unknown>): string {
-	const salient = firstStr(args, SALIENT_KEYS);
-	if (salient !== undefined) return firstMeaningfulLine(salient);
-	for (const value of Object.values(args)) {
-		if (typeof value === "string" && value.trim() && value.length <= 200) return firstMeaningfulLine(value);
+function genericHint(args: Record<string, unknown>): ToolArgDisplay {
+	const salient = firstDisplay(args, SALIENT_KEYS);
+	if (salient !== undefined) return salient;
+	for (const [key, value] of Object.entries(args)) {
+		if (typeof value === "string" && value.trim() && value.length <= 200)
+			return display(value, key) ?? textOnly(value);
 	}
-	return "";
+	return textOnly("");
 }
 
-export function humanizeToolArgs(toolName: string, args: Record<string, unknown> | undefined): string {
-	if (!args) return "";
-	const hinter = TOOL_HINTS[toolName];
-	if (hinter) {
-		const hint = hinter(args);
-		if (hint) return hint;
+export function selectToolArg(toolName: string, args: Record<string, unknown> | undefined): ToolArgDisplay {
+	if (!args) return textOnly("");
+	const selector = TOOL_ARG_SELECTORS[toolName];
+	if (selector) {
+		const hint = selector(args);
+		if (hint.text) return hint;
 	}
 	return genericHint(args);
 }
@@ -419,8 +474,8 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 					}
 				}
 			}
-			const hint = event.rawArgs ? humanizeToolArgs(event.toolName, event.rawArgs) : event.argsPreview;
-			pushStepLines(step, "tool", buildToolBlock(theme, event, hint, width));
+			const arg = event.rawArgs ? selectToolArg(event.toolName, event.rawArgs) : { text: event.argsPreview };
+			pushStepLines(step, "tool", buildToolBlock(theme, event, arg, width));
 			step.toolCount++;
 			continue;
 		}

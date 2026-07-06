@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { AsyncRunSummary } from "../../src/state/async-status.ts";
-import { buildRightLines, humanizeToolArgs } from "../../src/surfaces/dashboard-detail-renderer.ts";
+import { buildRightLines, selectToolArg } from "../../src/surfaces/dashboard-detail-renderer.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
@@ -26,6 +26,10 @@ const LONG_PROMPT = [
 ].join(" ");
 
 const RUN_CODE = '\nconst lessons = await r("lessons.md");\nout(lessons.value);\nreturn { ok: true };\n';
+
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
 
 function makeRun(id: string, asyncDir: string): AsyncRunSummary {
 	return {
@@ -80,7 +84,7 @@ function user(iso: string, content: unknown[]): Record<string, unknown> {
 }
 
 describe("dashboard detail pane redesign", () => {
-	it("clips the prompt, renders every tool call on its own line, and keeps the final block", () => {
+	it("clips the prompt, renders every tool call on its own card, and keeps the final block", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
 			writeStatus(dir, "run-detail");
@@ -108,33 +112,35 @@ describe("dashboard detail pane redesign", () => {
 			writeSession(dir, records);
 
 			const lines = buildRightLines(theme, { ownership: "foreign", run: makeRun("run-detail", dir) }, 60);
-			const joined = lines.join("\n");
+			const plainLines = lines.map(stripAnsi);
+			const joined = plainLines.join("\n");
 
 			// Prompt: preview + marker, never the whole wall of prose.
-			const promptIdx = lines.findIndex((line) => line === "prompt:");
+			const promptIdx = plainLines.findIndex((line) => line === "prompt:");
 			assert.ok(promptIdx >= 0, `prompt label missing:\n${joined}`);
 			assert.ok(
-				lines.some((line) => /^\s*… \(\d+ more lines\)\s*$/.test(line)),
+				plainLines.some((line) => /^\s*… \(\d+ more lines\)\s*$/.test(line)),
 				`prompt clip marker missing:\n${joined}`,
 			);
 			assert.doesNotMatch(joined, /final block behavior/, "full prompt tail must be hidden");
 
-			// NO ×N grouping: all 15 run calls render their own card. Line 1 of each
-			// card is the tool name + duration; the humanized arg hint follows on its
-			// own line inside the card instead of being clipped onto the title.
-			const runLines = lines.filter((line) => line.startsWith("→ run"));
+			// NO ×N grouping: all 15 run calls render their own card. The primary
+			// code arg is verbatim multi-line content, not a collapsed first line.
+			const runLines = plainLines.filter((line) => line.startsWith("→ run"));
 			assert.equal(runLines.length, 15, `expected 15 individual run cards:\n${joined}`);
 			assert.doesNotMatch(joined, /×\d/, "consecutive same-tool calls must NOT collapse");
 			for (const line of runLines) {
 				assert.match(line, /^→ run · \d+ms/);
 			}
-			const hintArgLines = lines.filter((line) => line.includes("const lessons = await r("));
-			assert.equal(hintArgLines.length, 15, `expected one arg-hint line per card:\n${joined}`);
-			assert.doesNotMatch(joined, /[{}]|\\n|\\"/, "no raw JSON braces or escapes in the pane");
+			const firstCodeLines = plainLines.filter((line) => line.includes("const lessons = await r("));
+			const secondCodeLines = plainLines.filter((line) => line.includes("out(lessons.value);"));
+			assert.equal(firstCodeLines.length, 15, `expected first verbatim code line per card:\n${joined}`);
+			assert.equal(secondCodeLines.length, 15, `expected second verbatim code line per card:\n${joined}`);
+			assert.doesNotMatch(joined, /\\n|\\"/, "no raw JSON escapes in the pane");
 
-			// Result hints: each tool line is followed by a dim "↳" preview.
-			const hintLines = lines.filter((line) => line.trimStart().startsWith("↳"));
-			assert.equal(hintLines.length, 15, `expected one result hint per tool line:\n${joined}`);
+			// Result hints: each tool card includes a dim "↳" preview.
+			const hintLines = plainLines.filter((line) => line.trimStart().startsWith("↳"));
+			assert.equal(hintLines.length, 15, `expected one result hint per tool card:\n${joined}`);
 			assert.match(hintLines[0]!, /↳ ok/);
 
 			// Step separator and bordered final markdown block stay intact.
@@ -143,13 +149,13 @@ describe("dashboard detail pane redesign", () => {
 			assert.match(joined, /Verdict/);
 			assert.match(joined, /All good\./);
 			const border = "─".repeat(60);
-			assert.equal(lines.filter((line) => line === border).length, 2, "final block keeps both borders");
+			assert.equal(plainLines.filter((line) => line === border).length, 2, "final block keeps both borders");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("interleaves assistant narration between tool lines, before the final block", () => {
+	it("interleaves assistant narration between tool cards, before the final block", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
 			writeStatus(dir, "run-narrate");
@@ -169,15 +175,16 @@ describe("dashboard detail pane redesign", () => {
 			]);
 
 			const lines = buildRightLines(theme, { ownership: "foreign", run: makeRun("run-narrate", dir) }, 80);
-			const joined = lines.join("\n");
+			const plainLines = lines.map(stripAnsi);
+			const joined = plainLines.join("\n");
 
-			const narr1 = lines.findIndex((line) => line.includes("Let me look at the failing test first."));
-			const tool1 = lines.findIndex((line) => line.startsWith("→ read"));
-			const arg1 = lines.findIndex((line) => line.trim() === "/abs/test.ts");
-			const hint1 = lines.findIndex((line) => line.trimStart().startsWith("↳ 34 matches"));
-			const narr2 = lines.findIndex((line) => line.includes("The assertion is inverted; patching now."));
-			const tool2 = lines.findIndex((line) => line.startsWith("→ edit"));
-			const finalIdx = lines.findIndex((line) => line.includes("Fixed the inverted assertion."));
+			const narr1 = plainLines.findIndex((line) => line.includes("Let me look at the failing test first."));
+			const tool1 = plainLines.findIndex((line) => line.startsWith("→ read"));
+			const arg1 = plainLines.findIndex((line) => line.trim() === "/abs/test.ts");
+			const hint1 = plainLines.findIndex((line) => line.trimStart().startsWith("↳ 34 matches"));
+			const narr2 = plainLines.findIndex((line) => line.includes("The assertion is inverted; patching now."));
+			const tool2 = plainLines.findIndex((line) => line.startsWith("→ edit"));
+			const finalIdx = plainLines.findIndex((line) => line.includes("Fixed the inverted assertion."));
 			assert.ok(
 				narr1 >= 0 &&
 					tool1 > narr1 &&
@@ -188,19 +195,21 @@ describe("dashboard detail pane redesign", () => {
 					finalIdx > tool2,
 				`chat order wrong (${narr1}/${tool1}/${arg1}/${hint1}/${narr2}/${tool2}/${finalIdx}):\n${joined}`,
 			);
-			// Breathing room: a blank line separates the tool card from the narration
-			// before and after it.
-			assert.equal(lines[tool1 - 1], "", "blank line before the tool card");
-			assert.equal(lines[hint1 + 1], "", "blank line after the tool card");
+			// Breathing room: outside blank lines separate the padded tool card from
+			// narration. The card's own padding lines are width-long whitespace.
+			assert.equal(plainLines[tool1 - 2], "", "blank line before the tool card");
+			assert.equal(plainLines[hint1 + 2], "", "blank line after the tool card");
+			assert.ok(plainLines[tool1 - 1]?.trim() === "" && visibleWidth(plainLines[tool1 - 1]!) === 80);
+			assert.ok(plainLines[hint1 + 1]?.trim() === "" && visibleWidth(plainLines[hint1 + 1]!) === 80);
 			// The last assistant text is the FINAL block (bordered), not narration:
 			// it appears exactly once.
 			assert.equal(
-				lines.filter((line) => line.includes("Fixed the inverted assertion.")).length,
+				plainLines.filter((line) => line.includes("Fixed the inverted assertion.")).length,
 				1,
 				"final text must not double as narration",
 			);
 			const border = "─".repeat(80);
-			assert.equal(lines.filter((line) => line === border).length, 2, "final block bordered");
+			assert.equal(plainLines.filter((line) => line === border).length, 2, "final block bordered");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -222,7 +231,7 @@ const styledTheme = {
 } as never;
 
 describe("dashboard detail pane tool cards", () => {
-	it("renders tool calls as multi-line bg cards: padded width, closed bg, wrapped args, inner result hint", () => {
+	it("renders tool calls as padded multi-line bg cards with verbatim args and inner result hints", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
 			writeStatus(dir, "run-cards");
@@ -253,29 +262,40 @@ describe("dashboard detail pane tool cards", () => {
 
 			const width = 48;
 			const lines = buildRightLines(styledTheme, { ownership: "foreign", run: makeRun("run-cards", dir) }, width);
-			const joined = lines.join("\n");
+			const plainLines = lines.map(stripAnsi);
+			const joined = plainLines.join("\n");
 
-			// Success card: green bg, title line with duration, arg hint WRAPPED onto
-			// following lines (not clipped into the title), result hint inside the card.
+			// Success card: green bg, empty top/bottom padding, title, verbatim code
+			// lines, and result hint inside the card.
 			const successCard = lines.filter((line) => line.startsWith(BG_OPEN.toolSuccessBg!));
-			assert.ok(successCard.length >= 3, `expected a multi-line success card:\n${joined}`);
-			assert.match(successCard[0]!, /→ run · \d+ms/);
-			assert.match(successCard[1]!, /const lessons = await r\(/);
+			const successPlain = successCard.map(stripAnsi);
+			assert.ok(successCard.length >= 6, `expected a multi-line success card:\n${joined}`);
+			assert.equal(visibleWidth(successCard[0]!), width);
+			assert.equal(successPlain[0]!.trim(), "", "first success card line is empty padded content");
+			assert.ok(successCard[0]!.endsWith("\x1b[49m"));
+			assert.match(successPlain[1]!, /→ run · \d+ms/);
+			assert.ok(successPlain.some((line) => line.includes("const lessons = await r(")));
+			assert.ok(successPlain.some((line) => line.includes("out(lessons.value);")));
 			assert.ok(
-				successCard.some((line) => line.includes("↳ ok")),
+				successPlain.some((line) => line.includes("↳ ok")),
 				`result hint must render inside the bg card:\n${joined}`,
 			);
-			// Arg hint wraps to a bounded number of lines instead of one hard clip.
-			const argLines = successCard.filter((line) => !/→ run/.test(line) && !line.includes("↳"));
-			assert.ok(argLines.length >= 1 && argLines.length <= 2, `arg hint wraps to ≤2 lines:\n${joined}`);
+			assert.equal(successPlain.at(-1)!.trim(), "", "last success card line is empty padded content");
+			assert.equal(visibleWidth(successCard.at(-1)!), width);
+			assert.ok(successCard.at(-1)!.endsWith("\x1b[49m"));
 
 			// Error card: the toolResult isError flag flips the palette to toolErrorBg.
 			const errorCard = lines.filter((line) => line.startsWith(BG_OPEN.toolErrorBg!));
-			assert.ok(errorCard.length >= 2, `expected an error card for the failed bash call:\n${joined}`);
-			assert.match(errorCard[0]!, /→ bash · \d+ms/);
-			assert.ok(errorCard.some((line) => line.includes("↳ FAIL 3 tests")));
+			const errorPlain = errorCard.map(stripAnsi);
+			assert.ok(errorCard.length >= 5, `expected an error card for the failed bash call:\n${joined}`);
+			assert.equal(errorPlain[0]!.trim(), "", "first error card line is empty padded content");
+			assert.match(errorPlain[1]!, /→ bash · \d+ms/);
+			assert.ok(errorPlain.some((line) => line.includes("npm test")));
+			assert.ok(errorPlain.some((line) => line.includes("↳ FAIL 3 tests")));
+			assert.equal(errorPlain.at(-1)!.trim(), "", "last error card line is empty padded content");
 
-			// Prompt block renders on the host's user-message background.
+			// Prompt block renders on the host's user-message background and keeps its
+			// existing no-extra-padding contract.
 			const promptCard = lines.filter((line) => line.startsWith(BG_OPEN.userMessageBg!));
 			assert.equal(promptCard.length, 4, `3 preview lines + clip marker on userMessageBg:\n${joined}`);
 
@@ -295,38 +315,101 @@ describe("dashboard detail pane tool cards", () => {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("folds long arg and result blocks with line-count markers", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
+		try {
+			writeStatus(dir, "run-fold");
+			const longCode = [
+				"const one = 1;",
+				"const two = 2;",
+				"const three = 3;",
+				"const four = 4;",
+				"const five = 5;",
+				"return one + two + three + four + five;",
+			].join("\n");
+			writeSession(dir, [
+				user("2026-05-20T00:00:00.050Z", [{ type: "text", text: "Run a long command." }]),
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "t1", name: "run", input: { code: longCode } },
+				]),
+				user("2026-05-20T00:00:01.200Z", [
+					{ type: "tool_result", tool_use_id: "t1", content: "alpha\nbeta\ngamma\ndelta\nepsilon" },
+				]),
+			]);
+
+			const lines = buildRightLines(theme, { ownership: "foreign", run: makeRun("run-fold", dir) }, 90).map(
+				stripAnsi,
+			);
+			const joined = lines.join("\n");
+			assert.match(joined, /const one = 1;/);
+			assert.match(joined, /const four = 4;/);
+			assert.doesNotMatch(joined, /const five = 5;/);
+			assert.ok(
+				lines.some((line) => line.trim() === "… (+2 lines)"),
+				`arg fold marker missing:\n${joined}`,
+			);
+
+			const resultStart = lines.findIndex((line) => line.trimStart().startsWith("↳ alpha"));
+			assert.ok(resultStart >= 0, `result start missing:\n${joined}`);
+			assert.equal(lines[resultStart + 1]!.trim(), "beta");
+			assert.equal(lines[resultStart + 2]!.trim(), "gamma");
+			assert.equal(lines[resultStart + 3]!.trim(), "… (+2 lines)");
+			assert.doesNotMatch(joined, /delta|epsilon/);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
-describe("humanizeToolArgs", () => {
+describe("selectToolArg", () => {
 	it("maps builtins to path/pattern hints", () => {
-		assert.equal(humanizeToolArgs("read", { path: "/tmp/a.ts", offset: 5 }), "/tmp/a.ts");
-		assert.equal(humanizeToolArgs("edit", { path: "/tmp/a.ts", oldText: "a", newText: "b" }), "/tmp/a.ts");
-		assert.equal(humanizeToolArgs("grep", { pattern: "foo|bar", path: "/tmp/src" }), "foo|bar /tmp/src");
-		assert.equal(humanizeToolArgs("find", { pattern: "**/*.ts" }), "**/*.ts");
-		assert.equal(humanizeToolArgs("ls", { path: "/tmp" }), "/tmp");
+		assert.deepEqual(selectToolArg("read", { path: "/tmp/a.ts", offset: 5 }), { text: "/tmp/a.ts" });
+		assert.deepEqual(selectToolArg("edit", { path: "/tmp/a.ts", oldText: "a", newText: "b" }), {
+			text: "/tmp/a.ts",
+		});
+		assert.deepEqual(selectToolArg("grep", { pattern: "foo|bar", path: "/tmp/src" }), { text: "foo|bar /tmp/src" });
+		assert.deepEqual(selectToolArg("find", { pattern: "**/*.ts" }), { text: "**/*.ts" });
+		assert.deepEqual(selectToolArg("ls", { path: "/tmp" }), { text: "/tmp" });
 	});
-	it("extracts the first meaningful line for code/command tools", () => {
-		assert.equal(humanizeToolArgs("run", { code: "\n\n  const x = 1;\nreturn x;" }), "const x = 1;");
-		assert.equal(humanizeToolArgs("bash", { command: "  \n npm test\nmore" }), "npm test");
+	it("selects full verbatim code/command values with key-based languages", () => {
+		assert.deepEqual(selectToolArg("run", { code: "\n\n  const x = 1;\nreturn x;" }), {
+			text: "\n\n  const x = 1;\nreturn x;",
+			lang: "javascript",
+		});
+		assert.deepEqual(selectToolArg("bash", { command: "  \n npm test\nmore" }), {
+			text: "  \n npm test\nmore",
+			lang: "bash",
+		});
+		assert.deepEqual(selectToolArg("workflow", { script: "\nphase('scope');\nmore" }), {
+			text: "\nphase('scope');\nmore",
+			lang: "javascript",
+		});
 	});
 	it("maps extension tools to their salient fields", () => {
-		assert.equal(
-			humanizeToolArgs("subagent", { run: [], agent: "scout", task: "find tests\nand more" }),
-			"scout find tests",
-		);
-		assert.equal(humanizeToolArgs("subagent", { action: "status", id: "r-1" }), "status r-1");
-		assert.equal(humanizeToolArgs("workflow", { script: "\nphase('scope');\nmore" }), "phase('scope');");
-		assert.equal(humanizeToolArgs("process", { action: "start", name: "dev-server" }), "start dev-server");
-		assert.equal(humanizeToolArgs("fetch", { url: "https://x.dev/a" }), "https://x.dev/a");
-		assert.equal(humanizeToolArgs("ast_grep", { pattern: "foo($X)" }), "foo($X)");
-		assert.equal(humanizeToolArgs("mcp", { tool: "exa_web_search", args: { q: "x" } }), "exa_web_search");
-		assert.equal(humanizeToolArgs("task", { action: "create", creates: [] }), "create");
-		assert.equal(humanizeToolArgs("apply_patch", { path: "src/a.ts", patch: "@@" }), "src/a.ts");
+		assert.deepEqual(selectToolArg("subagent", { run: [], agent: "scout", task: "find tests\nand more" }), {
+			text: "scout find tests\nand more",
+		});
+		assert.deepEqual(selectToolArg("subagent", { action: "status", id: "r-1" }), { text: "status r-1" });
+		assert.deepEqual(selectToolArg("process", { action: "start", name: "dev-server" }), {
+			text: "start dev-server",
+		});
+		assert.deepEqual(selectToolArg("fetch", { url: "https://x.dev/a" }), { text: "https://x.dev/a" });
+		assert.deepEqual(selectToolArg("ast_grep", { pattern: "foo($X)" }), { text: "foo($X)" });
+		assert.deepEqual(selectToolArg("mcp", { tool: "exa_web_search", args: { q: "x" } }), {
+			text: "exa_web_search",
+		});
+		assert.deepEqual(selectToolArg("task", { action: "create", creates: [] }), { text: "create" });
+		assert.deepEqual(selectToolArg("apply_patch", { path: "src/a.ts", patch: "@@" }), { text: "src/a.ts" });
 	});
 	it("falls back to salient keys then first short string for unknown tools — never raw JSON", () => {
-		assert.equal(humanizeToolArgs("imagegen", { prompt: "a red fox\nsitting" }), "a red fox");
-		assert.equal(humanizeToolArgs("charter", { action: "list" }), "list");
-		assert.equal(humanizeToolArgs("mystery", { count: 3, flag: true }), "");
-		assert.equal(humanizeToolArgs("mystery", undefined), "");
+		assert.deepEqual(selectToolArg("imagegen", { prompt: "a red fox\nsitting" }), { text: "a red fox\nsitting" });
+		assert.deepEqual(selectToolArg("unknown", { command: "npm test\nagain" }), {
+			text: "npm test\nagain",
+			lang: "bash",
+		});
+		assert.deepEqual(selectToolArg("charter", { action: "list" }), { text: "list" });
+		assert.deepEqual(selectToolArg("mystery", { count: 3, flag: true }), { text: "" });
+		assert.deepEqual(selectToolArg("mystery", undefined), { text: "" });
 	});
 });
