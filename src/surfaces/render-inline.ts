@@ -9,7 +9,7 @@ import { statusToRunView, type AsyncRunSummary } from "../state/async-status.ts"
 import { formatPhase } from "../state/run-phase.ts";
 import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
-import { formatDuration, formatTokens } from "./formatters.ts";
+import { formatDuration, formatTokenCounter } from "./formatters.ts";
 
 function isTerminalInlineState(state: AsyncRunSummary["state"]): boolean {
 	return state === "complete" || state === "failed" || state === "paused" || state === "lost";
@@ -160,7 +160,7 @@ function inlineMeta(summary: AsyncRunSummary, events: TranscriptLine[]): string 
 	// A queued child has not begun executing: omit the running timer (it would count
 	// queue-wait) and state `queued` plainly instead.
 	const tail = summary.state === "queued" ? "queued" : formatDuration(inlineDuration(summary));
-	return `${tools} tools · ${formatTokens(tokens)} tok · ${tail}`;
+	return `${tools} tools · ${formatTokenCounter(tokens)} · ${tail}`;
 }
 
 function inlinePrefix(depth: number): string {

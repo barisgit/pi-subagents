@@ -31,7 +31,7 @@ describe("inline child expansion", () => {
 		// The inline widget renders at most one level: the child is one line, the
 		// grandchild (fixer) is NOT expanded — it only contributes a `↳ N nested` hint.
 		assert.equal(lines.length, 1, `expected one line, got ${lines.length}:\n${lines.join("\n")}`);
-		assert.match(lines[0]!, /◇ subagent: explorer · find files · 2 tools · 1.2k tok/);
+		assert.match(lines[0]!, /◇ subagent: explorer · find files · 2 tools · 1.2kt/);
 		assert.match(lines[0]!, /↳ 1 nested/);
 		assert.doesNotMatch(lines[0]!, /subagent: fixer/);
 		assert.doesNotMatch(lines[0]!, /read: |bash: /);

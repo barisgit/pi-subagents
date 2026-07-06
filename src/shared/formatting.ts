@@ -9,10 +9,16 @@ export const ASYNC_NO_POLL_GUIDANCE =
 	"Avoid polling: Pi will send a completion or needs-attention message and trigger a new turn when this run needs you. Continue independent work or stop if blocked on the result. Use status/sleep checks only when immediate inspection is genuinely necessary.";
 
 /**
- * Format token count with k suffix for large numbers
+ * Format token count with compact k/M suffixes.
  */
 export function formatTokens(n: number): string {
-	return n < 1000 ? String(n) : n < 10000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`;
+	if (n < 1000) return String(n);
+	if (n < 1000000) return `${(n / 1000).toFixed(1)}k`;
+	return `${(n / 1000000).toFixed(1)}M`;
+}
+
+export function formatTokenCounter(n: number): string {
+	return `${formatTokens(n)}t`;
 }
 
 /**

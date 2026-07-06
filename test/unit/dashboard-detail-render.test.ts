@@ -31,33 +31,42 @@ function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-function makeRun(id: string, asyncDir: string): AsyncRunSummary {
+function makeRun(id: string, asyncDir: string, label?: string): AsyncRunSummary {
 	return {
 		id,
 		asyncDir,
 		state: "complete",
 		mode: "single",
 		startedAt: 1000,
+		...(label ? { label } : {}),
 		steps: [{ index: 0, agent: "fixer", status: "complete" }],
 	};
 }
 
-function writeStatus(dir: string, runId: string): void {
+function writeStatus(
+	dir: string,
+	runId: string,
+	options: { label?: string; stepLabel?: string; tokens?: number; durationMs?: number } = {},
+): void {
+	const totalTokens = options.tokens ?? 300;
+	const durationMs = options.durationMs ?? 4000;
 	const status: PersistedRunStatus = {
 		runId,
 		mode: "single",
+		...(options.label ? { label: options.label } : {}),
 		state: "complete",
 		startedAt: 1000,
-		endedAt: 5000,
-		lastUpdate: 5000,
+		endedAt: 1000 + durationMs,
+		lastUpdate: 1000 + durationMs,
 		steps: [
 			{
 				agent: "fixer",
+				...(options.stepLabel ? { label: options.stepLabel } : {}),
 				status: "complete",
 				startedAt: 1000,
-				endedAt: 5000,
-				durationMs: 4000,
-				tokens: { input: 100, output: 200, total: 300 },
+				endedAt: 1000 + durationMs,
+				durationMs,
+				tokens: { input: 100, output: Math.max(0, totalTokens - 100), total: totalTokens },
 			},
 		],
 	};
@@ -87,7 +96,7 @@ describe("dashboard detail pane redesign", () => {
 	it("renders the full prompt, every tool call on its own card, and keeps the final block", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {
-			writeStatus(dir, "run-detail");
+			writeStatus(dir, "run-detail", { tokens: 4240235, durationMs: 838449 });
 			const records: Array<Record<string, unknown>> = [
 				user("2026-05-20T00:00:00.050Z", [{ type: "text", text: LONG_PROMPT }]),
 			];
@@ -145,13 +154,49 @@ describe("dashboard detail pane redesign", () => {
 
 			// Step separator and bordered final markdown block stay intact.
 			assert.match(joined, /─── Step 1: fixer ───/);
-			assert.match(joined, /─── done · complete · 300t · 4000ms ───/);
+			assert.match(joined, /15 tools · 4\.2Mt · 13m58s/);
+			assert.match(joined, /─── done · complete · 4\.2Mt · 13m58s ───/);
 			assert.match(joined, /Verdict/);
 			assert.match(joined, /All good\./);
 			const border = "─".repeat(60);
 			assert.equal(plainLines.filter((line) => line === border).length, 2, "final block keeps both borders");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("hides duplicate run labels but keeps distinct step labels", () => {
+		const duplicateDir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
+		const distinctDir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
+		try {
+			const duplicateLabel = "detail pane v4: full prompt + tab glitch";
+			writeStatus(duplicateDir, "run-label-duplicate", { label: duplicateLabel });
+			writeSession(duplicateDir, [user("2026-05-20T00:00:00.050Z", [{ type: "text", text: "Fix this." }])]);
+			const duplicateLines = buildRightLines(
+				theme,
+				{ ownership: "foreign", run: makeRun("run-label-duplicate", duplicateDir, duplicateLabel) },
+				80,
+			).map(stripAnsi);
+			assert.equal(
+				duplicateLines.findIndex((line) => line === `Label: ${duplicateLabel}`),
+				-1,
+				`duplicate label must be hidden:\n${duplicateLines.join("\n")}`,
+			);
+
+			writeStatus(distinctDir, "run-label-distinct", { label: "run label", stepLabel: "distinct step label" });
+			writeSession(distinctDir, [user("2026-05-20T00:00:00.050Z", [{ type: "text", text: "Fix this." }])]);
+			const distinctLines = buildRightLines(
+				theme,
+				{ ownership: "foreign", run: makeRun("run-label-distinct", distinctDir, "run label") },
+				80,
+			).map(stripAnsi);
+			assert.ok(
+				distinctLines.includes("Label: distinct step label"),
+				`distinct step label must remain visible:\n${distinctLines.join("\n")}`,
+			);
+		} finally {
+			fs.rmSync(duplicateDir, { recursive: true, force: true });
+			fs.rmSync(distinctDir, { recursive: true, force: true });
 		}
 	});
 
@@ -314,6 +359,15 @@ describe("dashboard detail pane tool cards", () => {
 			assert.ok(
 				lines.some((line) => line === ""),
 				"cards are separated by plain blank lines",
+			);
+
+			const footerLine = lines.find((line) => stripAnsi(line).includes("─── done · complete"));
+			assert.ok(footerLine, `step footer missing:\n${joined}`);
+			assert.equal(visibleWidth(footerLine), width, "step footer overwrites the full pane row");
+			assert.doesNotMatch(
+				footerLine,
+				/\x1b\[(?:4[0-9]|10[0-7]|49)m/,
+				`step footer must not carry background codes: ${JSON.stringify(footerLine)}`,
 			);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });

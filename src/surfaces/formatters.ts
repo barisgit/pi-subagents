@@ -5,7 +5,7 @@
 import type { Usage } from "../protocol/types.ts";
 import { formatTokens } from "../shared/formatting.ts";
 
-export { formatDuration, formatTokens, formatToolCall, shortenPath } from "../shared/formatting.ts";
+export { formatDuration, formatTokenCounter, formatTokens, formatToolCall, shortenPath } from "../shared/formatting.ts";
 
 /**
  * Format usage statistics into a compact string

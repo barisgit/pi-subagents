@@ -12,7 +12,7 @@ import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@eare
 import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
 import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
-import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
+import { formatDuration, formatTokenCounter, shortenPath } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
 import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
@@ -31,6 +31,20 @@ function normalizePaneText(text: string): string {
 
 function clip(text: string, width: number): string {
 	return truncateToWidth(normalizePaneText(text), width, ELLIPSIS);
+}
+
+function padPlainLine(text: string, width: number): string {
+	const normalized = normalizePaneText(text);
+	const pad = Math.max(0, width - visibleWidth(normalized));
+	return `${normalized}${" ".repeat(pad)}`;
+}
+
+function normalizedLabel(text: string): string {
+	return normalizePaneText(text).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function shouldShowStepLabel(run: LiveRun, label: string): boolean {
+	return !run.run.label || normalizedLabel(label) !== normalizedLabel(run.run.label);
 }
 
 // Render prose (agent markdown output / prompts) through pi-tui's Markdown
@@ -269,7 +283,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 			const end = child.endedAt ?? Date.now();
 			stats.push(formatDuration(Math.max(0, end - child.startedAt)));
 			const tokens = childTokenTotal(child);
-			if (tokens > 0) stats.push(`${formatTokens(tokens)} tok`);
+			if (tokens > 0) stats.push(formatTokenCounter(tokens));
 			if (child.state === "running" && child.currentTool) stats.push(`→ ${child.currentTool}`);
 			const labelPart = child.label ? ` — ${child.label}` : "";
 			const line = `  ${glyph} ${parallelTag}${tintAgentName(agent, colorForAgentName(agent))} · ${stats.join(" · ")}${labelPart}`;
@@ -489,10 +503,10 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 			if (event.durationMs !== undefined) step.endDurationMs = event.durationMs;
 			const middle: string[] = ["done"];
 			if (event.status) middle.push(event.status);
-			if (event.tokens !== undefined) middle.push(`${event.tokens}t`);
-			if (event.durationMs !== undefined) middle.push(`${event.durationMs}ms`);
+			if (event.tokens !== undefined) middle.push(formatTokenCounter(event.tokens));
+			if (event.durationMs !== undefined) middle.push(formatDuration(event.durationMs));
 			const text = `─── ${middle.join(" · ")} ───`;
-			pushStepLines(step, "other", [theme.fg("dim", clip(text, width))]);
+			pushStepLines(step, "other", [theme.fg("dim", padPlainLine(clip(text, width), width))]);
 			continue;
 		}
 		if (event.kind === "final-text") {
@@ -511,14 +525,14 @@ export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: n
 	const stepWord = run.run.steps.length > 0 && run.run.mode === "parallel" ? "Task" : "Step";
 	for (const step of ordered) {
 		out.push(theme.fg("accent", clip(`─── ${stepWord} ${step.index + 1}: ${step.agent || "agent"} ───`, width)));
-		if (step.label) {
+		if (step.label && shouldShowStepLabel(run, step.label)) {
 			out.push(theme.fg("muted", clip(`Label: ${step.label}`, width)));
 		}
 		// Compact activity gist near the header so the reader doesn't have to scroll
 		// through the tool feed to size up the step.
 		if (step.toolCount > 0) {
 			const gist = [`${step.toolCount} tool${step.toolCount === 1 ? "" : "s"}`];
-			if (step.endTokens !== undefined) gist.push(`${step.endTokens}t`);
+			if (step.endTokens !== undefined) gist.push(formatTokenCounter(step.endTokens));
 			if (step.endDurationMs !== undefined) gist.push(formatDuration(step.endDurationMs));
 			out.push(theme.fg("dim", clip(gist.join(" · "), width)));
 		}

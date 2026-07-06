@@ -26,7 +26,7 @@ describe("inline child collapse", () => {
 				events: [tool("read", { path: "/a" }), tool("bash", { command: "echo hi" }, 1200)],
 			});
 			assert.deepEqual(renderNestedChild(id, 1), [
-				`└─ ${glyph} subagent: ${state} work · 2 tools · 2.0k tok · 1.5s`,
+				`└─ ${glyph} subagent: ${state} work · 2 tools · 2.0kt · 1.5s`,
 			]);
 		});
 	}
