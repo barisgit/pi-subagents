@@ -1,4 +1,5 @@
 import { type ConcurrencyPermit, ConcurrencySemaphore } from "./concurrency-semaphore.ts";
+import { __resetProcessGlobalForTest, processGlobal } from "../shared/process-global.ts";
 
 /**
  * Per-process bound on concurrently executing LEAF agents.
@@ -30,7 +31,7 @@ interface LeafConcurrencyRegistry {
 	permitsByRunId: Map<string, ConcurrencyPermit>;
 }
 
-const REGISTRY_KEY = Symbol.for("pi.subagents.leafConcurrency");
+const REGISTRY_KEY = "pi.subagents.leafConcurrency";
 
 /** Clamp to a positive integer; fall back to the default when absent/invalid. */
 function normalizeMaxPermits(value: number | undefined, fallback: number): number {
@@ -45,16 +46,10 @@ function normalizeMaxPermits(value: number | undefined, fallback: number): numbe
  * globalThis so it survives reloads and is shared across child module instances.
  */
 function getRegistry(): LeafConcurrencyRegistry {
-	const globals = globalThis as unknown as Record<symbol, LeafConcurrencyRegistry | undefined>;
-	let reg = globals[REGISTRY_KEY];
-	if (!reg) {
-		reg = {
-			semaphore: new ConcurrencySemaphore(DEFAULT_MAX_CONCURRENT_AGENTS),
-			permitsByRunId: new Map(),
-		};
-		globals[REGISTRY_KEY] = reg;
-	}
-	return reg;
+	return processGlobal<LeafConcurrencyRegistry>(REGISTRY_KEY, () => ({
+		semaphore: new ConcurrencySemaphore(DEFAULT_MAX_CONCURRENT_AGENTS),
+		permitsByRunId: new Map(),
+	}));
 }
 
 /**
@@ -115,6 +110,5 @@ export async function parkLeafPermit<T>(parentRunId: string | undefined, fn: () 
 
 /** Test-only: clear the process registry so each test starts from a fresh pool. */
 export function __resetLeafConcurrencyForTest(): void {
-	const globals = globalThis as unknown as Record<symbol, LeafConcurrencyRegistry | undefined>;
-	globals[REGISTRY_KEY] = undefined;
+	__resetProcessGlobalForTest(REGISTRY_KEY);
 }
