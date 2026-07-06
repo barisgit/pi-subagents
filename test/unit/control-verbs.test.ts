@@ -15,7 +15,7 @@ interface ExecutorResult {
 class FakeSession {
 	readonly messages: string[] = [];
 
-	postUserMessage(message: string): void {
+	async sendUserMessage(message: string): Promise<void> {
 		this.messages.push(message);
 	}
 }

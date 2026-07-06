@@ -12,9 +12,50 @@ interface ExecutorResult {
 
 class FakeSession {
 	readonly messages: string[] = [];
+	readonly deliveryOptions: Array<{ deliverAs?: "steer" | "followUp" } | undefined> = [];
 
-	postUserMessage(message: string): void {
+	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
 		this.messages.push(message);
+		this.deliveryOptions.push(options);
+	}
+}
+
+class BusySteerSession {
+	readonly steered: string[] = [];
+	promptCalls = 0;
+
+	prompt(): void {
+		this.promptCalls += 1;
+		throw new Error(
+			"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+		);
+	}
+
+	async steer(message: string): Promise<void> {
+		this.steered.push(message);
+	}
+
+	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
+		if (options?.deliverAs === "steer") {
+			await this.steer(message);
+			return;
+		}
+		this.prompt();
+	}
+}
+
+class ThrowingSession {
+	prompt(): void {
+		throw new Error("prompt failed");
+	}
+
+	async steer(): Promise<void> {
+		throw new Error("steer failed");
+	}
+
+	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
+		if (options?.deliverAs === "steer") await this.steer();
+		else this.prompt();
 	}
 }
 
@@ -35,12 +76,21 @@ function makeState(cwd: string): SubagentState {
 	};
 }
 
+type ResumeSession = FakeSession | BusySteerSession | ThrowingSession;
+
+function registerHandle(registry: ChildAgentRegistry, runId: string, stepIndex: number): FakeSession;
+function registerHandle<T extends ResumeSession>(
+	registry: ChildAgentRegistry,
+	runId: string,
+	stepIndex: number,
+	session: T,
+): T;
 function registerHandle(
 	registry: ChildAgentRegistry,
 	runId: string,
 	stepIndex: number,
-	session = new FakeSession(),
-): FakeSession {
+	session: ResumeSession = new FakeSession(),
+): ResumeSession {
 	const handle: ChildAgentHandle = {
 		runId,
 		stepIndex,
@@ -111,6 +161,7 @@ describe("resume action", () => {
 
 			assert.equal(result.isError, undefined, text(result));
 			assert.deepEqual(session.messages, ["continue"]);
+			assert.deepEqual(session.deliveryOptions, [{ deliverAs: "steer" }]);
 		} finally {
 			removeTempDir(tempDir);
 		}
@@ -141,6 +192,42 @@ describe("resume action", () => {
 
 			assert.equal(result.isError, undefined, text(result));
 			assert.deepEqual(session.messages, ["again"]);
+			assert.deepEqual(session.deliveryOptions, [{ deliverAs: "steer" }]);
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
+	it("live resume uses steering delivery instead of busy prompt", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			const session = new BusySteerSession();
+			registerHandle(harness.childRegistry, "run-busy", 0, session);
+			markAsync(harness.state, "run-busy", "running");
+
+			const result = await harness.execute({ action: "resume", id: "run-busy", message: "steer me" });
+
+			assert.equal(result.isError, undefined, text(result));
+			assert.deepEqual(session.steered, ["steer me"]);
+			assert.equal(session.promptCalls, 0);
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
+	it("live resume reports delivery failures instead of phantom success", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			registerHandle(harness.childRegistry, "run-fail", 0, new ThrowingSession());
+			markAsync(harness.state, "run-fail", "running");
+
+			const result = await harness.execute({ action: "resume", id: "run-fail", message: "fail me" });
+
+			assert.equal(result.isError, true);
+			assert.match(text(result), /Failed to resume run run-fail: steer failed/);
+			assert.doesNotMatch(text(result), /Resume message sent/);
 		} finally {
 			removeTempDir(tempDir);
 		}

@@ -184,8 +184,10 @@ describe("disk resume", () => {
 		const h = setup();
 		const liveSession = {
 			messages: [] as string[],
-			postUserMessage(message: string) {
+			deliveryOptions: [] as Array<{ deliverAs?: "steer" | "followUp" } | undefined>,
+			async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }) {
 				this.messages.push(message);
+				this.deliveryOptions.push(options);
 			},
 		};
 		h.state.asyncJobs.set("live-run", {
@@ -207,6 +209,7 @@ describe("disk resume", () => {
 
 		assert.equal(result.isError, undefined, result.content[0]?.text);
 		assert.deepEqual(liveSession.messages, ["live follow-up"]);
+		assert.deepEqual(liveSession.deliveryOptions, [{ deliverAs: "steer" }]);
 	});
 
 	it("concurrent resume rejects a second opener for the same run", async () => {

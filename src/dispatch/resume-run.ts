@@ -109,23 +109,13 @@ export function assertResumableTarget(target: Pick<ResumeTarget, "runId" | "stat
 
 const resumeInFlight = new Set<string>();
 
-function postResumeMessage(handle: ChildAgentHandle, runId: string, message: string): AgentToolResult<Details> | null {
+async function postResumeMessage(
+	handle: ChildAgentHandle,
+	runId: string,
+	message: string,
+): Promise<AgentToolResult<Details> | null> {
 	try {
-		const session = handle.session as unknown as {
-			postUserMessage?: (message: string, options?: unknown) => unknown;
-			enqueueTurn?: (message: string, options?: unknown) => unknown;
-			prompt?: (message: string, options?: unknown) => unknown;
-		};
-		const post = session.postUserMessage ?? session.enqueueTurn ?? session.prompt;
-		if (typeof post !== "function") return validationError(`Run ${runId} cannot accept resume messages.`);
-		void Promise.resolve(post.call(session, message, { expandPromptTemplates: false, source: "extension" })).catch(
-			(error) => {
-				logger.warn("resume action failed after dispatch", {
-					runId,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			},
-		);
+		await handle.session.sendUserMessage(message, { deliverAs: "steer" });
 		return null;
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -168,7 +158,7 @@ async function resumeRun(
 			? handles[0]
 			: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
 	if (handle) {
-		const error = postResumeMessage(handle, runId, message);
+		const error = await postResumeMessage(handle, runId, message);
 		if (error) return error;
 		if (tracked) {
 			tracked.status = "running";
