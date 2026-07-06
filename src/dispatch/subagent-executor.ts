@@ -72,6 +72,7 @@ import {
 	resolveDispatchRootRunId,
 	resolveDispatchRootSessionId,
 	safeEmit,
+	shapeSingleForegroundResult,
 	singleResultToChildAgentResult,
 	sumUsages,
 	tokenUsageFromResult,
@@ -121,7 +122,6 @@ import {
 } from "./subagent-control.ts";
 import {
 	captureSingleOutputSnapshot,
-	finalizeSingleOutput,
 	injectSingleOutputInstruction,
 	resolveSingleOutput,
 	resolveSingleOutputPath,
@@ -131,7 +131,6 @@ import type { StatusWriter } from "../state/status-writer.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import { formatRunHandle, type RunMode } from "../state/run-shape.ts";
 import {
-	compactForegroundDetails,
 	extractTextFromContent,
 	getFinalOutput,
 	getSingleResultOutput,
@@ -142,14 +141,16 @@ import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../s
 import { inspectSubagentStatus } from "../state/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
 import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
-import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
+import { evictCompletionDedupeForRunId, markCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
 import {
 	interruptRun,
 	spawnRun,
 	openGroup,
 	awaitRun,
+	awaitRunTerminal,
 	openRunRecord,
 	finalizeRun,
+	type AwaitRunTerminalOutcome,
 	type OpenRunHandle,
 } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
@@ -403,89 +404,192 @@ function getAsyncInterruptTarget(
 	}
 	return newest ? { asyncId: newest.asyncId, asyncDir: newest.asyncDir } : undefined;
 }
-function interruptAllAsyncRuns(state: SubagentState, childRegistry: ChildAgentRegistry): AgentToolResult<Details> {
-	const handles = childRegistry.list();
-	const asyncHandles = handles.filter((handle) => state.asyncJobs.has(handle.runId));
-	if (asyncHandles.length === 0) {
+
+const DEFAULT_INTERRUPT_WAIT_MS = 10_000;
+let interruptWaitMs = DEFAULT_INTERRUPT_WAIT_MS;
+
+/** Test-only override for the synchronous interrupt wait deadline. */
+export function __setInterruptWaitMsForTest(ms: number | null): void {
+	interruptWaitMs = ms ?? DEFAULT_INTERRUPT_WAIT_MS;
+}
+
+interface InterruptWaitTarget {
+	runId: string;
+	runRecordDir?: string;
+	completed?: Promise<ChildAgentResult>;
+}
+
+// Wait for an already-aborted run to actually reach a terminal state so the
+// tool result can report the final outcome inline. The completion-dedupe key is
+// marked BEFORE the wait: a completion landing mid-wait is swallowed by the
+// notify dedupe (which still emits notify-delivered, so the async tracker
+// clears pendingDelivery and retires the widget row through the normal path).
+// The timeout path evicts the keys again so the eventual notification is
+// delivered instead — the old fire-and-forget message is the degraded path.
+async function settleInterruptedRun(
+	state: SubagentState,
+	target: InterruptWaitTarget,
+	coveredRunIds: string[],
+	deadline: number,
+): Promise<AwaitRunTerminalOutcome> {
+	const newlyMarkedRunIds = coveredRunIds.filter((coveredRunId) => markCompletionDedupeForRunId(coveredRunId));
+	const outcome = await awaitRunTerminal(target.runId, {
+		deadline,
+		...(target.completed ? { completed: target.completed } : {}),
+		...(target.runRecordDir ? { runRecordDir: target.runRecordDir } : {}),
+	});
+	if (!outcome.terminal) {
+		// Degraded fire-and-forget path: release only the marks THIS wait created so
+		// the eventual completion notification is delivered; marks that pre-existed
+		// belong to notifications already sent and must stay deduped.
+		for (const coveredRunId of newlyMarkedRunIds) evictCompletionDedupeForRunId(coveredRunId);
+		return outcome;
+	}
+	const tracked = state.asyncJobs.get(target.runId);
+	if (tracked) {
+		if (
+			outcome.state === "complete" ||
+			outcome.state === "failed" ||
+			outcome.state === "interrupted" ||
+			outcome.state === "skipped" ||
+			outcome.state === "paused" ||
+			outcome.state === "lost"
+		) {
+			tracked.status = outcome.state;
+		}
+		tracked.activityState = undefined;
+		tracked.updatedAt = Date.now();
+	}
+	return outcome;
+}
+
+function interruptOutcomeText(runId: string, outcome: AwaitRunTerminalOutcome, requestedText: string): string {
+	if (!outcome.terminal)
+		return `${requestedText} The run is still unwinding; its completion notification will follow.`;
+	return outcome.state === "interrupted"
+		? `Run ${runId} interrupted.`
+		: `Run ${runId} finished with state '${outcome.state}' after the interrupt.`;
+}
+
+async function interruptAllAsyncRuns(
+	state: SubagentState,
+	childRegistry: ChildAgentRegistry,
+	waitMs: number,
+): Promise<AgentToolResult<Details>> {
+	// Sweep state.asyncJobs (rehydrated from disk after a reload), not just the
+	// per-activation childRegistry: a run spawned before a reload has no handle in
+	// the fresh registry but its AbortController survives in the shared layer0
+	// controller map, so interruptRun still reaches it.
+	const targets: InterruptWaitTarget[] = [];
+	for (const job of state.asyncJobs.values()) {
+		if (job.status !== "running" && job.status !== "queued") continue;
+		try {
+			const handle = childRegistry.get(job.asyncId);
+			const aborted = handle
+				? (void childRegistry.abortRun(job.asyncId, "interrupt-all requested"), true)
+				: interruptRun(job.asyncId, { cascade: true }).interruptedRunIds.length > 0;
+			if (!aborted) continue;
+			targets.push({
+				runId: job.asyncId,
+				runRecordDir: job.asyncDir,
+				...(handle ? { completed: handle.completed } : {}),
+			});
+			job.activityState = undefined;
+			job.updatedAt = Date.now();
+		} catch {
+			// best-effort: continue aborting remaining runs
+		}
+	}
+	if (targets.length === 0) {
 		return {
 			content: [{ type: "text", text: "No running runs to interrupt." }],
 			details: { mode: "management", results: [] },
 		};
 	}
-	const seen = new Set<string>();
-	const ids: string[] = [];
-	for (const handle of asyncHandles) {
-		if (seen.has(handle.runId)) continue;
-		seen.add(handle.runId);
-		ids.push(handle.runId);
-		try {
-			void childRegistry.abortRun(handle.runId, "interrupt-all requested");
-			const tracked = state.asyncJobs.get(handle.runId);
-			if (tracked) {
-				tracked.activityState = undefined;
-				tracked.updatedAt = Date.now();
-			}
-		} catch {
-			// best-effort: continue aborting remaining runs
-		}
-	}
+	// One shared deadline across all aborted runs; report per-run final states.
+	const deadline = Date.now() + waitMs;
+	const settled = await Promise.allSettled(
+		targets.map((target) => settleInterruptedRun(state, target, [target.runId], deadline)),
+	);
+	const outcomes = settled.map(
+		(entry): AwaitRunTerminalOutcome => (entry.status === "fulfilled" ? entry.value : { terminal: false }),
+	);
+	const lines = targets.map((target, index) => {
+		const outcome = outcomes[index]!;
+		return `- ${target.runId}: ${outcome.terminal ? outcome.state : "still unwinding"}`;
+	});
+	const allTerminal = outcomes.every((outcome) => outcome.terminal);
+	const headline = allTerminal
+		? `Interrupted ${targets.length} run(s):`
+		: `Interrupt requested for ${targets.length} run(s); some are still unwinding (their completion notifications will follow):`;
 	return {
-		content: [{ type: "text", text: `Interrupt requested for ${ids.length} run(s): ${ids.join(", ")}.` }],
+		content: [{ type: "text", text: [headline, ...lines].join("\n") }],
 		details: { mode: "management", results: [] },
 	};
 }
-function interruptAsyncRun(
+async function interruptAsyncRun(
 	state: SubagentState,
 	childRegistry: ChildAgentRegistry,
 	runId: string | undefined,
-): AgentToolResult<Details> | null {
+	waitMs: number,
+): Promise<AgentToolResult<Details> | null> {
 	const target = getAsyncInterruptTarget(state, runId);
 	if (!target) return null;
 	const handle = childRegistry.get(target.asyncId);
 	try {
+		let abortedRunIds: string[];
 		if (handle) {
 			void handle.abort("interrupt requested");
-			const tracked = state.asyncJobs.get(target.asyncId);
+			abortedRunIds = [target.asyncId];
+		} else {
+			const cascade = interruptRun(target.asyncId, { cascade: true });
+			// interruptRun already aborted every controller it found in the shared
+			// layer0 map (the target included). Additionally fire the per-activation
+			// registry controllers for registry-resident descendants.
+			for (const abortedRunId of cascade.interruptedRunIds) {
+				if (abortedRunId !== target.asyncId && childRegistry.get(abortedRunId)) {
+					void childRegistry.abortRun(abortedRunId, "interrupt requested");
+				}
+			}
+			// Success is "anything was aborted anywhere": the target aborted via the
+			// shared layer0 map counts even with zero registry-resident descendants
+			// (the post-reload case — the registry is empty but the map survives).
+			if (cascade.interruptedRunIds.length === 0) {
+				return {
+					content: [
+						{ type: "text", text: `No running in-process run was found for '${runId ?? "current"}'.` },
+					],
+					isError: true,
+					details: { mode: "management", results: [] },
+				};
+			}
+			abortedRunIds = cascade.interruptedRunIds;
+		}
+		// Clear tracked activity for every aborted run (target included).
+		for (const abortedRunId of abortedRunIds) {
+			const tracked = state.asyncJobs.get(abortedRunId);
 			if (tracked) {
 				tracked.activityState = undefined;
 				tracked.updatedAt = Date.now();
 			}
-			return {
-				content: [{ type: "text", text: `Interrupt requested for run ${target.asyncId}.` }],
-				details: { mode: "management", results: [] },
-			};
 		}
-		const cascade = interruptRun(target.asyncId, { cascade: true });
-		const abortedChildRunIds: string[] = [];
-		for (const targetRunId of cascade.interruptedRunIds) {
-			if (targetRunId === target.asyncId || !childRegistry.get(targetRunId)) continue;
-			void childRegistry.abortRun(targetRunId, "interrupt requested");
-			abortedChildRunIds.push(targetRunId);
-			const tracked = state.asyncJobs.get(targetRunId);
-			if (tracked) {
-				tracked.activityState = undefined;
-				tracked.updatedAt = Date.now();
-			}
-		}
-		const tracked = state.asyncJobs.get(target.asyncId);
-		if (tracked && abortedChildRunIds.length > 0) {
-			tracked.activityState = undefined;
-			tracked.updatedAt = Date.now();
-		}
-		if (abortedChildRunIds.length === 0) {
-			return {
-				content: [{ type: "text", text: `No running in-process run was found for '${runId ?? "current"}'.` }],
-				isError: true,
-				details: { mode: "management", results: [] },
-			};
-		}
+		const descendantRunIds = abortedRunIds.filter((id) => id !== target.asyncId);
+		const requestedText =
+			descendantRunIds.length > 0
+				? `Interrupt requested for run ${target.asyncId} (${descendantRunIds.length} descendant run(s): ${descendantRunIds.join(", ")}).`
+				: `Interrupt requested for run ${target.asyncId}.`;
+		const outcome = await settleInterruptedRun(
+			state,
+			{
+				runId: target.asyncId,
+				runRecordDir: target.asyncDir,
+				...(handle ? { completed: handle.completed } : {}),
+			},
+			abortedRunIds,
+			Date.now() + waitMs,
+		);
 		return {
-			content: [
-				{
-					type: "text",
-					text: `Interrupt requested for run ${target.asyncId} (${abortedChildRunIds.length} descendant run(s): ${abortedChildRunIds.join(", ")}).`,
-				},
-			],
+			content: [{ type: "text", text: interruptOutcomeText(target.asyncId, outcome, requestedText) }],
 			details: { mode: "management", results: [] },
 		};
 	} catch (error) {
@@ -808,73 +912,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (r.progress) allProgress.push(r.progress);
 	if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
 
-	const fullOutput = getSingleResultOutput(r);
-	const finalizedOutput = finalizeSingleOutput({
-		fullOutput,
-		truncatedOutput: r.truncation?.text,
+	return shapeSingleForegroundResult({
+		r,
+		runId,
+		agent: params.agent!,
 		outputPath,
-		exitCode: r.exitCode,
-		savedPath: r.savedOutputPath,
-		saveError: r.outputSaveError,
+		progress: params.includeProgress ? allProgress : undefined,
+		artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 	});
-
-	if (r.detached) {
-		return {
-			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}` }],
-			details: compactForegroundDetails({
-				mode: "single",
-				runId,
-				results: [r],
-				progress: params.includeProgress ? allProgress : undefined,
-				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				truncation: r.truncation,
-			}),
-		};
-	}
-
-	if (r.interrupted) {
-		return {
-			content: [
-				{
-					type: "text",
-					text: `Run paused after interrupt (${params.agent}). Waiting for explicit next action.`,
-				},
-			],
-			details: compactForegroundDetails({
-				mode: "single",
-				runId,
-				results: [r],
-				progress: params.includeProgress ? allProgress : undefined,
-				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				truncation: r.truncation,
-			}),
-		};
-	}
-
-	if (r.exitCode !== 0)
-		return {
-			content: [{ type: "text", text: r.error || "Failed" }],
-			details: compactForegroundDetails({
-				mode: "single",
-				runId,
-				results: [r],
-				progress: params.includeProgress ? allProgress : undefined,
-				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				truncation: r.truncation,
-			}),
-			isError: true,
-		};
-	return {
-		content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
-		details: compactForegroundDetails({
-			mode: "single",
-			runId,
-			results: [r],
-			progress: params.includeProgress ? allProgress : undefined,
-			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-			truncation: r.truncation,
-		}),
-	};
 }
 
 export function createSubagentExecutor(deps: ExecutorDeps): {
@@ -949,7 +994,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				// session (foreground runs are not affected). Used as a discoverable kill
 				// switch now that ESC of the parent turn no longer cascades into async work.
 				if (targetRunId === "all") {
-					return interruptAllAsyncRuns(deps.state, deps.childRegistry);
+					return interruptAllAsyncRuns(deps.state, deps.childRegistry, interruptWaitMs);
 				}
 				const foreground = getForegroundControl(deps.state, targetRunId);
 				if (foreground?.interrupt) {
@@ -975,7 +1020,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						details: { mode: "management", results: [] },
 					};
 				}
-				const asyncInterruptResult = interruptAsyncRun(deps.state, deps.childRegistry, targetRunId);
+				const asyncInterruptResult = await interruptAsyncRun(
+					deps.state,
+					deps.childRegistry,
+					targetRunId,
+					interruptWaitMs,
+				);
 				if (asyncInterruptResult) return asyncInterruptResult;
 				return {
 					content: [{ type: "text", text: "No interrupt-capable run found in this session." }],
@@ -1592,6 +1642,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					phaseIndex,
 					phaseTitle,
 					parallelGroupId,
+					pipeline,
 					resultSchema,
 					onChildProgress,
 				}) => {
@@ -1608,6 +1659,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							...(phaseIndex !== undefined ? { phaseIndex } : {}),
 							...(phaseTitle ? { phaseTitle } : {}),
 							...(parallelGroupId ? { parallelGroupId } : {}),
+							...(pipeline ? { pipeline } : {}),
 							...(deps.config.defaultSessionDir
 								? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
 								: {}),

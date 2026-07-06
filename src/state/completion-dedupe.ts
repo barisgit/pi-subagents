@@ -62,6 +62,25 @@ export function getGlobalSeenMap(storeKey: string): Map<string, number> {
 	return map;
 }
 
+/**
+ * Pre-mark a run's completion notification as already delivered. The notify
+ * handler then dedupes the eventual completion sendMessage but STILL emits the
+ * notify-delivered event, so the async tracker clears pendingDelivery and
+ * retires the widget row through the normal path. Callers that report a run's
+ * final outcome inline (the synchronous interrupt wait) use this; on timeout
+ * they must evict newly-marked keys again via evictCompletionDedupeForRunId so
+ * the eventual notification is not lost. Returns true when the key was NOT
+ * already present (i.e. this call created the mark), so timeout eviction never
+ * un-dedupes a notification that was genuinely delivered earlier.
+ */
+export function markCompletionDedupeForRunId(runId: string, now = Date.now()): boolean {
+	const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
+	const key = `id:${runId}`;
+	const newlyMarked = !seen.has(key);
+	seen.set(key, now);
+	return newlyMarked;
+}
+
 export function evictCompletionDedupeForRunId(runId: string): void {
 	getGlobalSeenMap("__pi_subagents_notify_seen__").delete(`id:${runId}`);
 }

@@ -334,15 +334,21 @@ describe("batch notifications", () => {
 		await delay(80);
 		const interrupt = await harness.execute({ action: "interrupt", id: runId });
 		assert.equal(interrupt.isError, undefined, resultText(interrupt));
-		await waitFor(() => harness.sent.length === 1, "expected one interrupted batch rollup notification");
+		// The interrupt now waits for the group to reach a terminal state and
+		// reports the outcome inline in the tool result.
+		assert.match(resultText(interrupt), /interrupted/i);
+		assert.doesNotMatch(resultText(interrupt), /still unwinding/);
+		await waitFor(() => harness.completionEvents.length === 1, "expected the group completion event");
 		const event = harness.completionEvents[0]!;
 		const states = childRows(event).map((row) => row.state);
 		assert.equal(states.length, 3);
 		assert.ok(states.includes("complete"), `expected a completed child, got ${states.join(",")}`);
 		assert.ok(states.includes("interrupted"), `expected an interrupted child, got ${states.join(",")}`);
-		const content = harness.sent[0]!.message.content ?? "";
-		assert.ok(content.includes("complete"));
-		assert.ok(content.includes("interrupted"));
+		// The outcome was already delivered inline by the interrupt tool result, so
+		// the rollup notification is deduped instead of arriving as a redundant
+		// second copy.
+		await delay(50);
+		assert.equal(harness.sent.length, 0, "in-time interrupt must suppress the later rollup notification");
 	});
 
 	it("single-child-batch-degenerate emits one rollup with one entry", async () => {
