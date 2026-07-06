@@ -137,7 +137,7 @@ describe("dashboard collapse and container rows", () => {
 		try {
 			const lines = component.render(120).map(stripAnsi);
 			const statusTop = lines.findIndex((line) => line.includes("─ polish dashboard"));
-			const actions = lines.findIndex((line) => line.includes("─ hide list ─"));
+			const actions = lines.findIndex((line) => line.includes("─ sidebar ─"));
 
 			assert.ok(statusTop >= 0, `selected-run status separator missing:\n${lines.join("\n")}`);
 			assert.ok(actions > statusTop + 2, `action legend must sit below status details:\n${lines.join("\n")}`);

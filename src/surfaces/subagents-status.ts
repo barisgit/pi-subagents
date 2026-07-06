@@ -778,9 +778,7 @@ export class SubagentsStatusComponent implements Component {
 				},
 				title: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);
-					return run
-						? `${selectedRunTitle(run)} [${run.run.displayState ?? run.run.state}]`
-						: "No run selected";
+					return run ? selectedRunTitle(run) : "No run selected";
 				},
 			},
 			closeKeys: ["escape", "ctrl+c", "q"],
@@ -789,11 +787,8 @@ export class SubagentsStatusComponent implements Component {
 			perSelectionScroll: true,
 			stickyBottom: true,
 			// Press 's' to collapse the run list entirely and give the detail pane the
-			// full width (and back). Mirrors the sidebar toggle in the charter picker.
-			// State-aware label: invites collapsing when open, and (since the primary
-			// legend vanishes when collapsed) the host surfaces the reopen hint in the
-			// detail footer using this same label.
-			collapse: { key: "s", label: (collapsed) => (collapsed ? "show list" : "hide list"), collapsedWidth: 0 },
+			// full width (and back). Same key + "sidebar" label as the charter picker.
+			collapse: { key: "s", label: "sidebar", collapsedWidth: 0 },
 			split: {
 				initialFraction: DEFAULT_LEFT_FRACTION,
 				minPrimaryWidth: MIN_LEFT_PANE,

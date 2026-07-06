@@ -271,7 +271,7 @@ describe("SubagentsStatusComponent", () => {
 				assert.doesNotMatch(output, /pgup\/pgdn\s+page/);
 				assert.match(output, /return\/o\s+collapse group/);
 				assert.match(output, /a\s+all sessions/);
-				assert.match(output, /s\s+hide list/);
+				assert.match(output, /s\s+sidebar/);
 				assert.match(output, /q\/esc\s+close/);
 			} finally {
 				component.dispose();
@@ -305,10 +305,10 @@ describe("SubagentsStatusComponent", () => {
 			// The left list (its primary title) is gone; the detail pane remains.
 			assert.doesNotMatch(collapsed, /Subagent runs · 1 total/, "primary title hidden when collapsed");
 			// The detail pane still renders (its title carries the selected run's agent + state).
-			assert.match(collapsed, /waiter \[running\]/, "detail pane title still renders when collapsed");
+			assert.match(collapsed, /waiter/, "detail pane title still renders when collapsed");
 			// The reopen hint surfaces in the always-visible detail footer (the primary
 			// legend that normally carries it is gone while collapsed).
-			assert.match(collapsed, /s show list/, "reopen hint shown in the bottom bar when collapsed");
+			assert.match(collapsed, /s sidebar/, "reopen hint shown in the bottom bar when collapsed");
 
 			// Toggle back: the list returns.
 			component.handleInput("s");
