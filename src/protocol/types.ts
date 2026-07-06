@@ -256,9 +256,17 @@ export interface ModelAttempt {
 	usage?: Usage;
 }
 
+export interface PipelineMetadata {
+	id: string;
+	itemIndex: number;
+	stageIndex: number;
+	itemLabel?: string;
+}
+
 export interface SingleResult {
 	agent: string;
 	task: string;
+	pipeline?: PipelineMetadata;
 	/** Caller-provided short label (5-10 words) describing this step. Optional. */
 	label?: string;
 	exitCode: number;

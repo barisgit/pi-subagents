@@ -126,12 +126,24 @@ function entryMatchesOverlayScope(
 
 function registryWorkflowFields(
 	entry: RunsRegistryEntry,
-): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
+): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId" | "pipeline"> {
 	return {
 		...(entry.kind === "workflow" ? { workflow: true } : {}),
 		...(entry.phaseIndex !== undefined ? { phaseIndex: entry.phaseIndex } : {}),
 		...(entry.phaseTitle ? { phaseTitle: entry.phaseTitle } : {}),
 		...(entry.parallelGroupId ? { parallelGroupId: entry.parallelGroupId } : {}),
+		...(entry.pipelineId !== undefined &&
+		entry.pipelineItemIndex !== undefined &&
+		entry.pipelineStageIndex !== undefined
+			? {
+					pipeline: {
+						id: entry.pipelineId,
+						itemIndex: entry.pipelineItemIndex,
+						stageIndex: entry.pipelineStageIndex,
+						...(entry.pipelineItemLabel ? { itemLabel: entry.pipelineItemLabel } : {}),
+					},
+				}
+			: {}),
 	};
 }
 
@@ -512,6 +524,20 @@ export function buildPhaseLine(
 	return truncateToWidth(text, width, "");
 }
 
+export function buildPipelineItemLine(
+	theme: Theme,
+	row: Extract<DisplayRow, { kind: "pipelineItem" }>,
+	selected: boolean,
+	width: number,
+): string {
+	const cursor = selected ? theme.fg("accent", "> ") : "  ";
+	const indent = row.depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, row.depth - 1))}└─`) : "";
+	const glyph = theme.fg(row.running ? "accent" : "dim", row.collapsed ? "▸" : "▾");
+	const label = row.label || `Item ${row.itemIndex + 1}`;
+	const text = `${cursor}${indent}${glyph} ${theme.fg("accent", label)} · ${theme.fg("dim", `${row.done}/${row.total}`)}`;
+	return truncateToWidth(text, width, "");
+}
+
 export function buildLeftLine(
 	theme: Theme,
 	run: LiveRun,
@@ -808,6 +834,7 @@ export class SubagentsStatusComponent implements Component {
 		// and went stale after a resize (the same defect fixed for the detail pane).
 		const lineWidth = Math.max(20, ctx.primary.width || this.lastLeftWidth || 80);
 		if (row.kind === "phase") return buildPhaseLine(this.theme, row, isSelected, lineWidth);
+		if (row.kind === "pipelineItem") return buildPipelineItemLine(this.theme, row, isSelected, lineWidth);
 		const containerInfo = this.containerRowInfo(row.run);
 		return buildLeftLine(
 			this.theme,
@@ -918,7 +945,7 @@ export class SubagentsStatusComponent implements Component {
 	private toggleCollapseRow(row: DisplayRow | undefined): void {
 		if (!row) return;
 		let id: string | undefined;
-		if (row.kind === "phase") id = row.id;
+		if (row.kind === "phase" || row.kind === "pipelineItem") id = row.id;
 		else if (row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) id = row.run.run.id;
 		if (!id) return;
 		if (this.collapsedIds.has(id)) this.collapsedIds.delete(id);

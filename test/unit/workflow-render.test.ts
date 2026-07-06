@@ -271,6 +271,81 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		assert.equal(parallel?.details?.totalSteps, 1);
 	});
 
+	it("uses semantic pipeline item labels in the foreground widget", () => {
+		const details: Details = {
+			mode: "parallel",
+			workflow: true,
+			agentGroups: ["A", "B", "A", "B"],
+			totalSteps: 4,
+			results: [
+				{
+					...result("A", "inspect sync", 0, 0),
+					pipeline: { id: "pipe", itemIndex: 0, stageIndex: 0, itemLabel: "sync widget" },
+				},
+				{
+					...result("B", "review sync", 0, 1),
+					pipeline: { id: "pipe", itemIndex: 0, stageIndex: 1, itemLabel: "sync widget" },
+				},
+				{
+					...result("A", "inspect dashboard", 0, 2),
+					pipeline: { id: "pipe", itemIndex: 1, stageIndex: 0, itemLabel: "dashboard left pane" },
+				},
+				{
+					...result("B", "review dashboard", 0, 3),
+					pipeline: { id: "pipe", itemIndex: 1, stageIndex: 1, itemLabel: "dashboard left pane" },
+				},
+			],
+		};
+
+		const text = renderText(details, false);
+		assert.match(text, /sync widget/);
+		assert.match(text, /dashboard left pane/);
+		assert.doesNotMatch(text, /Item 1/);
+		assert.match(text, /Stage 1: A/);
+		assert.match(text, /Stage 2: B/);
+	});
+
+	it("does not render pipeline stages as parallel bracket groups", async () => {
+		const persistedParallelGroupIds: Array<string | undefined> = [];
+		const tool = createWorkflowTool({
+			openWorkflowGroup: () => ({
+				groupRunId: "group-1",
+				async dispatchChild({ role, task, index, parallelGroupId }) {
+					persistedParallelGroupIds.push(parallelGroupId);
+					return result(role, task, 0, index);
+				},
+			}),
+		});
+
+		const executed = (await tool.execute?.(
+			"wf-pipeline",
+			{
+				script:
+					"phase('pipeline');\n" +
+					"await pipeline(['a', 'b'],\n" +
+					"  (item) => agent('explorer', 'inspect ' + item),\n" +
+					"  (draft) => agent('review', 'review ' + draft)\n" +
+					");",
+			},
+			new AbortController().signal,
+			undefined,
+			{} as never,
+		)) as AgentToolResult<Details> | undefined;
+
+		const final = executed?.details;
+		assert.ok(final, "pipeline should return workflow details");
+		assert.ok(final.agentGroups?.length, "pipeline should record child agents");
+		assert.equal(
+			final.agentGroups.some((entry) => entry.startsWith("[")),
+			false,
+		);
+		assert.deepEqual(persistedParallelGroupIds, [undefined, undefined, undefined, undefined]);
+
+		const compact = renderText(final, false);
+		assert.doesNotMatch(compact, /∥/);
+		assert.doesNotMatch(compact, /Agent 1\.1/);
+	});
+
 	it("renders non-workflow running children with the original starting and thinking fallbacks", () => {
 		const starting = result("explorer", "inventory", 0, 0);
 		starting.progress = { ...starting.progress!, status: "running", toolCount: 0 };

@@ -26,9 +26,11 @@ subagent({
 
 ## Dependent orchestration
 
-Use `workflow` for sequential or dependent phases. It can pass summaries/results between steps, branch, retry, loop, and decide runtime fan-out. In `agent(role, task, opts?)`, `role` is one of the caller's configured agent roles; replace placeholders with real roles from the active config. `parallel()` can fan out over a dynamic list and scales to many concurrent children, bounded by the process-wide leaf-concurrency pool.
+Use `workflow` for sequential or dependent phases. It can pass summaries/results between steps, branch, retry, loop, and decide runtime fan-out. In `agent(role, task, opts?)`, `role` is one of the caller's configured agent roles; replace placeholders with real roles from the active config. `parallel()` can fan out over a dynamic list and scales to many concurrent children, bounded by the process-wide leaf-concurrency pool. `pipeline(items, ...stages)` streams each item through async stages without waiting for a whole-stage barrier.
 
 `parallel()` is a **fail-fast barrier** (it awaits `Promise.all`): the first child that rejects rejects the whole call and the other results are discarded. That is the right default when every branch is required. When partial results are acceptable (survey/recon/fan-out where one dead branch should not sink the batch), catch inside each thunk so every branch resolves to a value.
+
+`pipeline()` is also fail-fast overall, but it does not create a barrier between stages: item B can enter stage 2 while item A is still in stage 1. Catch inside a stage when a per-item failure should become a value instead of failing the whole pipeline.
 
 ### Knowledge channel: the return value, not the filesystem
 

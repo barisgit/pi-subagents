@@ -7,7 +7,7 @@
 // Types-only leaf: no fs imports, no IO. The view's field types mirror the
 // former AsyncRunSummary exactly; the trailing block holds foreground-only
 // optionals (absent on disk-derived views).
-import type { ActivityState, RunDisplayState, TokenUsage } from "../protocol/types.ts";
+import type { ActivityState, PipelineMetadata, RunDisplayState, TokenUsage } from "../protocol/types.ts";
 import type { RunPhase } from "./run-phase.ts";
 
 export interface RunViewStep {
@@ -51,6 +51,7 @@ export interface RunView {
 	phaseIndex?: number;
 	phaseTitle?: string;
 	parallelGroupId?: string;
+	pipeline?: PipelineMetadata;
 	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";
 	activityState?: ActivityState;
 	displayState?: RunDisplayState;

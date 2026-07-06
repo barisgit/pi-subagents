@@ -67,6 +67,55 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		});
 	});
 
+	it("exposes pipeline() as streaming item-to-item stages", async () => {
+		const calls: string[] = [];
+		const tool = createWorkflowTool({
+			dispatch: async (_role, task) => {
+				calls.push(task);
+				if (task === "stage1-1") await new Promise((resolve) => setTimeout(resolve, 30));
+				return { result: task };
+			},
+		});
+
+		const result = (await tool.execute?.(
+			"wf",
+			{
+				script: [
+					"const out = await pipeline([1, 2],",
+					"  async (n) => { await agent('A', 'stage1-' + n); return n; },",
+					"  (n) => agent('A', 'stage2-' + n)",
+					");",
+					"return out;",
+				].join("\n"),
+			},
+			new AbortController().signal,
+			() => {},
+			ctx,
+		)) as WorkflowToolResult;
+
+		assert.equal(result?.isError, undefined);
+		assert.equal((result.content[0] as { text?: string } | undefined)?.text, '[\n  "stage2-1",\n  "stage2-2"\n]');
+		assert.deepEqual(calls, ["stage1-1", "stage1-2", "stage2-2", "stage2-1"]);
+	});
+
+	it("pipeline() validates arguments and preserves an empty/no-stage result", async () => {
+		const empty = await executeWorkflow("return await pipeline([], (x) => x);");
+		assert.equal(empty?.isError, undefined);
+		assert.equal((empty.content[0] as { text?: string } | undefined)?.text, "[]");
+
+		const unchanged = await executeWorkflow("return await pipeline(['a', 'b']);");
+		assert.equal(unchanged?.isError, undefined);
+		assert.equal((unchanged.content[0] as { text?: string } | undefined)?.text, '[\n  "a",\n  "b"\n]');
+
+		const badItems = await executeWorkflow("return await pipeline('nope', (x) => x);");
+		assert.equal(badItems?.isError, true);
+		assert.match((badItems.content[0] as { text?: string } | undefined)?.text ?? "", /expects an array/);
+
+		const badStage = await executeWorkflow("return await pipeline([1], 'nope');");
+		assert.equal(badStage?.isError, true);
+		assert.match((badStage.content[0] as { text?: string } | undefined)?.text ?? "", /expects every stage/);
+	});
+
 	it("surfaces a throwing script as an error result without crashing the host", async () => {
 		const result = await executeWorkflow("throw new Error('boom');");
 

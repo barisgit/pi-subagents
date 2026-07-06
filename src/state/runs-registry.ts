@@ -25,6 +25,10 @@ export interface RunsRegistryEntry {
 	phaseIndex?: number;
 	phaseTitle?: string;
 	parallelGroupId?: string;
+	pipelineId?: string;
+	pipelineItemIndex?: number;
+	pipelineStageIndex?: number;
+	pipelineItemLabel?: string;
 	label?: string;
 	// Immediate dispatcher session (parent subagent for nested runs, user
 	// session for top-level runs).

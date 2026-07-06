@@ -51,7 +51,7 @@ return { status: "needs-attention", change, findings };
 ` })
 ```
 
-The workflow sandbox provides `agent(role, task, opts?)`, `parallel(thunks)`, and `phase(title)`. `role` is one of the caller's configured agent roles; replace placeholders with real active roles. `agent()` returns the child's result directly: a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object). `parallel()` scales dynamic fan-out to many children, bounded by the process-wide leaf-concurrency pool. Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
+The workflow sandbox provides `agent(role, task, opts?)`, `parallel(thunks)`, `pipeline(items, ...stages)`, and `phase(title)`. `role` is one of the caller's configured agent roles; replace placeholders with real active roles. `agent()` returns the child's result directly: a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object). `parallel()` scales dynamic fan-out to many children, bounded by the process-wide leaf-concurrency pool; `pipeline()` streams each item through async stages without waiting for a whole-stage barrier. Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
 
 ## Slash commands
 

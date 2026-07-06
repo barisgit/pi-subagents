@@ -28,6 +28,19 @@ export interface ContainerRowInfo {
 export type DisplayRow =
 	| { kind: "run"; run: LiveRun; depth: number; parallelMarker?: boolean; suppressPhaseChip?: boolean }
 	| {
+			kind: "pipelineItem";
+			id: string;
+			workflowId: string;
+			pipelineId: string;
+			itemIndex: number;
+			label?: string;
+			depth: number;
+			done: number;
+			total: number;
+			running: boolean;
+			collapsed: boolean;
+	  }
+	| {
 			kind: "phase";
 			id: string;
 			workflowId: string;
@@ -145,6 +158,12 @@ function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
 				const phaseA = a.child.run.phaseIndex ?? 0;
 				const phaseB = b.child.run.phaseIndex ?? 0;
 				if (phaseA !== phaseB) return phaseA - phaseB;
+				const itemA = a.child.run.pipeline?.itemIndex ?? -1;
+				const itemB = b.child.run.pipeline?.itemIndex ?? -1;
+				if (itemA !== itemB) return itemA - itemB;
+				const stageA = a.child.run.pipeline?.stageIndex ?? -1;
+				const stageB = b.child.run.pipeline?.stageIndex ?? -1;
+				if (stageA !== stageB) return stageA - stageB;
 				const groupA = a.child.run.parallelGroupId ?? "";
 				const groupB = b.child.run.parallelGroupId ?? "";
 				if (groupA !== groupB) return groupA.localeCompare(groupB);
@@ -361,12 +380,50 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 				collapsed: collapsedIds.has(phaseId),
 			});
 			if (collapsedIds.has(phaseId)) continue;
-			for (const child of phaseChildren)
+			const pipelineChildren = phaseChildren.filter((child) => child.run.pipeline);
+			const pipelineKeys = Array.from(
+				new Set(pipelineChildren.map((child) => `${child.run.pipeline!.id}:${child.run.pipeline!.itemIndex}`)),
+			).sort((a, b) => {
+				const [, itemA = "0"] = a.split(":");
+				const [, itemB = "0"] = b.split(":");
+				return Number(itemA) - Number(itemB);
+			});
+			const emittedPipelineIds = new Set<string>();
+			for (const key of pipelineKeys) {
+				const itemChildren = pipelineChildren
+					.filter((child) => `${child.run.pipeline!.id}:${child.run.pipeline!.itemIndex}` === key)
+					.sort((a, b) => (a.run.pipeline?.stageIndex ?? 0) - (b.run.pipeline?.stageIndex ?? 0));
+				const first = itemChildren[0];
+				if (!first?.run.pipeline) continue;
+				const itemId = `pipeline:${workflow.run.id}:${first.run.pipeline.id}:${first.run.pipeline.itemIndex}`;
+				rows.push({
+					kind: "pipelineItem",
+					id: itemId,
+					workflowId: workflow.run.id,
+					pipelineId: first.run.pipeline.id,
+					itemIndex: first.run.pipeline.itemIndex,
+					...(first.run.pipeline.itemLabel ? { label: first.run.pipeline.itemLabel } : {}),
+					depth: depth + 2,
+					done: itemChildren.filter(phaseRowDone).length,
+					total: itemChildren.length,
+					running: itemChildren.some(
+						(child) => child.run.state === "running" || child.run.state === "queued",
+					),
+					collapsed: collapsedIds.has(itemId),
+				});
+				if (!collapsedIds.has(itemId)) {
+					for (const child of itemChildren) emitTree(child, depth + 3, { suppressPhaseChip: true });
+				}
+				for (const child of itemChildren) emittedPipelineIds.add(child.run.id);
+			}
+			for (const child of phaseChildren) {
+				if (emittedPipelineIds.has(child.run.id)) continue;
 				emitTree(child, depth + 2, {
 					suppressPhaseChip: true,
 					parallelMarker:
 						child.run.parallelGroupId !== undefined && parallelGroups.has(child.run.parallelGroupId),
 				});
+			}
 		}
 	};
 	const emitTree = (

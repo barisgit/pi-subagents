@@ -106,6 +106,8 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 		lastActivityAt,
 		lastUpdate: status.lastUpdate,
 		runnerHeartbeatAt: status.runnerHeartbeatAt,
+		runnerPid: status.runnerPid,
+		runnerToken: status.runnerToken,
 	});
 	return {
 		id,
@@ -149,6 +151,8 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 							lastActivityAt: stepLastActivityAt,
 							lastUpdate: status.lastUpdate,
 							runnerHeartbeatAt: status.runnerHeartbeatAt,
+							runnerPid: status.runnerPid,
+							runnerToken: status.runnerToken,
 						});
 			return {
 				index,
@@ -318,12 +322,24 @@ const QUEUED_STUB_MAX_AGE_MS = 60_000;
 
 function registryWorkflowFields(
 	entry: RunsRegistryEntry,
-): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId"> {
+): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId" | "pipeline"> {
 	return {
 		...(entry.kind === "workflow" ? { workflow: true } : {}),
 		...(entry.phaseIndex !== undefined ? { phaseIndex: entry.phaseIndex } : {}),
 		...(entry.phaseTitle ? { phaseTitle: entry.phaseTitle } : {}),
 		...(entry.parallelGroupId ? { parallelGroupId: entry.parallelGroupId } : {}),
+		...(entry.pipelineId !== undefined &&
+		entry.pipelineItemIndex !== undefined &&
+		entry.pipelineStageIndex !== undefined
+			? {
+					pipeline: {
+						id: entry.pipelineId,
+						itemIndex: entry.pipelineItemIndex,
+						stageIndex: entry.pipelineStageIndex,
+						...(entry.pipelineItemLabel ? { itemLabel: entry.pipelineItemLabel } : {}),
+					},
+				}
+			: {}),
 	};
 }
 

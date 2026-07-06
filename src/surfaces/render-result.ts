@@ -770,6 +770,17 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	// include siblings that have not registered into results[] yet, so a 2-agent
 	// group never flashes "agent 1/1"; it is only set while agents run, so settled
 	// frames fall back to results.length.
+	const hasPipeline = d.workflow === true && d.results.some((result) => result.pipeline);
+	const displayResults = hasPipeline
+		? [...d.results].sort((a, b) => {
+				const itemA = a.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
+				const itemB = b.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
+				if (itemA !== itemB) return itemA - itemB;
+				const stageA = a.pipeline?.stageIndex ?? Number.MAX_SAFE_INTEGER;
+				const stageB = b.pipeline?.stageIndex ?? Number.MAX_SAFE_INTEGER;
+				return stageA - stageB;
+			})
+		: d.results;
 	const parallelTotal = Math.max(d.results.length, d.expectedAgents ?? 0);
 	const totalCount = d.mode === "parallel" ? parallelTotal : sequenceParentTotal;
 	const currentStep =
@@ -777,7 +788,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			? d.currentStepIndex + 1
 			: Math.min(totalCount, headerOk + (hasRunning ? 1 : 0));
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
-	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
+	const itemTitle = hasPipeline ? "Stage" : d.mode === "parallel" ? "Agent" : "Step";
 	const modeLabel = d.workflow ? "workflow" : d.mode;
 	const stepInfo = hasRunning
 		? `${itemLabel} ${currentStep}/${totalCount}`
@@ -826,8 +837,8 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		),
 	);
 
-	const useResultsDirectly = hasParallelInSequence || !d.agentGroups?.length;
-	const stepsToShow = useResultsDirectly ? d.results.length : d.agentGroups!.length;
+	const useResultsDirectly = hasPipeline || hasParallelInSequence || !d.agentGroups?.length;
+	const stepsToShow = useResultsDirectly ? displayResults.length : d.agentGroups!.length;
 
 	// When parallel groups are nested, results are flattened but agentGroups preserves
 	// the grouping (e.g. ["a", "[b+c]", "d"] for 3 steps / 4 results). Build a per-result
@@ -853,7 +864,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	// Count concurrently-running agents so we can adapt history density.
 	let runningCount = 0;
 	for (let i = 0; i < stepsToShow; i++) {
-		const r = d.results[i];
+		const r = displayResults[i];
 		if (!r) continue;
 		const pf =
 			d.progress?.find((p) => p.index === i) ||
@@ -863,8 +874,9 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	}
 	const historyN = historyLinesForRunningCount(runningCount);
 
+	let lastPipelineItem: number | undefined;
 	for (let i = 0; i < stepsToShow; i++) {
-		const r = d.results[i];
+		const r = displayResults[i];
 		const agentName = useResultsDirectly
 			? r?.agent || `${itemLabel}-${i + 1}`
 			: d.agentGroups![i] || r?.agent || `${itemLabel}-${i + 1}`;
@@ -875,19 +887,27 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			continue;
 		}
 		const output = getSingleResultDisplayOutput(r);
+		if (hasPipeline && r.pipeline && r.pipeline.itemIndex !== lastPipelineItem) {
+			lastPipelineItem = r.pipeline.itemIndex;
+			const itemLabel = r.pipeline.itemLabel || `Item ${r.pipeline.itemIndex + 1}`;
+			c.addChild(new Text(truncLine(theme.fg("accent", `  ${itemLabel}`), width), 0, 0));
+		}
+
 		const progressFromArray =
-			d.progress?.find((p) => p.index === i) ||
+			d.progress?.find((p) => p.index === r.progress?.index) ||
 			d.progress?.find((p) => p.agent === r.agent && p.status === "running");
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg && "status" in rProg && rProg.status === "running";
 		const rPending = rProg && "status" in rProg && rProg.status === "pending";
 		const stepNumber: string | number =
-			sequenceStepLabels?.[i] ??
-			(r.progress?.index !== undefined
-				? r.progress.index + 1
-				: progressFromArray?.index !== undefined
-					? progressFromArray.index + 1
-					: i + 1);
+			hasPipeline && r.pipeline
+				? r.pipeline.stageIndex + 1
+				: (sequenceStepLabels?.[i] ??
+					(r.progress?.index !== undefined
+						? r.progress.index + 1
+						: progressFromArray?.index !== undefined
+							? progressFromArray.index + 1
+							: i + 1));
 		const stepStats = statJoin(theme, [formatTurnStat(r.usage?.turns), formatProgressStats(theme, rProg)]);
 		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
@@ -911,7 +931,8 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 				? (progressFromArray as { color?: string }).color
 				: undefined);
 		const coloredName = rowColor ? tintAgentName(rowBoldName, rowColor) : rowBoldName;
-		const rowLabelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
+		const rowLabelTail =
+			r.pipeline || !r.label ? "" : ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}`;
 		const rowChildTail = (() => {
 			if (!d.runId || !rProg || !("recentTools" in rProg)) return "";
 			const recentTools = rProg.recentTools ?? [];
@@ -951,7 +972,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 					historyN,
 					width,
 					"    ",
-					d.workflow ? (r.label ?? r.agent) : undefined,
+					d.workflow ? (r.pipeline ? r.agent : (r.label ?? r.agent)) : undefined,
 				);
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
@@ -1239,6 +1260,17 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		d.workflow && d.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(d.label, 30))}` : "";
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	const hasParallelInSequence = d.agentGroups?.some((a: string) => a.startsWith("["));
+	const hasPipeline = d.workflow === true && d.results.some((result) => result.pipeline);
+	const displayResults = hasPipeline
+		? [...d.results].sort((a, b) => {
+				const itemA = a.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
+				const itemB = b.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
+				if (itemA !== itemB) return itemA - itemB;
+				const stageA = a.pipeline?.stageIndex ?? Number.MAX_SAFE_INTEGER;
+				const stageB = b.pipeline?.stageIndex ?? Number.MAX_SAFE_INTEGER;
+				return stageA - stageB;
+			})
+		: d.results;
 	// expectedAgents widens the denominator for an in-flight workflow fan-out whose
 	// siblings have not registered yet (else a 2-agent group flashes "1/1"); it is
 	// only set while running, so settled frames fall back to the normal totals.
@@ -1248,7 +1280,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	);
 	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : ok + 1;
 	const stepInfo = hasRunning ? ` ${currentStep}/${totalCount}` : ` ${ok}/${totalCount}`;
-	const itemTitle = d.mode === "parallel" ? "Agent" : "Step";
+	const itemTitle = hasPipeline ? "Stage" : d.mode === "parallel" ? "Agent" : "Step";
 
 	const sequenceVis = d.agentGroups?.length
 		? (() => {
@@ -1300,8 +1332,8 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		c.addChild(new Text(fit(`  ${sequenceVis}`), 0, 0));
 	}
 
-	const useResultsDirectly = hasParallelInSequence || !d.agentGroups?.length;
-	const stepsToShow = useResultsDirectly ? d.results.length : d.agentGroups!.length;
+	const useResultsDirectly = hasPipeline || hasParallelInSequence || !d.agentGroups?.length;
+	const stepsToShow = useResultsDirectly ? displayResults.length : d.agentGroups!.length;
 
 	// Mirror the background-renderer logic so nested parallel sub-steps display as "2.1∥ / 2.2∥"
 	// instead of falsely-sequential "Step 2 / Step 3".
@@ -1325,8 +1357,9 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 
 	c.addChild(new Spacer(1));
 
+	let lastPipelineItem: number | undefined;
 	for (let i = 0; i < stepsToShow; i++) {
-		const r = d.results[i];
+		const r = displayResults[i];
 		const agentName = useResultsDirectly
 			? r?.agent || `step-${i + 1}`
 			: d.agentGroups![i] || r?.agent || `step-${i + 1}`;
@@ -1339,13 +1372,21 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			continue;
 		}
 
+		if (hasPipeline && r.pipeline && r.pipeline.itemIndex !== lastPipelineItem) {
+			lastPipelineItem = r.pipeline.itemIndex;
+			const itemLabel = r.pipeline.itemLabel || `Item ${r.pipeline.itemIndex + 1}`;
+			c.addChild(new Text(fit(theme.fg("accent", `  ${itemLabel}`)), 0, 0));
+		}
+
 		const progressFromArray =
-			d.progress?.find((p) => p.index === i) ||
+			d.progress?.find((p) => p.index === r.progress?.index) ||
 			d.progress?.find((p) => p.agent === r.agent && p.status === "running");
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg?.status === "running";
 		const stepNumber: string | number =
-			sequenceStepLabelsFg?.[i] ?? (typeof rProg?.index === "number" ? rProg.index + 1 : i + 1);
+			hasPipeline && r.pipeline
+				? r.pipeline.stageIndex + 1
+				: (sequenceStepLabelsFg?.[i] ?? (typeof rProg?.index === "number" ? rProg.index + 1 : i + 1));
 
 		const resultOutput = getSingleResultDisplayOutput(r);
 		const statusIcon = rRunning

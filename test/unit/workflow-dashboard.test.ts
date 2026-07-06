@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatAsyncRunList, readRunViewForEntry } from "../../src/state/async-status.ts";
 import { buildRightLines, buildWorkflowRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
+import { deriveDisplayRows } from "../../src/surfaces/dashboard-row-model.ts";
 import {
 	SubagentsStatusComponent,
 	runViewFromRegistryEntry,
@@ -398,5 +399,43 @@ describe("workflow dashboard reader overlays", () => {
 		assert.doesNotMatch(lines, /─ Script ─/);
 		assert.match(lines, /─ Steps ─/);
 		assert.match(lines, /Phase 1: inspect/);
+	});
+});
+
+describe("workflow dashboard pipeline rows", () => {
+	it("groups pipeline children under item rows", () => {
+		const workflow: LiveRun = {
+			ownership: "foreign",
+			run: { id: "wf", workflow: true, mode: "parallel", state: "running", startedAt: 1, steps: [] },
+		};
+		const child = (id: string, itemIndex: number, stageIndex: number, itemLabel?: string): LiveRun => ({
+			ownership: "foreign",
+			run: {
+				id,
+				parentRunId: "wf",
+				mode: "single",
+				state: "complete",
+				startedAt: 10 + itemIndex * 10 + stageIndex,
+				phaseIndex: 1,
+				phaseTitle: "process",
+				pipeline: { id: "pipe", itemIndex, stageIndex, ...(itemLabel ? { itemLabel } : {}) },
+				steps: [{ index: 0, agent: `agent-${stageIndex}`, status: "complete" }],
+			},
+		});
+
+		const rows = deriveDisplayRows(
+			[workflow, child("a", 0, 0, "sync widget"), child("b", 0, 1, "sync widget"), child("c", 1, 0)],
+			new Set(),
+		);
+		assert.deepEqual(
+			rows.map((row) =>
+				row.kind === "pipelineItem"
+					? `item:${row.label ?? row.itemIndex}:${row.total}`
+					: row.kind === "run"
+						? `run:${row.run.run.id}`
+						: row.kind,
+			),
+			["run:wf", "phase", "item:sync widget:2", "run:a", "run:b", "item:1:1", "run:c"],
+		);
 	});
 });
