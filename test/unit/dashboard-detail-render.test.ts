@@ -319,7 +319,8 @@ describe("dashboard selected-run status section", () => {
 			const joined = plainLines.join("\n");
 
 			assert.equal(lines.length, 3, "status section stays tight");
-			assert.match(plainLines[0]!, /^─ polish dashboard ─+ complete · 13m58s ─$/);
+			assert.match(plainLines[0]!, /^polish dashboard +complete · 13m58s$/);
+			assert.doesNotMatch(plainLines[0]!, /─/, "status header carries no rule dashes");
 			assert.match(plainLines[1]!, /^ {2}2 tools · 4\.2Mt · 13m58s$/);
 			assert.match(plainLines[2]!, /^ {2}parallel · id run-stat · started \d\d:\d\d$/);
 			assert.doesNotMatch(joined, /[╭╮╰╯│]/, "status section is not boxed");
@@ -334,7 +335,7 @@ describe("dashboard selected-run status section", () => {
 					`status section must use fg only, no bg bleed: ${JSON.stringify(line)}`,
 				);
 			}
-			assert.equal(visibleWidth(lines[0]!), width, "separator fills the sidebar width");
+			assert.equal(visibleWidth(lines[0]!), width, "header fills the sidebar width");
 			assert.match(lines[0]!, /\x1b\[32mpolish dashboard\x1b\[39m/, `label is success-colored:\n${joined}`);
 			assert.match(
 				lines[0]!,

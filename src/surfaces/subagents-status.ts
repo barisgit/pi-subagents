@@ -1217,8 +1217,7 @@ function clipPlain(text: string, width: number): string {
 }
 
 function renderStatusBoxHeader(theme: Theme, width: number, name: string, tail: string, color: ThemeFg): string {
-	const rule = (text: string) => theme.fg("dim", text);
-	const availableText = Math.max(0, width - 7);
+	const availableText = Math.max(0, width - 3);
 	let tailText = tail;
 	let nameText = name;
 	if (visibleWidth(nameText) + visibleWidth(tailText) > availableText) {
@@ -1226,8 +1225,8 @@ function renderStatusBoxHeader(theme: Theme, width: number, name: string, tail: 
 		tailText = clipPlain(tailText, tailBudget);
 		nameText = clipPlain(nameText, Math.max(0, availableText - visibleWidth(tailText)));
 	}
-	const dashCount = Math.max(1, width - 6 - visibleWidth(nameText) - visibleWidth(tailText));
-	const line = `${rule("─")} ${theme.fg(color, nameText)} ${rule("─".repeat(dashCount))} ${theme.fg(color, tailText)} ${rule("─")}`;
+	const gap = Math.max(1, width - visibleWidth(nameText) - visibleWidth(tailText));
+	const line = `${theme.fg(color, nameText)}${" ".repeat(gap)}${theme.fg(color, tailText)}`;
 	return truncateToWidth(line, width, "");
 }
 
