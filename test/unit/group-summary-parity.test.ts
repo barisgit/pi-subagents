@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { readRunViewForEntry } from "../../src/state/async-status.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { expandOverlayByRootRunId, runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
 import { writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
 
 // VAL-GROUP-SUMMARY: readRunViewForEntry (async-status) and runViewFromRegistryEntry
@@ -144,6 +144,40 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		assert.equal(b.state, "queued", "B never drops: returns a queued stub");
 		assert.equal(b.steps.length, 1);
 		assert.equal(b.steps[0]!.agent, "A");
+	});
+
+	it("drops a stale statusless child from expanded overlay rows", () => {
+		const root = setup("gsp-expanded-orphan-");
+		const parent = {
+			runId: "parent",
+			runRecordDir: path.join(root, "parent-run"),
+			mode: "parallel" as const,
+			source: "async" as const,
+			cwd: root,
+			startedAt: Date.now(),
+		};
+		const staleChild = {
+			runId: "stale-child",
+			runRecordDir: path.join(root, "stale-child"),
+			mode: "single" as const,
+			source: "async" as const,
+			agentName: "A",
+			parentRunId: parent.runId,
+			rootRunId: parent.runId,
+			cwd: root,
+			startedAt: Date.now() - 120_000,
+		};
+		appendRunEntry(parent);
+		appendRunEntry(staleChild);
+		const parentSummary = runViewFromRegistryEntry(parent, [parent, staleChild]);
+
+		const expanded = expandOverlayByRootRunId({ active: [parentSummary], recent: [] }, {});
+
+		assert.deepEqual(
+			expanded.active.map((run) => run.id),
+			[parent.runId],
+		);
+		assert.deepEqual(expanded.recent, []);
 	});
 
 	it("keeps a fresh statusless single run as a queued stub in both builders", () => {

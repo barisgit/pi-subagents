@@ -321,6 +321,10 @@ export function listRunsFromRegistryForOverlay(
 // the `subagent({ action: "status" })` wall the user hit.
 const QUEUED_STUB_MAX_AGE_MS = 60_000;
 
+export function isQueuedStubRecent(entry: RunsRegistryEntry, now = Date.now()): boolean {
+	return now - entry.startedAt <= QUEUED_STUB_MAX_AGE_MS;
+}
+
 function registryWorkflowFields(
 	entry: RunsRegistryEntry,
 ): Pick<AsyncRunSummary, "workflow" | "phaseIndex" | "phaseTitle" | "parallelGroupId" | "pipeline"> {
@@ -492,8 +496,7 @@ export function readRunViewForEntry(
 	// overlay reflects the spawn immediately — or (b) the entry is an orphan
 	// whose runRecordDir is gone. Drop orphans so the registry's append-only
 	// history doesn't masquerade as live work.
-	const age = Date.now() - entry.startedAt;
-	if (age > QUEUED_STUB_MAX_AGE_MS) return null;
+	if (!isQueuedStubRecent(entry)) return null;
 	const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : []);
 	return {
 		id: entry.runId,

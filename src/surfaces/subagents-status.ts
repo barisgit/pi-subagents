@@ -20,6 +20,7 @@ import {
 	type AsyncRunOverlayData,
 	type AsyncRunSummary,
 	buildGroupSummary,
+	isQueuedStubRecent,
 	dedupePhaseTitle,
 	listRunsFromRegistryForOverlay,
 	readLeafRunViewCached,
@@ -227,6 +228,9 @@ export function expandOverlayByRootRunId(
 		// The scoped seed has already proven this root run belongs to the current
 		// session. Include the whole run tree by rootRunId so descendants with
 		// stale/missing session tags are still rendered under their visible parent.
+		const owned = ownedViews?.has(entry.runId) === true;
+		const isLeaf = Boolean(entry.agentName || entry.agentNames);
+		if (isLeaf && !owned && !readLeafRunViewCached(entry.runRecordDir) && !isQueuedStubRecent(entry)) continue;
 		byId.set(entry.runId, runViewFromRegistryEntry(entry, entries, ownedViews));
 	}
 
