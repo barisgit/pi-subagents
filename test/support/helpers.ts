@@ -42,6 +42,8 @@ interface AgentConfig {
 	progress?: boolean;
 	mcpDirectTools?: string[];
 	maxSubagentDepth?: number;
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[];
 }
 
 export function makeAgentConfigs(names: string[]): AgentConfig[] {

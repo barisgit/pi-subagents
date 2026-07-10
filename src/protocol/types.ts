@@ -193,6 +193,9 @@ export interface SubagentLineage {
 	depth: number;
 	runId: string | null;
 	rootRunId?: string | null;
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[];
+	maxSubagentDepth?: number;
 }
 
 export interface SubagentUsageRecord {
@@ -762,10 +765,8 @@ export function resolveChildMaxSubagentDepth(parentMaxDepth: number, agentMaxDep
 }
 
 /**
- * Async dispatch is only allowed from the host session. Child (in-process) sessions
- * have no UI to surface async runs, no notify wake target separate from the host, and
- * no lifecycle owner to await descendants. The guard returns true when the current
- * activate-time globalThis flag indicates we are inside a child session.
+ * Construction-time marker used only while child extensions are being wired.
+ * Delegation authorization must use session lineage instead of this process-global state.
  */
 export const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
 

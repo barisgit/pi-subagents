@@ -1,6 +1,6 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RegisteredPersonaDir, discoverAgents } from "../shared/agents.ts";
-import { claimPendingChildLineage, setHostLineage } from "../state/lineage.ts";
+import { claimPendingChildLineage, setChildLineage, setHostLineage } from "../state/lineage.ts";
 import type { createSubagentExecutor } from "../dispatch/subagent-executor.ts";
 import { addUsageInto, emptyUsage } from "../dispatch/executor-helpers.ts";
 import { readShardEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
@@ -163,6 +163,21 @@ export function registerChildSessionApi(pi: ExtensionAPI): void {
 		// pre-registered-by-sid lineage didn't land for this session. Normally
 		// lineage is already in the store keyed by sid before activate runs.
 		lineage = claimPendingChildLineage(sid, { runId: null, agentName: null });
+		if (!lineage) {
+			lineage = {
+				role: "child",
+				currentAgent: "",
+				parentAgent: null,
+				parentSessionId: null,
+				rootSessionId: null,
+				depth: 0,
+				runId: null,
+				canDelegate: false,
+				allowedDelegateAgents: [],
+				maxSubagentDepth: 0,
+			};
+			setChildLineage(sid, lineage);
+		}
 		publish();
 	});
 }
@@ -181,29 +196,19 @@ export function createHostSubagentApi(params: CreateHostSubagentApiParams): {
 	republish: () => void;
 } {
 	const { pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents } = params;
-	const buildSpawnRawContext = (): ExtensionContext =>
-		state.lastUiContext ??
-		({
-			cwd: state.baseCwd,
-			hasUI: false,
-			ui: {} as ExtensionContext["ui"],
-			sessionManager: {
-				getSessionId: () => state.currentSessionId ?? "spawn-raw",
-				getSessionFile: () => null,
-			} as unknown as ExtensionContext["sessionManager"],
-			modelRegistry: { getAvailable: () => [] } as unknown as ExtensionContext["modelRegistry"],
-			model: undefined,
-			isIdle: () => true,
-			signal: undefined,
-			abort: () => {},
-			hasPendingMessages: () => false,
-			shutdown: () => {},
-			getContextUsage: () => undefined,
-			compact: () => {},
-			getSystemPrompt: () => "",
-		} as ExtensionContext);
-	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> =>
-		executor.executeInternal(
+	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> => {
+		const ctx = state.lastUiContext;
+		if (!ctx) {
+			return {
+				content: [{ type: "text", text: "spawnRaw is unavailable until session context is established" }],
+				details: {
+					type: "error",
+					message: "spawnRaw has no authoritative session context",
+				} as unknown as Details,
+				isError: true,
+			};
+		}
+		return executor.executeInternal(
 			"subagent-spawn-raw",
 			{
 				agent: "__raw__",
@@ -231,8 +236,9 @@ export function createHostSubagentApi(params: CreateHostSubagentApiParams): {
 			},
 			new AbortController().signal,
 			undefined,
-			buildSpawnRawContext(),
+			ctx,
 		) as unknown as SpawnResult;
+	};
 	// Host lineage is recorded on session_start once we know the host session
 	// id. Until then, lineage() returns a best-effort host shape with a null
 	// rootSessionId so callers never see undefined.

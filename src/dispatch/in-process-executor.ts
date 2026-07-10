@@ -21,7 +21,7 @@ import {
 // list unfiltered; extension tools like ast_grep/fetch/mcp/scan_files register during
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "../shared/logger.ts";
-import { pushPendingChildLineage, setChildLineage } from "../state/lineage.ts";
+import { getLineageForSession, pushPendingChildLineage, setChildLineage } from "../state/lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhaseState } from "../state/run-phase.ts";
 import {
 	SUBAGENT_PHASE_CHANGE_EVENT,
@@ -30,6 +30,7 @@ import {
 	type SubagentLineage,
 	type SubagentPhaseChangePayload,
 	type SubagentStuckPayload,
+	normalizeAgentIdentity,
 } from "../protocol/types.ts";
 import type {
 	ChildAgentExitState,
@@ -736,19 +737,37 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 	// the flag synchronously to skip host wiring.
 	setChildSessionFlag(true);
 
+	const parentLineage = step.parentSessionId ? getLineageForSession(step.parentSessionId) : null;
+	const depth = parentLineage
+		? parentLineage.depth + 1
+		: (() => {
+				const envParentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
+				return Number.isFinite(envParentDepth) ? envParentDepth + 1 : 1;
+			})();
+	const canDelegate = step.agentConfig.canDelegate === true;
+	const allowedDelegateAgents = step.agentConfig.allowedDelegateAgents
+		? [
+				...new Set(
+					step.agentConfig.allowedDelegateAgents
+						.map((agent) => normalizeAgentIdentity(agent))
+						.filter((agent): agent is string => Boolean(agent)),
+				),
+			]
+		: undefined;
 	// Queue this child's lineage so its activate can claim it once it knows its
-	// own session id. Depth = parent's depth + 1; we don't have the parent's
-	// depth here, but rootSessionId tells charters/consumers how to reconstruct
-	// the tree if needed. depth 0 = host, 1 = first-level child, etc.
+	// own session id.
 	const lineage: SubagentLineage = {
 		role: "child",
 		currentAgent: step.agentName,
-		parentAgent: step.parentAgentName ?? null,
+		parentAgent: parentLineage?.currentAgent ?? step.parentAgentName ?? null,
 		parentSessionId: step.parentSessionId ?? null,
-		rootSessionId: step.rootSessionId ?? step.parentSessionId ?? null,
-		depth: 1, // minimum; refined by child activate using rootSessionId vs parentSessionId
+		rootSessionId: parentLineage?.rootSessionId ?? step.rootSessionId ?? step.parentSessionId ?? null,
+		depth,
 		runId: step.runId,
 		rootRunId: step.rootRunId ?? step.runId,
+		canDelegate,
+		...(allowedDelegateAgents ? { allowedDelegateAgents } : {}),
+		maxSubagentDepth: step.maxSubagentDepth,
 	};
 	pushPendingChildLineage(lineage);
 	try {

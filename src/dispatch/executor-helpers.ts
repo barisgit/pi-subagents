@@ -454,8 +454,7 @@ export function resolveChildTools(agentConfig: AgentConfig): { activeToolNames: 
 	// A non-delegating agent must never reach a delegation tool, even if its allowlist
 	// (e.g. `*`) expanded to include one. `workflow` spawns child agents exactly like
 	// `subagent`, so both are stripped whenever canDelegate is explicitly false. This is
-	// the process-independent gate for in-process children (the env-based
-	// checkNestedDelegationGuard only covers separate-process dispatch).
+	// retained as defense in depth alongside the session-lineage delegation guard.
 	const baseAllow =
 		agentConfig.canDelegate === false && expanded !== undefined
 			? expanded.filter((name) => name !== "subagent" && name !== "workflow")

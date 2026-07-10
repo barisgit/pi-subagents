@@ -11,6 +11,7 @@ import {
 } from "./in-process-executor.ts";
 import type { StatusWriter } from "../state/status-writer.ts";
 import { formatRunHandle } from "../state/run-shape.ts";
+import { getLineageForSession } from "../state/lineage.ts";
 import { resolveChildCwd } from "../shared/utils.ts";
 import {
 	spawnRun,
@@ -74,7 +75,11 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 	const runId = data.runId;
 	const availableModels = normalizeAvailableModels(ctx.modelRegistry.getAvailable());
 	const currentProvider = ctx.model?.provider;
-	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
+	const currentSessionId = ctx.sessionManager?.getSessionId?.();
+	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(
+		deps.config.maxSubagentDepth,
+		currentSessionId ? getLineageForSession(currentSessionId) : null,
+	);
 	const parentRunId = resolveDispatchParentRunId(ctx);
 	const rootRunId = resolveDispatchRootRunId(ctx, runId);
 	const steps: AsyncDispatchStep[] = [];

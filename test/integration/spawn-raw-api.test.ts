@@ -125,6 +125,45 @@ describe("spawnRaw API exposure", () => {
 		assert.ok(getExposed()?.usageSnapshot, "expected requested API to include usageSnapshot");
 	});
 
+	it("fails closed when spawnRaw has no authoritative session context", async () => {
+		let executionCount = 0;
+		const { pi, getExposed } = createPiHarness();
+		createHostSubagentApi({
+			pi: pi as never,
+			executor: {
+				executeInternal: async () => {
+					executionCount += 1;
+					return {};
+				},
+			} as never,
+			config: {} as never,
+			state: {
+				baseCwd: tempDir,
+				currentSessionId: null,
+				asyncJobs: new Map(),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				cleanupTimers: new Map(),
+				lastUiContext: null,
+				poller: null,
+			} as never,
+			getRegisteredPersonaDirs: () => [],
+			discoverAgents: () => ({ agents: [] }) as never,
+		});
+		const api = getExposed();
+		assert.ok(api?.spawnRaw, "expected exposed spawnRaw API");
+
+		const result = await api.spawnRaw({
+			systemPrompt: "Follow the prompt.",
+			prompt: "Return a result",
+			cwd: tempDir,
+		});
+
+		assert.equal(result.isError, true);
+		assert.equal(executionCount, 0);
+		assert.match(result.content[0]?.text ?? "", /session context/i);
+	});
+
 	it("hydrates usage snapshots from persisted run status after restart", () => {
 		const sessionId = "session-restarted";
 		const registryPath = path.join(tempDir, "runs-index.jsonl");

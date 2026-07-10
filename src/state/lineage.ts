@@ -33,6 +33,12 @@ export interface SubagentLineage {
 	runId: string | null;
 	/** Root run id for this run tree — null for host. */
 	rootRunId?: string | null;
+	/** Whether this child may dispatch another child. */
+	canDelegate?: boolean;
+	/** Child agent names this child may dispatch. */
+	allowedDelegateAgents?: string[];
+	/** Effective maximum depth inherited by this child. */
+	maxSubagentDepth?: number;
 }
 
 const STORE_KEY = "__piSubagentLineageBySession";
@@ -84,6 +90,12 @@ export function claimPendingChildLineage(
 	hints: { runId?: string | null; agentName?: string | null },
 ): SubagentLineage | null {
 	const arr = pending();
+	const existing = store().get(sessionId);
+	if (existing) {
+		const pendingIndex = arr.findIndex((candidate) => candidate.runId === existing.runId);
+		if (pendingIndex >= 0) arr.splice(pendingIndex, 1);
+		return existing;
+	}
 	if (arr.length === 0) return null;
 	let idx = -1;
 	if (hints.runId) {
@@ -92,7 +104,8 @@ export function claimPendingChildLineage(
 	if (idx < 0 && hints.agentName) {
 		idx = arr.findIndex((l) => l.currentAgent === hints.agentName);
 	}
-	if (idx < 0) idx = 0;
+	if (idx < 0 && arr.length === 1) idx = 0;
+	if (idx < 0) return null;
 	const lineage = arr.splice(idx, 1)[0];
 	store().set(sessionId, lineage);
 	return lineage;
@@ -115,6 +128,7 @@ export function setChildLineage(sessionId: string, lineage: SubagentLineage): vo
 export function setHostLineage(sessionId: string, currentAgent = ""): SubagentLineage {
 	const m = store();
 	const existing = m.get(sessionId);
+	if (existing?.role === "child") return existing;
 	const lineage: SubagentLineage = {
 		...(existing ?? {
 			role: "host" as const,

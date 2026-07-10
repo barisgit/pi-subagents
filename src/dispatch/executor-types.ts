@@ -46,6 +46,8 @@ export interface ResolvedAgentConfig {
 	fallbackModels?: string[];
 	thinking?: string;
 	skills?: string[];
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[];
 	[key: string]: unknown;
 }
 

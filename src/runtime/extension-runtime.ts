@@ -226,12 +226,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 		getActiveRootRoleName: () => roleManager.getActiveRootRoleName(),
 	});
-	const hostApi = createHostSubagentApi({ pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents });
+	const hostApi = isChildSession
+		? undefined
+		: createHostSubagentApi({ pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents });
 	const roleManager = createRootRoleManager({
 		pi,
 		config,
 		state,
-		setHostCurrentAgent: hostApi.setCurrentAgent,
+		setHostCurrentAgent: hostApi?.setCurrentAgent ?? (() => {}),
 		notify,
 		normalizeName,
 		getLatestCustomStateName,
@@ -388,7 +390,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		resetSessionState(ctx);
-		hostApi.republish();
+		hostApi?.republish();
 		if (roleManager.isDelegatedSubagentSession()) return;
 		await roleManager.initializeRootRole(ctx);
 	});
