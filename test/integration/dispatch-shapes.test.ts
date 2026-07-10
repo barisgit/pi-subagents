@@ -2,6 +2,8 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { readAllEntries } from "../../src/state/runs-registry.ts";
+import { readStatus } from "../../src/shared/utils.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
 
 type Listener = (event: Record<string, unknown>) => void;
@@ -11,6 +13,8 @@ interface ExecutorResult {
 	content: Array<{ text?: string }>;
 	details?: {
 		mode?: string;
+		runId?: string;
+		children?: Array<{ runId: string; agent: string; stepIndex: number }>;
 		results?: Array<{ agent?: string; task?: string; exitCode?: number; finalOutput?: string }>;
 	};
 }
@@ -27,6 +31,7 @@ class FakeAgentSession {
 	// re-run promptImpl twice per child and inflate counts.
 	readonly messages: unknown[] = [];
 	lastAssistantText = "<output>done</output>";
+	private resolveAbort: (() => void) | undefined;
 
 	constructor(promptImpl: (task: string, session: FakeAgentSession) => Promise<void>) {
 		this.promptImpl = promptImpl;
@@ -51,7 +56,15 @@ class FakeAgentSession {
 		return this.lastAssistantText;
 	}
 
-	async abort(): Promise<void> {}
+	waitForAbort(): Promise<void> {
+		return new Promise((resolve) => {
+			this.resolveAbort = resolve;
+		});
+	}
+
+	async abort(): Promise<void> {
+		this.resolveAbort?.();
+	}
 
 	dispose(): void {}
 
@@ -181,6 +194,67 @@ describe("dispatch shapes", () => {
 		assert.deepEqual(seenTasks, ["x"]);
 	});
 
+	it("fresh foreground terminal status persists output, usage, and live tool counters", async () => {
+		restoreRuntime = installFakeRuntime([
+			new FakeAgentSession(async (_task, session) => {
+				session.lastAssistantText = "<output>fresh terminal output</output>";
+				session.emit({ type: "tool_execution_start", toolName: "read" });
+				session.emit({ type: "tool_execution_end", toolName: "read" });
+				session.emit({ type: "tool_execution_start", toolName: "bash" });
+				session.emit({ type: "tool_execution_end", toolName: "bash", isError: true });
+				session.emit(assistantMessage("<output>fresh terminal output</output>"));
+			}),
+		]);
+
+		const result = await execute(tempDir, { run: [{ agent: "explorer", task: "persist" }] });
+		const runId = result.details?.runId;
+		assert.ok(runId);
+		const entry = readAllEntries().find((candidate) => candidate.runId === runId);
+		assert.ok(entry);
+		const status = readStatus(entry.runRecordDir);
+		assert.ok(status);
+		assert.equal(status.state, "complete");
+		assert.equal(status.outputText, "fresh terminal output");
+		assert.equal(status.totalUsage?.input, 1);
+		assert.equal(status.totalUsage?.output, 1);
+		assert.equal(status.totalTokens?.total, 2);
+		assert.equal(status.steps?.[0]?.live?.outputText, "fresh terminal output");
+		assert.equal(status.steps?.[0]?.live?.toolCallCount, 2);
+		assert.equal(status.steps?.[0]?.live?.toolResultCount, 2);
+		assert.equal(status.steps?.[0]?.live?.toolErrorCount, 1);
+	});
+
+	it("foreground single interruption exposes its resumable run ID and resume action", async () => {
+		let markStarted: (() => void) | undefined;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		restoreRuntime = installFakeRuntime([
+			new FakeAgentSession(async (_task, session) => {
+				markStarted?.();
+				await session.waitForAbort();
+			}),
+		]);
+		const executor = makeExecutor(tempDir);
+		const abortController = new AbortController();
+		const resultPromise = executor.execute(
+			"single-interrupt",
+			{ run: [{ agent: "explorer", task: "wait" }] } as never,
+			abortController.signal,
+			undefined,
+			makeCtx(tempDir) as never,
+		) as Promise<ExecutorResult>;
+		await started;
+		abortController.abort("stop");
+
+		const result = await resultPromise;
+		const runId = result.details?.runId;
+		assert.ok(runId);
+		assert.match(resultText(result), new RegExp(runId));
+		assert.match(resultText(result), /subagent\(\{ action: "resume", id:/);
+		assert.match(resultText(result), /message:/);
+	});
+
 	it("prefers the <output> block over the assistant preamble for finalOutput", async () => {
 		// Regression: the child writes a prose preamble in the SAME turn as its final
 		// <output> block. The parent-visible finalOutput must be the contract result
@@ -200,6 +274,51 @@ describe("dispatch shapes", () => {
 			"done",
 			"finalOutput must be the <output> block, not the assistant preamble",
 		);
+	});
+
+	it("foreground parallel interruption exposes every resumable child run instead of its container", async () => {
+		let startedCount = 0;
+		let markAllStarted: (() => void) | undefined;
+		const allStarted = new Promise<void>((resolve) => {
+			markAllStarted = resolve;
+		});
+		const waitForInterrupt = async (_task: string, session: FakeAgentSession) => {
+			startedCount++;
+			if (startedCount === 2) markAllStarted?.();
+			await session.waitForAbort();
+		};
+		restoreRuntime = installFakeRuntime([
+			new FakeAgentSession(waitForInterrupt),
+			new FakeAgentSession(waitForInterrupt),
+		]);
+		const executor = makeExecutor(tempDir);
+		const abortController = new AbortController();
+		const resultPromise = executor.execute(
+			"parallel-interrupt",
+			{
+				run: [
+					{ agent: "A", task: "wait one" },
+					{ agent: "B", task: "wait two" },
+				],
+			} as never,
+			abortController.signal,
+			undefined,
+			makeCtx(tempDir) as never,
+		) as Promise<ExecutorResult>;
+		await allStarted;
+		abortController.abort("stop");
+
+		const result = await resultPromise;
+		const containerRunId = result.details?.runId;
+		const children = result.details?.children ?? [];
+		assert.ok(containerRunId);
+		assert.equal(children.length, 2);
+		for (const child of children) {
+			assert.notEqual(child.runId, containerRunId);
+			assert.match(resultText(result), new RegExp(child.runId));
+		}
+		assert.doesNotMatch(resultText(result), new RegExp(containerRunId));
+		assert.equal(resultText(result).match(/subagent\(\{ action: "resume", id:/g)?.length, 2);
 	});
 
 	it("parallel-default dispatches run length concurrently by default", async () => {

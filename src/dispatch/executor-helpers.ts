@@ -24,7 +24,7 @@ import type {
 	ForegroundControlRef,
 	InternalSubagentParams,
 } from "./executor-types.ts";
-import type { ChildAgentResult } from "../protocol/status-types.ts";
+import type { ChildAgentResult, PersistedRunStep } from "../protocol/status-types.ts";
 import { compactForegroundDetails, getSingleResultOutput } from "../shared/utils.ts";
 import { finalizeSingleOutput } from "../surfaces/single-output.ts";
 import { resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
@@ -36,7 +36,7 @@ import {
 } from "./subagent-control.ts";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import type { RunMode } from "../state/run-shape.ts";
-import { tokenUsageFromUsage } from "../state/usage-totals.ts";
+import { tokenUsageFromUsage, totalUsageTokens } from "../state/usage-totals.ts";
 import type { StatusWriter } from "../state/status-writer.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "../state/lineage.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
@@ -340,6 +340,24 @@ export function tokenUsageFromResult(
 	return tokenUsageFromUsage(result.usage);
 }
 
+export function terminalStatusStepFromResult(result: SingleResult): Partial<PersistedRunStep> {
+	const toolCallCount = result.toolCallCount ?? result.progressSummary?.toolCount ?? 0;
+	return {
+		status: result.interrupted ? "interrupted" : result.exitCode === 0 ? "complete" : "failed",
+		tokens: tokenUsageFromResult(result),
+		durationMs: result.progressSummary?.durationMs,
+		error: result.error,
+		live: {
+			outputText: getSingleResultOutput(result),
+			toolCallCount,
+			toolResultCount: result.toolResultCount ?? 0,
+			toolErrorCount: result.toolErrorCount ?? 0,
+			toolCount: toolCallCount,
+			tokens: totalUsageTokens(result.usage),
+		},
+	};
+}
+
 export function emitSyncLifecycleEvent(
 	pi: ExtensionAPI,
 	event: string,
@@ -552,17 +570,17 @@ export function buildAsyncAggregateCompletePayload(params: {
 
 export function singleResultToChildAgentResult(
 	result: SingleResult,
-	prepared: { runId: string; sessionFile: string },
+	prepared: { runId: string; sessionFile: string; stepIndex?: number },
 ): ChildAgentResult {
 	return {
 		runId: prepared.runId,
-		stepIndex: 0,
+		stepIndex: prepared.stepIndex ?? 0,
 		state: result.interrupted ? "interrupted" : result.exitCode === 0 ? "complete" : "failed",
 		exitCode: result.exitCode === 0 ? 0 : 1,
 		outputText: getSingleResultOutput(result),
-		toolCallCount: result.progressSummary?.toolCount ?? 0,
-		toolResultCount: 0,
-		toolErrorCount: 0,
+		toolCallCount: result.toolCallCount ?? result.progressSummary?.toolCount ?? 0,
+		toolResultCount: result.toolResultCount ?? 0,
+		toolErrorCount: result.toolErrorCount ?? 0,
 		durationMs: result.progressSummary?.durationMs ?? 0,
 		startedAt: Date.now() - (result.progressSummary?.durationMs ?? 0),
 		endedAt: Date.now(),
@@ -624,7 +642,7 @@ export function shapeSingleForegroundResult(args: {
 			content: [
 				{
 					type: "text",
-					text: `Run paused after interrupt (${agent}). Waiting for explicit next action.`,
+					text: `Run ${runId} paused after interrupt (${agent}). Resume with subagent({ action: "resume", id: "${runId}", message: "Continue the interrupted work." }).`,
 				},
 			],
 			details,

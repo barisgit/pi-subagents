@@ -75,7 +75,7 @@ import {
 	shapeSingleForegroundResult,
 	singleResultToChildAgentResult,
 	sumUsages,
-	tokenUsageFromResult,
+	terminalStatusStepFromResult,
 	validationError,
 } from "./executor-helpers.ts";
 export {
@@ -1081,6 +1081,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						paramsWithResolvedCwd.id!,
 						paramsWithResolvedCwd.message!,
 						resumeAsyncMode,
+						resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined),
 						resumeData,
 						deps,
 					),
@@ -1504,22 +1505,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					// its result carries interrupted:true with no isError, so honor that first
 					// (mirrors the workflow/group path) instead of falling through to
 					// 'complete'. 'interrupted' is a terminal, resumable state.
-					const interrupted =
-						executionResult?.details?.results?.some((result) => result.interrupted) ?? false;
+					const terminalResults = executionResult?.details?.results ?? [];
+					const interrupted = terminalResults.some((result) => result.interrupted);
+					const totalUsage =
+						executionResult?.details?.totalUsage ??
+						sumUsages(...terminalResults.map((result) => result.usage));
+					const totalTokens = tokenUsageFromUsage(totalUsage);
+					const primaryResult = terminalResults[0];
 					finalizeRun(runHandle, {
 						via: "terminal",
 						state: interrupted ? "interrupted" : executionResult?.isError ? "failed" : "complete",
-						steps:
-							executionResult?.details?.results?.map((result) => ({
-								status: result.interrupted
-									? "interrupted"
-									: result.exitCode === 0
-										? "complete"
-										: "failed",
-								tokens: tokenUsageFromResult(result),
-								durationMs: result.progressSummary?.durationMs,
-								error: result.error,
-							})) ?? [],
+						steps: terminalResults.map(terminalStatusStepFromResult),
+						totalUsage,
+						...(totalTokens ? { totalTokens } : {}),
+						...(primaryResult ? { outputText: getSingleResultOutput(primaryResult) } : {}),
+						...(primaryResult?.error ? { error: primaryResult.error } : {}),
 					});
 					fgWriter.dispose();
 				}

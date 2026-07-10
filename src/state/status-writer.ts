@@ -8,7 +8,7 @@ import {
 	type StatusPatch,
 	parsePersistedRunStatus,
 } from "../protocol/status-types.ts";
-import type { TokenUsage } from "../protocol/types.ts";
+import type { TokenUsage, Usage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 import { applyPatchToStatus } from "./status-patch.ts";
 import { STALE_MTIME_THRESHOLD_MS } from "../shared/utils.ts";
@@ -171,6 +171,9 @@ export class StatusWriter {
 		state?: "complete" | "failed" | "interrupted";
 		steps?: Array<Partial<StatusStep>>;
 		totalTokens?: TokenUsage;
+		totalUsage?: Usage;
+		outputText?: string;
+		error?: string;
 		sessionFile?: string;
 	}): void {
 		this.ensureInitialized();
@@ -191,6 +194,7 @@ export class StatusWriter {
 			return {
 				...step,
 				...patch,
+				...(patch.live ? { live: { ...step.live, ...patch.live } } : {}),
 				status,
 				endedAt: patch.endedAt ?? endedAt,
 				durationMs: patch.durationMs ?? (startedAt ? endedAt - startedAt : undefined),
@@ -203,6 +207,10 @@ export class StatusWriter {
 			endedAt,
 			...(end.totalTokens ? { totalTokens: end.totalTokens } : {}),
 		});
+		if (end.outputText !== undefined) this.status.outputText = end.outputText;
+		if (end.totalUsage !== undefined) this.status.totalUsage = { ...end.totalUsage };
+		if (end.error !== undefined) this.status.error = end.error;
+		else delete this.status.error;
 		this.lastWriteAt = endedAt;
 		this.writeNow();
 	}
@@ -218,6 +226,7 @@ export class StatusWriter {
 				cost?: number;
 				turns?: number;
 			};
+			stepTokens?: TokenUsage;
 		},
 	): Promise<void> {
 		this.ensureInitialized();
@@ -254,8 +263,8 @@ export class StatusWriter {
 			step.endedAt = result.endedAt;
 			step.durationMs = result.durationMs;
 			if (result.error?.message) step.error = result.error.message;
-			if (result.usage) {
-				step.tokens = tokenUsageFromUsage(result.usage);
+			if (options?.stepTokens ?? result.usage) {
+				step.tokens = options?.stepTokens ?? tokenUsageFromUsage(result.usage);
 			}
 			step.live = {
 				...(step.live ?? {}),
@@ -263,6 +272,8 @@ export class StatusWriter {
 				toolCallCount: result.toolCallCount,
 				toolResultCount: result.toolResultCount,
 				toolErrorCount: result.toolErrorCount,
+				toolCount: result.toolCallCount,
+				tokens: (options?.stepTokens ?? tokenUsageFromUsage(result.usage))?.total,
 			};
 		}
 		this.writeNow();

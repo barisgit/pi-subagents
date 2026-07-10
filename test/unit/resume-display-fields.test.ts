@@ -102,6 +102,7 @@ function seedRun(root: string, startedAt = 4444, extra: Record<string, unknown> 
 		source: "sync",
 		agentName: "fixer",
 		rootRunId: runId,
+		rootSessionId: "parent",
 		cwd: root,
 		startedAt,
 	});
