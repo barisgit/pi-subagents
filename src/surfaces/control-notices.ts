@@ -1,6 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { controlNotificationKey, formatControlNoticeMessage } from "../dispatch/subagent-control.ts";
+import {
+	claimControlNotificationKey,
+	createControlNotificationDedupeStore,
+	evictControlNotificationsForRunId,
+	formatControlNoticeMessage,
+} from "../dispatch/subagent-control.ts";
+import { resolveSubagentIntercomTarget } from "../dispatch/intercom-bridge.ts";
 import type { ControlEvent } from "../protocol/types.ts";
 
 export const SUBAGENT_CONTROL_MESSAGE_TYPE = "subagent_control_notice";
@@ -21,22 +27,17 @@ export function registerControlNotices(params: {
 	pi: ExtensionAPI;
 	isChildSession: boolean;
 	globalStore: Record<string, unknown>;
-}): { controlEventHandler: (payload: unknown) => void } {
+}): { controlEventHandler: (payload: unknown) => void; controlRunTerminalHandler: (payload: unknown) => void } {
 	const { pi, isChildSession, globalStore } = params;
 	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
 	const existingVisibleControlNotices = isChildSession ? undefined : globalStore[controlNoticeSeenStoreKey];
-	const visibleControlNotices =
-		existingVisibleControlNotices instanceof Set
-			? (existingVisibleControlNotices as Set<string>)
-			: new Set<string>();
+	const visibleControlNotices = createControlNotificationDedupeStore(existingVisibleControlNotices);
 	if (!isChildSession) globalStore[controlNoticeSeenStoreKey] = visibleControlNotices;
 	const controlEventHandler = (payload: unknown) => {
 		const details = payload as SubagentControlMessageDetails;
 		if (!details?.event) return;
 		const childIntercomTarget = controlNoticeTarget(details);
-		const key = controlNotificationKey(details.event, childIntercomTarget);
-		if (visibleControlNotices.has(key)) return;
-		visibleControlNotices.add(key);
+		if (!claimControlNotificationKey(details.event, visibleControlNotices, childIntercomTarget)) return;
 		const noticeText = details.noticeText ?? formatControlNoticeMessage(details.event, childIntercomTarget);
 		pi.sendMessage(
 			{
@@ -47,6 +48,26 @@ export function registerControlNotices(params: {
 			},
 			{ triggerTurn: true },
 		);
+	};
+	const controlRunTerminalHandler = (payload: unknown) => {
+		const details = payload as {
+			agent?: unknown;
+			id?: unknown;
+			index?: unknown;
+			runId?: unknown;
+			taskIndex?: unknown;
+		};
+		const runId = typeof details.runId === "string" ? details.runId : details.id;
+		if (typeof runId !== "string") return;
+		const index =
+			typeof details.index === "number"
+				? details.index
+				: typeof details.taskIndex === "number"
+					? details.taskIndex
+					: undefined;
+		const additionalLegacyChildKeys =
+			typeof details.agent === "string" ? [resolveSubagentIntercomTarget(runId, details.agent, index)] : [];
+		evictControlNotificationsForRunId(visibleControlNotices, runId, additionalLegacyChildKeys);
 	};
 	pi.registerMessageRenderer<SubagentControlMessageDetails>(
 		SUBAGENT_CONTROL_MESSAGE_TYPE,
@@ -60,7 +81,7 @@ export function registerControlNotices(params: {
 			);
 		},
 	);
-	return { controlEventHandler };
+	return { controlEventHandler, controlRunTerminalHandler };
 }
 
 export function formatSubagentControlNotice(details: SubagentControlMessageDetails, content?: string): string {

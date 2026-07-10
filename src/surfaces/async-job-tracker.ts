@@ -36,6 +36,7 @@ interface AsyncJobTrackerOptions {
 	pollIntervalMs?: number;
 	idleTracker?: IdleTracker;
 	getWidgetClient?: (ctx: ExtensionContext) => UtilsClient | undefined;
+	onRunTerminal?: (payload: unknown) => void;
 }
 
 // Widen to string: the on-disk status.json can carry terminal exit states
@@ -162,6 +163,7 @@ export function createAsyncJobTracker(
 	const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
 	const idleTracker = options.idleTracker;
 	const getWidgetClient = options.getWidgetClient;
+	const onRunTerminal = options.onRunTerminal;
 	const lastActivityStateByRunId = new Map<string, ActivityState | undefined>();
 	// Runs whose completion notification already reached the host turn. Guards
 	// the delivered-before-complete listener-order race: notify may emit the
@@ -203,6 +205,7 @@ export function createAsyncJobTracker(
 					agent: asyncAgentName(job),
 					index: job.currentStep,
 					lastActivityAt: job.lastActivityAt,
+					activityAt: job.lastActivityAt ?? job.executionStartedAt ?? job.startedAt,
 				}),
 			);
 		}
@@ -595,7 +598,17 @@ export function createAsyncJobTracker(
 				continue;
 			}
 			const status = readStatus(entry.runRecordDir);
-			if (!status || isTerminalAsyncStatus(status.state)) continue;
+			if (!status) continue;
+			if (isTerminalAsyncStatus(status.state)) {
+				const stepIndex = status.currentStep;
+				const agent = status.steps?.[stepIndex ?? 0]?.agent;
+				onRunTerminal?.({
+					runId: entry.runId,
+					...(agent ? { agent } : {}),
+					...(stepIndex !== undefined ? { taskIndex: stepIndex } : {}),
+				});
+				continue;
+			}
 			// An ungracefully killed runner (SIGKILL/session crash) leaves status.json
 			// frozen at 'running' with a stale heartbeat. Finalize it to terminal-lost
 			// on disk so it becomes resumable, and skip the live-reclaim branch. The
