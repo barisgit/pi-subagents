@@ -90,18 +90,29 @@ export function buildAsyncChildStep(input: {
 	return { step: prepared.step, cleanTask, agentConfig, outputSnapshot: captureSingleOutputSnapshot(outputPath) };
 }
 
-function combineOptionalSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+export function combineOptionalSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
 	const controller = new AbortController();
+	const listeners = new Map<AbortSignal, () => void>();
+	const cleanup = () => {
+		for (const [signal, listener] of listeners) signal.removeEventListener("abort", listener);
+		listeners.clear();
+	};
 	const abort = (signal: AbortSignal) => {
-		if (!controller.signal.aborted) controller.abort(signal.reason);
+		if (!controller.signal.aborted) {
+			controller.abort(signal.reason);
+			cleanup();
+		}
 	};
 	for (const signal of signals) {
 		if (!signal) continue;
+		if (listeners.has(signal)) continue;
 		if (signal.aborted) {
 			abort(signal);
 			break;
 		}
-		signal.addEventListener("abort", () => abort(signal), { once: true });
+		const listener = () => abort(signal);
+		listeners.set(signal, listener);
+		signal.addEventListener("abort", listener, { once: true });
 	}
 	return controller.signal;
 }

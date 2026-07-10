@@ -149,7 +149,7 @@ export class ChildAgentRegistry {
 	}
 
 	/**
-	 * Land terminal result metadata (final usage + endedAt) that is NOT carried in
+	 * Land terminal result metadata (output, final usage, and endedAt) that is NOT carried in
 	 * the patch stream. This is the one explicit non-patch memory update.
 	 */
 	finalizeView(runId: string, result: ChildAgentResult): void {
@@ -157,6 +157,7 @@ export class ChildAgentRegistry {
 		if (!s) return;
 		const total = tokenUsageFromUsage(result.usage);
 		if (total) s.totalTokens = total;
+		s.outputText = result.outputText;
 		s.endedAt ??= result.endedAt ?? Date.now();
 		this.terminalAt.set(runId, Date.now());
 	}

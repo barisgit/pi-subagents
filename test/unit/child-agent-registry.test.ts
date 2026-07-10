@@ -171,11 +171,12 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		registry.finalizeView(RUN_ID, result);
 
 		// finalizeView lands the terminal result metadata NOT carried in the patch
-		// stream (final usage + endedAt). Run-level state flip stays a producer
+		// stream (output, final usage, and endedAt). Run-level state flip stays a producer
 		// concern (deferred): the terminal STEP patch deliberately does not flip it.
 		const beforeWindow = registry.getRunView(RUN_ID);
 		assert.ok(beforeWindow, "view retained before window elapses");
 		assert.equal(beforeWindow.endedAt, terminalAt);
+		assert.equal(beforeWindow.finalOutput, "done");
 		assert.equal(beforeWindow.totalTokens?.total, 300);
 
 		// Sweep happens lazily in listRunViews once retention elapses. terminalAt is

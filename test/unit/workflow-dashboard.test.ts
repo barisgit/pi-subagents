@@ -24,6 +24,10 @@ type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
 
 const tmpRoots: string[] = [];
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 function tmpRegistry(): string {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-dashboard-"));
 	tmpRoots.push(root);
@@ -256,7 +260,7 @@ describe("workflow dashboard reader overlays", () => {
 		);
 
 		try {
-			const text = component.render(180).map(stripBorders).join("\n");
+			const text = component.render(180).map(stripBorders).map(stripAnsi).join("\n");
 			assert.match(text, /┬─ workflow /);
 			// Container row: collapse marker + done/total child progress.
 			assert.match(text, /▾ workflow · complete · 3\/3/);
@@ -265,8 +269,8 @@ describe("workflow dashboard reader overlays", () => {
 			// Phase labels are tree rows; children no longer carry P1/P2 chips.
 			const phase1RowIndex = text.indexOf("Phase 1: inspect · 2/2");
 			const phase2RowIndex = text.indexOf("Phase 2: patch · 1/1");
-			const phase1Index = text.indexOf("explorer\x1B[39m · complete");
-			const phase2Index = text.indexOf("fixer\x1B[39m · complete");
+			const phase1Index = text.indexOf("explorer · complete");
+			const phase2Index = text.indexOf("fixer · complete");
 			assert.ok(phase1RowIndex !== -1, "expected phase-1 row in status output");
 			assert.ok(phase2RowIndex !== -1, "expected phase-2 row in status output");
 			assert.ok(phase1Index !== -1, "expected phase-1 child in status output");
@@ -274,9 +278,9 @@ describe("workflow dashboard reader overlays", () => {
 			assert.ok(phase1RowIndex < phase1Index, "phase-1 children render below phase row");
 			assert.ok(phase1Index < phase2RowIndex, "phase 2 renders after phase 1 children");
 			assert.ok(phase2RowIndex < phase2Index, "phase-2 child renders below phase row");
-			assert.match(text, /explorer\x1B\[39m · complete/);
-			assert.match(text, /review\x1B\[39m · complete/);
-			assert.match(text, /fixer\x1B\[39m · complete/);
+			assert.match(text, /explorer · complete/);
+			assert.match(text, /review · complete/);
+			assert.match(text, /fixer · complete/);
 			assert.doesNotMatch(text, /P1 inspect/);
 			assert.doesNotMatch(text, /P2 patch/);
 		} finally {
@@ -313,10 +317,10 @@ describe("workflow dashboard reader overlays", () => {
 
 		try {
 			void entries;
-			const text = component.render(180).map(stripBorders).join("\n");
+			const text = component.render(180).map(stripBorders).map(stripAnsi).join("\n");
 			// Leaf rows drop the redundant state word; the ✓ glyph conveys completion.
-			const phase2Index = text.indexOf("fixer\x1B[39m · P2 patch");
-			const phase1Index = text.indexOf("explorer\x1B[39m · P1 inspect");
+			const phase2Index = text.indexOf("fixer · P2 patch");
+			const phase1Index = text.indexOf("explorer · P1 inspect");
 			assert.ok(phase2Index !== -1, "expected newer non-workflow child in status output");
 			assert.ok(phase1Index !== -1, "expected older non-workflow child in status output");
 			assert.ok(phase2Index < phase1Index, "non-workflow children keep the global display order");

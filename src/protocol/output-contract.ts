@@ -79,7 +79,7 @@ export function extractOutputBlockForDisplay(text: string): string | undefined {
 	return last?.trim();
 }
 
-/** True when `text` contains at least one complete <output> block. */
+/** True when `text` ends with a complete <output> block followed only by whitespace. */
 export function hasOutputBlock(text: string): boolean {
 	return extractOutputBlock(text) !== undefined;
 }

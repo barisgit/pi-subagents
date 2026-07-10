@@ -177,6 +177,7 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 		}),
 		...(status.sessionDir ? { sessionDir: status.sessionDir } : {}),
 		...(status.outputFile ? { outputFile: status.outputFile } : {}),
+		...(status.outputText !== undefined ? { finalOutput: status.outputText } : {}),
 		...(status.totalTokens ? { totalTokens: status.totalTokens } : {}),
 		...(status.sessionFile ? { sessionFile: status.sessionFile } : {}),
 	};

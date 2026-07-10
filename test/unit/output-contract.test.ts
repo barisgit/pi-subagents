@@ -26,7 +26,9 @@ describe("output contract", () => {
 	});
 
 	it("rejects a complete output block followed by trailing prose", () => {
-		assert.equal(extractOutputBlock("<output>SAMPLE</output>\nLet me know if you need more."), undefined);
+		const text = "<output>SAMPLE</output>\nLet me know if you need more.";
+		assert.equal(extractOutputBlock(text), undefined);
+		assert.equal(hasOutputBlock(text), false);
 	});
 
 	it("display-lenient extractor returns the last block even when prose follows it", () => {

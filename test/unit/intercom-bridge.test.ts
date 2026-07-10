@@ -167,6 +167,7 @@ describe("resolveIntercomBridge", () => {
 			assert.match(bridge.instruction, /reference-only/i);
 			assert.match(bridge.instruction, /normal assistant text/i);
 			assert.match(bridge.instruction, /focused task result/i);
+			assert.doesNotMatch(bridge.instruction, /orchestrator/i);
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}

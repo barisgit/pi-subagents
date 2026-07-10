@@ -203,7 +203,8 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 	if (data === null || typeof data !== "object") return { ok: false, reason: "invalid-shape" };
 	const o = data as Record<string, unknown>;
 	if (typeof o.runId !== "string") return { ok: false, reason: "invalid-shape" };
-	if (o.mode !== "single" && o.mode !== "parallel") return { ok: false, reason: "invalid-shape" };
+	if (o.mode !== "single" && o.mode !== "parallel" && o.mode !== "chain")
+		return { ok: false, reason: "invalid-shape" };
 	const validStates = ["queued", "running", "complete", "failed", "paused", "lost", "interrupted", "skipped"];
 	if (typeof o.state !== "string" || !validStates.includes(o.state)) return { ok: false, reason: "invalid-shape" };
 	if (typeof o.startedAt !== "number") return { ok: false, reason: "invalid-shape" };
@@ -221,6 +222,7 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 			o.steps.some((step) => step === null || typeof step !== "object" || typeof step.status !== "string"))
 	)
 		return { ok: false, reason: "invalid-shape" };
+	if (o.mode === "chain") o.mode = "parallel";
 	return { ok: true, value: data as PersistedRunStatus };
 }
 

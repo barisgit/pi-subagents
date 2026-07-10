@@ -16,6 +16,12 @@ describe("parsePersistedRunStatus", () => {
 		assert.deepEqual(result, { ok: true, value });
 	});
 
+	it("normalizes a legacy chain status to parallel", () => {
+		const value = { runId: "x", mode: "chain", state: "complete", startedAt: 1, steps: [] };
+		const result = parsePersistedRunStatus(JSON.stringify(value));
+		assert.deepEqual(result, { ok: true, value: { ...value, mode: "parallel" } });
+	});
+
 	it("rejects invalid JSON with reason invalid-json", () => {
 		assert.deepEqual(parsePersistedRunStatus("{not json"), { ok: false, reason: "invalid-json" });
 	});

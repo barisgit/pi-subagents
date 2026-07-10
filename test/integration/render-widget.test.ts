@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
+import { clearAgentColorByNameCache } from "../../src/shared/agents.ts";
 import { WIDGET_ANIMATION_MS } from "../../src/surfaces/render-shared.ts";
 
 // Wait long enough to observe at least one live repaint at the current cadence
 // (kept relative to the constant so it tracks future cadence changes).
 const ANIM_WAIT = WIDGET_ANIMATION_MS + 200;
+
+function withProjectAgentColors<T>(run: () => T): T {
+	const previousCwd = process.cwd();
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "widget-agent-colors-"));
+	const agentsDir = path.join(root, ".pi", "agents");
+	fs.mkdirSync(agentsDir, { recursive: true });
+	fs.writeFileSync(path.join(agentsDir, "explorer.md"), "---\nname: explorer\ndescription: test\ncolor: cyan\n---\n");
+	fs.writeFileSync(path.join(agentsDir, "fixer.md"), "---\nname: fixer\ndescription: test\ncolor: green\n---\n");
+	process.chdir(root);
+	clearAgentColorByNameCache();
+	try {
+		return run();
+	} finally {
+		process.chdir(previousCwd);
+		clearAgentColorByNameCache();
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+}
 
 const { buildWidgetLines, renderWidget, stopWidgetAnimation } =
 	(await import("../../src/surfaces/render-widget.ts")) as unknown as {
@@ -112,92 +134,96 @@ describe("subagent async widget rendering", () => {
 	});
 
 	it("tints real async agent names by their configured color (widget had no fallback)", () => {
-		// Regression: job.agentColor(s) are never populated by the async start event or
-		// status.json, and unlike the dashboard the widget had no colorForAgentName
-		// fallback -- so async agent names rendered uncolored. tintAgentName emits the
-		// ANSI escape directly (bypassing theme.fg), so a color-stripping theme still
-		// preserves the tint. explorer=cyan(51), fixer=green(76).
-		const cyan = "\u001b[38;5;51m";
-		const green = "\u001b[38;5;76m";
-		const single = buildWidgetLines(
-			[
-				{
-					asyncId: "r-single",
-					asyncDir: "/tmp/s",
-					status: "running",
-					agents: ["explorer"],
-					currentAgent: "explorer",
-				},
-			],
-			theme,
-			200,
-		);
-		assert.ok(single[1]!.includes(`${cyan}explorer`), "single async explorer name should be tinted cyan");
+		withProjectAgentColors(() => {
+			// Regression: job.agentColor(s) are never populated by the async start event or
+			// status.json, and unlike the dashboard the widget had no colorForAgentName
+			// fallback -- so async agent names rendered uncolored. tintAgentName emits the
+			// ANSI escape directly (bypassing theme.fg), so a color-stripping theme still
+			// preserves the tint. explorer=cyan(51), fixer=green(76).
+			const cyan = "\u001b[38;5;51m";
+			const green = "\u001b[38;5;76m";
+			const single = buildWidgetLines(
+				[
+					{
+						asyncId: "r-single",
+						asyncDir: "/tmp/s",
+						status: "running",
+						agents: ["explorer"],
+						currentAgent: "explorer",
+					},
+				],
+				theme,
+				200,
+			);
+			assert.ok(single[1]!.includes(`${cyan}explorer`), "single async explorer name should be tinted cyan");
 
-		const mixed = buildWidgetLines(
-			[
-				{
-					asyncId: "r-par",
-					asyncDir: "/tmp/p",
-					status: "running",
-					mode: "parallel",
-					agents: ["explorer", "fixer"],
-					currentAgent: "explorer",
-				},
-			],
-			theme,
-			200,
-		);
-		assert.ok(mixed[1]!.includes(`${cyan}explorer`), "parallel explorer piece should be tinted cyan");
-		assert.ok(mixed[1]!.includes(`${green}fixer`), "parallel fixer piece should be tinted green");
+			const mixed = buildWidgetLines(
+				[
+					{
+						asyncId: "r-par",
+						asyncDir: "/tmp/p",
+						status: "running",
+						mode: "parallel",
+						agents: ["explorer", "fixer"],
+						currentAgent: "explorer",
+					},
+				],
+				theme,
+				200,
+			);
+			assert.ok(mixed[1]!.includes(`${cyan}explorer`), "parallel explorer piece should be tinted cyan");
+			assert.ok(mixed[1]!.includes(`${green}fixer`), "parallel fixer piece should be tinted green");
+		});
 	});
 
 	it("falls back to role color for empty tracker-mirrored agentColors slots", () => {
-		// Regression: async-job-tracker mirrors per-step colors as `step.live?.color ?? ""`,
-		// so a real async job carries agentColors: [""] (empty string, not undefined) before
-		// any live step color arrives. The rendering path treated the non-null array and its
-		// empty slots as authoritative, suppressing the colorForAgentName fallback -- so async
-		// agent names rendered gray while the dashboard/sync widget rendered them colored.
-		// Each empty slot (and empty singular agentColor) must fall back by role name.
-		const cyan = "\u001b[38;5;51m";
-		const green = "\u001b[38;5;76m";
-		const single = buildWidgetLines(
-			[
-				{
-					asyncId: "r-empty-single",
-					asyncDir: "/tmp/es",
-					status: "running",
-					agents: ["explorer"],
-					currentAgent: "explorer",
-					agentColor: "",
-					agentColors: [""],
-				},
-			],
-			theme,
-			200,
-		);
-		assert.ok(
-			single[1]!.includes(`${cyan}explorer`),
-			"empty agentColors slot should fall back to explorer's cyan role color",
-		);
+		withProjectAgentColors(() => {
+			// Regression: async-job-tracker mirrors per-step colors as `step.live?.color ?? ""`,
+			// so a real async job carries agentColors: [""] (empty string, not undefined) before
+			// any live step color arrives. The rendering path treated the non-null array and its
+			// empty slots as authoritative, suppressing the colorForAgentName fallback -- so async
+			// agent names rendered gray while the dashboard/sync widget rendered them colored.
+			// Each empty slot (and empty singular agentColor) must fall back by role name.
+			const cyan = "\u001b[38;5;51m";
+			const green = "\u001b[38;5;76m";
+			const single = buildWidgetLines(
+				[
+					{
+						asyncId: "r-empty-single",
+						asyncDir: "/tmp/es",
+						status: "running",
+						agents: ["explorer"],
+						currentAgent: "explorer",
+						agentColor: "",
+						agentColors: [""],
+					},
+				],
+				theme,
+				200,
+			);
+			assert.ok(
+				single[1]!.includes(`${cyan}explorer`),
+				"empty agentColors slot should fall back to explorer's cyan role color",
+			);
 
-		const mixed = buildWidgetLines(
-			[
-				{
-					asyncId: "r-empty-par",
-					asyncDir: "/tmp/ep",
-					status: "running",
-					mode: "parallel",
-					agents: ["explorer", "fixer"],
-					currentAgent: "explorer",
-					agentColors: ["", ""],
-				},
-			],
-			theme,
-			200,
-		);
-		assert.ok(mixed[1]!.includes(`${cyan}explorer`), "empty parallel slot should fall back to explorer cyan");
-		assert.ok(mixed[1]!.includes(`${green}fixer`), "empty parallel slot should fall back to fixer green");
+			const mixed = buildWidgetLines(
+				[
+					{
+						asyncId: "r-empty-par",
+						asyncDir: "/tmp/ep",
+						status: "running",
+						mode: "parallel",
+						agents: ["explorer", "fixer"],
+						currentAgent: "explorer",
+						agentColors: ["", ""],
+					},
+				],
+				theme,
+				200,
+			);
+			assert.ok(mixed[1]!.includes(`${cyan}explorer`), "empty parallel slot should fall back to explorer cyan");
+			assert.ok(mixed[1]!.includes(`${green}fixer`), "empty parallel slot should fall back to fixer green");
+		});
 	});
 
 	it("caps visible rows at MAX_WIDGET_JOBS and adds an overflow line", () => {
