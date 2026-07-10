@@ -213,6 +213,10 @@ describe("dispatch shapes", () => {
 		const runId = result.details?.runId;
 		assert.ok(runId);
 		assert.ok(state.currentSessionId);
+		assert.match(
+			state.currentSessionId,
+			/^session-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+		);
 		const entry = readAllEntries().find((candidate) => candidate.runId === runId);
 		assert.equal(entry?.rootSessionId, state.currentSessionId);
 	});

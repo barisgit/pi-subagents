@@ -1148,9 +1148,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId =
-			ctx.sessionManager.getSessionId() ??
-			deps.state.currentSessionId ??
-			`session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? `session-${randomUUID()}`;
 		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, {
 			preset: normalizedParams.preset,
 			includeInternal: true,
@@ -1552,9 +1550,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		openWorkflowGroup: ({ signal, onUpdate, ctx, requestedAsync }) => {
 			deps.state.baseCwd = ctx.cwd;
 			deps.state.currentSessionId =
-				ctx.sessionManager.getSessionId() ??
-				deps.state.currentSessionId ??
-				`session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+				ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? `session-${randomUUID()}`;
 			const effectiveCwd = ctx.cwd;
 			const agents = deps.discoverAgents(effectiveCwd, "both", { includeInternal: true }).agents;
 			const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
