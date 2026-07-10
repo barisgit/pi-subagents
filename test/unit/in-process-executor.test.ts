@@ -11,10 +11,22 @@ import {
 	type ChildAgentContext,
 	type ChildAgentHandle,
 	type ChildAgentStep,
-} from "../../in-process-executor.ts";
+} from "../../src/dispatch/in-process-executor.ts";
+import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "../../src/state/lineage.ts";
+import { isInsideChildSession } from "../../src/shared/child-session-context.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
+
+function clearLineage(...sessionIds: string[]): void {
+	const globals = globalThis as Record<string, unknown>;
+	const lineageStore = globals["__piSubagentLineageBySession"] as Map<string, unknown> | undefined;
+	const boundSessionFiles = globals["__piSubagentLineageBoundSessionFiles"] as Map<string, unknown> | undefined;
+	for (const sessionId of sessionIds) {
+		lineageStore?.delete(sessionId);
+		boundSessionFiles?.delete(sessionId);
+	}
+}
 
 afterEach(() => {
 	while (restoreFns.length > 0) restoreFns.pop()?.();
@@ -113,7 +125,6 @@ function makeStep(overrides: Partial<ChildAgentStep> = {}): ChildAgentStep {
 		model: { provider: "test", id: "model-a" } as never,
 		modelCandidates: [],
 		activeToolNames: ["read", "bash"],
-		customTools: [],
 		systemPrompt: "You fix things.",
 		skillsResolved: [],
 		sessionFile: path.join(root, "run-1", "run-0", "session.jsonl"),
@@ -134,15 +145,27 @@ function makeContext(overrides: Partial<ChildAgentContext> = {}): ChildAgentCont
 	};
 }
 
-function installFakeRuntime(sessions: FakeAgentSession[], createHook?: () => void): void {
+function installFakeRuntime(
+	sessions: FakeAgentSession[],
+	createHook?: () => void,
+	childSessionId?: string | ((sessionFile: string) => string | undefined),
+	createErrors: Error[] = [],
+	ResourceLoader: typeof FakeResourceLoader = FakeResourceLoader,
+): void {
 	const restore = __setChildAgentExecutorDepsForTest({
-		DefaultResourceLoader: FakeResourceLoader as never,
+		DefaultResourceLoader: ResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: {
-			open: (file: string) => ({ file }) as never,
+			open: (file: string) =>
+				({
+					file,
+					getSessionId: () => (typeof childSessionId === "function" ? childSessionId(file) : childSessionId),
+				}) as never,
 		},
 		createAgentSession: async () => {
 			createHook?.();
+			const createError = createErrors.shift();
+			if (createError) throw createError;
 			const session = sessions.shift();
 			if (!session) throw new Error("No fake session queued");
 			return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
@@ -156,14 +179,18 @@ describe("runChildAgent", () => {
 		const session = new FakeAgentSession(async (self) => {
 			self.emit({ type: "text_delta", delta: "hello " });
 			self.emit({ type: "text_delta", delta: "world" });
+			self.lastAssistantText = "<output>hello world</output>";
 			self.emit({ type: "agent_end" });
 		});
 		installFakeRuntime([session]);
 		const events: unknown[] = [];
 
-		const result = await runChildAgent(makeStep(), makeContext({
-			onEvent: (_stepIndex, event) => events.push(event),
-		}));
+		const result = await runChildAgent(
+			makeStep(),
+			makeContext({
+				onEvent: (_stepIndex, event) => events.push(event),
+			}),
+		);
 
 		assert.equal(result.state, "complete");
 		assert.equal(result.exitCode, 0);
@@ -174,25 +201,86 @@ describe("runChildAgent", () => {
 		assert.equal(events.length, 3);
 	});
 
+	it("keeps overlapping session construction in independent child contexts", async () => {
+		let releaseFirst!: () => void;
+		let markFirstStarted!: () => void;
+		const firstReleased = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		let reloadCount = 0;
+		class InterleavedResourceLoader extends FakeResourceLoader {
+			override async reload(): Promise<void> {
+				assert.equal(isInsideChildSession(), true);
+				reloadCount++;
+				if (reloadCount === 1) {
+					markFirstStarted();
+					await firstReleased;
+				}
+				await super.reload();
+			}
+		}
+		const makeSession = () =>
+			new FakeAgentSession(async (self) => {
+				self.lastAssistantText = "<output>done</output>";
+			});
+		const firstStep = makeStep({ runId: "run-child-context-first" });
+		const secondStep = makeStep({ runId: "run-child-context-second" });
+		installFakeRuntime(
+			[makeSession(), makeSession()],
+			() => assert.equal(isInsideChildSession(), true),
+			(sessionFile) => sessionFile,
+			[],
+			InterleavedResourceLoader,
+		);
+		let firstRun: ReturnType<typeof runChildAgent> | undefined;
+
+		try {
+			firstRun = runChildAgent(firstStep, makeContext());
+			await firstStarted;
+			assert.equal(isInsideChildSession(), false);
+			const secondResult = await runChildAgent(secondStep, makeContext());
+			assert.equal(secondResult.state, "complete");
+			assert.equal(isInsideChildSession(), false);
+			releaseFirst();
+			const firstResult = await firstRun;
+			assert.equal(firstResult.state, "complete");
+			assert.equal(isInsideChildSession(), false);
+		} finally {
+			releaseFirst();
+			await firstRun?.catch(() => {});
+			clearLineage(firstStep.sessionFile, secondStep.sessionFile);
+		}
+	});
+
 	it("increments tool counters on tool_execution_start and tool_execution_end", async () => {
 		const session = new FakeAgentSession(async (self) => {
 			self.emit({ type: "tool_execution_start", toolName: "read" });
 			self.emit({ type: "tool_execution_end", toolName: "read" });
 			self.emit({ type: "tool_execution_start", toolName: "bash" });
 			self.emit({ type: "tool_execution_end", toolName: "bash", isError: true });
+			self.lastAssistantText = "<output>done</output>";
 		});
 		installFakeRuntime([session]);
 		const patches: unknown[] = [];
 
-		const result = await runChildAgent(makeStep(), makeContext({
-			onStatusUpdate: (patch) => patches.push(patch),
-		}));
+		const result = await runChildAgent(
+			makeStep(),
+			makeContext({
+				onStatusUpdate: (patch) => patches.push(patch),
+			}),
+		);
 
 		assert.equal(result.toolCallCount, 2);
 		assert.equal(result.toolResultCount, 2);
 		assert.equal(result.toolErrorCount, 1);
 		assert.equal(patches.filter((patch) => (patch as { toolCallDelta?: number }).toolCallDelta === 1).length, 2);
-		assert.equal(patches.filter((patch) => (patch as { toolResultDelta?: number }).toolResultDelta === 1).length, 2);
+		assert.equal(
+			patches.filter((patch) => (patch as { toolResultDelta?: number }).toolResultDelta === 1).length,
+			2,
+		);
 		assert.equal(patches.filter((patch) => (patch as { toolErrorDelta?: number }).toolErrorDelta === 1).length, 1);
 	});
 
@@ -210,6 +298,233 @@ describe("runChildAgent", () => {
 		assert.equal(session.disposeCalls, 1);
 		assert.equal(result.state, "interrupted");
 		assert.equal(result.error?.reason, "stop-now");
+	});
+
+	it("normalizes parent lineage identity before falling back to the step parent identity", async () => {
+		const parentSessionId = "session-parent-blank-identity";
+		const childSessionId = "session-child-parent-fallback";
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		setHostLineage(parentSessionId, "   ");
+		installFakeRuntime([session], undefined, childSessionId);
+
+		try {
+			await runChildAgent(makeStep({ parentSessionId, parentAgentName: "  fallback-agent  " }), makeContext());
+
+			assert.equal(getLineageForSession(childSessionId)?.parentAgent, "fallback-agent");
+		} finally {
+			claimPendingChildLineage(childSessionId, { runId: null, agentName: null });
+			clearLineage(parentSessionId, childSessionId);
+		}
+	});
+
+	it("preserves parent lineage when a fork child uses a distinct session id", async () => {
+		const parentSessionId = "session-fork-parent";
+		const childSessionId = "session-fork-child";
+		const forkSource = path.join(tempDir("pi-in-process-fork-source-"), "branched.jsonl");
+		fs.writeFileSync(forkSource, '{"type":"session","id":"session-fork-child"}\n');
+		const step = makeStep({
+			parentSessionId,
+			forkReuse: { sessionFile: forkSource, agentName: "fixer" },
+		});
+		const parentLineage = setHostLineage(parentSessionId, "parent-agent");
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		installFakeRuntime([session], undefined, childSessionId);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "complete");
+			assert.notEqual(childSessionId, parentSessionId);
+			assert.equal(getLineageForSession(parentSessionId), parentLineage);
+			assert.equal(getLineageForSession(childSessionId)?.parentSessionId, parentSessionId);
+		} finally {
+			claimPendingChildLineage(childSessionId, { runId: null, agentName: null });
+			clearLineage(parentSessionId, childSessionId);
+		}
+	});
+
+	it("fails a colliding fork child without replacing parent lineage", async () => {
+		const parentSessionId = "session-fork-collision-parent";
+		const forkSource = path.join(tempDir("pi-in-process-fork-collision-"), "branched.jsonl");
+		fs.writeFileSync(forkSource, '{"type":"session","id":"session-fork-collision-parent"}\n');
+		const step = makeStep({
+			parentSessionId,
+			forkReuse: { sessionFile: forkSource, agentName: "fixer" },
+		});
+		const parentLineage = setHostLineage(parentSessionId, "parent-agent");
+		let createCalls = 0;
+		installFakeRuntime([], () => createCalls++, parentSessionId);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "failed");
+			assert.equal(result.error?.message, "Cannot replace an existing session lineage binding.");
+			assert.equal(createCalls, 0);
+			assert.equal(getLineageForSession(parentSessionId), parentLineage);
+		} finally {
+			clearLineage(parentSessionId);
+		}
+	});
+
+	it("cleans failed lineage after model fallback is exhausted when session id is unavailable", async () => {
+		const firstFailedSessionId = "session-failed-setup-first";
+		const terminalFailedSessionId = "session-failed-setup-terminal";
+		const cleanupSessionId = "session-failed-setup-cleanup";
+		const attemptSessionIds = [firstFailedSessionId, terminalFailedSessionId];
+		const step = makeStep({
+			runId: "run-failed-setup",
+			modelCandidates: [{ provider: "test", id: "model-b" } as never],
+		});
+		let createCalls = 0;
+		let firstClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		let terminalClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		installFakeRuntime(
+			[],
+			() => {
+				if (createCalls === 1) assert.equal(getLineageForSession(firstFailedSessionId), null);
+				const claimed = claimPendingChildLineage(attemptSessionIds[createCalls]!, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				});
+				assert.equal(claimed?.runId, step.runId);
+				if (createCalls === 0) firstClaim = claimed;
+				else terminalClaim = claimed;
+				createCalls++;
+			},
+			undefined,
+			[new Error("authentication failed for model-a"), new Error("authentication failed for model-b")],
+		);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "failed");
+			assert.equal(createCalls, 2);
+			assert.equal(firstClaim, terminalClaim);
+			assert.equal(getLineageForSession(firstFailedSessionId), null);
+			assert.equal(getLineageForSession(terminalFailedSessionId), null);
+			assert.equal(
+				claimPendingChildLineage(cleanupSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				null,
+			);
+		} finally {
+			claimPendingChildLineage(cleanupSessionId, {
+				runId: step.runId,
+				agentName: null,
+				sessionFile: step.sessionFile,
+			});
+			clearLineage(firstFailedSessionId, terminalFailedSessionId, cleanupSessionId);
+		}
+	});
+
+	it("cleans an auth-failed attempt binding before fallback succeeds when session id is unavailable", async () => {
+		const failedSessionId = "session-auth-fallback-failed-attempt";
+		const successfulSessionId = "session-auth-fallback-successful-attempt";
+		const cleanupSessionId = "session-auth-fallback-attempt-cleanup";
+		const attemptSessionIds = [failedSessionId, successfulSessionId];
+		const step = makeStep({
+			runId: "run-auth-fallback-attempt-cleanup",
+			modelCandidates: [{ provider: "test", id: "model-b" } as never],
+		});
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		let createCalls = 0;
+		let firstClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		let successfulClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		installFakeRuntime(
+			[session],
+			() => {
+				if (createCalls === 1) assert.equal(getLineageForSession(failedSessionId), null);
+				const claimed = claimPendingChildLineage(attemptSessionIds[createCalls]!, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				});
+				assert.equal(claimed?.runId, step.runId);
+				if (createCalls === 0) firstClaim = claimed;
+				else successfulClaim = claimed;
+				createCalls++;
+			},
+			undefined,
+			[new Error("authentication failed for model-a")],
+		);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "complete");
+			assert.equal(createCalls, 2);
+			assert.equal(firstClaim, successfulClaim);
+			assert.equal(getLineageForSession(failedSessionId), null);
+			assert.equal(getLineageForSession(successfulSessionId), successfulClaim);
+			assert.equal(getLineageForSession(successfulSessionId)?.runId, step.runId);
+			assert.equal(
+				claimPendingChildLineage(successfulSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				successfulClaim,
+			);
+			assert.equal(
+				claimPendingChildLineage(cleanupSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				null,
+			);
+		} finally {
+			clearLineage(failedSessionId, successfulSessionId, cleanupSessionId);
+		}
+	});
+
+	it("preserves pending lineage through auth fallback until successful activation can claim it", async () => {
+		const activationSessionId = "session-auth-fallback-success";
+		const cleanupSessionId = "session-auth-fallback-success-cleanup";
+		const step = makeStep({
+			runId: "run-auth-fallback-success",
+			modelCandidates: [{ provider: "test", id: "model-b" } as never],
+		});
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		let createCalls = 0;
+		installFakeRuntime([session], () => createCalls++, undefined, [new Error("authentication failed for model-a")]);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+			const claimed = claimPendingChildLineage(activationSessionId, {
+				runId: null,
+				agentName: null,
+				sessionFile: step.sessionFile,
+			});
+
+			assert.equal(result.state, "complete");
+			assert.equal(createCalls, 2);
+			assert.equal(claimed?.runId, step.runId);
+			assert.equal(
+				claimPendingChildLineage(cleanupSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				null,
+			);
+		} finally {
+			clearLineage(activationSessionId, cleanupSessionId);
+		}
 	});
 });
 
@@ -252,7 +567,7 @@ describe("dispatchAsyncChild", () => {
 		assert.equal(result.state, "interrupted");
 	});
 
-	it("returns a handle without awaiting and fires onCompleted", async () => {
+	it("returns a handle without awaiting", async () => {
 		let release!: () => void;
 		const promptReleased = new Promise<void>((resolve) => {
 			release = resolve;
@@ -260,20 +575,17 @@ describe("dispatchAsyncChild", () => {
 		const session = new FakeAgentSession(async (self) => {
 			await promptReleased;
 			self.emit({ type: "text_delta", delta: "done" });
+			self.lastAssistantText = "<output>done</output>";
 		});
 		let createCalls = 0;
 		installFakeRuntime([session], () => createCalls++);
-		const completed = new Promise((resolve) => {
-			const handle = dispatchAsyncChild(makeStep({ runId: "async-run" }), makeContext({
-				onCompleted: resolve,
-			}));
-			assert.equal(handle.runId, "async-run");
-			assert.equal(createCalls, 0);
-			assert.equal(session.promptCalls, 0);
-		});
+		const handle = dispatchAsyncChild(makeStep({ runId: "async-run" }), makeContext());
+		assert.equal(handle.runId, "async-run");
+		assert.equal(createCalls, 0);
+		assert.equal(session.promptCalls, 0);
 
 		release();
-		const result = await completed as { state: string; outputText: string };
+		const result = await handle.completed;
 		assert.equal(result.state, "complete");
 		assert.equal(result.outputText, "done");
 	});
@@ -304,8 +616,14 @@ describe("ChildAgentRegistry", () => {
 		registry.register(handleA);
 		registry.register(handleB);
 		assert.equal(registry.get("a"), handleA);
-		assert.deepEqual(registry.snapshot(), [{ runId: "a", stepIndex: 0 }, { runId: "b", stepIndex: 1 }]);
-		assert.deepEqual(registry.list().map((handle) => handle.runId), ["a", "b"]);
+		assert.deepEqual(registry.snapshot(), [
+			{ runId: "a", stepIndex: 0 },
+			{ runId: "b", stepIndex: 1 },
+		]);
+		assert.deepEqual(
+			registry.list().map((handle) => handle.runId),
+			["a", "b"],
+		);
 
 		await registry.abortRun("a", "reload");
 		assert.equal(signalA.aborted, true);
@@ -313,7 +631,10 @@ describe("ChildAgentRegistry", () => {
 
 		registry.delete("a");
 		assert.equal(registry.get("a"), undefined);
-		assert.deepEqual(registry.list().map((handle) => handle.runId), ["b"]);
+		assert.deepEqual(
+			registry.list().map((handle) => handle.runId),
+			["b"],
+		);
 
 		await registry.abortAll("shutdown");
 		assert.deepEqual(aborts, ["a:reload", "b:shutdown"]);
@@ -327,7 +648,10 @@ describe("ChildAgentRegistry", () => {
 
 		registry.register(handleA);
 		registry.register(handleB);
-		assert.deepEqual(registry.snapshot(), [{ runId: "shared", stepIndex: 0 }, { runId: "shared", stepIndex: 1 }]);
+		assert.deepEqual(registry.snapshot(), [
+			{ runId: "shared", stepIndex: 0 },
+			{ runId: "shared", stepIndex: 1 },
+		]);
 
 		registry.delete("shared", 0);
 		assert.deepEqual(registry.snapshot(), [{ runId: "shared", stepIndex: 1 }]);

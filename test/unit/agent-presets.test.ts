@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { discoverAgents, discoverAgentsAll } from "../../agents.ts";
+import { discoverAgents, discoverAgentsAll } from "../../src/shared/agents.ts";
 
 let tempHome = "";
 let tempProject = "";
@@ -11,6 +11,8 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPreset = process.env.PI_PRESET;
 const originalLegacyPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 function writeJson(filePath: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -21,13 +23,17 @@ function writeProjectAgent(name: string, model = "anthropic/claude-sonnet-4", ex
 	const filePath = path.join(tempProject, ".pi", "agents", `${name}.md`);
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const extra = extraFrontmatter.trim() ? `\n${extraFrontmatter.trim()}` : "";
-	fs.writeFileSync(filePath, `---
+	fs.writeFileSync(
+		filePath,
+		`---
 name: ${name}
 description: ${name} agent
 model: ${model}${extra}
 ---
 You are ${name}.
-`, "utf-8");
+`,
+		"utf-8",
+	);
 }
 
 describe("agent presets", () => {
@@ -36,6 +42,8 @@ describe("agent presets", () => {
 		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-presets-project-"));
 		process.env.HOME = tempHome;
 		process.env.USERPROFILE = tempHome;
+		process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
+		process.env.FI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 		delete process.env.PI_PRESET;
 		delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 		writeProjectAgent("fixer");
@@ -50,6 +58,10 @@ describe("agent presets", () => {
 		else process.env.PI_PRESET = originalPreset;
 		if (originalLegacyPreset === undefined) delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 		else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
+		if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
+		if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+		else process.env.FI_CODING_AGENT_DIR = originalFiAgentDir;
 		fs.rmSync(tempHome, { recursive: true, force: true });
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
@@ -117,14 +129,18 @@ describe("agent presets", () => {
 
 	it("applies preset overlays to extension-registered personas while keeping them strict-mode survivable", () => {
 		const personaDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-registered-persona-"));
-		fs.writeFileSync(path.join(personaDir, "charter-qa.md"), `---
+		fs.writeFileSync(
+			path.join(personaDir, "charter-qa.md"),
+			`---
 name: charter-qa
 description: Charter QA persona
 model: anthropic/claude-sonnet-4-6
 thinking: high
 ---
 You are charter-qa.
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
 			presets: {
@@ -186,13 +202,19 @@ You are charter-qa.
 		});
 
 		const mainResult = discoverAgents(tempProject, "project", { preset: "workflow", surface: "main" });
-		assert.deepEqual(mainResult.agents.map((agent) => agent.name), ["build"]);
+		assert.deepEqual(
+			mainResult.agents.map((agent) => agent.name),
+			["build"],
+		);
 		assert.equal(mainResult.agents[0]?.model, "openai/gpt-5");
 		assert.equal(mainResult.preset.applied, "workflow");
 		assert.equal(mainResult.preset.defaultRole, "build");
 
 		const subagentResult = discoverAgents(tempProject, "project", { preset: "workflow", surface: "subagent" });
-		assert.deepEqual(subagentResult.agents.map((agent) => agent.name), ["explorer"]);
+		assert.deepEqual(
+			subagentResult.agents.map((agent) => agent.name),
+			["explorer"],
+		);
 		assert.equal(subagentResult.agents[0]?.model, "openai/gpt-5-mini");
 	});
 });

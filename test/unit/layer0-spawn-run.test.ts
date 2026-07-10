@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { spawnRun, awaitRun, type Layer0PreparedRunStep, type Layer0RunAgent } from "../../layer0-runs.ts";
-import { readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
-import type { ChildAgentResult } from "../../in-process-executor.ts";
+import { spawnRun, awaitRun, type Layer0PreparedRunStep, type Layer0RunAgent } from "../../src/dispatch/layer0-runs.ts";
+import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 
 const tmpRoots: string[] = [];
 let previousHome: string | undefined;
@@ -50,12 +50,17 @@ describe("Layer-0 spawnRun", () => {
 		const root = setupTempHome("layer0-spawn-run-test-");
 		const runAgent: Layer0RunAgent = async (step) => resultFor(step);
 
-		const handles = ["fixer", "qa", "review"].map((agentName) => spawnRun({ agentName, task: `do ${agentName}`, cwd: root }, {
-			rootRunId: "root-run",
-			notifyPolicy: "silent",
-			runAgent,
-			defaultSessionDir: path.join(root, "runs"),
-		}));
+		const handles = ["fixer", "qa", "review"].map((agentName) =>
+			spawnRun(
+				{ agentName, task: `do ${agentName}`, cwd: root },
+				{
+					rootRunId: "root-run",
+					notifyPolicy: "silent",
+					runAgent,
+					defaultSessionDir: path.join(root, "runs"),
+				},
+			),
+		);
 
 		assert.equal(new Set(handles.map((handle) => handle.runId)).size, handles.length);
 		assert.equal(new Set(handles.map((handle) => handle.runRecordDir)).size, handles.length);
@@ -69,5 +74,27 @@ describe("Layer-0 spawnRun", () => {
 		assert.equal(new Set(entries.map((entry) => entry.runRecordDir)).size, handles.length);
 
 		await Promise.all(handles.map((handle) => awaitRun(handle)));
+	});
+
+	it("opens each group child as queued until it acquires a permit", async () => {
+		const root = setupTempHome("layer0-spawn-queued-test-");
+		const gate = new Promise<void>(() => {}); // never resolves: children stay pre-finalize
+		const runAgent: Layer0RunAgent = async (step) => {
+			await gate;
+			return resultFor(step);
+		};
+
+		const handle = spawnRun(
+			{ agentName: "fixer", task: "queued probe", cwd: root },
+			{ rootRunId: "root-run", notifyPolicy: "silent", runAgent, defaultSessionDir: path.join(root, "runs") },
+		);
+
+		// openRunRecord writes the initial status synchronously during spawnRun. The
+		// bare runAgent emits no status patch, so the record stays at its opened
+		// state: a group child must open "queued" (run + first step), NOT "running",
+		// so it never looks active while blocked on the leaf-concurrency pool.
+		const status = JSON.parse(fs.readFileSync(path.join(handle.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.state, "queued");
+		assert.equal(status.steps[0].status, "queued");
 	});
 });

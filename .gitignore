@@ -1,5 +1,8 @@
 .pi/todos/
 .DS_Store
-AGENTS.md
 node_modules/
 .pi
+.Claude Code
+.notes
+# Git worktrees (local dev)
+.worktrees/

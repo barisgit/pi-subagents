@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { SubagentParams } from "../../schemas.ts";
+import { SubagentParams } from "../../src/protocol/schemas.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -13,9 +13,9 @@ function readSource(file: string): string {
 
 describe("description relabel guards", () => {
 	it("keeps tool and slash-command descriptions mode-neutral", () => {
-		const index = readSource("index.ts");
-		const slash = readSource("slash-commands.ts");
-		const schemas = readSource("schemas.ts");
+		const index = readSource("src/dispatch/subagent-tool.ts");
+		const slash = readSource("src/surfaces/slash-commands.ts");
+		const schemas = readSource("src/protocol/schemas.ts");
 
 		assert.doesNotMatch(index, /inspect\/resume async runs/);
 		assert.match(index, /inspect\/resume background runs/);

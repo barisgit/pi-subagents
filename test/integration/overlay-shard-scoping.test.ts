@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { listRunsFromRegistryForOverlay } from "../../async-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { listRunsFromRegistryForOverlay } from "../../src/state/async-status.ts";
+import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 
@@ -16,7 +16,12 @@ function tmpRegistry(): { root: string; registryPath: string } {
 	return { root, registryPath };
 }
 
-function makeRun(root: string, runId: string, startedAt: number, state: "complete" | "running" = "complete"): RunsRegistryEntry {
+function makeRun(
+	root: string,
+	runId: string,
+	startedAt: number,
+	state: "complete" | "running" = "complete",
+): RunsRegistryEntry {
 	const runRecordDir = path.join(root, "runs", runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
 	fs.writeFileSync(

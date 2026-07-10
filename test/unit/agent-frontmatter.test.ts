@@ -3,20 +3,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { serializeAgent } from "../../agent-serializer.ts";
-import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../agents.ts";
+import { serializeAgent } from "../../src/surfaces/agent-serializer.ts";
+import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../src/shared/agents.ts";
 
 const tempDirs: string[] = [];
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPreset = process.env.PI_PRESET;
 const originalLegacyPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 beforeEach(() => {
 	const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-frontmatter-home-"));
 	tempDirs.push(homeDir);
 	process.env.HOME = homeDir;
 	process.env.USERPROFILE = homeDir;
+	process.env.PI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
+	process.env.FI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
 	delete process.env.PI_PRESET;
 	delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 });
@@ -35,6 +39,10 @@ afterEach(() => {
 	else process.env.PI_PRESET = originalPreset;
 	if (originalLegacyPreset === undefined) delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 	else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
+	if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
+	if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+	else process.env.FI_CODING_AGENT_DIR = originalFiAgentDir;
 });
 
 describe("agent frontmatter scope", () => {
@@ -43,23 +51,29 @@ describe("agent frontmatter scope", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "hidden.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "hidden.md"),
+			`---
 name: hidden
 description: Hidden helper
 scope: internal
 ---
 
 Stay hidden
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const defaultResult = discoverAgents(dir, "project", { surface: "subagent" });
-		assert.equal(defaultResult.agents.find((agent) => agent.name === "hidden"), undefined);
+		assert.equal(
+			defaultResult.agents.find((agent) => agent.name === "hidden"),
+			undefined,
+		);
 
 		const internalResult = discoverAgents(dir, "project", { surface: "subagent", includeInternal: true });
 		const hidden = internalResult.agents.find((agent) => agent.name === "hidden");
 		assert.equal(hidden?.surface, "internal");
 	});
-
 });
 
 describe("agent frontmatter maxSubagentDepth", () => {
@@ -85,14 +99,18 @@ describe("agent frontmatter maxSubagentDepth", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "scout.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "scout.md"),
+			`---
 name: scout
 description: Scout
 maxSubagentDepth: 1
 ---
 
 Inspect code
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const scout = result.agents.find((agent) => agent.name === "scout");
@@ -123,14 +141,18 @@ describe("agent frontmatter fallbackModels", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 fallbackModels: openai/gpt-5-mini, anthropic/claude-sonnet-4
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -160,14 +182,18 @@ describe("agent frontmatter systemPromptMode", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 systemPromptMode: replace
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -198,7 +224,9 @@ describe("agent frontmatter prompt inheritance flags", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 inheritProjectContext: true
@@ -206,7 +234,9 @@ inheritSkills: true
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -221,13 +251,17 @@ describe("agent frontmatter prompt assembly defaults", () => {
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "worker.md"),
+			`---
 name: worker
 description: Worker
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
@@ -243,10 +277,14 @@ Do work
 		tempDirs.push(homeDir);
 		const previousHome = process.env.HOME;
 		const previousUserProfile = process.env.USERPROFILE;
+		const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const previousFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 		try {
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
+			process.env.PI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
+			process.env.FI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
 
 			const result = discoverAgents(dir, "both");
 			const scout = result.agents.find((agent) => agent.name === "scout");
@@ -260,6 +298,10 @@ Do work
 			else process.env.HOME = previousHome;
 			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 			else process.env.USERPROFILE = previousUserProfile;
+			if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+			if (previousFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+			else process.env.FI_CODING_AGENT_DIR = previousFiAgentDir;
 		}
 	});
 
@@ -268,13 +310,17 @@ Do work
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "delegate.md"), `---
+		fs.writeFileSync(
+			path.join(agentsDir, "delegate.md"),
+			`---
 name: delegate
 description: Delegate
 ---
 
 Do work
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
 		const delegate = result.agents.find((agent) => agent.name === "delegate");
@@ -290,24 +336,41 @@ describe("project agent directory discovery", () => {
 		tempDirs.push(dir);
 		fs.mkdirSync(path.join(dir, ".agents", "skills"), { recursive: true });
 		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(path.join(dir, ".agents", "legacy.md"), `---
+		fs.writeFileSync(
+			path.join(dir, ".agents", "legacy.md"),
+			`---
 name: legacy
 description: Legacy
 ---
 
 Legacy prompt
-`, "utf-8");
-		fs.writeFileSync(path.join(dir, ".pi", "agents", "canonical.md"), `---
+`,
+			"utf-8",
+		);
+		fs.writeFileSync(
+			path.join(dir, ".pi", "agents", "canonical.md"),
+			`---
 name: canonical
 description: Canonical
 ---
 
 Canonical prompt
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const result = discoverAgents(dir, "project");
-		assert.ok(result.agents.find((agent) => agent.name === "legacy" && agent.filePath === path.join(dir, ".agents", "legacy.md")));
-		assert.ok(result.agents.find((agent) => agent.name === "canonical" && agent.filePath === path.join(dir, ".pi", "agents", "canonical.md")));
+		assert.ok(
+			result.agents.find(
+				(agent) => agent.name === "legacy" && agent.filePath === path.join(dir, ".agents", "legacy.md"),
+			),
+		);
+		assert.ok(
+			result.agents.find(
+				(agent) =>
+					agent.name === "canonical" && agent.filePath === path.join(dir, ".pi", "agents", "canonical.md"),
+			),
+		);
 		assert.equal(result.projectAgentsDir, path.join(dir, ".pi", "agents"));
 	});
 
@@ -316,20 +379,28 @@ Canonical prompt
 		tempDirs.push(dir);
 		fs.mkdirSync(path.join(dir, ".agents"), { recursive: true });
 		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(path.join(dir, ".agents", "shared.md"), `---
+		fs.writeFileSync(
+			path.join(dir, ".agents", "shared.md"),
+			`---
 name: shared
 description: Legacy shared
 ---
 
 Legacy prompt
-`, "utf-8");
-		fs.writeFileSync(path.join(dir, ".pi", "agents", "shared.md"), `---
+`,
+			"utf-8",
+		);
+		fs.writeFileSync(
+			path.join(dir, ".pi", "agents", "shared.md"),
+			`---
 name: shared
 description: Canonical shared
 ---
 
 Canonical prompt
-`, "utf-8");
+`,
+			"utf-8",
+		);
 
 		const shared = discoverAgents(dir, "project").agents.find((agent) => agent.name === "shared");
 		assert.ok(shared);
@@ -347,67 +418,5 @@ Canonical prompt
 
 		const result = discoverAgentsAll(nested);
 		assert.equal(result.projectDir, path.join(dir, ".pi", "agents"));
-	});
-
-	it("discovers project chains from both .agents and .pi/agents", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-chain-dirs-"));
-		tempDirs.push(dir);
-		fs.mkdirSync(path.join(dir, ".agents", "skills"), { recursive: true });
-		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(path.join(dir, ".agents", "legacy.chain.md"), `---
-name: legacy-chain
-description: Legacy chain
----
-
-## scout
-
-Inspect legacy
-`, "utf-8");
-		fs.writeFileSync(path.join(dir, ".pi", "agents", "canonical.chain.md"), `---
-name: canonical-chain
-description: Canonical chain
----
-
-## worker
-
-Inspect canonical
-`, "utf-8");
-
-		const result = discoverAgentsAll(dir);
-		assert.ok(result.chains.find((chain) => chain.name === "legacy-chain" && chain.filePath === path.join(dir, ".agents", "legacy.chain.md")));
-		assert.ok(result.chains.find((chain) => chain.name === "canonical-chain" && chain.filePath === path.join(dir, ".pi", "agents", "canonical.chain.md")));
-		assert.equal(result.projectDir, path.join(dir, ".pi", "agents"));
-	});
-
-	it("prefers .pi/agents over .agents on project chain name collisions", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-chain-collision-"));
-		tempDirs.push(dir);
-		fs.mkdirSync(path.join(dir, ".agents"), { recursive: true });
-		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(path.join(dir, ".agents", "shared.chain.md"), `---
-name: shared-chain
-description: Legacy chain
----
-
-## scout
-
-Inspect legacy
-`, "utf-8");
-		fs.writeFileSync(path.join(dir, ".pi", "agents", "shared.chain.md"), `---
-name: shared-chain
-description: Canonical chain
----
-
-## worker
-
-Inspect canonical
-`, "utf-8");
-
-		const shared = discoverAgentsAll(dir).chains.find((chain) => chain.name === "shared-chain");
-		assert.ok(shared);
-		assert.equal(shared.filePath, path.join(dir, ".pi", "agents", "shared.chain.md"));
-		assert.equal(shared.description, "Canonical chain");
-		assert.equal(shared.steps[0]?.agent, "worker");
-		assert.equal(shared.steps[0]?.task, "Inspect canonical");
 	});
 });

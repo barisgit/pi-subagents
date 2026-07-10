@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { StepSchema, SubagentParams, TaskSchema } from "../../schemas.ts";
+import { StepSchema, SubagentParams, TaskSchema } from "../../src/protocol/schemas.ts";
 
 type JsonSchemaNode = Record<string, unknown>;
 
@@ -11,7 +11,9 @@ function walkSchema(root: unknown, visit: (path: string, node: JsonSchemaNode) =
 		const current = stack.pop()!;
 		if (!current.value || typeof current.value !== "object") continue;
 		if (Array.isArray(current.value)) {
-			current.value.forEach((value, index) => stack.push({ path: `${current.path}[${index}]`, value }));
+			current.value.forEach((value, index) => {
+				stack.push({ path: `${current.path}[${index}]`, value });
+			});
 			continue;
 		}
 		const node = current.value as JsonSchemaNode;
@@ -24,7 +26,9 @@ function walkSchema(root: unknown, visit: (path: string, node: JsonSchemaNode) =
 
 describe("SubagentParams schema", () => {
 	it("defines Task context as fresh/fork enum on the task schema", () => {
-		const contextSchema = (TaskSchema.properties as unknown as Record<string, JsonSchemaNode>).context as JsonSchemaNode | undefined;
+		const contextSchema = (TaskSchema.properties as unknown as Record<string, JsonSchemaNode>).context as
+			| JsonSchemaNode
+			| undefined;
 		assert.ok(contextSchema, "context schema should exist on Task");
 		const literals = (contextSchema.anyOf as JsonSchemaNode[] | undefined)?.map((schema) => schema.const);
 		assert.deepEqual(literals, ["fresh", "fork"]);
@@ -33,16 +37,23 @@ describe("SubagentParams schema", () => {
 	});
 
 	it("keeps flexible output typed explicitly", () => {
-		const outputSchema = (TaskSchema.properties as unknown as Record<string, JsonSchemaNode>).output as JsonSchemaNode | undefined;
+		const outputSchema = (TaskSchema.properties as unknown as Record<string, JsonSchemaNode>).output as
+			| JsonSchemaNode
+			| undefined;
 		assert.ok(outputSchema, "output schema should exist on Task");
-		assert.deepEqual((outputSchema.anyOf as JsonSchemaNode[] | undefined)?.map((schema) => schema.type), ["string", "boolean"]);
+		assert.deepEqual(
+			(outputSchema.anyOf as JsonSchemaNode[] | undefined)?.map((schema) => schema.type),
+			["string", "boolean"],
+		);
 	});
 
-	it("models run steps as Task or Task[]", () => {
-		const runSchema = (SubagentParams.properties as unknown as Record<string, JsonSchemaNode>).run as JsonSchemaNode | undefined;
+	it("models run steps as Task", () => {
+		const runSchema = (SubagentParams.properties as unknown as Record<string, JsonSchemaNode>).run as
+			| JsonSchemaNode
+			| undefined;
 		assert.ok(runSchema, "run schema should exist");
 		assert.equal(runSchema.type, "array");
-		assert.deepEqual((runSchema.items as JsonSchemaNode | undefined)?.anyOf, StepSchema.anyOf);
+		assert.deepEqual(runSchema.items, StepSchema);
 	});
 
 	it("does not emit description-only schema nodes", () => {
@@ -50,11 +61,11 @@ describe("SubagentParams schema", () => {
 		for (const [name, schema] of Object.entries({ SubagentParams, TaskSchema, StepSchema })) {
 			walkSchema(schema, (path, node) => {
 				if (
-					Object.hasOwn(node, "description")
-					&& !Object.hasOwn(node, "type")
-					&& !Object.hasOwn(node, "anyOf")
-					&& !Object.hasOwn(node, "oneOf")
-					&& !Object.hasOwn(node, "allOf")
+					Object.hasOwn(node, "description") &&
+					!Object.hasOwn(node, "type") &&
+					!Object.hasOwn(node, "anyOf") &&
+					!Object.hasOwn(node, "oneOf") &&
+					!Object.hasOwn(node, "allOf")
 				) {
 					descriptionOnlyPaths.push(`${name}.${path}`);
 				}
@@ -80,8 +91,12 @@ describe("SubagentParams schema", () => {
 		const validator = Compile(SubagentParams);
 		const validValues = [
 			{ run: [{ agent: "main", task: "check this" }] },
-			{ run: [{ agent: "main", task: "a" }, { agent: "explorer", task: "b", context: "fresh", output: false }], concurrency: 2 },
-			{ chain: true, run: [{ agent: "main", task: "a" }, [{ agent: "main", task: "b" }, { agent: "main", task: "c" }]], worktree: true },
+			{
+				run: [
+					{ agent: "main", task: "a" },
+					{ agent: "explorer", task: "b", context: "fresh", output: false },
+				],
+			},
 			{ action: "list" },
 			{ action: "status", id: "run-123" },
 			{ action: "interrupt", id: "run-123" },
@@ -99,7 +114,7 @@ describe("SubagentParams schema", () => {
 
 	it("rejects representative removed fields", () => {
 		const validator = Compile(SubagentParams);
-		for (const field of ["tasks", "prompt", "model", "skill", "agentScope", "cwd"]) {
+		for (const field of ["tasks", "prompt", "model", "skill", "agentScope", "cwd", "chain"]) {
 			assert.equal(validator.Check({ [field]: "removed" }), false, `${field} should be rejected`);
 		}
 	});

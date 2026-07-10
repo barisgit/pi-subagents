@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { SubagentParams, TaskSchema } from "../../schemas.ts";
-import { validateSubagentToolInput } from "../../subagent-executor.ts";
+import { SubagentParams, TaskSchema } from "../../src/protocol/schemas.ts";
+import { validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
 
 type SchemaError = { params?: Record<string, unknown>; message?: string };
 
@@ -21,17 +21,10 @@ function additionalProperty(errors: Iterable<SchemaError>): string | undefined {
 
 describe("schema field set", () => {
 	it("top-level keys are exactly the slim set", () => {
-		assert.deepEqual(sortedKeys(SubagentParams), [
-			"action",
-			"async",
-			"batch",
-			"chain",
-			"concurrency",
-			"id",
-			"message",
-			"run",
-			"worktree",
-		].sort());
+		assert.deepEqual(
+			sortedKeys(SubagentParams),
+			["action", "async", "batch", "id", "message", "run", "worktree"].sort(),
+		);
 	});
 
 	it("rejects unknown top-level keys with structured key detail", () => {
@@ -43,13 +36,7 @@ describe("schema field set", () => {
 	});
 
 	it("task keys are exactly the slim set", () => {
-		assert.deepEqual(sortedKeys(TaskSchema), [
-			"agent",
-			"context",
-			"label",
-			"output",
-			"task",
-		].sort());
+		assert.deepEqual(sortedKeys(TaskSchema), ["agent", "context", "label", "output", "task"].sort());
 	});
 
 	it("rejects unknown task keys with structured key detail", () => {

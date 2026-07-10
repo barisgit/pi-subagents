@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { renderNestedChild, renderSubagentResult } from "../../render.ts";
+import { renderNestedChild } from "../../src/surfaces/render-inline.ts";
+import { renderSubagentResult } from "../../src/surfaces/render-result.ts";
 import { rmRun, tool, writeRun } from "./inline-nested-helpers.ts";
 
-const ids = [
-	"inline-dr-orch",
-	"inline-dr-fixer",
-	"inline-dr-explorer",
-	"inline-dr-breadth",
-];
+const ids = ["inline-dr-orch", "inline-dr-fixer", "inline-dr-explorer", "inline-dr-breadth"];
 
 const theme = {
 	fg: (_name: string, text: string) => text,
@@ -36,32 +32,45 @@ describe("inline double-render guard", () => {
 			events: [tool("read", { path: "/tmp/x" }), tool("bash", { command: "ls" })],
 		});
 
-		const widget = renderSubagentResult({
-			content: [{ type: "text", text: "(running...)" }],
-			details: {
-				mode: "parallel",
-				runId: ids[0],
-				results: [{
-					agent: "fixer",
-					task: "drive nest-A",
-					label: "nest-A",
-					exitCode: 0,
-					messages: [],
-					usage,
-					progress: {
-						index: 0,
-						agent: "fixer",
-						status: "running",
-						task: "drive nest-A",
-						recentTools: [{ tool: "subagent", args: "go deep", rawArgs: { run: [{ agent: "explorer", task: "go deep" }] }, endMs: Date.now() }],
-						recentOutput: [],
-						toolCount: 1,
-						tokens: 0,
-						durationMs: 100,
-					},
-				}],
+		const widget = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "(running...)" }],
+				details: {
+					mode: "parallel",
+					runId: ids[0],
+					results: [
+						{
+							agent: "fixer",
+							task: "drive nest-A",
+							label: "nest-A",
+							exitCode: 0,
+							messages: [],
+							usage,
+							progress: {
+								index: 0,
+								agent: "fixer",
+								status: "running",
+								task: "drive nest-A",
+								recentTools: [
+									{
+										tool: "subagent",
+										args: "go deep",
+										rawArgs: { run: [{ agent: "explorer", task: "go deep" }] },
+										endMs: Date.now(),
+									},
+								],
+								recentOutput: [],
+								toolCount: 1,
+								tokens: 0,
+								durationMs: 100,
+							},
+						},
+					],
+				},
 			},
-		}, { expanded: false }, theme);
+			{ expanded: false },
+			theme,
+		);
 
 		const text = widget.render(140).join("\n");
 		// The fixer appears only as the row header ("Agent 1: fixer"), never re-rendered

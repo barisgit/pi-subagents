@@ -3,24 +3,51 @@ import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { createWorkflowTool } from "../../workflow.ts";
+import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 
 const ctx = {} as never;
 type WorkflowToolResult = AgentToolResult<unknown> & { isError?: boolean };
 
 async function executeWorkflow(script: string): Promise<WorkflowToolResult> {
-	const tool = createWorkflowTool({ dispatch: async () => ({ status: "ok", summary: "unused", result: "unused" }) });
-	return await tool.execute?.("wf", { script }, new AbortController().signal, () => {}, ctx) as WorkflowToolResult;
+	const tool = createWorkflowTool({ dispatch: async () => ({ result: "unused" }) });
+	return (await tool.execute?.("wf", { script }, new AbortController().signal, () => {}, ctx)) as WorkflowToolResult;
 }
 
 describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 	it("exposes the workflow tool with strict { script: string, async?: boolean } parameters", () => {
-		const tool = createWorkflowTool({ dispatch: async () => ({ status: "ok", summary: "unused", result: "unused" }) });
+		const tool = createWorkflowTool({
+			dispatch: async () => ({ result: "unused" }),
+		});
 
 		assert.equal(tool.name, "workflow");
-		assert.deepEqual(validateToolArguments(tool, { type: "toolCall", id: "good", name: "workflow", arguments: { script: "return 1;" } }), { script: "return 1;" });
-		assert.deepEqual(validateToolArguments(tool, { type: "toolCall", id: "async", name: "workflow", arguments: { script: "return 1;", async: true } }), { script: "return 1;", async: true });
-		assert.throws(() => validateToolArguments(tool, { type: "toolCall", id: "extra", name: "workflow", arguments: { script: "return 1;", extra: true } }), /extra|Unexpected property/);
+		assert.deepEqual(
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "good",
+				name: "workflow",
+				arguments: { script: "return 1;" },
+			}),
+			{ script: "return 1;" },
+		);
+		assert.deepEqual(
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "async",
+				name: "workflow",
+				arguments: { script: "return 1;", async: true },
+			}),
+			{ script: "return 1;", async: true },
+		);
+		assert.throws(
+			() =>
+				validateToolArguments(tool, {
+					type: "toolCall",
+					id: "extra",
+					name: "workflow",
+					arguments: { script: "return 1;", extra: true },
+				}),
+			/extra|Unexpected property/,
+		);
 	});
 
 	it("runs the script inside the required async IIFE and returns the resolved value", async () => {
@@ -29,8 +56,64 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.equal(result?.isError, undefined);
 		// The script's arbitrary return value is surfaced via content text, NOT details:
 		// `details` is always a real Details so the renderer can never crash on it.
-		assert.equal((result.content[0] as { text?: string } | undefined)?.text, "{\n  \"value\": 42\n}");
-		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), { mode: "parallel", workflow: true, results: [], progress: [], chainAgents: [], totalSteps: 0 });
+		assert.equal((result.content[0] as { text?: string } | undefined)?.text, '{\n  "value": 42\n}');
+		assert.deepEqual(JSON.parse(JSON.stringify(result?.details)), {
+			mode: "parallel",
+			workflow: true,
+			results: [],
+			progress: [],
+			agentGroups: [],
+			totalSteps: 0,
+		});
+	});
+
+	it("exposes pipeline() as streaming item-to-item stages", async () => {
+		const calls: string[] = [];
+		const tool = createWorkflowTool({
+			dispatch: async (_role, task) => {
+				calls.push(task);
+				if (task === "stage1-1") await new Promise((resolve) => setTimeout(resolve, 30));
+				return { result: task };
+			},
+		});
+
+		const result = (await tool.execute?.(
+			"wf",
+			{
+				script: [
+					"const out = await pipeline([1, 2],",
+					"  async (n) => { await agent('A', 'stage1-' + n); return n; },",
+					"  (n) => agent('A', 'stage2-' + n)",
+					");",
+					"return out;",
+				].join("\n"),
+			},
+			new AbortController().signal,
+			() => {},
+			ctx,
+		)) as WorkflowToolResult;
+
+		assert.equal(result?.isError, undefined);
+		assert.equal((result.content[0] as { text?: string } | undefined)?.text, '[\n  "stage2-1",\n  "stage2-2"\n]');
+		assert.deepEqual(calls, ["stage1-1", "stage1-2", "stage2-2", "stage2-1"]);
+	});
+
+	it("pipeline() validates arguments and preserves an empty/no-stage result", async () => {
+		const empty = await executeWorkflow("return await pipeline([], (x) => x);");
+		assert.equal(empty?.isError, undefined);
+		assert.equal((empty.content[0] as { text?: string } | undefined)?.text, "[]");
+
+		const unchanged = await executeWorkflow("return await pipeline(['a', 'b']);");
+		assert.equal(unchanged?.isError, undefined);
+		assert.equal((unchanged.content[0] as { text?: string } | undefined)?.text, '[\n  "a",\n  "b"\n]');
+
+		const badItems = await executeWorkflow("return await pipeline('nope', (x) => x);");
+		assert.equal(badItems?.isError, true);
+		assert.match((badItems.content[0] as { text?: string } | undefined)?.text ?? "", /expects an array/);
+
+		const badStage = await executeWorkflow("return await pipeline([1], 'nope');");
+		assert.equal(badStage?.isError, true);
+		assert.match((badStage.content[0] as { text?: string } | undefined)?.text ?? "", /expects every stage/);
 	});
 
 	it("surfaces a throwing script as an error result without crashing the host", async () => {
@@ -45,8 +128,11 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 	// listener, so an in-process assertion can't prove host-survival; a subprocess
 	// shows the real behavior — without containment the child exits non-zero (host
 	// crash), with it the child exits 0 and the tool reports isError.
-	function runWorkflowInSubprocess(script: string, dispatchBody: string): { status: number | null; stderr: string; out: { isError: boolean; text: string } } {
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+	function runWorkflowInSubprocess(
+		script: string,
+		dispatchBody: string,
+	): { status: number | null; stderr: string; out: { isError: boolean; text: string } } {
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
 			`  const tool = m.createWorkflowTool({ dispatch: ${dispatchBody} });`,
@@ -61,7 +147,11 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			encoding: "utf8",
 			env: { ...process.env, WF_URL: workflowUrl, WF_SCRIPT: script },
 		});
-		return { status: res.status, stderr: res.stderr, out: res.stdout ? JSON.parse(res.stdout) : { isError: false, text: "" } };
+		return {
+			status: res.status,
+			stderr: res.stderr,
+			out: res.stdout ? JSON.parse(res.stdout) : { isError: false, text: "" },
+		};
 	}
 
 	it("contains a synchronously floated raw Promise.reject instead of crashing the host (best-effort gap)", () => {
@@ -69,13 +159,16 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// design it is not attributed: the run reports success. The load-bearing
 		// guarantee here is R-crash — the host must SURVIVE (exit 0). This encodes the
 		// documented best-effort limitation as an explicit contract, not a silent leak.
-		const res = runWorkflowInSubprocess("Promise.reject(new Error('raw-boom'));\nreturn 'ok';", "async () => ({ status: 'ok', summary: 'u', result: 'u' })");
+		const res = runWorkflowInSubprocess(
+			"Promise.reject(new Error('raw-boom'));\nreturn 'ok';",
+			"async () => ({ result: 'u' })",
+		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, false);
 		assert.equal(res.out.text, "ok");
 	});
 
-	it("reports a floated .then() chain off agent() as an error (finding #1)", () => {
+	it("reports a floated .then() workflow off agent() as an error (finding #1)", () => {
 		// The script floats a DERIVATIVE of agent(): agent('bad').then(v=>v). Because
 		// agent() returns a TrackingPromise (Symbol.species = itself), the .then result
 		// is also a TrackingPromise registered in this run's owned Set, so the floated
@@ -87,12 +180,15 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.match(res.out.text, /unhandled promise rejection.*then-derived-boom/);
 	});
 
-	it("reports a 2-deep floated chain off agent() as an error", () => {
-		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'deep-chain-boom' })";
-		const res = runWorkflowInSubprocess("agent('explorer', 'bad').then((v) => v).then((v) => v);\nreturn 'ok';", dispatch);
+	it("reports a 2-deep floated workflow off agent() as an error", () => {
+		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'deep-workflow-boom' })";
+		const res = runWorkflowInSubprocess(
+			"agent('explorer', 'bad').then((v) => v).then((v) => v);\nreturn 'ok';",
+			dispatch,
+		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, true);
-		assert.match(res.out.text, /unhandled promise rejection.*deep-chain-boom/);
+		assert.match(res.out.text, /unhandled promise rejection.*deep-workflow-boom/);
 	});
 
 	it("reports a floated async-helper agent() rejection via reason marker, not promise identity (round-6 finding)", () => {
@@ -100,7 +196,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// TrackingPromise — so owned-Set identity alone misses it. The run token
 		// stamped on the WorkflowAgentError reason still attributes it to this run.
 		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'helper-boom' })";
-		const res = runWorkflowInSubprocess("async function helper(){ await agent('explorer', 'bad'); }\nhelper();\nreturn 'ok';", dispatch);
+		const res = runWorkflowInSubprocess(
+			"async function helper(){ await agent('explorer', 'bad'); }\nhelper();\nreturn 'ok';",
+			dispatch,
+		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, true);
 		assert.match(res.out.text, /unhandled promise rejection.*helper-boom/);
@@ -112,7 +211,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.equal(floated.status, 0, `host crashed (exit ${floated.status}): ${floated.stderr}`);
 		assert.equal(floated.out.isError, true);
 		assert.match(floated.out.text, /unhandled promise rejection.*all-boom/);
-		const caught = runWorkflowInSubprocess("await Promise.all([agent('explorer', 'bad')]).catch(() => {});\nreturn 'ok';", dispatch);
+		const caught = runWorkflowInSubprocess(
+			"await Promise.all([agent('explorer', 'bad')]).catch(() => {});\nreturn 'ok';",
+			dispatch,
+		);
 		assert.equal(caught.status, 0, `host crashed (exit ${caught.status}): ${caught.stderr}`);
 		assert.equal(caught.out.isError, false);
 		assert.equal(caught.out.text, "ok");
@@ -125,7 +227,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// the marked agent error: host survives (exit 0). The already-returned result
 		// cannot be retroactively failed (documented gap d), so isError is false.
 		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'atomics-boom' })";
-		const res = runWorkflowInSubprocess("Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0).value.then(() => agent('explorer', 'bad'));\nreturn 'ok';", dispatch);
+		const res = runWorkflowInSubprocess(
+			"Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0).value.then(() => agent('explorer', 'bad'));\nreturn 'ok';",
+			dispatch,
+		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, false);
 		assert.equal(res.out.text, "ok");
@@ -133,7 +238,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 
 	it("survives a post-return agent() float scheduled via WebAssembly.compile (host crash-safety)", () => {
 		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'wasm-boom' })";
-		const res = runWorkflowInSubprocess("WebAssembly.compile(new Uint8Array([0,97,115,109,1,0,0,0])).then(() => agent('explorer', 'bad'));\nreturn 'ok';", dispatch);
+		const res = runWorkflowInSubprocess(
+			"WebAssembly.compile(new Uint8Array([0,97,115,109,1,0,0,0])).then(() => agent('explorer', 'bad'));\nreturn 'ok';",
+			dispatch,
+		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, false);
 		assert.equal(res.out.text, "ok");
@@ -143,16 +251,16 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// The phantom-slot reap attaches work.then(clear, clear); clear() calls
 		// onParallelGroupSettled -> emit -> onUpdate. If onUpdate THROWS on that frame,
 		// the promise returned by .then(clear, clear) rejects and floats unless the
-		// observer chain is fully total (try/catch in clear + .catch on the chain).
+		// observer workflow is fully total (try/catch in clear + .catch on the workflow).
 		// While a run is live the permanent containment listener would SWALLOW the
 		// float (host survives either way), so host-exit can't discriminate — we assert
 		// directly that NO unhandledRejection event is emitted for the clear frame.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"const floats = [];",
 			"process.on('unhandledRejection', (r) => { floats.push(String(r && r.message ? r.message : r)); });",
 			"import(process.env.WF_URL).then(async (m) => {",
-			"  const tool = m.createWorkflowTool({ openWorkflowGroup: () => ({ groupRunId: 'g', async dispatchChild({ role, task, index }) { await Promise.resolve(); return { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, structuredResult: { status: 'ok', summary: 's', result: 'r' }, progress: { index, agent: role, status: 'completed', task, recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0, lastActivityAt: Date.now() } }; } }) });",
+			"  const tool = m.createWorkflowTool({ openWorkflowGroup: () => ({ groupRunId: 'g', async dispatchChild({ role, task, index }) { await Promise.resolve(); return { agent: role, task, exitCode: 0, usage: { input: 0, output: 0 }, structuredResult: { result: 'r' }, progress: { index, agent: role, status: 'completed', task, recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, durationMs: 0, lastActivityAt: Date.now() } }; } }) });",
 			// Mixed group (one real agent + one raw thunk) leaves a phantom slot, so
 			// parallelGroupSettled actually deletes it and emits the CLEAR frame. That clear
 			// frame is the 2nd emit with a single completed result (the 1st is childSettled);
@@ -165,7 +273,12 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		].join("\n");
 		const res = spawnSync(process.execPath, ["--experimental-strip-types", "-e", program], {
 			encoding: "utf8",
-			env: { ...process.env, WF_URL: workflowUrl, WF_SCRIPT: "phase('mixed');\nawait parallel([() => agent('explorer', 'alpha'), async () => 'raw']);\nreturn 'ok';" },
+			env: {
+				...process.env,
+				WF_URL: workflowUrl,
+				WF_SCRIPT:
+					"phase('mixed');\nawait parallel([() => agent('explorer', 'alpha'), async () => 'raw']);\nreturn 'ok';",
+			},
 		});
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		const out = res.stdout ? JSON.parse(res.stdout) : { floats: [] };
@@ -176,10 +289,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// The permanent listener must NOT swallow rejections it cannot attribute to a
 		// live workflow. With no run active and us as sole listener, a real host bug
 		// must still crash as Node intends.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
-			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
+			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ result: 'r' }) });",
 			"  await tool.execute('wf', { script: 'return 1;' }, new AbortController().signal, () => {}, {});",
 			"  await new Promise((r) => setTimeout(r, 30));",
 			"  Promise.reject(new Error('host-bug'));",
@@ -187,7 +300,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			"  process.stdout.write('NO-CRASH');",
 			"}).catch((e) => { process.stderr.write('OUTER:' + String(e)); process.exit(2); });",
 		].join("\n");
-		const res = spawnSync(process.execPath, ["--experimental-strip-types", "-e", program], { encoding: "utf8", env: { ...process.env, WF_URL: workflowUrl } });
+		const res = spawnSync(process.execPath, ["--experimental-strip-types", "-e", program], {
+			encoding: "utf8",
+			env: { ...process.env, WF_URL: workflowUrl },
+		});
 		assert.notEqual(res.status, 0, "non-workflow host bug should have crashed the process");
 		assert.match(res.stderr, /host-bug/);
 	});
@@ -198,11 +314,11 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// must still recognize a SECOND (cache-busted) instance's floated agent error
 		// — otherwise the stale listener re-signals it as a host bug and crashes. The
 		// fix shares the live-run set + run-token key via the globalThis registry.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"const base = process.env.WF_URL;",
 			"const m1 = await import(base + '?first');",
-			"const tool1 = m1.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
+			"const tool1 = m1.createWorkflowTool({ dispatch: async () => ({ result: 'r' }) });",
 			"await tool1.execute('wf1', { script: 'return 1;' }, new AbortController().signal, () => {}, {});",
 			"const m2 = await import(base + '?second');",
 			"const tool2 = m2.createWorkflowTool({ dispatch: async () => ({ isError: true, exitCode: 1, error: 'reload-boom' }) });",
@@ -210,7 +326,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			"await new Promise((r) => setTimeout(r, 120));",
 			"process.stdout.write(JSON.stringify({ isError: result.isError === true, text: (result.content[0] && result.content[0].text) || '' }));",
 		].join("\n");
-		const res = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", program], { encoding: "utf8", env: { ...process.env, WF_URL: workflowUrl } });
+		const res = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", program], {
+			encoding: "utf8",
+			env: { ...process.env, WF_URL: workflowUrl },
+		});
 		assert.equal(res.status, 0, `host crashed across reload (exit ${res.status}): ${res.stderr}`);
 		const out = JSON.parse(res.stdout) as { isError: boolean; text: string };
 		assert.equal(out.isError, true);
@@ -222,10 +341,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// brand a rejection as ours only when its token VALUE is one the runtime
 		// actually issued (registry WeakSet) — not on mere key presence — otherwise a
 		// foreign host bug carrying the symbol would be silently swallowed.
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
-			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ status: 'ok', summary: 's', result: 'r' }) });",
+			"  const tool = m.createWorkflowTool({ dispatch: async () => ({ result: 'r' }) });",
 			"  await tool.execute('wf', { script: 'return 1;' }, new AbortController().signal, () => {}, {});",
 			"  await new Promise((r) => setTimeout(r, 20));",
 			"  const e = new Error('symbol-collision-host-bug');",
@@ -235,7 +354,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			"  process.stdout.write('NO-CRASH');",
 			"}).catch((e) => { process.stderr.write('OUTER:' + String(e)); process.exit(2); });",
 		].join("\n");
-		const res = spawnSync(process.execPath, ["--experimental-strip-types", "-e", program], { encoding: "utf8", env: { ...process.env, WF_URL: workflowUrl } });
+		const res = spawnSync(process.execPath, ["--experimental-strip-types", "-e", program], {
+			encoding: "utf8",
+			env: { ...process.env, WF_URL: workflowUrl },
+		});
 		assert.notEqual(res.status, 0, "foreign rejection carrying the token symbol must not be masked");
 		assert.match(res.stderr, /symbol-collision-host-bug/);
 	});
@@ -246,7 +368,10 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// float, the owned-Set membership (set at TrackingPromise construction) still
 		// surfaces the agent() failure.
 		const dispatch = "async () => ({ isError: true, exitCode: 1, error: 'hasinstance-boom' })";
-		const res = runWorkflowInSubprocess("Promise[Symbol.hasInstance] = () => false;\nagent('explorer', 'bad').then((v) => v);\nreturn 'ok';", dispatch);
+		const res = runWorkflowInSubprocess(
+			"Promise[Symbol.hasInstance] = () => false;\nagent('explorer', 'bad').then((v) => v);\nreturn 'ok';",
+			dispatch,
+		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, true);
 		assert.match(res.out.text, /unhandled promise rejection.*hasinstance-boom/);
@@ -256,7 +381,8 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		// The hard case the one-macrotask drain missed: an unawaited agent() whose
 		// dispatch rejects ~20ms later — long after a naive drain would have reported
 		// success and detached the listener.
-		const dispatch = "async () => { await new Promise((r) => setTimeout(r, 20)); return { isError: true, exitCode: 1, error: 'late-agent-boom' }; }";
+		const dispatch =
+			"async () => { await new Promise((r) => setTimeout(r, 20)); return { isError: true, exitCode: 1, error: 'late-agent-boom' }; }";
 		const res = runWorkflowInSubprocess("agent('explorer', 'late');\nreturn 'ok';", dispatch);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, true);
@@ -264,8 +390,12 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 	});
 
 	it("does NOT false-fail a delayed agent() rejection the script awaits and catches", () => {
-		const dispatch = "async () => { await new Promise((r) => setTimeout(r, 20)); return { isError: true, exitCode: 1, error: 'handled-boom' }; }";
-		const res = runWorkflowInSubprocess("try { await agent('explorer', 'x'); } catch (e) { /* handled */ }\nreturn 'ok-handled';", dispatch);
+		const dispatch =
+			"async () => { await new Promise((r) => setTimeout(r, 20)); return { isError: true, exitCode: 1, error: 'handled-boom' }; }";
+		const res = runWorkflowInSubprocess(
+			"try { await agent('explorer', 'x'); } catch (e) { /* handled */ }\nreturn 'ok-handled';",
+			dispatch,
+		);
 		assert.equal(res.status, 0, `host crashed (exit ${res.status}): ${res.stderr}`);
 		assert.equal(res.out.isError, false);
 		assert.equal(res.out.text, "ok-handled");
@@ -276,15 +406,19 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 	// plus the child exit code. Subprocess because B's floated promise stays
 	// genuinely unhandled, which node:test's own listener would attribute to this
 	// test in-process.
-	function runConcurrentWorkflows(bScript: string): { status: number | null; stderr: string; out: { aStatus: string; aValue: string; bStatus: string; bReason: string } } {
-		const workflowUrl = new URL("../../workflow.ts", import.meta.url).href;
+	function runConcurrentWorkflows(bScript: string): {
+		status: number | null;
+		stderr: string;
+		out: { aStatus: string; aValue: string; bStatus: string; bReason: string };
+	} {
+		const workflowUrl = new URL("../../src/workflow/workflow.ts", import.meta.url).href;
 		const program = [
 			"import(process.env.WF_URL).then(async (m) => {",
 			"  const delay = (ms) => new Promise((r) => setTimeout(r, ms));",
 			"  const dispatch = async (_role, task) => {",
-			"    if (task === 'slow-ok') { await delay(100); return { status: 'ok', summary: 'slow', result: 'slow' }; }",
+			"    if (task === 'slow-ok') { await delay(100); return { result: 'slow' }; }",
 			"    if (task === 'bad') { await delay(20); return { isError: true, exitCode: 1, error: 'foreign-boom' }; }",
-			"    return { status: 'ok', summary: task, result: task };",
+			"    return { result: task };",
 			"  };",
 			"  const a = m.runWorkflowScript({ dispatch, script: \"await agent('explorer', 'slow-ok');\\nreturn 'A-ok';\" });",
 			"  const b = m.runWorkflowScript({ dispatch, script: process.env.WF_B_SCRIPT });",
@@ -300,7 +434,11 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			encoding: "utf8",
 			env: { ...process.env, WF_URL: workflowUrl, WF_B_SCRIPT: bScript },
 		});
-		return { status: res.status, stderr: res.stderr, out: res.stdout ? JSON.parse(res.stdout) : { aStatus: "", aValue: "", bStatus: "", bReason: "" } };
+		return {
+			status: res.status,
+			stderr: res.stderr,
+			out: res.stdout ? JSON.parse(res.stdout) : { aStatus: "", aValue: "", bStatus: "", bReason: "" },
+		};
 	}
 
 	it("does NOT cross-attribute a peer run's floated agent() rejection under concurrency", () => {

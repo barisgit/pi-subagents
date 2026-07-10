@@ -42,6 +42,8 @@ interface AgentConfig {
 	progress?: boolean;
 	mcpDirectTools?: string[];
 	maxSubagentDepth?: number;
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[];
 }
 
 export function makeAgentConfigs(names: string[]): AgentConfig[] {
@@ -112,20 +114,22 @@ export async function tryImport<T>(specifier: string): Promise<T | null> {
 			const projectRoot = path.resolve(__dirname, "..", "..");
 			const abs = path.resolve(projectRoot, specifier);
 			const url = pathToFileURL(abs).href;
-			return await import(url) as T;
+			return (await import(url)) as T;
 		}
-		return await import(specifier) as T;
+		return (await import(specifier)) as T;
 	} catch (error: unknown) {
-		const code = typeof error === "object" && error !== null && "code" in error
-			? (error as { code?: unknown }).code
-			: undefined;
+		const code =
+			typeof error === "object" && error !== null && "code" in error
+				? (error as { code?: unknown }).code
+				: undefined;
 		const isModuleNotFound = code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
 		if (isBare && isModuleNotFound) {
-			const msg = typeof error === "object" && error !== null && "message" in error
-				? String((error as { message?: unknown }).message ?? "")
-				: "";
-			const missing = msg.match(/Cannot find (?:package|module) ['\"]([^'\"]+)['\"]/i)?.[1];
-			if (missing === specifier || msg.includes(`'${specifier}'`) || msg.includes(`\"${specifier}\"`)) {
+			const msg =
+				typeof error === "object" && error !== null && "message" in error
+					? String((error as { message?: unknown }).message ?? "")
+					: "";
+			const missing = msg.match(/Cannot find (?:package|module) ['"]([^'"]+)['"]/i)?.[1];
+			if (missing === specifier || msg.includes(`'${specifier}'`) || msg.includes(`"${specifier}"`)) {
 				return null;
 			}
 		}

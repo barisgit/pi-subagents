@@ -9,7 +9,8 @@ function fail(message, exitCode = 1) {
 }
 
 function listPendingFiles(dir) {
-	return fs.readdirSync(dir)
+	return fs
+		.readdirSync(dir)
 		.filter((name) => name.startsWith("pending-") && name.endsWith(".json"))
 		.sort();
 }

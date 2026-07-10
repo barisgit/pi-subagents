@@ -3,9 +3,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { awaitRun, spawnRun, type Layer0PreparedRunStep, type Layer0RunAgent, type RunLifecycleEvent } from "../../layer0-runs.ts";
-import { setRegistryPathForTests } from "../../runs-registry.ts";
-import type { ChildAgentResult } from "../../in-process-executor.ts";
+import {
+	awaitRun,
+	spawnRun,
+	type Layer0PreparedRunStep,
+	type Layer0RunAgent,
+	type RunLifecycleEvent,
+} from "../../src/dispatch/layer0-runs.ts";
+import { setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 
 const tmpRoots: string[] = [];
 let previousHome: string | undefined;
@@ -58,23 +64,38 @@ describe("Layer-0 run lifecycle events", () => {
 			return runAgentSettled;
 		};
 
-		const handle = spawnRun({ agentName: "fixer", task: "do fixer", cwd: root }, {
-			rootRunId: "root-run",
-			notifyPolicy: "each",
-			runAgent,
-			defaultSessionDir: path.join(root, "runs"),
-			onLifecycle: (event) => lifecycleEvents.push(event),
-		});
+		const handle = spawnRun(
+			{ agentName: "fixer", task: "do fixer", cwd: root },
+			{
+				rootRunId: "root-run",
+				notifyPolicy: "each",
+				runAgent,
+				defaultSessionDir: path.join(root, "runs"),
+				onLifecycle: (event) => lifecycleEvents.push(event),
+			},
+		);
 
-		assert.deepEqual(lifecycleEvents.map((event) => event.type), ["run.started"]);
+		assert.deepEqual(
+			lifecycleEvents.map((event) => event.type),
+			["run.started"],
+		);
 		assert.equal(lifecycleEvents[0]?.runId, handle.runId);
 
 		const result = await awaitRun(handle);
 
 		assert.equal(result.runId, handle.runId);
-		assert.deepEqual(lifecycleEvents.map((event) => event.type), ["run.started", "run.completed"]);
-		assert.deepEqual(lifecycleEvents.map((event) => event.runId), [handle.runId, handle.runId]);
-		assert.deepEqual(lifecycleEvents.filter((event) => !event.type.startsWith("run.")), []);
+		assert.deepEqual(
+			lifecycleEvents.map((event) => event.type),
+			["run.started", "run.completed"],
+		);
+		assert.deepEqual(
+			lifecycleEvents.map((event) => event.runId),
+			[handle.runId, handle.runId],
+		);
+		assert.deepEqual(
+			lifecycleEvents.filter((event) => !event.type.startsWith("run.")),
+			[],
+		);
 
 		await awaitRun(handle);
 		assert.equal(lifecycleEvents.length, 2);

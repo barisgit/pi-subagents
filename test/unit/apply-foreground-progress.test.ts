@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyForegroundProgress } from "../../subagent-executor.ts";
-import type { AgentProgress } from "../../types.ts";
+import { applyForegroundProgress } from "../../src/dispatch/subagent-executor.ts";
+import type { AgentProgress } from "../../src/protocol/types.ts";
 
 function makeProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
 	return {

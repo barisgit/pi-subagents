@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { formatAsyncRunList, listAsyncRuns, type AsyncRunOverlayData } from "../../async-status.ts";
+import { formatAsyncRunList, listAsyncRuns, type AsyncRunOverlayData } from "../../src/state/async-status.ts";
 
 function createAsyncDir(root: string, id: string, status: Record<string, unknown>): string {
 	const dir = path.join(root, id);
@@ -24,12 +24,43 @@ function listLegacyOverlay(root: string, recentLimit = 5): AsyncRunOverlayData {
 }
 
 describe("async status helpers", () => {
+	it("formats epoch-zero tool and activity timestamps", () => {
+		const originalNow = Date.now;
+		Date.now = () => 1_000;
+		try {
+			const text = formatAsyncRunList([
+				{
+					id: "run-zero",
+					asyncDir: "/tmp/run-zero",
+					mode: "single",
+					state: "running",
+					startedAt: 0,
+					lastActivityAt: 0,
+					steps: [
+						{
+							index: 0,
+							agent: "worker",
+							status: "running",
+							currentTool: "bash",
+							currentToolStartedAt: 0,
+						},
+					],
+				},
+			]);
+
+			assert.match(text, /active 1\.0s ago/);
+			assert.match(text, /tool bash 1\.0s/);
+		} finally {
+			Date.now = originalNow;
+		}
+	});
+
 	it("lists only requested states and includes flattened step summaries", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-status-"));
 		try {
 			createAsyncDir(root, "run-a", {
 				runId: "run-a",
-				mode: "chain",
+				mode: "parallel",
 				state: "running",
 				startedAt: 100,
 				lastUpdate: 200,
@@ -84,7 +115,10 @@ describe("async status helpers", () => {
 			});
 
 			const overlay = listLegacyOverlay(root, 5);
-			assert.deepEqual(overlay.recent.map((run) => run.id), ["newer-complete", "older-failed"]);
+			assert.deepEqual(
+				overlay.recent.map((run) => run.id),
+				["newer-complete", "older-failed"],
+			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -204,10 +238,7 @@ describe("async status helpers", () => {
 		fs.mkdirSync(dir, { recursive: true });
 		fs.writeFileSync(path.join(dir, "status.json"), "{not-json", "utf-8");
 		try {
-			assert.throws(
-				() => listAsyncRuns(root),
-				/Failed to parse async status file/,
-			);
+			assert.throws(() => listAsyncRuns(root), /Failed to parse async status file/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -218,7 +249,7 @@ describe("async status helpers", () => {
 		try {
 			createAsyncDir(root, "run-running", {
 				runId: "run-running",
-				mode: "chain",
+				mode: "parallel",
 				state: "running",
 				startedAt: 100,
 				lastUpdate: 300,
@@ -250,7 +281,7 @@ describe("async status helpers", () => {
 			assert.equal(overlay.recent[0]?.id, "run-failed");
 
 			const text = formatAsyncRunList(overlay.active);
-			assert.match(text, /Active async runs: 1/);
+			assert.match(text, /Subagent runs: 1/);
 			assert.match(text, /run-running/);
 			assert.match(text, /scout/);
 		} finally {

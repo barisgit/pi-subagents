@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { SubagentsStatusComponent } from "../../subagents-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
@@ -42,10 +42,18 @@ function stripBorders(line: string): string {
 	return line.replace(/^│/, "").replace(/│$/, "").trim();
 }
 
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function leftOnly(lines: string[]): string[] {
+	return lines.map((line) => line.split("│")[0] ?? line);
+}
+
 interface SeedRun {
 	runId: string;
 	agentName?: string;
-	mode?: "single" | "chain" | "parallel";
+	mode?: "single" | "parallel";
 	state?: "running" | "complete";
 	label?: string;
 	parentRunId?: string;
@@ -63,20 +71,31 @@ function seedRun(root: string, entry: SeedRun): void {
 	const state = entry.state ?? "complete";
 	const terminal = state !== "running";
 	if (entry.agentName) {
-		fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-			runId: entry.runId,
-			mode: entry.mode ?? "single",
-			state,
-			startedAt: entry.startedAt,
-			lastUpdate: terminal ? entry.startedAt + 1 : Date.now(),
-			runnerHeartbeatAt: terminal ? entry.startedAt + 1 : Date.now(),
-			...(terminal ? { endedAt: entry.startedAt + 1 } : {}),
-			cwd: root,
-			currentStep: 0,
-			...(entry.label ? { label: entry.label } : {}),
-			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-			steps: [{ agent: entry.agentName, status: state, startedAt: entry.startedAt, ...(terminal ? { endedAt: entry.startedAt + 1 } : {}) }],
-		}), "utf8");
+		fs.writeFileSync(
+			path.join(runRecordDir, "status.json"),
+			JSON.stringify({
+				runId: entry.runId,
+				mode: entry.mode ?? "single",
+				state,
+				startedAt: entry.startedAt,
+				lastUpdate: terminal ? entry.startedAt + 1 : Date.now(),
+				runnerHeartbeatAt: terminal ? entry.startedAt + 1 : Date.now(),
+				...(terminal ? { endedAt: entry.startedAt + 1 } : {}),
+				cwd: root,
+				currentStep: 0,
+				...(entry.label ? { label: entry.label } : {}),
+				...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+				steps: [
+					{
+						agent: entry.agentName,
+						status: state,
+						startedAt: entry.startedAt,
+						...(terminal ? { endedAt: entry.startedAt + 1 } : {}),
+					},
+				],
+			}),
+			"utf8",
+		);
 	}
 	appendRunEntry({
 		runId: entry.runId,
@@ -102,37 +121,88 @@ afterEach(() => {
 });
 
 describe("dashboard collapse and container rows", () => {
-	it("enter collapses the selected container: children hide, inline agent summary appears", () => {
+	it("renders the selected run status box in the sidebar directly above the action legend", () => {
 		const root = tmpRegistry();
-		seedRun(root, { runId: "group-1", mode: "parallel", label: "batch", rootRunId: "group-1", startedAt: 1000 });
-		seedRun(root, { runId: "child-a", agentName: "explorer", parentRunId: "group-1", rootRunId: "group-1", startedAt: 1100 });
-		seedRun(root, { runId: "child-b", agentName: "qa", parentRunId: "group-1", rootRunId: "group-1", startedAt: 1200 });
+		seedRun(root, {
+			runId: "run-status-box",
+			agentName: "fixer",
+			label: "polish dashboard",
+			startedAt: 1000,
+		});
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, {
+			refreshMs: 0,
+			sessionCwd: root,
+		});
+		try {
+			const lines = component.render(120).map(stripAnsi);
+			const statusTop = lines.findIndex((line) => line.includes("─ polish dashboard"));
+			const actions = lines.findIndex((line) => line.includes("─ sidebar ─"));
+
+			assert.ok(statusTop >= 0, `selected-run status separator missing:\n${lines.join("\n")}`);
+			assert.ok(actions > statusTop + 2, `action legend must sit below status details:\n${lines.join("\n")}`);
+			assert.doesNotMatch(lines.join("\n"), /╭─ polish dashboard/, "selected status is not boxed");
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("enter collapses a workflow container: phase rows and children hide", () => {
+		const root = tmpRegistry();
+		seedRun(root, {
+			runId: "wf-1",
+			mode: "parallel",
+			workflow: true,
+			label: "wf",
+			rootRunId: "wf-1",
+			startedAt: 1000,
+		});
+		seedRun(root, {
+			runId: "child-a",
+			agentName: "explorer",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 1,
+			phaseTitle: "recon",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "child-b",
+			agentName: "qa",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 2,
+			phaseTitle: "verify",
+			startedAt: 1200,
+		});
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
-			const expanded = component.render(180).map(stripBorders).join("\n");
-			assert.match(expanded, /▾ parallel · complete · 2\/2/);
-			assert.match(expanded, /└─✓ .*explorer/);
-			assert.match(expanded, /└─✓ .*qa/);
+			const expanded = leftOnly(component.render(180).map(stripBorders)).join("\n");
+			assert.match(expanded, /▾ workflow · complete · 2\/2/);
+			assert.match(expanded, /▾ Phase 1: recon · 1\/1/);
+			assert.match(expanded, /✓ .*explorer/);
+			assert.match(expanded, /▾ Phase 2: verify · 1\/1/);
+			assert.match(expanded, /✓ .*qa/);
 
-			// Selection starts on the newest row; move to the container row first.
-			const rows = component.render(180).map(stripBorders);
-			const groupRow = rows.findIndex((line) => /▾ parallel/.test(line));
+			// Selection starts on the workflow container row.
+			const rows = leftOnly(component.render(180).map(stripBorders));
+			const groupRow = rows.findIndex((line) => /▾ workflow/.test(line));
 			const selectedRow = rows.findIndex((line) => line.startsWith(">"));
 			for (let i = 0; i < Math.abs(groupRow - selectedRow); i++) {
 				component.handleInput(groupRow > selectedRow ? "j" : "k");
 			}
 			component.handleInput("\r");
 
-			const collapsed = component.render(180).map(stripBorders).join("\n");
-			assert.match(collapsed, /▸ parallel · complete · 2\/2/);
-			assert.match(collapsed, /\(2 agents: qa, explorer\)/);
-			assert.doesNotMatch(collapsed, /└─/);
+			const collapsed = leftOnly(component.render(180).map(stripBorders)).join("\n");
+			assert.match(collapsed, /▸ workflow · complete · 2\/2/);
+			assert.doesNotMatch(collapsed, /Phase 1: recon/);
+			assert.doesNotMatch(collapsed, /✓ .*explorer/);
 
 			component.handleInput("\r");
-			const reexpanded = component.render(180).map(stripBorders).join("\n");
-			assert.match(reexpanded, /▾ parallel · complete · 2\/2/);
-			assert.match(reexpanded, /└─✓ .*explorer/);
+			const reexpanded = leftOnly(component.render(180).map(stripBorders)).join("\n");
+			assert.match(reexpanded, /▾ workflow · complete · 2\/2/);
+			assert.match(reexpanded, /▾ Phase 1: recon · 1\/1/);
 		} finally {
 			component.dispose();
 		}
@@ -140,9 +210,33 @@ describe("dashboard collapse and container rows", () => {
 
 	it("running workflow container shows done/total and the current phase from its children", () => {
 		const root = tmpRegistry();
-		seedRun(root, { runId: "wf-1", mode: "parallel", workflow: true, label: "wf", rootRunId: "wf-1", startedAt: 1000 });
-		seedRun(root, { runId: "wf-child-1", agentName: "explorer", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 1, phaseTitle: "recon", startedAt: 1100 });
-		seedRun(root, { runId: "wf-child-2", agentName: "qa", parentRunId: "wf-1", rootRunId: "wf-1", phaseIndex: 2, phaseTitle: "verify", state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "wf-1",
+			mode: "parallel",
+			workflow: true,
+			label: "wf",
+			rootRunId: "wf-1",
+			startedAt: 1000,
+		});
+		seedRun(root, {
+			runId: "wf-child-1",
+			agentName: "explorer",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 1,
+			phaseTitle: "recon",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "wf-child-2",
+			agentName: "qa",
+			parentRunId: "wf-1",
+			rootRunId: "wf-1",
+			phaseIndex: 2,
+			phaseTitle: "verify",
+			state: "running",
+			startedAt: 1200,
+		});
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
@@ -157,30 +251,61 @@ describe("dashboard collapse and container rows", () => {
 	it("a complete child under a still-open parallel group renders the pending-delivery accent glyph", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "pg-1", mode: "parallel", rootRunId: "pg-1", startedAt: 1000 });
-		seedRun(root, { runId: "pg-done", agentName: "explorer", parentRunId: "pg-1", rootRunId: "pg-1", startedAt: 1100 });
-		seedRun(root, { runId: "pg-live", agentName: "qa", parentRunId: "pg-1", rootRunId: "pg-1", state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "pg-done",
+			agentName: "explorer",
+			parentRunId: "pg-1",
+			rootRunId: "pg-1",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "pg-live",
+			agentName: "qa",
+			parentRunId: "pg-1",
+			rootRunId: "pg-1",
+			state: "running",
+			startedAt: 1200,
+		});
 
-		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, { refreshMs: 0 });
+		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, {
+			refreshMs: 0,
+		});
 		try {
 			const lines = component.render(220);
 			// The finished child is done but its result has not been delivered to
 			// the parent turn yet (rollup batching): accent ✓, not success ✓.
-			// Assert on the left child row (└─) so the right-pane steps outline
-			// (always success-toned) cannot mask the left-row glyph.
-			const childRow = lines.find((line) => line.includes("└─") && line.includes("explorer"));
-			assert.ok(childRow, "expected a └─ explorer child row");
-			assert.match(childRow, /└─<\/dim><accent>✓<\/accent>/);
-			assert.doesNotMatch(childRow, /└─<\/dim><success>✓<\/success>/);
+			const childRow = lines.find((line) => line.includes("explorer"));
+			assert.ok(childRow, "expected a flat explorer child row");
+			assert.match(childRow, /<accent>✓<\/accent> <dim>∥ <\/dim>/);
+			assert.doesNotMatch(childRow, /<success>✓<\/success> <dim>∥ <\/dim>/);
 		} finally {
 			component.dispose();
 		}
 	});
 
-	it("phase chips dedupe a 'Phase N:' prefix already present in the script's phase title", () => {
+	it("phase rows dedupe a 'Phase N:' prefix already present in the script's phase title", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf-3", mode: "parallel", workflow: true, rootRunId: "wf-3", startedAt: 1000 });
-		seedRun(root, { runId: "wf3-a", agentName: "explorer", parentRunId: "wf-3", rootRunId: "wf-3", phaseIndex: 1, phaseTitle: "Phase 1: recon", parallelGroupId: "pg", startedAt: 1100 });
-		seedRun(root, { runId: "wf3-b", agentName: "qa", parentRunId: "wf-3", rootRunId: "wf-3", phaseIndex: 2, phaseTitle: "Phase 2: verify", state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "wf3-a",
+			agentName: "explorer",
+			parentRunId: "wf-3",
+			rootRunId: "wf-3",
+			phaseIndex: 1,
+			phaseTitle: "Phase 1: recon",
+			parallelGroupId: "pg",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "wf3-b",
+			agentName: "qa",
+			parentRunId: "wf-3",
+			rootRunId: "wf-3",
+			phaseIndex: 2,
+			phaseTitle: "Phase 2: verify",
+			state: "running",
+			startedAt: 1200,
+		});
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
@@ -188,9 +313,10 @@ describe("dashboard collapse and container rows", () => {
 			// Container chip: "Phase 2: verify", not "Phase 2: Phase 2: verify".
 			assert.match(text, /▾ workflow · Phase 2: verify · running/);
 			assert.doesNotMatch(text, /Phase 2: Phase 2/);
-			// Child chip: "∥ P1 recon", not "∥ P1 Phase 1: recon".
-			assert.match(text, /∥ P1 recon/);
-			assert.doesNotMatch(text, /P1 Phase 1/);
+			// Phase row: "Phase 1: recon", not "Phase 1: Phase 1: recon".
+			assert.match(text, /▾ Phase 1: recon · 1\/1/);
+			assert.doesNotMatch(text, /Phase 1: Phase 1/);
+			assert.doesNotMatch(text, /∥ P1/);
 		} finally {
 			component.dispose();
 		}
@@ -199,10 +325,27 @@ describe("dashboard collapse and container rows", () => {
 	it("workflow children are never pending-delivery (script consumes results live)", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf-2", mode: "parallel", workflow: true, rootRunId: "wf-2", startedAt: 1000 });
-		seedRun(root, { runId: "wf2-done", agentName: "explorer", parentRunId: "wf-2", rootRunId: "wf-2", phaseIndex: 1, startedAt: 1100 });
-		seedRun(root, { runId: "wf2-live", agentName: "qa", parentRunId: "wf-2", rootRunId: "wf-2", phaseIndex: 2, state: "running", startedAt: 1200 });
+		seedRun(root, {
+			runId: "wf2-done",
+			agentName: "explorer",
+			parentRunId: "wf-2",
+			rootRunId: "wf-2",
+			phaseIndex: 1,
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "wf2-live",
+			agentName: "qa",
+			parentRunId: "wf-2",
+			rootRunId: "wf-2",
+			phaseIndex: 2,
+			state: "running",
+			startedAt: 1200,
+		});
 
-		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, { refreshMs: 0 });
+		const component = new SubagentsStatusComponent(createTestTui(), createTaggingTheme(), () => {}, {
+			refreshMs: 0,
+		});
 		try {
 			const lines = component.render(220);
 			const childRow = lines.find((line) => line.includes("└─") && line.includes("explorer"));

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { SubagentParams } from "../../schemas.ts";
-import { createSubagentExecutor, validateSubagentToolInput } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, type ChildAgentHandle } from "../../in-process-executor.ts";
+import { SubagentParams } from "../../src/protocol/schemas.ts";
+import { createSubagentExecutor, validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, type ChildAgentHandle } from "../../src/dispatch/in-process-executor.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
-import type { SubagentState } from "../../types.ts";
+import type { SubagentState } from "../../src/protocol/types.ts";
 
 interface ExecutorResult {
 	isError?: boolean;
@@ -15,7 +15,7 @@ interface ExecutorResult {
 class FakeSession {
 	readonly messages: string[] = [];
 
-	postUserMessage(message: string): void {
+	async sendUserMessage(message: string): Promise<void> {
 		this.messages.push(message);
 	}
 }
@@ -26,7 +26,10 @@ function text(result: ExecutorResult | null): string {
 
 function actionLiterals(): string[] {
 	const action = SubagentParams.properties.action as { anyOf?: Array<{ const?: string }> };
-	return (action.anyOf ?? []).map((item) => item.const).filter((value): value is string => typeof value === "string").sort();
+	return (action.anyOf ?? [])
+		.map((item) => item.const)
+		.filter((value): value is string => typeof value === "string")
+		.sort();
 }
 
 function makeState(cwd: string): SubagentState {
@@ -64,27 +67,22 @@ function makeHarness(cwd: string) {
 			getAllTools: () => [],
 		},
 		state,
-		config: { parallel: { concurrency: 1 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry,
 		expandTilde: (value: string) => value,
 		discoverAgents: () => ({ agents: ["main"].map((name) => makeAgent(name, { model: "mock/test-model" })) }),
 	} as never);
-	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> => executor.execute(
-		"id",
-		params as never,
-		new AbortController().signal,
-		undefined,
-		{
+	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> =>
+		executor.execute("id", params as never, new AbortController().signal, undefined, {
 			cwd,
 			hasUI: false,
 			ui: {},
 			sessionManager: { getSessionId: () => "session-control-verbs", getSessionFile: () => null },
 			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
 			model: { provider: "mock" },
-		} as never,
-	) as Promise<ExecutorResult>;
+		} as never) as Promise<ExecutorResult>;
 	return { execute, state, childRegistry };
 }
 
@@ -127,6 +125,38 @@ describe("control verbs", () => {
 
 			for (const result of results) assert.doesNotMatch(text(result), /Unknown action/);
 		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
+	it("formats epoch-zero foreground activity timestamps", async () => {
+		const tempDir = createTempDir("pi-subagent-control-zero-");
+		const originalNow = Date.now;
+		Date.now = () => 1_000;
+		try {
+			const harness = makeHarness(tempDir);
+			const control = {
+				runId: "run-zero",
+				mode: "single" as const,
+				startedAt: 0,
+				updatedAt: 0,
+				started: true,
+				currentAgent: "worker",
+				currentTool: "bash" as string | undefined,
+				currentToolStartedAt: 0 as number | undefined,
+				lastActivityAt: 0,
+			};
+			harness.state.foregroundControls.set("run-zero", control);
+
+			assert.match(
+				text(await harness.execute({ action: "status", id: "run-zero" })),
+				/Activity: tool bash for 1s/,
+			);
+			control.currentTool = undefined;
+			control.currentToolStartedAt = undefined;
+			assert.match(text(await harness.execute({ action: "status", id: "run-zero" })), /Activity: active 1s ago/);
+		} finally {
+			Date.now = originalNow;
 			removeTempDir(tempDir);
 		}
 	});

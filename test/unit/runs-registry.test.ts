@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import {
+	appendRunEntry,
+	parseRunsRegistryEntryLine,
+	readAllEntries,
+	setRegistryPathForTests,
+	type RunsRegistryEntry,
+} from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 
@@ -57,7 +63,26 @@ describe("runs registry", () => {
 		const newer = entry("newer", 200);
 		appendRunEntry(older);
 		appendRunEntry(newer);
-		assert.deepEqual(readAllEntries().map((e) => e.runId), ["newer", "older"]);
+		assert.deepEqual(
+			readAllEntries().map((e) => e.runId),
+			["newer", "older"],
+		);
+	});
+
+	it("rejects records with invalid required or optional fields", () => {
+		const valid = entry("valid", 100);
+		const invalid = [
+			{ ...valid, mode: "chain" },
+			{ ...valid, source: "process" },
+			{ ...valid, cwd: 42 },
+			{ ...valid, startedAt: Number.NaN },
+			{ ...valid, agentNames: ["A", 42] },
+			{ ...valid, phaseIndex: "one" },
+			{ runId: valid.runId, runRecordDir: valid.runRecordDir },
+		];
+
+		for (const record of invalid) assert.equal(parseRunsRegistryEntryLine(JSON.stringify(record)), undefined);
+		assert.deepEqual(parseRunsRegistryEntryLine(JSON.stringify(valid)), valid);
 	});
 
 	it("skips malformed lines", () => {
@@ -73,6 +98,9 @@ describe("runs registry", () => {
 		appendRunEntry(entry("oldest", 100));
 		appendRunEntry(entry("middle", 200));
 		appendRunEntry(entry("newest", 300));
-		assert.deepEqual(readAllEntries({ limit: 2 }).map((e) => e.runId), ["newest", "middle"]);
+		assert.deepEqual(
+			readAllEntries({ limit: 2 }).map((e) => e.runId),
+			["newest", "middle"],
+		);
 	});
 });

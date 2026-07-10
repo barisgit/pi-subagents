@@ -6,15 +6,19 @@
  */
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { RUNNER_HARD_DEAD_MS, RUNNER_HEARTBEAT_STALE_MS, deriveRunDisplayState } from "../../run-liveness.ts";
+import { RUNNER_HARD_DEAD_MS, RUNNER_HEARTBEAT_STALE_MS, deriveRunDisplayState } from "../../src/state/run-liveness.ts";
 
 const THIRTY_SECONDS = RUNNER_HEARTBEAT_STALE_MS + 15_000;
 const FIVE_SECONDS = 5_000;
 const NOW = 100_000;
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 describe("deriveRunDisplayState lost requires unknown phase", () => {
 	it("active-phase-not-lost: thinking + 30s old heartbeat → not lost", () => {

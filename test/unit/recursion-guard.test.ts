@@ -1,18 +1,19 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
-	checkNestedDelegationGuard,
-	checkSubagentDepth,
-	getSubagentDepthEnv,
 	DEFAULT_SUBAGENT_MAX_DEPTH,
 	isAllowedNestedOrchestratorChild,
 	isNestedOrchestratorAgent,
 	normalizeMaxSubagentDepth,
-	resolveTopLevelParallelConcurrency,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
+} from "../../src/protocol/types.ts";
+import {
+	checkNestedDelegationGuard,
+	checkSubagentDepth,
+	getSubagentDepthEnv,
 	resolveCurrentMaxSubagentDepth,
-} from "../../types.ts";
+} from "../../src/shared/runtime-env.ts";
 
 let savedDepth: string | undefined;
 let savedMaxDepth: string | undefined;
@@ -94,20 +95,6 @@ describe("top-level parallel config helpers", () => {
 		assert.equal(resolveTopLevelParallelMaxTasks(undefined), 8);
 		assert.equal(resolveTopLevelParallelMaxTasks(0), 8);
 		assert.equal(resolveTopLevelParallelMaxTasks("oops"), 8);
-	});
-
-	it("resolves concurrency from per-call override, config, or default", () => {
-		assert.equal(resolveTopLevelParallelConcurrency(2, 6), 2);
-		assert.equal(resolveTopLevelParallelConcurrency(undefined, 6), 6);
-		assert.equal(resolveTopLevelParallelConcurrency(0, 6), 6);
-		assert.equal(resolveTopLevelParallelConcurrency(undefined, 0), 4);
-	});
-
-	it("caps concurrency when maxConcurrency is configured", () => {
-		assert.equal(resolveTopLevelParallelConcurrency(21, 8, 8), 8);
-		assert.equal(resolveTopLevelParallelConcurrency(undefined, 12, 8), 8);
-		assert.equal(resolveTopLevelParallelConcurrency(4, 8, 8), 4);
-		assert.equal(resolveTopLevelParallelConcurrency(21, 8, 0), 21);
 	});
 });
 
@@ -259,20 +246,23 @@ describe("nested delegation guardrails", () => {
 		const result = checkNestedDelegationGuard(["explorer"]);
 		assert.equal(result.blocked, true);
 		assert.match(result.reason ?? "", /Only agents marked canDelegate/);
+		assert.doesNotMatch(result.reason ?? "", /fixer|explorer/i);
 	});
 
 	it("uses the legacy orchestrator fallback child allowlist when no explicit capability env is set", () => {
 		process.env.PI_SUBAGENT_CURRENT_AGENT = "orchestrator";
 		const result = checkNestedDelegationGuard(["delegate"]);
 		assert.equal(result.blocked, true);
-		assert.match(result.reason ?? "", /explorer, librarian, oracle, designer, fixer/i);
+		assert.match(result.reason ?? "", /configured allowlist/i);
+		assert.doesNotMatch(result.reason ?? "", /orchestrator|delegate|explorer|librarian|oracle|designer|fixer/i);
 	});
 
 	it("blocks nested orchestrators from delegating outside the allowed child set", () => {
 		process.env.PI_SUBAGENT_CURRENT_AGENT = "delegate";
 		const result = checkNestedDelegationGuard(["worker"]);
 		assert.equal(result.blocked, true);
-		assert.match(result.reason ?? "", /explorer, librarian, oracle, designer, fixer/i);
+		assert.match(result.reason ?? "", /configured allowlist/i);
+		assert.doesNotMatch(result.reason ?? "", /delegate|worker|explorer|librarian|oracle|designer|fixer/i);
 	});
 
 	it("allows nested orchestrators to delegate to the allowed child set", () => {
@@ -288,7 +278,8 @@ describe("nested delegation guardrails", () => {
 		assert.equal(checkNestedDelegationGuard(["oracle"]).blocked, false);
 		const blocked = checkNestedDelegationGuard(["explorer"]);
 		assert.equal(blocked.blocked, true);
-		assert.match(blocked.reason ?? "", /oracle, fixer/i);
+		assert.match(blocked.reason ?? "", /configured allowlist/i);
+		assert.doesNotMatch(blocked.reason ?? "", /researcher|oracle|fixer|explorer/i);
 	});
 
 	it("uses explicit capability env to disable even legacy orchestrators", () => {
@@ -297,5 +288,6 @@ describe("nested delegation guardrails", () => {
 		const result = checkNestedDelegationGuard(["explorer"]);
 		assert.equal(result.blocked, true);
 		assert.match(result.reason ?? "", /Only agents marked canDelegate/);
+		assert.doesNotMatch(result.reason ?? "", /orchestrator|explorer/i);
 	});
 });

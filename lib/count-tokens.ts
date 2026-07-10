@@ -18,7 +18,7 @@ export function descriptionTokenCheck(text: string, limit = DESCRIPTION_TOKEN_LI
 	return { count, limit, ok: count <= limit };
 }
 
-export function readRegisteredSubagentDescription(indexPath = path.resolve("index.ts")): string {
+export function readRegisteredSubagentDescription(indexPath = path.resolve("src/dispatch/subagent-tool.ts")): string {
 	const source = fs.readFileSync(indexPath, "utf-8");
 	const match = source.match(/name:\s*"subagent",[\s\S]*?description:\s*((?:`(?:\\[\s\S]|[^`])*`))[\s,]*\n\t\tparameters: SubagentParams,/);
 	if (!match) throw new Error(`expected to find registered subagent tool description in ${indexPath}`);

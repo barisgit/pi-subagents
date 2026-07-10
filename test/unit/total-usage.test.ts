@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { compactForegroundDetails, computeDetailsTotalUsage } from "../../utils.ts";
-import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../../usage-totals.ts";
-import type { Details, SingleResult } from "../../types.ts";
+import { compactForegroundDetails, computeDetailsTotalUsage } from "../../src/shared/utils.ts";
+import { tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../../src/state/usage-totals.ts";
+import type { Details, SingleResult } from "../../src/protocol/types.ts";
 
 describe("computeDetailsTotalUsage", () => {
 	it("returns zeroed totals for empty results", () => {
@@ -22,7 +22,9 @@ describe("computeDetailsTotalUsage", () => {
 		const total = computeDetailsTotalUsage([
 			{ usage: { input: 10, output: 5 } },
 			{ usage: undefined },
-			{ /* no usage at all */ } as { usage?: undefined },
+			{
+				/* no usage at all */
+			} as { usage?: undefined },
 			{ usage: { input: 0, output: 0, cacheRead: 7 } },
 		]);
 		assert.deepEqual(total, { input: 10, output: 5, cacheRead: 7, cacheWrite: 0, cost: 0, turns: 0 });
@@ -61,8 +63,20 @@ describe("compactForegroundDetails", () => {
 		const details: Details = {
 			mode: "parallel",
 			results: [
-				{ agent: "a", task: "t1", exitCode: 0, messages: [], usage: { input: 50, output: 25, cacheRead: 1, cacheWrite: 0, cost: 0.001, turns: 1 } } as SingleResult,
-				{ agent: "b", task: "t2", exitCode: 0, messages: [], usage: { input: 70, output: 35, cacheRead: 2, cacheWrite: 0, cost: 0.002, turns: 1 } } as SingleResult,
+				{
+					agent: "a",
+					task: "t1",
+					exitCode: 0,
+					messages: [],
+					usage: { input: 50, output: 25, cacheRead: 1, cacheWrite: 0, cost: 0.001, turns: 1 },
+				} as SingleResult,
+				{
+					agent: "b",
+					task: "t2",
+					exitCode: 0,
+					messages: [],
+					usage: { input: 70, output: 35, cacheRead: 2, cacheWrite: 0, cost: 0.002, turns: 1 },
+				} as SingleResult,
 			],
 		};
 		const out = compactForegroundDetails(details);

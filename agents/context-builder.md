@@ -20,7 +20,7 @@ Working rules:
 - Write the requested output files clearly and concretely.
 - Prefer distilled, high-signal context over exhaustive dumps.
 
-When running in a chain, expect to generate two files in the chain directory:
+When running as part of orchestrated work, expect to generate two files in the run directory:
 
 `context.md`
 - relevant files with line numbers and key snippets

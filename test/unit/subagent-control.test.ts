@@ -4,15 +4,18 @@ import {
 	DEFAULT_NEEDS_ATTENTION_AFTER_MS,
 	buildControlEvent,
 	claimControlNotification,
+	claimControlNotificationKey,
 	controlNotificationKey,
+	createControlNotificationDedupeStore,
 	deriveActivityState,
+	evictControlNotificationsForRunId,
 	formatControlIntercomMessage,
 	formatControlNoticeMessage,
 	isControlEventAllowed,
 	resolveControlConfig,
 	shouldEmitControlEvent,
 	shouldNotifyControlEvent,
-} from "../../subagent-control.ts";
+} from "../../src/dispatch/subagent-control.ts";
 
 const config = resolveControlConfig(undefined, {
 	needsAttentionAfterMs: 300,
@@ -30,14 +33,58 @@ describe("subagent control attention state", () => {
 		assert.equal(deriveActivityState({ config, startedAt: 0, now: 400 }), "needs_attention");
 	});
 
+	it("never marks a queued run as needing attention, however long it waits", () => {
+		// A queued child is blocked on a leaf-concurrency permit with no activity yet;
+		// its baseline would otherwise fall back to dispatch time and fire the stall timer.
+		assert.equal(deriveActivityState({ config, startedAt: 0, queued: true, now: 10_000 }), undefined);
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, queued: true, now: 10_000 }),
+			undefined,
+		);
+	});
+
+	it("anchors the stall window on executionStartedAt, not dispatch time", () => {
+		// Dispatched at 0, started executing at 9_900; at now=10_000 only 100ms of
+		// execution has elapsed, well under the 300ms threshold -> not stalled.
+		assert.equal(deriveActivityState({ config, startedAt: 0, executionStartedAt: 9_900, now: 10_000 }), undefined);
+		// Past the threshold measured from executionStartedAt -> stalled.
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, executionStartedAt: 9_900, now: 10_300 }),
+			"needs_attention",
+		);
+		// lastActivityAt still wins over executionStartedAt when present.
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, executionStartedAt: 0, lastActivityAt: 9_900, now: 10_000 }),
+			undefined,
+		);
+	});
+
 	it("suppresses needs-attention while the model is in an engaged phase", () => {
 		for (const phase of ["waiting_model", "thinking", "streaming_text", "retrying"]) {
-			assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000 }), undefined);
+			assert.equal(
+				deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000 }),
+				undefined,
+			);
 		}
 
 		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, now: 1_000 }), "needs_attention");
-		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "idle", now: 1_000 }), "needs_attention");
-		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "paused", now: 1_000 }), "needs_attention");
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "idle", now: 1_000 }),
+			"needs_attention",
+		);
+		assert.equal(
+			deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase: "paused", now: 1_000 }),
+			"needs_attention",
+		);
+	});
+
+	it("never marks an in-flight tool phase as needing attention", () => {
+		for (const phase of ["tool_running", "tool_streaming"]) {
+			assert.equal(
+				deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000_000 }),
+				undefined,
+			);
+		}
 	});
 
 	it("emits only needs-attention transitions", () => {
@@ -61,11 +108,25 @@ describe("subagent control attention state", () => {
 			from: undefined,
 			to: "needs_attention",
 			ts: 1_000,
+			activityAt: 100,
 			runId: "run-1",
 			agent: "worker",
 			index: 2,
 			message: "worker needs attention (no observed activity for 0s)",
 		});
+	});
+
+	it("includes elapsed time when the last activity timestamp is zero", () => {
+		const event = buildControlEvent({
+			to: "needs_attention",
+			runId: "run-1",
+			agent: "worker",
+			ts: 1_000,
+			lastActivityAt: 0,
+		});
+
+		assert.equal(event.message, "worker needs attention (no observed activity for 1s)");
+		assert.equal(event.activityAt, 0);
 	});
 
 	it("defaults notifications to needs attention", () => {
@@ -133,12 +194,37 @@ describe("subagent control attention state", () => {
 		assert.equal(isControlEventAllowed({ runFinalized: true }), false);
 	});
 
-	it("dedupes notifications once per child target and attention state", () => {
-		const event = buildControlEvent({ to: "needs_attention", runId: "run-1", agent: "worker", index: 0 });
-		const seen = new Set<string>();
+	it("dedupes notifications once per child target and event transition", () => {
+		const event = buildControlEvent({
+			to: "needs_attention",
+			runId: "run-1",
+			agent: "worker",
+			index: 0,
+			ts: 1_000,
+			activityAt: 500,
+		});
+		const seen = createControlNotificationDedupeStore();
+		const legacySeen = new Set<string>();
 
-		assert.equal(controlNotificationKey(event, "subagent-worker-run-1-1"), "subagent-worker-run-1-1:needs_attention");
-		assert.equal(claimControlNotification(resolveControlConfig(), event, seen, "subagent-worker-run-1-1"), true);
-		assert.equal(claimControlNotification(resolveControlConfig(), event, seen, "subagent-worker-run-1-1"), false);
+		assert.equal(
+			controlNotificationKey(event, "subagent-worker-run-1-1"),
+			"subagent-worker-run-1-1:needs_attention",
+		);
+		assert.equal(claimControlNotification(config, event, legacySeen, "subagent-worker-run-1-1"), true);
+		assert.equal(claimControlNotification(config, event, legacySeen, "subagent-worker-run-1-1"), false);
+		assert.equal(claimControlNotificationKey(event, seen, "subagent-worker-run-1-1"), true);
+		assert.equal(claimControlNotificationKey(event, seen, "subagent-worker-run-1-1"), false);
+		assert.equal(claimControlNotificationKey({ ...event, ts: 2_000 }, seen, "subagent-worker-run-1-1"), false);
+		assert.equal(
+			claimControlNotificationKey({ ...event, ts: 3_000, activityAt: 2_500 }, seen, "subagent-worker-run-1-1"),
+			true,
+		);
+		assert.equal(seen.byRunId.get("run-1")?.size, 1);
+
+		const delimiterRun = { ...event, runId: "run-1:0", index: undefined, activityAt: 500 };
+		assert.equal(claimControlNotificationKey(delimiterRun, seen), true);
+		evictControlNotificationsForRunId(seen, "run-1");
+		assert.equal(seen.byRunId.has("run-1"), false);
+		assert.equal(seen.byRunId.has("run-1:0"), true);
 	});
 });

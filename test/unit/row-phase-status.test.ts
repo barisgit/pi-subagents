@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
-import { stopWidgetAnimation } from "../../render.ts";
-import { buildLeftLine, type LiveRun } from "../../subagents-status.ts";
+import { stopWidgetAnimation } from "../../src/surfaces/render-widget.ts";
+import { buildLeftLine, type LiveRun } from "../../src/surfaces/subagents-status.ts";
 
 const theme = {
 	fg: (_name: string, text: string) => text,
@@ -19,7 +19,7 @@ describe("row phase/displayState contradiction", () => {
 	it("suppresses the working/quiet discriminant when a live phase chip is present", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "finishing-run",
 				asyncDir: "/tmp/finishing-run",
@@ -38,14 +38,15 @@ describe("row phase/displayState contradiction", () => {
 		assert.match(line, /finishing/);
 		// It must NOT also print the contradictory `running/quiet` discriminant.
 		assert.doesNotMatch(line, /running\/quiet/);
-		// The bare state still appears (so the row isn't ambiguous about running vs done).
-		assert.match(line, /\brunning\b/);
+		// The state glyph already encodes running; the redundant bare `running` word
+		// is dropped (the phase chip + running glyph carry the liveness signal).
+		assert.doesNotMatch(line, /\brunning\b/);
 	});
 
 	it("keeps the state/displayState discriminant when there is no phase chip", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "quiet-run",
 				asyncDir: "/tmp/quiet-run",
@@ -59,13 +60,39 @@ describe("row phase/displayState contradiction", () => {
 			},
 		};
 		const line = buildLeftLine(theme as never, run, false, now, 240);
-		assert.match(line, /running\/quiet/);
+		// No phase chip: the displayState discriminant is the only live-activity signal,
+		// shown bare (`quiet`) since the running glyph already conveys the state.
+		assert.match(line, /\bquiet\b/);
+		assert.doesNotMatch(line, /running\/quiet/);
+	});
+
+	it("shows bare `queued` without the always-quiet discriminant", () => {
+		const now = 1_000_000;
+		const run: LiveRun = {
+			ownership: "foreign",
+			run: {
+				id: "queued-run",
+				asyncDir: "/tmp/queued-run",
+				mode: "single",
+				state: "queued",
+				// A queued run's displayState is always 'quiet' (it has not begun executing).
+				displayState: "quiet",
+				startedAt: now - 5_000,
+				lastUpdate: now - 5_000,
+				steps: [{ index: 0, agent: "explorer", status: "queued" }],
+			},
+		};
+		const line = buildLeftLine(theme as never, run, false, now, 240);
+		// A queued leaf row shows the `○` glyph alone; the redundant `queued` word and
+		// the always-`quiet` discriminant are both dropped.
+		assert.doesNotMatch(line, /\bqueued\b/);
+		assert.doesNotMatch(line, /quiet/);
 	});
 
 	it("keeps lost authoritative over a stale running state", () => {
 		const now = 1_000_000;
 		const run: LiveRun = {
-			source: "async",
+			ownership: "foreign",
 			run: {
 				id: "lost-run",
 				asyncDir: "/tmp/lost-run",

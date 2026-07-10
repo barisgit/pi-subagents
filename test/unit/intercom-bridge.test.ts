@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import type { AgentConfig } from "../../agents.ts";
+import type { AgentConfig } from "../../src/shared/agents.ts";
 import {
 	applyIntercomBridgeToAgent,
 	resolveIntercomBridge,
@@ -11,7 +11,7 @@ import {
 	resolveSubagentIntercomTarget,
 	resolveIntercomBridgeMode,
 	type IntercomBridgeState,
-} from "../../intercom-bridge.ts";
+} from "../../src/dispatch/intercom-bridge.ts";
 
 function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
 	return {
@@ -53,7 +53,10 @@ describe("resolveIntercomSessionTarget", () => {
 describe("resolveSubagentIntercomTarget", () => {
 	it("builds stable child session targets from run metadata", () => {
 		assert.equal(resolveSubagentIntercomTarget("78f659a3", "worker"), "subagent-worker-78f659a3");
-		assert.equal(resolveSubagentIntercomTarget("78f659a3", "oracle executor", 1), "subagent-oracle-executor-78f659a3-2");
+		assert.equal(
+			resolveSubagentIntercomTarget("78f659a3", "oracle executor", 1),
+			"subagent-oracle-executor-78f659a3-2",
+		);
 	});
 });
 
@@ -164,6 +167,7 @@ describe("resolveIntercomBridge", () => {
 			assert.match(bridge.instruction, /reference-only/i);
 			assert.match(bridge.instruction, /normal assistant text/i);
 			assert.match(bridge.instruction, /focused task result/i);
+			assert.doesNotMatch(bridge.instruction, /orchestrator/i);
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -176,7 +180,8 @@ describe("applyIntercomBridgeToAgent", () => {
 		mode: "always",
 		orchestratorTarget: "main",
 		extensionDir: "/Users/test/.pi/agent/extensions/pi-intercom",
-		instruction: "Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: \"ask\", to: \"main\", message: \"<question>\" })\n- Completion/update: intercom({ action: \"send\", to: \"main\", message: \"DONE: <summary>\" })",
+		instruction:
+			'Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: "ask", to: "main", message: "<question>" })\n- Completion/update: intercom({ action: "send", to: "main", message: "DONE: <summary>" })',
 	};
 
 	it("injects intercom tool and prompt instructions", () => {

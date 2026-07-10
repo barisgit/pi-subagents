@@ -3,10 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { statusToSummary } from "../../async-status.ts";
-import { StatusWriter } from "../../status-writer.ts";
-import { writeSyncRunStatusUpdate } from "../../sync-run-persistence.ts";
-import { RUNS_DIR, type AsyncStatus } from "../../types.ts";
+import { statusToRunView } from "../../src/state/async-status.ts";
+import { StatusWriter } from "../../src/state/status-writer.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 function createTempDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -16,11 +15,11 @@ function removeTempDir(dir: string): void {
 	fs.rmSync(dir, { recursive: true, force: true });
 }
 
-function readStatus(dir: string): AsyncStatus {
-	return JSON.parse(fs.readFileSync(path.join(dir, "status.json"), "utf-8")) as AsyncStatus;
+function readStatus(dir: string): PersistedRunStatus {
+	return JSON.parse(fs.readFileSync(path.join(dir, "status.json"), "utf-8")) as PersistedRunStatus;
 }
 
-function writeStatus(dir: string, status: AsyncStatus): void {
+function writeStatus(dir: string, status: PersistedRunStatus): void {
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify(status, null, 2), "utf-8");
 }
@@ -43,7 +42,7 @@ function uniqueRunId(prefix: string): string {
 	return `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function newShapeStatus(runId: string): AsyncStatus {
+function newShapeStatus(runId: string): PersistedRunStatus {
 	return {
 		runId,
 		mode: "single",
@@ -58,28 +57,32 @@ function newShapeStatus(runId: string): AsyncStatus {
 		currentStep: 0,
 		currentTool: "read",
 		currentToolStartedAt: 10_150,
-		steps: [{
-			agent: "fixer",
-			label: "write tests",
-			status: "running",
-			lastActivityAt: 10_200,
-			currentTool: "read",
-			currentToolStartedAt: 10_150,
-			live: {
-				color: "cyan",
-				thinking: "checking schema",
-				phase: "thinking",
-				phaseStartedAt: 10_100,
-				toolCount: 1,
-				tokens: 42,
+		steps: [
+			{
+				agent: "fixer",
+				label: "write tests",
+				status: "running",
+				lastActivityAt: 10_200,
+				currentTool: "read",
+				currentToolStartedAt: 10_150,
+				live: {
+					color: "cyan",
+					thinking: "checking schema",
+					phase: "thinking",
+					phaseStartedAt: 10_100,
+					toolCount: 1,
+					tokens: 42,
+				},
 			},
-		}],
+		],
 		sessionFile: "session.jsonl",
 		totalTokens: { input: 2, output: 3, total: 5 },
 	};
 }
 
-function pretendLegacyReader(status: AsyncStatus): { steps: Array<{ live?: Record<string, unknown> } & Record<string, unknown>> } & Record<string, unknown> {
+function pretendLegacyReader(
+	status: PersistedRunStatus,
+): { steps: Array<{ live?: Record<string, unknown> } & Record<string, unknown>> } & Record<string, unknown> {
 	const {
 		runId,
 		parentRunId,
@@ -145,15 +148,15 @@ function pretendLegacyReader(status: AsyncStatus): { steps: Array<{ live?: Recor
 			} = step;
 			const legacyLive = live
 				? {
-					color: live.color,
-					thinking: live.thinking,
-					currentToolArgs: live.currentToolArgs,
-					recentTools: live.recentTools,
-					tokenSamples: live.tokenSamples,
-					lastToolEndAt: live.lastToolEndAt,
-					toolCount: live.toolCount,
-					tokens: live.tokens,
-				}
+						color: live.color,
+						thinking: live.thinking,
+						currentToolArgs: live.currentToolArgs,
+						recentTools: live.recentTools,
+						tokenSamples: live.tokenSamples,
+						lastToolEndAt: live.lastToolEndAt,
+						toolCount: live.toolCount,
+						tokens: live.tokens,
+					}
 				: undefined;
 			return {
 				agent,
@@ -205,9 +208,9 @@ describe("schema-compat (backward compatible)", () => {
 			assert.equal("phase" in status, false);
 			assert.equal("phaseStartedAt" in status, false);
 
-			let summary!: ReturnType<typeof statusToSummary>;
+			let summary!: ReturnType<typeof statusToRunView>;
 			assert.doesNotThrow(() => {
-				summary = statusToSummary(dir, status);
+				summary = statusToRunView(dir, status);
 			});
 			assert.equal(summary.phase, undefined);
 			assert.equal(summary.phaseStartedAt, undefined);
@@ -250,9 +253,9 @@ describe("schema-compat (backward compatible)", () => {
 			await delay(20);
 
 			const status = readStatus(dir);
-			let summary!: ReturnType<typeof statusToSummary>;
+			let summary!: ReturnType<typeof statusToRunView>;
 			assert.doesNotThrow(() => {
-				summary = statusToSummary(dir, status);
+				summary = statusToRunView(dir, status);
 			});
 			assert.equal(summary.phase, "tool_running");
 			assert.equal(summary.phaseStartedAt, startedAt + 10);
@@ -269,21 +272,22 @@ describe("schema-compat (backward compatible)", () => {
 	it("schema-compat legacy sync status without phase reads with undefined phase", () => {
 		const runId = uniqueRunId("legacy-sync");
 		const runRecordDir = createTempDir("pi-schema-compat-legacy-sync-");
+		const writer = new StatusWriter({ runRecordDir, runId, flushPolicy: "terminal" });
 		try {
-			const legacyStatus: AsyncStatus = {
-				runId,
+			writer.initialize({
 				mode: "single",
 				state: "running",
 				startedAt: 20_000,
-				lastUpdate: 20_100,
+				lastActivityAt: 20_100,
 				runnerHeartbeatAt: 20_100,
 				cwd: "/repo",
 				currentStep: 0,
 				steps: [{ agent: "fixer", status: "running", startedAt: 20_000 }],
-			};
-			writeStatus(runRecordDir, legacyStatus);
+			});
 
-			assert.doesNotThrow(() => writeSyncRunStatusUpdate(runId, { lastUpdate: 20_200, runnerHeartbeatAt: 20_200 }, { flush: true }, runRecordDir));
+			assert.doesNotThrow(() =>
+				writer.mergePatch({ lastUpdate: 20_200, runnerHeartbeatAt: 20_200 }, { flush: true }),
+			);
 			const status = readStatus(runRecordDir);
 			assert.equal(status.phase, undefined);
 			assert.equal(status.phaseStartedAt, undefined);
@@ -297,8 +301,8 @@ describe("schema-compat (backward compatible)", () => {
 			assert.equal(status.lastUpdate, 20_200);
 			assert.equal(status.runnerHeartbeatAt, 20_200);
 		} finally {
+			writer.dispose();
 			removeTempDir(runRecordDir);
-			removeTempDir(path.join(RUNS_DIR, runId));
 		}
 	});
 
@@ -309,9 +313,9 @@ describe("schema-compat (backward compatible)", () => {
 			writeStatus(dir, original);
 
 			const readBack = readStatus(dir);
-			let summary!: ReturnType<typeof statusToSummary>;
+			let summary!: ReturnType<typeof statusToRunView>;
 			assert.doesNotThrow(() => {
-				summary = statusToSummary(dir, readBack);
+				summary = statusToRunView(dir, readBack);
 			});
 			assert.equal(summary.phase, "thinking");
 			assert.equal(summary.phaseStartedAt, 10_100);

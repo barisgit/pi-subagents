@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { resolveDispatchParentRunId, resolveDispatchRootRunId, resolveDispatchRootSessionId } from "../../subagent-executor.ts";
-import type { SubagentLineage } from "../../lineage.ts";
+import {
+	resolveDispatchParentRunId,
+	resolveDispatchRootRunId,
+	resolveDispatchRootSessionId,
+} from "../../src/dispatch/subagent-executor.ts";
+import type { SubagentLineage } from "../../src/state/lineage.ts";
 
 const globalStore = globalThis as Record<string, unknown>;
 const LINEAGE_STORE_KEY = "__piSubagentLineageBySession";

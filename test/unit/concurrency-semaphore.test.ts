@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConcurrencySemaphore, type ConcurrencyPermit } from "../../concurrency-semaphore.ts";
+import { ConcurrencySemaphore, type ConcurrencyPermit } from "../../src/dispatch/concurrency-semaphore.ts";
 
 interface Deferred<T = void> {
 	promise: Promise<T>;
@@ -24,6 +24,71 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("ConcurrencySemaphore", () => {
+	it("does not queue or acquire for a pre-aborted signal", async () => {
+		const semaphore = new ConcurrencySemaphore(1);
+		const controller = new AbortController();
+		controller.abort();
+
+		assert.equal(await semaphore.acquire(controller.signal), undefined);
+		assert.equal(semaphore.activeCount, 0);
+		assert.equal(semaphore.queuedCount, 0);
+	});
+
+	it("removes an aborted middle waiter without changing FIFO order", async () => {
+		const semaphore = new ConcurrencySemaphore(1);
+		const holder = await semaphore.acquire();
+		const order: string[] = [];
+		const first = semaphore.acquire().then((permit) => {
+			order.push("first");
+			return permit;
+		});
+		const controller = new AbortController();
+		const middle = semaphore.acquire(controller.signal);
+		const last = semaphore.acquire().then((permit) => {
+			order.push("last");
+			return permit;
+		});
+
+		controller.abort();
+		assert.equal(await middle, undefined);
+		assert.equal(semaphore.queuedCount, 2);
+		holder.release();
+		const firstPermit = await first;
+		await flushMicrotasks();
+		assert.deepEqual(order, ["first"]);
+
+		firstPermit.release();
+		const lastPermit = await last;
+		assert.deepEqual(order, ["first", "last"]);
+		lastPermit.release();
+		assert.equal(semaphore.activeCount, 0);
+	});
+
+	it("ignores abort after a queued waiter is granted", async () => {
+		const semaphore = new ConcurrencySemaphore(1);
+		const holder = await semaphore.acquire();
+		const controller = new AbortController();
+		const granted = semaphore.acquire(controller.signal);
+		let trailingAcquired = false;
+		const trailing = semaphore.acquire().then((permit) => {
+			trailingAcquired = true;
+			return permit;
+		});
+
+		holder.release();
+		controller.abort();
+		const grantedPermit = await granted;
+		assert.ok(grantedPermit);
+		await flushMicrotasks();
+		assert.equal(trailingAcquired, false);
+		assert.equal(semaphore.activeCount, 1);
+
+		grantedPermit.release();
+		const trailingPermit = await trailing;
+		trailingPermit.release();
+		assert.equal(semaphore.activeCount, 0);
+	});
+
 	it("leaf sessions count; parent awaiting children releases permit", async () => {
 		const leafSemaphore = new ConcurrencySemaphore(2);
 		const order: string[] = [];

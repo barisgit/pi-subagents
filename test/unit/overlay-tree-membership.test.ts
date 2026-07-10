@@ -4,8 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { SubagentsStatusComponent } from "../../subagents-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import { filterRunsToSessionTree } from "../../src/surfaces/dashboard-row-model.ts";
+import type { LiveRun } from "../../src/surfaces/subagents-status.ts";
+import type { AsyncRunSummary } from "../../src/state/async-status.ts";
+import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 // Production provider logic (mirrors slash-commands.ts openSubagentsStatus):
 // collect the run ids anchored by 'subagent_run' custom entries on the CURRENT
@@ -45,9 +48,58 @@ function stripBorders(line: string): string {
 	return line.replace(/^│/, "").replace(/│$/, "").trim();
 }
 
+interface AsyncSeed {
+	id: string;
+	agent: string;
+	label: string;
+	parentRunId?: string;
+	startedAt: number;
+}
+
+// All seeded runs live in the SAME session shard (sess-host). Membership is
+// decided purely by the branch anchor set, not by session tagging.
+function asyncRun(seed: AsyncSeed): LiveRun {
+	return {
+		ownership: "foreign",
+		run: {
+			id: seed.id,
+			asyncDir: `/tmp/${seed.id}`,
+			mode: "single",
+			state: "complete",
+			startedAt: seed.startedAt,
+			lastUpdate: seed.startedAt + 1,
+			label: seed.label,
+			rootSessionId: "sess-host",
+			parentSessionId: "sess-host",
+			steps: [{ index: 0, agent: seed.agent, status: "complete", startedAt: seed.startedAt }],
+			...(seed.parentRunId ? { parentRunId: seed.parentRunId } : {}),
+		} as unknown as AsyncRunSummary,
+	};
+}
+
+// One anchored top-level run (`current-branch`) plus its nested child, and one
+// run (`reverted-branch`) whose anchor was dropped by a /tree revert.
+function twoBranches(): LiveRun[] {
+	return [
+		asyncRun({ id: "current-branch", agent: "fixer", label: "current branch run", startedAt: 100 }),
+		asyncRun({
+			id: "current-child",
+			agent: "review",
+			label: "current child",
+			parentRunId: "current-branch",
+			startedAt: 150,
+		}),
+		asyncRun({ id: "reverted-branch", agent: "qa", label: "reverted branch run", startedAt: 200 }),
+	];
+}
+
 function appendCompleteRun(
 	root: string,
-	entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & { agentName: string; mode?: "single" | "chain" | "parallel"; cwd?: string },
+	entry: Omit<RunsRegistryEntry, "runRecordDir" | "mode" | "source" | "cwd"> & {
+		agentName: string;
+		mode?: "single" | "parallel";
+		cwd?: string;
+	},
 ): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
@@ -64,7 +116,14 @@ function appendCompleteRun(
 			currentStep: 0,
 			...(entry.label ? { label: entry.label } : {}),
 			...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
-			steps: [{ agent: entry.agentName, status: "complete", startedAt: entry.startedAt, endedAt: entry.startedAt + 1 }],
+			steps: [
+				{
+					agent: entry.agentName,
+					status: "complete",
+					startedAt: entry.startedAt,
+					endedAt: entry.startedAt + 1,
+				},
+			],
 		}),
 		"utf8",
 	);
@@ -84,10 +143,6 @@ function appendCompleteRun(
 	});
 }
 
-// Two top-level runs in the SAME session shard: one whose branch anchor is on
-// the current branch (`current-branch`) plus its nested child, and one whose
-// anchor was dropped by a /tree revert (`reverted-branch`). Branch-aware
-// membership must show the anchored run + its descendant and hide the other.
 function seedTwoBranches(root: string): void {
 	appendCompleteRun(root, {
 		runId: "current-branch",
@@ -125,45 +180,17 @@ afterEach(() => {
 });
 
 describe("overlay branch-aware membership (VAL-TREE-MEMBERSHIP)", () => {
-	it("shows only runs whose branch anchor is on the current branch, with descendants", () => {
-		const root = tmpRegistry();
-		seedTwoBranches(root);
-		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, {
-			refreshMs: 1000,
-			sessionId: "sess-host",
-			sessionCwd: root,
-			// Only the current-branch top-level run is anchored. Mutant E (no-op
-			// filter) and mutant D (key on child run.id) both reintroduce the
-			// reverted run or drop the descendant.
-			getBranchAnchorRunIds: () => new Set(["current-branch"]),
-		});
-		try {
-			const text = component.render(180).map(stripBorders).join("\n");
-			assert.match(text, /current branch run/, "anchored top-level run must show");
-			assert.match(text, /current child/, "descendant of an anchored run must show even though it is not itself anchored");
-			assert.doesNotMatch(text, /reverted branch run/, "a run whose anchor left the current branch must be hidden");
-		} finally {
-			component.dispose();
-		}
+	it("keeps only runs whose branch anchor is on the current branch, with descendants", () => {
+		const scoped = filterRunsToSessionTree(twoBranches(), { sessionId: "sess-host" }, new Set(["current-branch"]));
+		const ids = scoped.map((run) => run.run.id).sort();
+		// Anchored top-level run + its descendant survive; the reverted run is gone.
+		// The child is NOT itself anchored: descendants of an included root flow in.
+		assert.deepEqual(ids, ["current-branch", "current-child"]);
 	});
 
-	it("hides every top-level run when no anchors are on the current branch", () => {
-		const root = tmpRegistry();
-		seedTwoBranches(root);
-		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, {
-			refreshMs: 1000,
-			sessionId: "sess-host",
-			sessionCwd: root,
-			getBranchAnchorRunIds: () => new Set<string>(),
-		});
-		try {
-			const text = component.render(180).map(stripBorders).join("\n");
-			assert.doesNotMatch(text, /current branch run/);
-			assert.doesNotMatch(text, /reverted branch run/);
-			assert.doesNotMatch(text, /current child/);
-		} finally {
-			component.dispose();
-		}
+	it("drops every top-level run when no anchors are on the current branch", () => {
+		const scoped = filterRunsToSessionTree(twoBranches(), { sessionId: "sess-host" }, new Set<string>());
+		assert.deepEqual(scoped, []);
 	});
 
 	it("ignores anchors under showAllSessions (mutant F: filter applied in all-sessions view)", () => {
@@ -199,18 +226,32 @@ describe("overlay branch-aware membership (VAL-TREE-MEMBERSHIP)", () => {
 
 		// Dispatch 1: anchor `current-branch`. Its entry id is the fork point we
 		// will revert back to (it stays on the branch after the revert).
-		const forkPoint = sm.appendCustomEntry("subagent_run", { runId: "current-branch", rootRunId: "current-branch", mode: "single", source: "async" });
+		const forkPoint = sm.appendCustomEntry("subagent_run", {
+			runId: "current-branch",
+			rootRunId: "current-branch",
+			mode: "single",
+			source: "async",
+		});
 		assert.ok(forkPoint, "need a leaf id to revert back to");
 
 		// Dispatch 2 on the SAME branch: anchor `reverted-branch` (a later turn).
-		sm.appendCustomEntry("subagent_run", { runId: "reverted-branch", rootRunId: "reverted-branch", mode: "single", source: "async" });
+		sm.appendCustomEntry("subagent_run", {
+			runId: "reverted-branch",
+			rootRunId: "reverted-branch",
+			mode: "single",
+			source: "async",
+		});
 
 		// Before the revert, both anchors are on the branch.
 		assert.deepEqual([...branchAnchorRunIdsOf(sm)].sort(), ["current-branch", "reverted-branch"]);
 
 		// /tree revert: move the leaf back to the first dispatch.
 		sm.branch(forkPoint);
-		assert.deepEqual([...branchAnchorRunIdsOf(sm)], ["current-branch"], "reverted anchor must leave the current branch");
+		assert.deepEqual(
+			[...branchAnchorRunIdsOf(sm)],
+			["current-branch"],
+			"reverted anchor must leave the current branch",
+		);
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, {
 			refreshMs: 1000,

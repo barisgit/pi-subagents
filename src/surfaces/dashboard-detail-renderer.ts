@@ -1,0 +1,517 @@
+/**
+ * Right-pane / transcript renderer for the subagent dashboard. Builds the
+ * detail-pane line buffers for a selected run: the generic per-step transcript
+ * (buildRightLines) and the purpose-built workflow-group pane (script + phase
+ * outline) via buildWorkflowRightLines. Pure functions over run data — the
+ * SubagentsStatusComponent owns selection/scroll and feeds the selected run in.
+ */
+
+import { colorForAgentName } from "../shared/agents.ts";
+import { getMarkdownTheme, highlightCode, type Theme } from "@earendil-works/pi-coding-agent";
+import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
+import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
+import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
+import { formatDuration, formatTokenCounter, shortenPath } from "./formatters.ts";
+import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
+import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
+import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
+import { parentRunIdOf } from "./dashboard-row-model.ts";
+import type { LiveRun } from "../state/run-view.ts";
+
+// Single ellipsis glyph for every dashboard truncation. pi-tui's
+// truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
+// "…", so clip() pins the dashboard to the same single-glyph ellipsis.
+const ELLIPSIS = "…";
+const TAB_WIDTH = 4;
+
+function normalizePaneText(text: string): string {
+	return text.replace(/\t/g, " ".repeat(TAB_WIDTH));
+}
+
+function clip(text: string, width: number): string {
+	return truncateToWidth(normalizePaneText(text), width, ELLIPSIS);
+}
+
+// Render prose (agent markdown output / prompts) through pi-tui's Markdown
+// component so headings, lists, and code fences read correctly in the pane.
+function renderMarkdownLines(text: string, width: number): string[] {
+	if (width <= 0) return [];
+	return new Markdown(normalizePaneText(text), 0, 0, getMarkdownTheme()).render(width);
+}
+
+export function statusGlyph(
+	theme: Theme,
+	state: AsyncRunSummary["state"],
+	activity: ActivityState | undefined,
+	displayState?: RunDisplayState,
+): string {
+	if (displayState === "lost") return theme.fg("error", "!");
+	if (displayState === "needs_attention" || activity === "needs_attention") return theme.fg("warning", "!");
+	switch (state) {
+		case "running":
+			return theme.fg("accent", RUNNING_GLYPH);
+		case "queued":
+			return theme.fg("dim", "○");
+		case "paused":
+			return theme.fg("warning", "⏸");
+		case "complete":
+			return theme.fg("success", "✓");
+		case "failed":
+			return theme.fg("error", "✗");
+		case "interrupted":
+			return theme.fg("warning", "■");
+		case "skipped":
+			return theme.fg("dim", "·");
+		case "lost":
+			return theme.fg("error", "!");
+	}
+	return theme.fg("dim", "·");
+}
+
+function wrapText(text: string, width: number): string[] {
+	if (width <= 0) return [];
+	const out: string[] = [];
+	for (const paragraph of normalizePaneText(text).split("\n")) {
+		if (!paragraph) {
+			out.push("");
+			continue;
+		}
+		let line = "";
+		for (const word of paragraph.split(/\s+/)) {
+			if (!word) continue;
+			const candidate = line ? `${line} ${word}` : word;
+			if (visibleWidth(candidate) <= width) {
+				line = candidate;
+				continue;
+			}
+			if (visibleWidth(word) > width) {
+				if (line) out.push(line);
+				let rest = word;
+				while (visibleWidth(rest) > width) {
+					out.push(truncateToWidth(rest, width));
+					rest = rest.slice(width);
+				}
+				line = rest;
+				continue;
+			}
+			out.push(line);
+			line = word;
+		}
+		if (line) out.push(line);
+	}
+	return out;
+}
+
+// ── Tool call cards ────────────────────────────────────────────────────────
+// Each tool call renders as a mini card on the host's tool-card palette
+// (toolSuccessBg, or toolErrorBg when the transcript recorded a failed call).
+// Pattern matches pi-tui's Box.applyBg: pad the styled line to the pane width
+// FIRST, then wrap the whole padded line in theme.bg. theme.bg closes every
+// line with a background-only reset, so the color never bleeds into the pane
+// border or the following row.
+type ThemeBg = Parameters<Theme["bg"]>[0];
+
+function bgLine(theme: Theme, color: ThemeBg, text: string, width: number): string {
+	const normalized = normalizePaneText(text);
+	const pad = Math.max(0, width - visibleWidth(normalized));
+	return theme.bg(color, `${normalized}${" ".repeat(pad)}`);
+}
+
+type ToolEvent = Extract<TranscriptLine, { kind: "tool" }>;
+
+function trimBlankEdges(lines: string[]): string[] {
+	while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
+	while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") lines.pop();
+	return lines;
+}
+
+function withoutFullReset(line: string): string {
+	return line.replace(/\x1b\[0m/g, "\x1b[39m");
+}
+
+function fitAnsiLines(lines: string[], width: number): string[] {
+	const fitted: string[] = [];
+	for (const sourceLine of lines) {
+		const line = normalizePaneText(sourceLine);
+		if (visibleWidth(line) <= width) fitted.push(line);
+		else fitted.push(...wrapTextWithAnsi(line, width));
+	}
+	return fitted;
+}
+
+function appendFoldedLines(
+	out: string[],
+	lines: string[],
+	hiddenSourceLines: number,
+	maxLines: number,
+	indent: string,
+	theme: Theme,
+): void {
+	let hidden = hiddenSourceLines;
+	let shown = lines;
+	if (hidden > 0) {
+		const keep = Math.min(lines.length, Math.max(0, maxLines - 1));
+		hidden += lines.length - keep;
+		shown = lines.slice(0, keep);
+	} else if (lines.length > maxLines) {
+		const keep = Math.max(0, maxLines - 1);
+		hidden = lines.length - keep;
+		shown = lines.slice(0, keep);
+	}
+	for (const line of shown) out.push(`${indent}${line}`);
+	if (hidden > 0) out.push(`${indent}${theme.fg("dim", `${ELLIPSIS} (+${hidden} lines)`)}`);
+}
+
+function buildArgLines(theme: Theme, arg: ToolArgDisplay, width: number): string[] {
+	const source = trimBlankEdges(normalizePaneText(arg.text).split("\n"));
+	if (source.length === 0) return [];
+	const shownSource = source.slice(0, 4);
+	const hiddenSourceLines = source.length - shownSource.length;
+	const rendered = arg.lang ? highlightCode(shownSource.join("\n"), arg.lang).map(withoutFullReset) : shownSource;
+	const out: string[] = [];
+	appendFoldedLines(out, fitAnsiLines(rendered, Math.max(1, width - 2)), hiddenSourceLines, 5, "  ", theme);
+	return out;
+}
+
+function buildResultLines(theme: Theme, event: ToolEvent, width: number): string[] {
+	if (!event.resultHint) return [];
+	const allSource = normalizePaneText(event.resultHint).split("\n");
+	const source = allSource.slice(0, 3);
+	const totalSourceLines = event.resultLineCount ?? allSource.length;
+	const fitted = fitAnsiLines(source, Math.max(1, width - 4));
+	let hidden = Math.max(0, totalSourceLines - source.length);
+	let shown = fitted;
+	if (fitted.length > 3) {
+		shown = fitted.slice(0, 3);
+		hidden += fitted.length - shown.length;
+	}
+	const out = shown.map((line, index) => theme.fg("toolOutput", index === 0 ? `  ↳ ${line}` : `    ${line}`));
+	if (hidden > 0) out.push(theme.fg("dim", `    ${ELLIPSIS} (+${hidden} lines)`));
+	return out;
+}
+
+// Top padding, title, verbatim primary arg block, result preview, bottom padding.
+function buildToolBlock(theme: Theme, event: ToolEvent, arg: ToolArgDisplay, width: number): string[] {
+	const color: ThemeBg = event.isError ? "toolErrorBg" : "toolSuccessBg";
+	const inner: string[] = [""];
+	const duration = event.durationMs !== undefined ? theme.fg("dim", ` · ${formatDuration(event.durationMs)}`) : "";
+	const title = theme.fg("toolTitle", clip(`→ ${event.toolName}`, Math.max(1, width - visibleWidth(duration))));
+	inner.push(`${title}${duration}`);
+	inner.push(...buildArgLines(theme, arg, width));
+	inner.push(...buildResultLines(theme, event, width));
+	inner.push("");
+	return inner.map((line) => bgLine(theme, color, line, width));
+}
+
+function buildChildSummaryLines(theme: Theme, run: LiveRun, width: number, runs: LiveRun[]): string[] {
+	const children = runs.filter((candidate) => parentRunIdOf(candidate) === run.run.id);
+	if (children.length === 0) return [];
+	// Field priority preserved: currentAgent (live-only) wins, else first step's
+	// agent (foreign carries steps; live carries steps:[]), else mode.
+	const agents = children.map(
+		(child) => child.run.currentAgent ?? child.run.steps.find((step) => step.agent)?.agent ?? child.run.mode,
+	);
+	const uniqueAgents = Array.from(new Set(agents.filter(Boolean)));
+	const agentWord = children.length === 1 ? "agent" : "agents";
+	const suffix = uniqueAgents.length > 0 ? `: ${uniqueAgents.join(", ")}` : "";
+	return [theme.fg("dim", clip(`${children.length} ${agentWord}${suffix}`, width))];
+}
+
+function childTokenTotal(child: AsyncRunSummary): number {
+	if (child.totalTokens) return child.totalTokens.total;
+	return child.steps.reduce((sum, step) => sum + (step.tokens?.total ?? 0), 0);
+}
+
+// Workflow groups get a purpose-built right pane: the SCRIPT that produced the
+// orchestration (the workflow's whole identity) followed by a phase-grouped
+// step outline synthesized from the child runs. The generic transcript pane is
+// useless for groups (the container has no session of its own).
+export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, width: number, runs: LiveRun[]): string[] {
+	const out: string[] = [];
+	const script = run.asyncDir ? readWorkflowScript(run.asyncDir) : undefined;
+	if (script) {
+		out.push(theme.fg("accent", clip("─── Script ───", width)));
+		const scriptLines = normalizePaneText(script).split("\n");
+		// Trim leading/trailing blank lines but keep interior structure verbatim:
+		// code must not be word-wrap reflowed.
+		while (scriptLines.length > 0 && scriptLines[0]?.trim() === "") scriptLines.shift();
+		while (scriptLines.length > 0 && scriptLines[scriptLines.length - 1]?.trim() === "") scriptLines.pop();
+		// Whole script, syntax-highlighted; long lines wrap (ANSI-aware) instead of
+		// truncating so no code is hidden. No line cap: the script is the workflow's
+		// identity and the pane scrolls.
+		for (const line of highlightCode(scriptLines.join("\n"), "ts")) {
+			if (visibleWidth(line) <= width) out.push(line);
+			else for (const wrapped of wrapTextWithAnsi(line, width)) out.push(wrapped);
+		}
+	}
+	// Children are selected by structural parent linkage (parentRunId), NOT
+	// provenance: an owned-async run's children (now ownership:'live') must still
+	// appear in the right-pane Steps list.
+	const children = runs.filter((candidate) => candidate.run.parentRunId === run.id).map((candidate) => candidate.run);
+	if (children.length > 0) {
+		if (out.length > 0) out.push("");
+		out.push(theme.fg("accent", clip("─── Steps ───", width)));
+		let lastPhaseKey: number | undefined;
+		let shownPhaseHeader = false;
+		for (const child of sortedWorkflowChildren(children)) {
+			if (child.phaseIndex !== lastPhaseKey || !shownPhaseHeader) {
+				lastPhaseKey = child.phaseIndex;
+				shownPhaseHeader = true;
+				const label = child.phaseIndex === undefined && !child.phaseTitle ? "" : workflowPhaseLabel(child);
+				if (label) out.push(theme.fg("muted", clip(label, width)));
+			}
+			const agent = child.steps.find((step) => step.agent)?.agent ?? child.mode;
+			const glyph = statusGlyph(theme, child.state, child.activityState, child.displayState);
+			// parallelGroupId is a raw UUID; render a compact marker instead of the id.
+			const parallelTag = child.parallelGroupId ? theme.fg("dim", "∥ ") : "";
+			const stats: string[] = [child.state];
+			const end = child.endedAt ?? Date.now();
+			stats.push(formatDuration(Math.max(0, end - child.startedAt)));
+			const tokens = childTokenTotal(child);
+			if (tokens > 0) stats.push(formatTokenCounter(tokens));
+			if (child.state === "running" && child.currentTool) stats.push(`→ ${child.currentTool}`);
+			const labelPart = child.label ? ` — ${child.label}` : "";
+			const line = `  ${glyph} ${parallelTag}${tintAgentName(agent, colorForAgentName(agent))} · ${stats.join(" · ")}${labelPart}`;
+			out.push(clip(line, width));
+		}
+	}
+	return out;
+}
+
+// ── Tool-call primary arg selection ────────────────────────────────────────
+// Raw JSON args are too faithful for the pane: a `run {code:"\n…"}` call would
+// render as escaped noise. Instead each tool selects the string argument that
+// best identifies the call. Rendering keeps that string verbatim and owns caps.
+
+export interface ToolArgDisplay {
+	text: string;
+	lang?: string;
+}
+
+function str(args: Record<string, unknown>, key: string): string | undefined {
+	const value = args[key];
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function display(text: string | undefined, key?: string): ToolArgDisplay | undefined {
+	if (text === undefined) return undefined;
+	if (key === "code" || key === "script") return { text, lang: "javascript" };
+	if (key === "command" || key === "cmd") return { text, lang: "bash" };
+	return { text };
+}
+
+function firstDisplay(args: Record<string, unknown>, keys: readonly string[]): ToolArgDisplay | undefined {
+	for (const key of keys) {
+		const selected = display(str(args, key), key);
+		if (selected !== undefined) return selected;
+	}
+	return undefined;
+}
+
+const PRIMARY_CODE_KEYS = ["code", "command", "cmd", "script"] as const;
+const SALIENT_KEYS = [
+	"path",
+	"file",
+	"url",
+	"query",
+	"pattern",
+	"command",
+	"cmd",
+	"task",
+	"prompt",
+	"name",
+	"id",
+] as const;
+
+function textOnly(text: string): ToolArgDisplay {
+	return { text };
+}
+
+function pathHint(args: Record<string, unknown>): ToolArgDisplay {
+	const target = firstDisplay(args, ["path", "file_path", "filePath", "file"]);
+	return textOnly(target ? shortenPath(target.text) : "");
+}
+
+function patternPathHint(args: Record<string, unknown>): ToolArgDisplay {
+	const pattern = firstDisplay(args, ["pattern", "query", "regex"]);
+	const target = pathHint(args).text;
+	if (pattern) return textOnly(target ? `${pattern.text} ${target}` : pattern.text);
+	return textOnly(target);
+}
+
+// Per-tool selector table. Builtins first, then the extension tools this repo ships.
+const TOOL_ARG_SELECTORS: Record<string, (args: Record<string, unknown>) => ToolArgDisplay> = {
+	read: pathHint,
+	edit: pathHint,
+	write: pathHint,
+	ls: pathHint,
+	grep: patternPathHint,
+	find: patternPathHint,
+	run: (args) => firstDisplay(args, PRIMARY_CODE_KEYS) ?? textOnly(""),
+	bash: (args) => firstDisplay(args, PRIMARY_CODE_KEYS) ?? textOnly(""),
+	subagent: (args) => {
+		const agent = str(args, "agent");
+		const task = str(args, "task");
+		if (agent || task) return textOnly([agent, task].filter(Boolean).join(" "));
+		return textOnly([str(args, "action"), str(args, "id")].filter(Boolean).join(" "));
+	},
+	workflow: (args) => firstDisplay(args, ["script"]) ?? textOnly(str(args, "phase") ?? ""),
+	process: (args) => textOnly([str(args, "action"), str(args, "name")].filter(Boolean).join(" ")),
+	fetch: (args) => textOnly(str(args, "url") ?? ""),
+	ast_grep: (args) => textOnly(str(args, "pattern") ?? ""),
+	mcp: (args) =>
+		textOnly(str(args, "tool") ?? str(args, "describe") ?? str(args, "search") ?? str(args, "server") ?? ""),
+	task: (args) => textOnly(str(args, "action") ?? ""),
+	apply_patch: pathHint,
+};
+
+// Fallback for unknown tools: first string among salient keys, else the first
+// short string prop — never raw JSON.
+function genericHint(args: Record<string, unknown>): ToolArgDisplay {
+	const salient = firstDisplay(args, SALIENT_KEYS);
+	if (salient !== undefined) return salient;
+	for (const [key, value] of Object.entries(args)) {
+		if (typeof value === "string" && value.trim() && value.length <= 200)
+			return display(value, key) ?? textOnly(value);
+	}
+	return textOnly("");
+}
+
+export function selectToolArg(toolName: string, args: Record<string, unknown> | undefined): ToolArgDisplay {
+	if (!args) return textOnly("");
+	const selector = TOOL_ARG_SELECTORS[toolName];
+	if (selector) {
+		const hint = selector(args);
+		if (hint.text) return hint;
+	}
+	return genericHint(args);
+}
+
+export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
+	if (!run) return [theme.fg("dim", "(no events yet)")];
+	if (run.run.workflow) {
+		const workflowLines = buildWorkflowRightLines(theme, run.run, width, runs);
+		if (workflowLines.length > 0) return workflowLines;
+	}
+	const childSummary = buildChildSummaryLines(theme, run, width, runs);
+	const asyncDir = run.run.asyncDir;
+	if (!asyncDir) return childSummary.length > 0 ? childSummary : [theme.fg("dim", "(no events yet)")];
+	const events = readRunTranscript(asyncDir);
+	if (events.length === 0) return childSummary.length > 0 ? childSummary : [theme.fg("dim", "(no events yet)")];
+	// Shared set so each nested child run is rendered at most once across all steps.
+	const rightPaneUsed = new Set<string>();
+
+	// Parallel runs share one run record with N session transcripts, one per step.
+	// Render order chronological-within-step
+	// so each step reads as a coherent block instead of interleaved noise.
+	type Step = {
+		index: number;
+		agent: string;
+		startTs?: number;
+		lines: string[];
+		final?: string;
+		task?: string;
+		lastKind?: "tool" | "narration" | "other";
+	};
+	const steps = new Map<number, Step>();
+	const ensureStep = (index: number, agent: string): Step => {
+		let s = steps.get(index);
+		if (!s) {
+			s = { index, agent, lines: [] };
+			steps.set(index, s);
+		}
+		if (!s.agent && agent) s.agent = agent;
+		return s;
+	};
+	// Breathing room: tool cards are background blocks, so a plain blank line
+	// separates a card from adjacent narration or another card. Narration after
+	// narration stays contiguous (markdown owns its own spacing).
+	const pushStepLines = (step: Step, kind: "tool" | "narration" | "other", lines: string[]): void => {
+		if (lines.length === 0) return;
+		const last = step.lines[step.lines.length - 1];
+		if (last !== undefined && last !== "" && (kind === "tool" || step.lastKind === "tool")) step.lines.push("");
+		step.lines.push(...lines);
+		step.lastKind = kind;
+	};
+
+	for (const event of events) {
+		if (event.kind === "step-start") {
+			const step = ensureStep(event.stepIndex, event.agent);
+			if (!step.startTs) step.startTs = event.ts;
+			if (event.task && !step.task) step.task = event.task;
+			continue;
+		}
+		if (event.kind === "assistant-text") {
+			const step = ensureStep(event.stepIndex, "");
+			// Mid-run narration: markdown-rendered but dimmed, so it reads as the
+			// agent's running commentary rather than competing with the final block.
+			pushStepLines(
+				step,
+				"narration",
+				renderMarkdownLines(event.text, width).map((line) => theme.fg("muted", line)),
+			);
+			continue;
+		}
+		if (event.kind === "tool") {
+			const step = ensureStep(event.stepIndex, "");
+			// charter inline-nested-fix: suppress plain `subagent` raw-args lines in the
+			// right pane and recurse into the child run via the shared renderer, mirroring
+			// the left-pane/compact-card wiring. Falls back to the plain line when the
+			// child hasn't flushed its status.json yet.
+			if (event.toolName === "subagent") {
+				const isAsync = event.rawArgs?.async === true;
+				if (!isAsync) {
+					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
+					if (child) {
+						const nested = renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed).map((line) =>
+							theme.fg("dim", clip(line, width)),
+						);
+						pushStepLines(step, "tool", nested);
+						continue;
+					}
+				}
+			}
+			const arg = event.rawArgs ? selectToolArg(event.toolName, event.rawArgs) : { text: event.argsPreview };
+			pushStepLines(step, "tool", buildToolBlock(theme, event, arg, width));
+			continue;
+		}
+		if (event.kind === "step-end") {
+			ensureStep(event.stepIndex, event.agent);
+			continue;
+		}
+		if (event.kind === "final-text") {
+			const step = ensureStep(event.stepIndex, event.agent);
+			step.final = event.text;
+		}
+	}
+
+	const ordered = [...steps.values()].sort((a, b) => {
+		if (a.startTs !== undefined && b.startTs !== undefined) return a.startTs - b.startTs;
+		return a.index - b.index;
+	});
+	const out: string[] = [];
+	for (const step of ordered) {
+		if (ordered.length > 1 && out.length > 0)
+			out.push(theme.fg("dim", clip(`── ${step.agent || "agent"} ──`, width)));
+		if (step.task) {
+			// Host convention: user prompts render on userMessageBg — same pad-then-bg
+			// pattern as the tool cards so the block spans the pane width.
+			const wrapped = wrapText(step.task, Math.max(1, width - 2));
+			out.push(bgLine(theme, "userMessageBg", "", width));
+			for (const line of wrapped) out.push(bgLine(theme, "userMessageBg", `  ${line}`, width));
+			out.push(bgLine(theme, "userMessageBg", "", width));
+		}
+		// One blank line of breathing room between the header area and the feed.
+		if (step.lines.length > 0) out.push("");
+		for (const line of step.lines) out.push(line);
+		if (step.final) {
+			const border = "─".repeat(Math.max(0, width));
+			out.push(theme.fg("dim", border));
+			// Agent output is typically markdown; render it as such.
+			for (const wrapped of renderMarkdownLines(step.final, width)) out.push(wrapped);
+			out.push(theme.fg("dim", border));
+		}
+	}
+	return out;
+}

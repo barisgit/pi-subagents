@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { SubagentParams } from "../../schemas.ts";
-import { validateSubagentToolInput } from "../../subagent-executor.ts";
+import { SubagentParams } from "../../src/protocol/schemas.ts";
+import { validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
 
 const validator = Compile(SubagentParams);
 
@@ -36,7 +36,7 @@ describe("context enum", () => {
 	});
 
 	it("documents summarized as a future extension point", () => {
-		const source = readFileSync("schemas.ts", "utf8");
+		const source = readFileSync("src/protocol/schemas.ts", "utf8");
 
 		assert.match(source, /Future context mode `summarized` is reserved/);
 	});

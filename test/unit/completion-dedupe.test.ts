@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "../../completion-dedupe.ts";
+import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "../../src/state/completion-dedupe.ts";
 
 describe("buildCompletionKey", () => {
 	it("uses id as canonical key when present", () => {
@@ -9,8 +9,14 @@ describe("buildCompletionKey", () => {
 	});
 
 	it("builds deterministic fallback key when id is missing", () => {
-		const a = buildCompletionKey({ agent: "reviewer", timestamp: 123, taskIndex: 1, totalTasks: 2, success: true }, "x");
-		const b = buildCompletionKey({ agent: "reviewer", timestamp: 123, taskIndex: 1, totalTasks: 2, success: true }, "x");
+		const a = buildCompletionKey(
+			{ agent: "reviewer", timestamp: 123, taskIndex: 1, totalTasks: 2, success: true },
+			"x",
+		);
+		const b = buildCompletionKey(
+			{ agent: "reviewer", timestamp: 123, taskIndex: 1, totalTasks: 2, success: true },
+			"x",
+		);
 		assert.equal(a, b);
 	});
 });

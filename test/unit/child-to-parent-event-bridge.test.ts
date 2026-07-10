@@ -11,8 +11,8 @@ import {
 	createPhaseEventHandler,
 	type PhaseEventHandlerOptions,
 	type StatusPatch,
-} from "../../in-process-executor.ts";
-import { SUBAGENT_PHASE_CHANGE_EVENT, type SubagentPhaseChangePayload } from "../../types.ts";
+} from "../../src/dispatch/in-process-executor.ts";
+import { SUBAGENT_PHASE_CHANGE_EVENT, type SubagentPhaseChangePayload } from "../../src/protocol/types.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;
@@ -25,7 +25,9 @@ function messageUpdate(assistantType: string): AgentSessionEvent {
 function makeEventsBus() {
 	const calls: Array<{ event: string; payload: SubagentPhaseChangePayload }> = [];
 	return {
-		emit(ev: string, payload: SubagentPhaseChangePayload) { calls.push({ event: ev, payload }); },
+		emit(ev: string, payload: SubagentPhaseChangePayload) {
+			calls.push({ event: ev, payload });
+		},
 		calls,
 	};
 }
@@ -38,8 +40,12 @@ function baseOpts(
 }
 
 let testsRun = 0;
-afterEach(() => { testsRun++; });
-after(() => { process.stdout.write(`# tests ${testsRun}\n`); });
+afterEach(() => {
+	testsRun++;
+});
+after(() => {
+	process.stdout.write(`# tests ${testsRun}\n`);
+});
 
 describe("child-to-parent event bridge: phase-change emits on parent pi", () => {
 	it("emit-on-phase-change: transitions produce subagent:phase-change events with correct payload", () => {
@@ -48,10 +54,10 @@ describe("child-to-parent event bridge: phase-change emits on parent pi", () => 
 		const { handle } = createPhaseEventHandler(baseOpts((p) => patches.push(p), { events: bus }));
 
 		// Drive: idle → waiting_model → thinking → tool_running → idle
-		handle(event({ type: "turn_start" }), 1100);               // idle → waiting_model
-		handle(messageUpdate("thinking_delta"), 1200);              // waiting_model → thinking
+		handle(event({ type: "turn_start" }), 1100); // idle → waiting_model
+		handle(messageUpdate("thinking_delta"), 1200); // waiting_model → thinking
 		handle(event({ type: "tool_execution_start", toolName: "bash" }), 1300); // thinking → tool_running
-		handle(event({ type: "tool_execution_end" }), 1400);       // tool_running → idle
+		handle(event({ type: "tool_execution_end" }), 1400); // tool_running → idle
 
 		const phaseEvents = bus.calls.filter((c) => c.event === SUBAGENT_PHASE_CHANGE_EVENT);
 		assert.equal(phaseEvents.length, 4, `expected 4 phase-change events, got ${phaseEvents.length}`);
@@ -110,7 +116,9 @@ describe("child-to-parent event bridge: phase-change emits on parent pi", () => 
 
 	it("never-throws-on-emit-failure: pi.events.emit throwing must not propagate", () => {
 		const evilBus = {
-			emit() { throw new Error("bus exploded"); },
+			emit() {
+				throw new Error("bus exploded");
+			},
 		};
 		let threw = false;
 		try {

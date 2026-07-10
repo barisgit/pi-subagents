@@ -3,12 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { buildBuiltinOverrideConfig, discoverAgents, removeBuiltinAgentOverride } from "../../agents.ts";
+import { buildBuiltinOverrideConfig, discoverAgents, removeBuiltinAgentOverride } from "../../src/shared/agents.ts";
 
 let tempHome = "";
 let tempProject = "";
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 function writeJson(filePath: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -27,6 +29,8 @@ describe("builtin agent overrides", () => {
 		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-"));
 		process.env.HOME = tempHome;
 		process.env.USERPROFILE = tempHome;
+		process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
+		process.env.FI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 	});
 
 	afterEach(() => {
@@ -34,6 +38,10 @@ describe("builtin agent overrides", () => {
 		else process.env.HOME = originalHome;
 		if (originalUserProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = originalUserProfile;
+		if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
+		if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+		else process.env.FI_CODING_AGENT_DIR = originalFiAgentDir;
 		fs.rmSync(tempHome, { recursive: true, force: true });
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
@@ -128,7 +136,11 @@ describe("builtin agent overrides", () => {
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
 			subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4" } } },
 		});
-		writeProjectAgent(tempProject, "reviewer", `---\nname: reviewer\ndescription: Project reviewer\nmodel: google/gemini-3-pro\n---\n\nUse the project reviewer.\n`);
+		writeProjectAgent(
+			tempProject,
+			"reviewer",
+			`---\nname: reviewer\ndescription: Project reviewer\nmodel: google/gemini-3-pro\n---\n\nUse the project reviewer.\n`,
+		);
 
 		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
 		assert.ok(reviewer);
@@ -151,9 +163,10 @@ describe("builtin agent overrides", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("Failed to parse settings file"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("Failed to parse settings file"),
 		);
 	});
 
@@ -163,9 +176,10 @@ describe("builtin agent overrides", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("Failed to read settings file"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("Failed to read settings file"),
 		);
 	});
 
@@ -183,10 +197,11 @@ describe("builtin agent overrides", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("reviewer")
-				&& error.message.includes("inheritProjectContext"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("reviewer") &&
+				error.message.includes("inheritProjectContext"),
 		);
 	});
 

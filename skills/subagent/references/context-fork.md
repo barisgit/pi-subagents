@@ -14,7 +14,7 @@ subagent({
 
 ## Fork context
 
-`context:"fork"` is same-agent self-branching. It creates a branched child from the current persisted parent session and is useful for alternate implementation attempts, second-pass checks, or same-agent scratch work. It is not a filtered review context and must not be used to switch personas. Forks keep the same configured agent identity (`<current-agent>→<current-agent>`); cross-agent delegation uses `context:"fresh"`.
+`context:"fork"` is same-agent self-branching. It is almost the inline agent in another branch: the child keeps the same configured role/model and inherits the persisted parent context. A fork adds an isolation or concurrency boundary, not specialist capability or an independent perspective, and it still incurs dispatch and handoff overhead. Stay inline for ordinary sequential continuation; fork only when an isolated branch, alternate attempt, or genuinely parallel same-agent task makes that boundary useful. It is not a filtered review context and must not be used to switch personas. Cross-agent delegation uses `context:"fresh"`.
 
 ```ts
 // same-agent self-fork

@@ -2,42 +2,82 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
-import { setCurrentPi } from "../../current-pi.ts";
-import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
-import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../types.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { __resetLeafConcurrencyForTest } from "../../src/dispatch/leaf-concurrency.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { createTempDir, events, makeAgent, removeTempDir } from "../support/helpers.ts";
+import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../src/protocol/types.ts";
 
 let tempDir: string | undefined;
 let restoreDeps: (() => void) | undefined;
+// Detached async-resume children outlive the test body. Track the active fake
+// session + registry so afterEach can settle them BEFORE restoring deps and
+// deleting tempDir; otherwise a late child runs against the next test's mocks
+// and corrupts its status. (The leaf-concurrency gate adds a microtask before a
+// child prompts, which makes this pre-existing race deterministic.)
+let activeSession: { resolvePrompt?: () => void } | undefined;
+let activeRegistry: ChildAgentRegistry | undefined;
 
-afterEach(() => {
+afterEach(async () => {
+	activeSession?.resolvePrompt?.();
+	const inFlight = activeRegistry?.get("resume-run");
+	if (inFlight) await inFlight.completed.catch(() => {});
+	activeSession = undefined;
+	activeRegistry = undefined;
 	restoreDeps?.();
 	restoreDeps = undefined;
 	setRegistryPathForTests(null);
+	__resetLeafConcurrencyForTest();
 	if (tempDir) removeTempDir(tempDir);
 	tempDir = undefined;
 });
 
 function makeState(cwd: string): SubagentState {
-	return { baseCwd: cwd, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null, poller: null };
+	return {
+		baseCwd: cwd,
+		currentSessionId: null,
+		asyncJobs: new Map(),
+		foregroundControls: new Map(),
+		lastForegroundControlId: null,
+		cleanupTimers: new Map(),
+		lastUiContext: null,
+		poller: null,
+	};
 }
 
 class FakeSession {
 	prompts: string[] = [];
 	messages: unknown[] = [];
+	eventsToEmit: object[] = [];
+	lastAssistantText = "<output>resumed output</output>";
 	resolvePrompt: (() => void) | undefined;
 	promptPromise: Promise<void> | undefined;
-	subscribe() { return () => {}; }
+	private listeners: Array<(event: object) => void> = [];
+	subscribe(listener: (event: object) => void) {
+		this.listeners.push(listener);
+		return () => {
+			this.listeners = this.listeners.filter((candidate) => candidate !== listener);
+		};
+	}
 	setActiveToolsByName() {}
-	getLastAssistantText() { return "resumed output"; }
+	emit(event: object) {
+		for (const listener of this.listeners) listener(event);
+	}
+	getLastAssistantText() {
+		return this.lastAssistantText;
+	}
 	dispose() {}
-	abort() { this.resolvePrompt?.(); }
+	abort() {
+		this.resolvePrompt?.();
+	}
 	prompt(message: string) {
 		this.prompts.push(message);
-		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "resumed", result: "resumed output", artifacts: [] } });
-		this.promptPromise ??= new Promise<void>((resolve) => { this.resolvePrompt = resolve; });
+		for (const event of this.eventsToEmit.splice(0)) this.emit(event);
+		this.promptPromise ??= new Promise<void>((resolve) => {
+			this.resolvePrompt = resolve;
+		});
 		return this.promptPromise;
 	}
 }
@@ -55,59 +95,189 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 	setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	const state = makeState(tempDir);
 	const events: Array<{ channel: string; data: any }> = [];
-	const pi = { events: { emit: (channel: string, data: any) => {
-		events.push({ channel, data });
-		if (channel === SUBAGENT_ASYNC_STARTED_EVENT) {
-			state.asyncJobs.set(data.runId, { asyncId: data.runId, asyncDir: data.asyncDir, status: "queued", mode: "single", updatedAt: Date.now() });
-		}
-	} }, getSessionName: () => undefined, setSessionName: () => {}, getAllTools: () => [] };
+	const pi = {
+		events: {
+			emit: (channel: string, data: any) => {
+				events.push({ channel, data });
+				if (channel === SUBAGENT_ASYNC_STARTED_EVENT) {
+					state.asyncJobs.set(data.runId, {
+						asyncId: data.runId,
+						asyncDir: data.asyncDir,
+						status: "queued",
+						mode: "single",
+						updatedAt: Date.now(),
+					});
+				}
+			},
+		},
+		getSessionName: () => undefined,
+		setSessionName: () => {},
+		getAllTools: () => [],
+	};
 	setCurrentPi(pi as never);
 	const session = new FakeSession();
 	if (!opts.pending) session.promptPromise = Promise.resolve();
 	let opened = "";
 	restoreDeps = __setChildAgentExecutorDepsForTest({
-		SessionManager: { open: (file: string) => { opened = file; return { getSessionId: () => "same-session-id" }; } } as never,
-		DefaultResourceLoader: class { async reload() {} } as never,
+		SessionManager: {
+			open: (file: string) => {
+				opened = file;
+				return { getSessionId: () => readSessionId(file), getSessionFile: () => file };
+			},
+		} as never,
+		DefaultResourceLoader: class {
+			async reload() {}
+		} as never,
 		getAgentDir: () => tempDir!,
 		createAgentSession: (async () => ({ session })) as never,
 	});
 	const childRegistry = new ChildAgentRegistry();
+	// Let afterEach settle any detached child this test spawns before teardown.
+	activeSession = session;
+	activeRegistry = childRegistry;
 	const executor = createSubagentExecutor({
-		pi, state, config: { parallel: { concurrency: 1 } }, asyncByDefault: opts.asyncByDefault ?? false, tempArtifactsDir: tempDir, childRegistry, expandTilde: (v: string) => v,
+		pi,
+		state,
+		config: {},
+		asyncByDefault: opts.asyncByDefault ?? false,
+		tempArtifactsDir: tempDir,
+		childRegistry,
+		expandTilde: (v: string) => v,
 		discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }),
 	} as never);
-	const execute = (params: Record<string, unknown>) => executor.execute("id", params as never, new AbortController().signal, undefined, {
-		cwd: tempDir!, hasUI: false, ui: {}, sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => null }, modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] }, model: { provider: "mock" },
-	} as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
-	return { execute, session, events, childRegistry, get opened() { return opened; }, state };
+	const execute = (params: Record<string, unknown>) =>
+		executor.execute("id", params as never, new AbortController().signal, undefined, {
+			cwd: tempDir!,
+			hasUI: false,
+			ui: {},
+			sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => null },
+			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
+			model: { provider: "mock" },
+		} as never) as Promise<{
+			isError?: boolean;
+			content: Array<{ text?: string }>;
+			details?: { mode?: string; runId?: string; results: Array<{ exitCode?: number }> };
+		}>;
+	return {
+		execute,
+		session,
+		events,
+		childRegistry,
+		get opened() {
+			return opened;
+		},
+		state,
+	};
+}
+
+function readSessionId(sessionFile: string): string {
+	const firstLine = fs.readFileSync(sessionFile, "utf8").split("\n", 1)[0];
+	const header: unknown = JSON.parse(firstLine ?? "");
+	if (typeof header !== "object" || header === null || !("id" in header) || typeof header.id !== "string") {
+		throw new Error("Invalid fake session header.");
+	}
+	return header.id;
+}
+
+function writeSessionHeader(sessionFile: string, sessionId: string, cwd: string): void {
+	fs.writeFileSync(
+		sessionFile,
+		`${JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd })}\n`,
+		"utf8",
+	);
 }
 
 function writeCompleteRun(root: string, runId = "resume-run") {
 	const runRecordDir = path.join(root, runId);
 	const sessionFile = path.join(runRecordDir, "run-0", "session.jsonl");
 	fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-	fs.writeFileSync(sessionFile, "{\"sessionId\":\"same-session-id\"}\n", "utf8");
-	appendRunEntry({ runId, runRecordDir, mode: "single", source: "sync", agentName: "fixer", rootRunId: runId, cwd: root, startedAt: 1234 });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({ runId, mode: "single", state: "complete", startedAt: 1234, endedAt: 1300, cwd: root, steps: [{ agent: "fixer", status: "complete", sessionFile }] }), "utf8");
+	writeSessionHeader(sessionFile, `session-${path.basename(root)}-${runId}-0`, root);
+	appendRunEntry({
+		runId,
+		runRecordDir,
+		mode: "single",
+		source: "sync",
+		agentName: "fixer",
+		rootRunId: runId,
+		rootSessionId: "parent-session",
+		cwd: root,
+		startedAt: 1234,
+	});
+	fs.writeFileSync(
+		path.join(runRecordDir, "status.json"),
+		JSON.stringify({
+			runId,
+			mode: "single",
+			state: "complete",
+			startedAt: 1234,
+			endedAt: 1300,
+			cwd: root,
+			steps: [{ agent: "fixer", status: "complete", sessionFile }],
+		}),
+		"utf8",
+	);
 	return { runRecordDir, sessionFile };
 }
 
-function writeCompleteChainRun(root: string, runId = "chain-run") {
+function writeCompleteMultiStepRun(root: string, runId = "multi-step-run") {
 	const runRecordDir = path.join(root, runId);
 	const step0Session = path.join(runRecordDir, "run-0", "session.jsonl");
 	const step1Session = path.join(runRecordDir, "run-1", "session.jsonl");
 	fs.mkdirSync(path.dirname(step0Session), { recursive: true });
 	fs.mkdirSync(path.dirname(step1Session), { recursive: true });
-	fs.writeFileSync(step0Session, "{\"sessionId\":\"same-session-id\"}\n", "utf8");
-	fs.writeFileSync(step1Session, "{\"sessionId\":\"same-session-id\"}\n", "utf8");
-	appendRunEntry({ runId, runRecordDir, mode: "chain", source: "sync", agentNames: ["fixer", "fixer"], rootRunId: runId, cwd: root, startedAt: 1000 });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({
-		runId, mode: "chain", state: "complete", startedAt: 1000, endedAt: 6000, cwd: root,
-		steps: [
-			{ agent: "fixer", status: "complete", startedAt: 1000, endedAt: 5000, durationMs: 4000, sessionFile: step0Session },
-			{ agent: "fixer", status: "complete", startedAt: 5000, endedAt: 6000, durationMs: 1000, sessionFile: step1Session },
-		],
-	}), "utf8");
+	writeSessionHeader(step0Session, `session-${path.basename(root)}-${runId}-0`, root);
+	writeSessionHeader(step1Session, `session-${path.basename(root)}-${runId}-1`, root);
+	appendRunEntry({
+		runId,
+		runRecordDir,
+		mode: "single",
+		source: "sync",
+		agentName: "fixer",
+		rootRunId: runId,
+		rootSessionId: "parent-session",
+		cwd: root,
+		startedAt: 1000,
+	});
+	fs.writeFileSync(
+		path.join(runRecordDir, "status.json"),
+		JSON.stringify({
+			runId,
+			mode: "single",
+			state: "complete",
+			startedAt: 1000,
+			endedAt: 6000,
+			cwd: root,
+			totalTokens: { input: 20, output: 10, total: 30 },
+			steps: [
+				{
+					agent: "fixer",
+					status: "complete",
+					startedAt: 1000,
+					endedAt: 5000,
+					durationMs: 4000,
+					sessionFile: step0Session,
+				},
+				{
+					agent: "fixer",
+					status: "complete",
+					startedAt: 5000,
+					endedAt: 6000,
+					durationMs: 1000,
+					tokens: { input: 20, output: 10, total: 30 },
+					live: {
+						outputText: "old output",
+						toolCallCount: 3,
+						toolResultCount: 2,
+						toolErrorCount: 1,
+						toolCount: 3,
+						tokens: 30,
+					},
+					sessionFile: step1Session,
+				},
+			],
+		}),
+		"utf8",
+	);
 	return { runRecordDir, step0Session, step1Session };
 }
 
@@ -122,13 +292,23 @@ describe("sync resume foreground", () => {
 		assert.equal(h.state.asyncJobs.size, 0);
 		assert.equal(h.opened, run.sessionFile);
 		assert.deepEqual(h.session.prompts, ["continue"]);
-		assert.equal(h.events.some((event) => event.channel === SUBAGENT_ASYNC_STARTED_EVENT), false);
+		assert.equal(
+			h.events.some((event) => event.channel === SUBAGENT_ASYNC_STARTED_EVENT),
+			false,
+		);
 
 		h.session.resolvePrompt?.();
 		const result = await pending;
 		assert.equal(result.isError, undefined, result.content[0]?.text);
-		assert.match(result.content[0]?.text ?? "", /Resume completed for run resume-run\./);
+		// Sync resume returns the SAME shape as a normal sync single dispatch: the
+		// child's output in content and a populated single-mode details envelope,
+		// not the old management stub.
+		assert.match(result.content[0]?.text ?? "", /resumed output/);
 		assert.doesNotMatch(result.content[0]?.text ?? "", /Async resume/);
+		assert.equal(result.details?.mode, "single");
+		assert.equal(result.details?.runId, "resume-run");
+		assert.equal(result.details?.results.length, 1);
+		assert.equal(result.details?.results[0]?.exitCode, 0);
 		assert.equal(h.state.foregroundControls.size, 0);
 	});
 
@@ -150,10 +330,15 @@ describe("sync resume foreground", () => {
 		// No async:false passed, yet it routes foreground because the host default is sync.
 		assert.equal(h.state.foregroundControls.has("resume-run"), true);
 		assert.equal(h.state.asyncJobs.size, 0);
-		assert.equal(h.events.some((event) => event.channel === SUBAGENT_ASYNC_STARTED_EVENT), false);
+		assert.equal(
+			h.events.some((event) => event.channel === SUBAGENT_ASYNC_STARTED_EVENT),
+			false,
+		);
 		h.session.resolvePrompt?.();
 		const result = await pending;
-		assert.match(result.content[0]?.text ?? "", /Resume completed for run resume-run\./);
+		assert.match(result.content[0]?.text ?? "", /resumed output/);
+		assert.equal(result.details?.mode, "single");
+		assert.equal(result.details?.results.length, 1);
 	});
 
 	it("bare resume (async omitted) follows asyncByDefault=true as background", async () => {
@@ -179,10 +364,10 @@ describe("sync resume foreground", () => {
 		assert.ok(status.resumedAt >= before);
 	});
 
-	it("foreground chain-step resume finalizes only the resumed step and preserves sibling step fields", async () => {
+	it("foreground step resume finalizes only the resumed step and preserves sibling step fields", async () => {
 		const h = setup();
-		const run = writeCompleteChainRun(tempDir!);
-		await h.execute({ action: "resume", id: "chain-run:1", message: "continue", async: false });
+		const run = writeCompleteMultiStepRun(tempDir!);
+		await h.execute({ action: "resume", id: "multi-step-run:1", message: "continue", async: false });
 		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
 		// The resumed step (1) is finalized.
 		assert.equal(status.steps[1].status, "complete");
@@ -192,6 +377,120 @@ describe("sync resume foreground", () => {
 		assert.equal(status.steps[0].status, "complete");
 		assert.equal(status.steps[0].endedAt, 5000);
 		assert.equal(status.steps[0].durationMs, 4000);
+	});
+
+	it("foreground disk resume refreshes terminal output, aggregate usage, and live tool counters", async () => {
+		const h = setup();
+		const run = writeCompleteMultiStepRun(tempDir!);
+		const before = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		h.session.lastAssistantText = "<output>refreshed resume output</output>";
+		h.session.eventsToEmit = [
+			events.toolStart("read"),
+			events.toolEnd("read"),
+			events.toolStart("bash"),
+			{ type: "tool_execution_end", toolName: "bash", isError: true },
+			events.assistantMessage("<output>refreshed resume output</output>"),
+		];
+
+		const result = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "continue",
+			async: false,
+		});
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.state, "complete");
+		assert.equal(status.outputText, "refreshed resume output");
+		assert.equal(status.totalUsage.input, 120);
+		assert.equal(status.totalUsage.output, 60);
+		assert.equal(status.totalTokens.input, 120);
+		assert.equal(status.totalTokens.output, 60);
+		assert.equal(status.totalTokens.total, 180);
+		assert.equal(status.steps[1].tokens.total, 180);
+		assert.equal(status.steps[1].live.outputText, "refreshed resume output");
+		assert.equal(status.steps[1].live.toolCallCount, 5);
+		assert.equal(status.steps[1].live.toolResultCount, 4);
+		assert.equal(status.steps[1].live.toolErrorCount, 2);
+		assert.equal(status.steps[1].live.tokens, 180);
+		assert.ok(status.steps[1].endedAt > before.steps[1].endedAt);
+		assert.deepEqual(status.steps[0], before.steps[0]);
+	});
+
+	it("carries live usage through another restart before terminal persistence", async () => {
+		const h = setup({ pending: true });
+		const run = writeCompleteMultiStepRun(tempDir!);
+
+		const firstResume = h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "first resumed turn",
+			async: false,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		h.session.emit(events.assistantMessage("<output>partial resumed output</output>"));
+		await waitFor(() => {
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			return status.state === "running" && (status.steps[1].tokens?.total ?? 0) > 30;
+		});
+		const interruptedStatus = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		interruptedStatus.state = "interrupted";
+		interruptedStatus.steps[1].status = "interrupted";
+		h.session.resolvePrompt?.();
+		await firstResume;
+		fs.writeFileSync(path.join(run.runRecordDir, "status.json"), JSON.stringify(interruptedStatus));
+
+		h.session.eventsToEmit = [events.assistantMessage("<output>final resumed output</output>")];
+		const secondResume = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "second resumed turn",
+			async: false,
+		});
+		assert.equal(secondResume.isError, undefined, secondResume.content[0]?.text);
+
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.resumeCount, 2);
+		assert.equal(status.totalTokens.total, 330);
+		assert.equal(status.steps[1].tokens.total, 330);
+	});
+
+	it("background disk resume preserves prior output accounting and live tool counters", async () => {
+		const h = setup();
+		const run = writeCompleteMultiStepRun(tempDir!);
+		const before = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		h.session.lastAssistantText = "<output>refreshed background output</output>";
+		h.session.eventsToEmit = [
+			events.toolStart("read"),
+			events.toolEnd("read"),
+			events.toolStart("bash"),
+			{ type: "tool_execution_end", toolName: "bash", isError: true },
+			events.assistantMessage("<output>refreshed background output</output>"),
+		];
+
+		const result = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "continue",
+			async: true,
+		});
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		await waitFor(() => {
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			return status.state === "complete";
+		});
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.outputText, "refreshed background output");
+		assert.equal(status.totalUsage.input, 120);
+		assert.equal(status.totalUsage.output, 60);
+		assert.equal(status.totalTokens.total, 180);
+		assert.equal(status.steps[1].tokens.total, 180);
+		assert.equal(status.steps[1].live.toolCallCount, 5);
+		assert.equal(status.steps[1].live.toolResultCount, 4);
+		assert.equal(status.steps[1].live.toolErrorCount, 2);
+		assert.equal(status.steps[1].live.toolCount, 5);
+		assert.equal(status.steps[1].live.tokens, 180);
+		assert.deepEqual(status.steps[0], before.steps[0]);
 	});
 
 	it("foreground concurrent guard rejects same run and runId:0 alias while pending", async () => {

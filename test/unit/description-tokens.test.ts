@@ -39,7 +39,7 @@ describe("description tokens", () => {
 	});
 
 	it("tokenizer-deterministic", () => {
-		const text = "run:[{agent,task}] uses {task}/{previous}/{in}";
+		const text = "run:[{agent,task}] uses {task}/{in}";
 
 		assert.equal(countCl100kTokens(text), countCl100kTokens(text));
 	});

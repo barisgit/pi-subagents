@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { renderInlineAsyncToolLine } from "../../render.ts";
+import { renderInlineAsyncToolLine } from "../../src/surfaces/render-inline.ts";
 import { rmRun, writeRun } from "./inline-nested-helpers.ts";
 
 const parent = "inline-async-parent";
@@ -13,7 +13,10 @@ describe("inline async child tool line", () => {
 		it(`renders the same plain line while ${state}`, () => {
 			writeRun(parent);
 			writeRun(child, { parentRunId: parent, state, agent: "explorer", label: "find pattern" });
-			assert.equal(renderInlineAsyncToolLine(parent, { async: true, agent: "explorer", label: "find pattern" }), "└─ subagent (background): explorer · find pattern → a1b2c3d4");
+			assert.equal(
+				renderInlineAsyncToolLine(parent, { async: true, agent: "explorer", label: "find pattern" }),
+				"└─ subagent (background): explorer · find pattern → a1b2c3d4",
+			);
 		});
 	}
 });

@@ -3,12 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { readSummaryForEntry } from "../../async-status.ts";
-import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
-import { summaryFromRegistryEntry } from "../../subagents-status.ts";
-import { writeWorkflowGroupState } from "../../workflow-group-state.ts";
+import { readRunViewForEntry } from "../../src/state/async-status.ts";
+import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { expandOverlayByRootRunId, runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
 
-// VAL-GROUP-SUMMARY: readSummaryForEntry (async-status) and summaryFromRegistryEntry
+// VAL-GROUP-SUMMARY: readRunViewForEntry (async-status) and runViewFromRegistryEntry
 // (subagents-status) share one group-synthesis seam (buildGroupSummary). This test pins
 // the exact contract: where the two builders MUST agree (the shared group body) and the
 // four intentional knobs where they differ (orphan-drop nullability, isGroup predicate,
@@ -63,12 +63,21 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		appendRunEntry(child);
 		fs.writeFileSync(
 			path.join(childDir, "status.json"),
-			JSON.stringify({ runId: child.runId, mode: "single", state: "complete", startedAt: 1000, endedAt: 2500, cwd: root, currentStep: 0, steps: [] }),
+			JSON.stringify({
+				runId: child.runId,
+				mode: "single",
+				state: "complete",
+				startedAt: 1000,
+				endedAt: 2500,
+				cwd: root,
+				currentStep: 0,
+				steps: [],
+			}),
 		);
 		const entries = readAllEntries();
 
-		const a = readSummaryForEntry(group, entries);
-		const b = summaryFromRegistryEntry(group, entries);
+		const a = readRunViewForEntry(group, entries);
+		const b = runViewFromRegistryEntry(group, entries);
 		assert.ok(a, "async-status must synthesize the group (not drop it)");
 
 		// Shared body: id/mode/state/startedAt/endedAt/cwd/steps must be identical.
@@ -108,12 +117,12 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		const entries = readAllEntries();
 
 		writeWorkflowGroupState(groupDir, "running");
-		assert.equal(readSummaryForEntry(group, entries)?.state, "running");
-		assert.equal(summaryFromRegistryEntry(group, entries).state, "running");
+		assert.equal(readRunViewForEntry(group, entries)?.state, "running");
+		assert.equal(runViewFromRegistryEntry(group, entries).state, "running");
 
 		writeWorkflowGroupState(groupDir, "complete");
-		assert.equal(readSummaryForEntry(group, entries)?.state, "complete");
-		assert.equal(summaryFromRegistryEntry(group, entries).state, "complete");
+		assert.equal(readRunViewForEntry(group, entries)?.state, "complete");
+		assert.equal(runViewFromRegistryEntry(group, entries).state, "complete");
 	});
 
 	it("differs on orphan-drop: A returns null past the stub window, B returns a queued stub", () => {
@@ -130,11 +139,45 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		appendRunEntry(stale);
 		const entries = readAllEntries();
 
-		assert.equal(readSummaryForEntry(stale, entries), null, "A drops a stale statusless orphan");
-		const b = summaryFromRegistryEntry(stale, entries);
+		assert.equal(readRunViewForEntry(stale, entries), null, "A drops a stale statusless orphan");
+		const b = runViewFromRegistryEntry(stale, entries);
 		assert.equal(b.state, "queued", "B never drops: returns a queued stub");
 		assert.equal(b.steps.length, 1);
 		assert.equal(b.steps[0]!.agent, "A");
+	});
+
+	it("drops a stale statusless child from expanded overlay rows", () => {
+		const root = setup("gsp-expanded-orphan-");
+		const parent = {
+			runId: "parent",
+			runRecordDir: path.join(root, "parent-run"),
+			mode: "parallel" as const,
+			source: "async" as const,
+			cwd: root,
+			startedAt: Date.now(),
+		};
+		const staleChild = {
+			runId: "stale-child",
+			runRecordDir: path.join(root, "stale-child"),
+			mode: "single" as const,
+			source: "async" as const,
+			agentName: "A",
+			parentRunId: parent.runId,
+			rootRunId: parent.runId,
+			cwd: root,
+			startedAt: Date.now() - 120_000,
+		};
+		appendRunEntry(parent);
+		appendRunEntry(staleChild);
+		const parentSummary = runViewFromRegistryEntry(parent, [parent, staleChild]);
+
+		const expanded = expandOverlayByRootRunId({ active: [parentSummary], recent: [] }, {});
+
+		assert.deepEqual(
+			expanded.active.map((run) => run.id),
+			[parent.runId],
+		);
+		assert.deepEqual(expanded.recent, []);
 	});
 
 	it("keeps a fresh statusless single run as a queued stub in both builders", () => {
@@ -151,8 +194,8 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		appendRunEntry(fresh);
 		const entries = readAllEntries();
 
-		const a = readSummaryForEntry(fresh, entries);
-		const b = summaryFromRegistryEntry(fresh, entries);
+		const a = readRunViewForEntry(fresh, entries);
+		const b = runViewFromRegistryEntry(fresh, entries);
 		assert.equal(a?.state, "queued");
 		assert.equal(b.state, "queued");
 		assert.deepEqual(a!.steps, b.steps);
@@ -176,13 +219,26 @@ describe("group summary parity (VAL-GROUP-SUMMARY)", () => {
 		// status.json has NO parentRunId of its own, so only the registry entry carries it.
 		fs.writeFileSync(
 			path.join(leafDir, "status.json"),
-			JSON.stringify({ runId: leaf.runId, mode: "single", state: "complete", startedAt: 1000, endedAt: 2000, cwd: root, currentStep: 0, steps: [] }),
+			JSON.stringify({
+				runId: leaf.runId,
+				mode: "single",
+				state: "complete",
+				startedAt: 1000,
+				endedAt: 2000,
+				cwd: root,
+				currentStep: 0,
+				steps: [],
+			}),
 		);
 		const entries = readAllEntries();
 
-		const a = readSummaryForEntry(leaf, entries);
-		const b = summaryFromRegistryEntry(leaf, entries);
+		const a = readRunViewForEntry(leaf, entries);
+		const b = runViewFromRegistryEntry(leaf, entries);
 		assert.equal(a?.parentRunId, undefined, "A does not inject the registry parentRunId onto a leaf summary");
-		assert.equal(b.parentRunId, "some-parent", "B injects the registry parentRunId when the leaf summary lacks one");
+		assert.equal(
+			b.parentRunId,
+			"some-parent",
+			"B injects the registry parentRunId when the leaf summary lacks one",
+		);
 	});
 });

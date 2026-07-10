@@ -3,10 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { readAllEntries, setRegistryPathForTests } from "../../runs-registry.ts";
-import { STATUS_JSON_VERSION } from "../../status-writer.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { interruptRun } from "../../src/dispatch/layer0-runs.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { STATUS_JSON_VERSION } from "../../src/state/status-writer.ts";
 import { makeAgent } from "../support/helpers.ts";
 
 const tmpRoots: string[] = [];
@@ -30,12 +31,31 @@ async function waitForCompleteStatus(runRecordDir: string): Promise<void> {
 }
 
 class FakeAgentSession {
-	subscribe(): () => void { return () => {}; }
+	subscribe(): () => void {
+		return () => {};
+	}
 	async prompt(): Promise<void> {}
-	getLastAssistantText(): string { return "done"; }
+	getLastAssistantText(): string {
+		return "done";
+	}
 	async abort(): Promise<void> {}
 	dispose(): void {}
 	setActiveToolsByName(): void {}
+}
+
+class BlockingFakeAgentSession extends FakeAgentSession {
+	private releasePrompt: () => void = () => {};
+	private readonly promptReleased = new Promise<void>((resolve) => {
+		this.releasePrompt = resolve;
+	});
+
+	override async prompt(): Promise<void> {
+		await this.promptReleased;
+	}
+
+	override async abort(): Promise<void> {
+		this.releasePrompt();
+	}
 }
 
 function setupTempHome(prefix: string): string {
@@ -47,12 +67,16 @@ function setupTempHome(prefix: string): string {
 	return root;
 }
 
-function installFakeRuntime(): void {
+function installFakeRuntime(createSession: () => FakeAgentSession = () => new FakeAgentSession()): void {
 	restoreRuntime = __setChildAgentExecutorDepsForTest({
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: { open: (file: string) => ({ getSessionId: () => `session-${file}` }) as never },
-		createAgentSession: async () => ({ session: new FakeAgentSession() as never, extensionsResult: { extensions: [], diagnostics: [] } }) as never,
+		createAgentSession: async () =>
+			({
+				session: createSession() as never,
+				extensionsResult: { extensions: [], diagnostics: [] },
+			}) as never,
 	});
 }
 
@@ -74,7 +98,7 @@ function makeExecutor(cwd: string, emitted: Array<{ event: string; payload: Reco
 			lastUiContext: null,
 			poller: null,
 		},
-		config: { parallel: { concurrency: 2 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry: new ChildAgentRegistry(),
@@ -94,14 +118,40 @@ function makeCtx(cwd: string) {
 	};
 }
 
-async function execute(cwd: string, emitted: Array<{ event: string; payload: Record<string, unknown> }>): Promise<{ details?: { runId?: string } }> {
-	return await makeExecutor(cwd, emitted).execute(
+async function execute(
+	cwd: string,
+	emitted: Array<{ event: string; payload: Record<string, unknown> }>,
+): Promise<{ details?: { runId?: string } }> {
+	return (await makeExecutor(cwd, emitted).execute(
 		"id",
-		{ async: true, run: [{ agent: "A", task: "alpha" }, { agent: "B", task: "bravo" }] } as never,
+		{
+			async: true,
+			run: [
+				{ agent: "A", task: "alpha" },
+				{ agent: "B", task: "bravo" },
+			],
+		} as never,
 		new AbortController().signal,
 		undefined,
 		makeCtx(cwd) as never,
-	) as { details?: { runId?: string } };
+	)) as { details?: { runId?: string } };
+}
+
+async function executeSingle(
+	cwd: string,
+	emitted: Array<{ event: string; payload: Record<string, unknown> }>,
+	output: string,
+): Promise<{ details?: { runId?: string; asyncDir?: string } }> {
+	return (await makeExecutor(cwd, emitted).execute(
+		"id",
+		{
+			async: true,
+			run: [{ agent: "A", task: "alpha", output }],
+		} as never,
+		new AbortController().signal,
+		undefined,
+		makeCtx(cwd) as never,
+	)) as { details?: { runId?: string; asyncDir?: string } };
 }
 
 async function waitForEntries(count: number): Promise<void> {
@@ -142,11 +192,67 @@ describe("async parallel per-run status", () => {
 		for (const child of children) {
 			const statusPath = path.join(child.runRecordDir, "status.json");
 			assert.equal(fs.existsSync(statusPath), true);
-			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as { version?: number; runId?: string; mode?: string; steps?: unknown[] };
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as {
+				version?: number;
+				runId?: string;
+				mode?: string;
+				steps?: unknown[];
+			};
 			assert.equal(status.version, STATUS_JSON_VERSION);
 			assert.equal(status.runId, child.runId);
 			assert.equal(status.mode, "single");
 			assert.equal(status.steps?.length, 1);
 		}
+	});
+
+	it("interrupts an individual running child through its layer0 controller", async () => {
+		const root = setupTempHome("per-run-interrupt-test-");
+		const sessions: BlockingFakeAgentSession[] = [];
+		installFakeRuntime(() => {
+			const session = new BlockingFakeAgentSession();
+			sessions.push(session);
+			return session;
+		});
+		const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
+
+		await execute(root, emitted);
+		await waitForEntries(3);
+		for (let i = 0; i < 50 && sessions.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.equal(sessions.length, 2, "expected both child sessions to be running");
+
+		const entries = readAllEntries();
+		const group = entries.find((entry) => !Object.hasOwn(entry, "agentName"));
+		assert.ok(group);
+		const children = entries.filter((entry) => entry.parentRunId === group.runId);
+		const target = children[0];
+		assert.ok(target);
+		assert.deepEqual(interruptRun(target.runId, { cascade: false }).interruptedRunIds, [target.runId]);
+		await waitForCompleteStatus(target.runRecordDir);
+		const targetStatus = JSON.parse(fs.readFileSync(path.join(target.runRecordDir, "status.json"), "utf-8")) as {
+			state?: string;
+		};
+		assert.equal(targetStatus.state, "interrupted");
+
+		for (const child of children.slice(1)) interruptRun(child.runId, { cascade: false });
+		await Promise.all(children.slice(1).map((child) => waitForCompleteStatus(child.runRecordDir)));
+	});
+
+	it("resolves single-output files before finalizing async single status", async () => {
+		const root = setupTempHome("per-run-output-test-");
+		installFakeRuntime();
+		const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
+		const outputPath = path.join(root, "reports", "result.md");
+
+		const result = await executeSingle(root, emitted, outputPath);
+		assert.ok(result.details?.asyncDir);
+		await waitForCompleteStatus(result.details.asyncDir);
+
+		assert.equal(fs.readFileSync(outputPath, "utf-8"), "done");
+		const status = JSON.parse(fs.readFileSync(path.join(result.details.asyncDir, "status.json"), "utf-8")) as {
+			outputText?: string;
+			steps?: Array<{ live?: { outputText?: string } }>;
+		};
+		assert.equal(status.outputText, "done");
+		assert.equal(status.steps?.[0]?.live?.outputText, "done");
 	});
 });

@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
-import { writeWorkflowGroupState } from "../../workflow-group-state.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { readWorkflowGroupState, writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
 
 interface AsyncJobTrackerModule {
 	createAsyncJobTracker(
@@ -20,7 +20,7 @@ interface AsyncJobTrackerModule {
 	};
 }
 
-const trackerMod = await tryImport<AsyncJobTrackerModule>("./async-job-tracker.ts");
+const trackerMod = await tryImport<AsyncJobTrackerModule>("./src/surfaces/async-job-tracker.ts");
 const available = !!trackerMod;
 
 function createState() {
@@ -168,10 +168,150 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(state.asyncJobs.has("run-live"), true);
 			assert.equal(state.asyncJobs.has("run-other"), false);
 			assert.equal(state.asyncJobs.has("run-terminal"), false);
-			const job = state.asyncJobs.get("run-live") as { status?: string; agents?: string[]; runnerHeartbeatAt?: number } | undefined;
+			const job = state.asyncJobs.get("run-live") as
+				| { status?: string; agents?: string[]; runnerHeartbeatAt?: number }
+				| undefined;
 			assert.equal(job?.status, "running");
 			assert.deepEqual(job?.agents, ["worker"]);
 			assert.equal(job?.runnerHeartbeatAt, now);
+		} finally {
+			setRegistryPathForTests(null);
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("reconciles a stale-heartbeat running entry to lost on disk and skips reclaim", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const registryPath = path.join(asyncRoot, "runs-index.jsonl");
+			setRegistryPathForTests(registryPath);
+			const now = Date.now();
+			const hostSessionId = "host-session-1";
+			// status.json frozen at 'running' with a heartbeat older than RUNNER_HARD_DEAD_MS
+			// (30s): an ungracefully killed runner. rehydrate must finalize it to terminal
+			// 'lost' on disk (so it becomes resumable) and take the `continue` branch rather
+			// than re-attaching it as a live async job.
+			const runDir = path.join(asyncRoot, "run-stale");
+			writeStatus(runDir, {
+				version: 1,
+				runId: "run-stale",
+				mode: "single",
+				state: "running",
+				startedAt: now - 120_000,
+				lastUpdate: now - 60_000,
+				runnerHeartbeatAt: now - 60_000,
+				steps: [{ agent: "worker", status: "running" }],
+			});
+			appendRunEntry({
+				runId: "run-stale",
+				runRecordDir: runDir,
+				mode: "single",
+				source: "async",
+				agentName: "worker",
+				rootSessionId: hostSessionId,
+				parentSessionId: hostSessionId,
+				cwd: "/repo",
+				startedAt: now - 120_000,
+			});
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, { pollIntervalMs: 10 });
+			const count = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
+
+			// Not reclaimed: it took the `continue` branch after reconciling.
+			assert.equal(count, 0);
+			assert.equal(state.asyncJobs.has("run-stale"), false);
+			// status.json was finalized to terminal 'lost' on disk.
+			const raw = JSON.parse(fs.readFileSync(path.join(runDir, "status.json"), "utf-8")) as Record<
+				string,
+				unknown
+			>;
+			assert.equal(raw.state, "lost");
+			assert.equal(typeof raw.endedAt, "number");
+		} finally {
+			setRegistryPathForTests(null);
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("finalizes a dead reclaimed workflow group from its children instead of reviving it as running", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const registryPath = path.join(asyncRoot, "runs-index.jsonl");
+			setRegistryPathForTests(registryPath);
+			const now = Date.now();
+			const hostSessionId = "host-session-1";
+			// A workflow group whose in-process orchestrator died (host reload) leaves its
+			// statusless lifecycle marker frozen at 'running' forever (no resume path, so
+			// finishAsync never runs). Reaching the reclaim sweep therefore means it is
+			// dead: it must be finalized from its children (computeGroupStatus), not revived
+			// as a live 'running' row that clocks up indefinitely.
+			const groupDir = path.join(asyncRoot, "wf-group");
+			writeWorkflowGroupState(groupDir, "running");
+			appendRunEntry({
+				runId: "wf-group",
+				runRecordDir: groupDir,
+				mode: "parallel",
+				source: "async",
+				kind: "workflow",
+				rootSessionId: hostSessionId,
+				parentSessionId: hostSessionId,
+				cwd: "/repo",
+				startedAt: now - 5_000_000,
+			});
+			// One failed child + one complete child -> computeGroupStatus = failed.
+			for (const [runId, childState] of [
+				["wf-child-failed", "failed"],
+				["wf-child-done", "complete"],
+			] as const) {
+				const dir = path.join(asyncRoot, runId);
+				writeStatus(dir, {
+					runId,
+					mode: "single",
+					state: childState as never,
+					agent: "operator",
+					parentRunId: "wf-group",
+					startedAt: now - 5_000_000,
+					lastUpdate: now - 4_000_000,
+					endedAt: now - 4_000_000,
+				});
+				appendRunEntry({
+					runId,
+					runRecordDir: dir,
+					mode: "single",
+					source: "async",
+					agentName: "operator",
+					parentRunId: "wf-group",
+					rootSessionId: hostSessionId,
+					parentSessionId: hostSessionId,
+					cwd: "/repo",
+					startedAt: now - 5_000_000,
+				});
+			}
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, { pollIntervalMs: 10 });
+			const count = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
+
+			// Not revived onto the live widget; finalized on disk instead.
+			assert.equal(count, 0);
+			assert.equal(
+				state.asyncJobs.has("wf-group"),
+				false,
+				"dead workflow group must not be reclaimed as running",
+			);
+			assert.equal(
+				readWorkflowGroupState(groupDir),
+				"failed",
+				"marker is finalized from the children (one failed child => failed)",
+			);
+
+			// A second sweep is now a no-op: the marker is terminal, so the group is skipped.
+			const secondCount = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
+			assert.equal(secondCount, 0);
+			assert.equal(state.asyncJobs.has("wf-group"), false);
 		} finally {
 			setRegistryPathForTests(null);
 			removeTempDir(asyncRoot);
@@ -187,7 +327,10 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			const hostSessionId = "host-session-1";
 			// A days-old interrupted run sharing this session's rootSessionId must NOT be
 			// reclaimed onto the live widget (and must not fire a stale needs-attention alarm).
-			for (const [runId, lifecycleState] of [["run-interrupted", "interrupted"], ["run-skipped", "skipped"]] as const) {
+			for (const [runId, lifecycleState] of [
+				["run-interrupted", "interrupted"],
+				["run-skipped", "skipped"],
+			] as const) {
 				const dir = path.join(asyncRoot, runId);
 				writeStatus(dir, {
 					runId,
@@ -289,7 +432,10 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(state.asyncJobs.has("run-1"), true, "undelivered job must not be cleaned up");
 
 			tracker.handleDelivered({ runIds: ["run-1"] });
-			assert.equal((state.asyncJobs.get("run-1") as { pendingDelivery?: boolean } | undefined)?.pendingDelivery, false);
+			assert.equal(
+				(state.asyncJobs.get("run-1") as { pendingDelivery?: boolean } | undefined)?.pendingDelivery,
+				false,
+			);
 
 			await new Promise((resolve) => setTimeout(resolve, 40));
 			assert.equal(state.asyncJobs.has("run-1"), false, "delivered job should retire after retention");
@@ -313,23 +459,54 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			const childDir = path.join(asyncRoot, "wf-child");
 			// The phase label travels via the child's status.json (the poller
 			// mirrors status.label onto the job; handleStarted has no label field).
-			writeStatus(childDir, { state: "running", agent: "explorer", label: "Phase 1: recon", parentRunId: "wf-group", runnerHeartbeatAt: Date.now(), lastUpdate: Date.now(), startedAt: Date.now() });
+			writeStatus(childDir, {
+				runId: "wf-child",
+				mode: "single",
+				state: "running",
+				agent: "explorer",
+				label: "Phase 1: recon",
+				parentRunId: "wf-group",
+				runnerHeartbeatAt: Date.now(),
+				lastUpdate: Date.now(),
+				startedAt: Date.now(),
+			});
 			tracker.handleStarted({ id: "wf-child", asyncDir: childDir, agent: "explorer", parentRunId: "wf-group" });
 
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			const group = state.asyncJobs.get("wf-group") as { status: string; kind?: string; stepsTotal?: number; currentStep?: number; label?: string; displayState?: string } | undefined;
+			const group = state.asyncJobs.get("wf-group") as
+				| {
+						status: string;
+						kind?: string;
+						stepsTotal?: number;
+						currentStep?: number;
+						childCounts?: { done: number; running: number; queued: number };
+						label?: string;
+						displayState?: string;
+				  }
+				| undefined;
 			assert.ok(group, "group job should exist");
 			assert.equal(group?.kind, "workflow");
 			assert.equal(group?.status, "running", "statusless group must not be marked lost while children run");
-			assert.equal(group?.stepsTotal, 1);
-			assert.equal(group?.currentStep, 0, "no terminal children yet");
+			assert.equal(group?.childCounts?.done, 0, "no terminal children yet");
+			assert.equal(group?.childCounts?.running, 1, "one child running");
+			assert.equal(group?.childCounts?.queued, 0);
 			assert.equal(group?.label, "Phase 1: recon", "group label mirrors the active child's phase label");
 
 			// Workflow finishes: lifecycle flips, group goes pending-delivery.
-			writeStatus(childDir, { state: "complete", agent: "explorer", parentRunId: "wf-group", lastUpdate: Date.now() });
+			writeStatus(childDir, {
+				runId: "wf-child",
+				mode: "single",
+				state: "complete",
+				agent: "explorer",
+				parentRunId: "wf-group",
+				startedAt: Date.now(),
+				lastUpdate: Date.now(),
+			});
 			writeWorkflowGroupState(groupDir, "complete");
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			const finished = state.asyncJobs.get("wf-group") as { status: string; pendingDelivery?: boolean } | undefined;
+			const finished = state.asyncJobs.get("wf-group") as
+				| { status: string; pendingDelivery?: boolean }
+				| undefined;
 			assert.equal(finished?.status, "complete");
 			assert.equal(finished?.pendingDelivery, true, "group must wait for its one notification to deliver");
 		} finally {
@@ -394,14 +571,18 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		try {
 			const runDir = path.join(asyncRoot, "run-2");
 			fs.mkdirSync(runDir, { recursive: true });
-			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
-				runId: "run-2",
-				mode: "single",
-				state: "complete",
-				startedAt: Date.now() - 1000,
-				lastUpdate: Date.now(),
-				steps: [{ agent: "worker", status: "complete" }],
-			}), "utf-8");
+			fs.writeFileSync(
+				path.join(runDir, "status.json"),
+				JSON.stringify({
+					runId: "run-2",
+					mode: "single",
+					state: "complete",
+					startedAt: Date.now() - 1000,
+					lastUpdate: Date.now(),
+					steps: [{ agent: "worker", status: "complete" }],
+				}),
+				"utf-8",
+			);
 
 			const state = createState();
 			const ui = createUiContext();
@@ -422,5 +603,4 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			removeTempDir(asyncRoot);
 		}
 	});
-
 });

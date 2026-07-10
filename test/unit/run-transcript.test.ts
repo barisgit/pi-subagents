@@ -4,32 +4,44 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { readRunTranscript } from "../../run-transcript.ts";
-import type { AsyncStatus } from "../../types.ts";
+import { readRunTranscript } from "../../src/state/run-transcript.ts";
+import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 function makeRunDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), `run-transcript-${randomUUID()}-`));
 }
 
-function writeStatus(dir: string, patch: Partial<AsyncStatus> = {}): void {
-	const status: AsyncStatus = {
+function writeStatus(dir: string, patch: Partial<PersistedRunStatus> = {}): void {
+	const status: PersistedRunStatus = {
 		runId: "run-a",
 		mode: "single",
 		state: "complete",
 		startedAt: 1000,
 		endedAt: 2200,
 		lastUpdate: 2200,
-		steps: [{ agent: "fixer", label: "check files", status: "complete", startedAt: 1000, endedAt: 2200, durationMs: 1200, tokens: { input: 1, output: 2, total: 3 } }],
+		steps: [
+			{
+				agent: "fixer",
+				label: "check files",
+				status: "complete",
+				startedAt: 1000,
+				endedAt: 2200,
+				durationMs: 1200,
+				tokens: { input: 1, output: 2, total: 3 },
+			},
+		],
 		...patch,
 	};
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify(status, null, 2));
 }
 
-function writeSession(dir: string, stepIndex: number, records: Array<Record<string, unknown>>): void {
+function writeSession(dir: string, stepIndex: number, records: Array<Record<string, unknown>>): string {
 	const runDir = path.join(dir, `run-${stepIndex}`);
 	fs.mkdirSync(runDir, { recursive: true });
 	const session = { type: "session", version: 3, id: "s1", timestamp: "2026-05-20T00:00:00.000Z", cwd: dir };
-	fs.writeFileSync(path.join(runDir, "session.jsonl"), [session, ...records].map((record) => JSON.stringify(record)).join("\n") + "\n");
+	const sessionFile = path.join(runDir, "session.jsonl");
+	fs.writeFileSync(sessionFile, [session, ...records].map((record) => JSON.stringify(record)).join("\n") + "\n");
+	return sessionFile;
 }
 
 function assistant(timestamp: string, content: unknown[]): Record<string, unknown> {
@@ -51,6 +63,72 @@ describe("readRunTranscript", () => {
 		}
 	});
 
+	it("falls back to canonical session files when status steps are malformed", () => {
+		const dir = makeRunDir();
+		try {
+			fs.writeFileSync(
+				path.join(dir, "status.json"),
+				JSON.stringify({ runId: "run-a", mode: "single", state: "complete", startedAt: 1000, steps: {} }),
+			);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "a", name: "read", input: { path: "a" } },
+				]),
+			]);
+
+			assert.deepEqual(
+				readRunTranscript(dir)
+					.filter((line) => line.kind === "tool")
+					.map((line) => [line.stepIndex, line.toolName]),
+				[[0, "read"]],
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses explicit session files per step without dropping canonical transcripts for other steps", () => {
+		const dir = makeRunDir();
+		const explicitDir = makeRunDir();
+		try {
+			const explicitSessionFile = writeSession(explicitDir, 0, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "a", name: "read", input: { path: "a" } },
+				]),
+			]);
+			writeStatus(dir, {
+				mode: "parallel",
+				steps: [
+					{ agent: "fixer", status: "complete", sessionFile: explicitSessionFile },
+					{ agent: "review", status: "complete" },
+				],
+			});
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.050Z", [
+					{ type: "tool_use", id: "ignored", name: "write", input: { path: "ignored" } },
+				]),
+			]);
+			writeSession(dir, 1, [
+				assistant("2026-05-20T00:00:01.100Z", [
+					{ type: "tool_use", id: "b", name: "bash", input: { command: "npm test" } },
+				]),
+			]);
+
+			assert.deepEqual(
+				readRunTranscript(dir)
+					.filter((line) => line.kind === "tool")
+					.map((line) => [line.stepIndex, line.toolName]),
+				[
+					[0, "read"],
+					[1, "bash"],
+				],
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(explicitDir, { recursive: true, force: true });
+		}
+	});
+
 	it("normalizes session messages into right-pane transcript lines", () => {
 		const dir = makeRunDir();
 		try {
@@ -60,20 +138,105 @@ describe("readRunTranscript", () => {
 					{ type: "thinking", thinking: "checking" },
 					{ type: "tool_use", id: "tool-1", name: "read", input: { path: "/abs/a.ts" } },
 				]),
-				user("2026-05-20T00:00:01.350Z", [
-					{ type: "tool_result", tool_use_id: "tool-1", content: "ok" },
-				]),
-				assistant("2026-05-20T00:00:02.000Z", [
-					{ type: "text", text: "Done." },
-				]),
+				user("2026-05-20T00:00:01.350Z", [{ type: "tool_result", tool_use_id: "tool-1", content: "ok" }]),
+				assistant("2026-05-20T00:00:02.000Z", [{ type: "text", text: "Done." }]),
 			]);
 
 			assert.deepEqual(readRunTranscript(dir), [
 				{ kind: "step-start", stepIndex: 0, agent: "fixer", ts: 1000, label: "check files" },
-				{ kind: "tool", stepIndex: 0, toolName: "read", argsPreview: '{"path":"/abs/a.ts"}', rawArgs: { path: "/abs/a.ts" }, durationMs: 250, ts: Date.parse("2026-05-20T00:00:01.100Z") },
-				{ kind: "step-end", stepIndex: 0, agent: "fixer", ts: 2200, durationMs: 1200, tokens: 3, status: "complete" },
+				{
+					kind: "tool",
+					stepIndex: 0,
+					toolName: "read",
+					argsPreview: '{"path":"/abs/a.ts"}',
+					rawArgs: { path: "/abs/a.ts" },
+					durationMs: 250,
+					resultHint: "ok",
+					resultLineCount: 1,
+					ts: Date.parse("2026-05-20T00:00:01.100Z"),
+				},
+				{
+					kind: "step-end",
+					stepIndex: 0,
+					agent: "fixer",
+					ts: 2200,
+					durationMs: 1200,
+					tokens: 3,
+					status: "complete",
+				},
 				{ kind: "final-text", stepIndex: 0, agent: "fixer", text: "Done." },
 			]);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves dedicated toolResult-role messages, including the isError flag", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.100Z", [
+					{ type: "tool_use", id: "tool-1", name: "bash", input: { command: "npm test" } },
+				]),
+				{
+					type: "message",
+					timestamp: "2026-05-20T00:00:01.400Z",
+					message: {
+						role: "toolResult",
+						toolCallId: "tool-1",
+						toolName: "bash",
+						content: [{ type: "text", text: "FAIL 3 tests" }],
+						isError: true,
+					},
+				},
+				assistant("2026-05-20T00:00:02.000Z", [{ type: "text", text: "Done." }]),
+			]);
+
+			const tool = readRunTranscript(dir).find((line) => line.kind === "tool");
+			assert.ok(tool && tool.kind === "tool");
+			assert.equal(tool.durationMs, 300);
+			assert.equal(tool.resultHint, "FAIL 3 tests");
+			assert.equal(tool.isError, true);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("strips the agent preamble to the trailing <output> block in final-text", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:02.000Z", [
+					{
+						type: "text",
+						text: "Let me compile the findings.\nHere is what I found.\n<output>the clean result</output>",
+					},
+				]),
+			]);
+			const finalLine = readRunTranscript(dir).find((line) => line.kind === "final-text");
+			// The dashboard final-text surface shows ONLY the result, never the preamble.
+			assert.deepEqual(finalLine, { kind: "final-text", stepIndex: 0, agent: "fixer", text: "the clean result" });
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the full final message when it has no <output> block", () => {
+		const dir = makeRunDir();
+		try {
+			writeStatus(dir);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:02.000Z", [{ type: "text", text: "Plain prose answer, no block." }]),
+			]);
+			const finalLine = readRunTranscript(dir).find((line) => line.kind === "final-text");
+			assert.deepEqual(finalLine, {
+				kind: "final-text",
+				stepIndex: 0,
+				agent: "fixer",
+				text: "Plain prose answer, no block.",
+			});
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -89,12 +252,32 @@ describe("readRunTranscript", () => {
 					{ agent: "review", status: "failed", startedAt: 1100, endedAt: 2100 },
 				],
 			});
-			writeSession(dir, 0, [assistant("2026-05-20T00:00:01.000Z", [{ type: "tool_use", id: "a", name: "read", input: { path: "a" } }])]);
-			writeSession(dir, 1, [assistant("2026-05-20T00:00:01.100Z", [{ type: "tool_use", id: "b", name: "bash", input: { command: "npm test" } }])]);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "a", name: "read", input: { path: "a" } },
+				]),
+			]);
+			writeSession(dir, 1, [
+				assistant("2026-05-20T00:00:01.100Z", [
+					{ type: "tool_use", id: "b", name: "bash", input: { command: "npm test" } },
+				]),
+			]);
 
 			const lines = readRunTranscript(dir);
-			assert.deepEqual(lines.filter((line) => line.kind === "tool").map((line) => [line.stepIndex, line.toolName]), [[0, "read"], [1, "bash"]]);
-			assert.deepEqual(lines.filter((line) => line.kind === "step-start").map((line) => [line.stepIndex, line.agent]), [[0, "fixer"], [1, "review"]]);
+			assert.deepEqual(
+				lines.filter((line) => line.kind === "tool").map((line) => [line.stepIndex, line.toolName]),
+				[
+					[0, "read"],
+					[1, "bash"],
+				],
+			);
+			assert.deepEqual(
+				lines.filter((line) => line.kind === "step-start").map((line) => [line.stepIndex, line.agent]),
+				[
+					[0, "fixer"],
+					[1, "review"],
+				],
+			);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -138,11 +321,20 @@ describe("readRunTranscript", () => {
 		const dir = makeRunDir();
 		try {
 			writeStatus(dir);
-			writeSession(dir, 0, [assistant("2026-05-20T00:00:01.000Z", [{ type: "tool_use", id: "a", name: "read", input: { path: "a" } }])]);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "a", name: "read", input: { path: "a" } },
+				]),
+			]);
 			const first = readRunTranscript(dir);
 			const second = readRunTranscript(dir);
 			assert.equal(first, second);
-			writeSession(dir, 0, [assistant("2026-05-20T00:00:01.000Z", [{ type: "tool_use", id: "a", name: "read", input: { path: "a" } }, { type: "tool_use", id: "b", name: "bash", input: { command: "echo hi" } }])]);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "a", name: "read", input: { path: "a" } },
+					{ type: "tool_use", id: "b", name: "bash", input: { command: "echo hi" } },
+				]),
+			]);
 			const third = readRunTranscript(dir);
 			assert.notEqual(first, third);
 			assert.equal(third.filter((line) => line.kind === "tool").length, 2);

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createSubagentExecutor, validateSubagentToolInput } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, type ChildAgentHandle } from "../../in-process-executor.ts";
+import { createSubagentExecutor, validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, type ChildAgentHandle } from "../../src/dispatch/in-process-executor.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
-import type { SubagentState } from "../../types.ts";
+import type { SubagentState } from "../../src/protocol/types.ts";
 
 interface ExecutorResult {
 	isError?: boolean;
@@ -12,9 +12,50 @@ interface ExecutorResult {
 
 class FakeSession {
 	readonly messages: string[] = [];
+	readonly deliveryOptions: Array<{ deliverAs?: "steer" | "followUp" } | undefined> = [];
 
-	postUserMessage(message: string): void {
+	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
 		this.messages.push(message);
+		this.deliveryOptions.push(options);
+	}
+}
+
+class BusySteerSession {
+	readonly steered: string[] = [];
+	promptCalls = 0;
+
+	prompt(): void {
+		this.promptCalls += 1;
+		throw new Error(
+			"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+		);
+	}
+
+	async steer(message: string): Promise<void> {
+		this.steered.push(message);
+	}
+
+	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
+		if (options?.deliverAs === "steer") {
+			await this.steer(message);
+			return;
+		}
+		this.prompt();
+	}
+}
+
+class ThrowingSession {
+	prompt(): void {
+		throw new Error("prompt failed");
+	}
+
+	async steer(): Promise<void> {
+		throw new Error("steer failed");
+	}
+
+	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
+		if (options?.deliverAs === "steer") await this.steer();
+		else this.prompt();
 	}
 }
 
@@ -35,7 +76,21 @@ function makeState(cwd: string): SubagentState {
 	};
 }
 
-function registerHandle(registry: ChildAgentRegistry, runId: string, stepIndex: number, session = new FakeSession()): FakeSession {
+type ResumeSession = FakeSession | BusySteerSession | ThrowingSession;
+
+function registerHandle(registry: ChildAgentRegistry, runId: string, stepIndex: number): FakeSession;
+function registerHandle<T extends ResumeSession>(
+	registry: ChildAgentRegistry,
+	runId: string,
+	stepIndex: number,
+	session: T,
+): T;
+function registerHandle(
+	registry: ChildAgentRegistry,
+	runId: string,
+	stepIndex: number,
+	session: ResumeSession = new FakeSession(),
+): ResumeSession {
 	const handle: ChildAgentHandle = {
 		runId,
 		stepIndex,
@@ -58,31 +113,33 @@ function makeHarness(cwd: string) {
 			getAllTools: () => [],
 		},
 		state,
-		config: { parallel: { concurrency: 1 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry,
 		expandTilde: (value: string) => value,
-		discoverAgents: () => ({ agents: ["main", "explorer"].map((name) => makeAgent(name, { model: "mock/test-model" })) }),
+		discoverAgents: () => ({
+			agents: ["main", "explorer"].map((name) => makeAgent(name, { model: "mock/test-model" })),
+		}),
 	} as never);
-	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> => executor.execute(
-		"id",
-		params as never,
-		new AbortController().signal,
-		undefined,
-		{
+	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> =>
+		executor.execute("id", params as never, new AbortController().signal, undefined, {
 			cwd,
 			hasUI: false,
 			ui: {},
 			sessionManager: { getSessionId: () => "session-resume-action", getSessionFile: () => null },
 			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
 			model: { provider: "mock" },
-		} as never,
-	) as Promise<ExecutorResult>;
+		} as never) as Promise<ExecutorResult>;
 	return { execute, state, childRegistry };
 }
 
-function markAsync(state: SubagentState, runId: string, status: "queued" | "running" | "complete" | "failed" | "paused" | "lost", mode: "single" | "parallel" | "chain" = "single"): void {
+function markAsync(
+	state: SubagentState,
+	runId: string,
+	status: "queued" | "running" | "complete" | "failed" | "paused" | "lost",
+	mode: "single" | "parallel" = "single",
+): void {
 	state.asyncJobs.set(runId, {
 		asyncId: runId,
 		asyncDir: "/tmp/pi-subagent-resume-action",
@@ -104,6 +161,7 @@ describe("resume action", () => {
 
 			assert.equal(result.isError, undefined, text(result));
 			assert.deepEqual(session.messages, ["continue"]);
+			assert.deepEqual(session.deliveryOptions, [{ deliverAs: "steer" }]);
 		} finally {
 			removeTempDir(tempDir);
 		}
@@ -134,13 +192,54 @@ describe("resume action", () => {
 
 			assert.equal(result.isError, undefined, text(result));
 			assert.deepEqual(session.messages, ["again"]);
+			assert.deepEqual(session.deliveryOptions, [{ deliverAs: "steer" }]);
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
+	it("live resume uses steering delivery instead of busy prompt", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			const session = new BusySteerSession();
+			registerHandle(harness.childRegistry, "run-busy", 0, session);
+			markAsync(harness.state, "run-busy", "running");
+
+			const result = await harness.execute({ action: "resume", id: "run-busy", message: "steer me" });
+
+			assert.equal(result.isError, undefined, text(result));
+			assert.deepEqual(session.steered, ["steer me"]);
+			assert.equal(session.promptCalls, 0);
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
+	it("live resume reports delivery failures instead of phantom success", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			registerHandle(harness.childRegistry, "run-fail", 0, new ThrowingSession());
+			markAsync(harness.state, "run-fail", "running");
+
+			const result = await harness.execute({ action: "resume", id: "run-fail", message: "fail me" });
+
+			assert.equal(result.isError, true);
+			assert.match(text(result), /Failed to resume run run-fail: steer failed/);
+			assert.doesNotMatch(text(result), /Resume message sent/);
 		} finally {
 			removeTempDir(tempDir);
 		}
 	});
 
 	it("agent-switch-attempt-rejected", () => {
-		const taskError = validateSubagentToolInput({ action: "resume", id: "x", message: "hi", run: [{ agent: "explorer", task: "y" }] });
+		const taskError = validateSubagentToolInput({
+			action: "resume",
+			id: "x",
+			message: "hi",
+			run: [{ agent: "explorer", task: "y" }],
+		});
 		const agentError = validateSubagentToolInput({ action: "resume", id: "x", message: "hi", agent: "explorer" });
 
 		assert.equal(taskError?.isError, true);

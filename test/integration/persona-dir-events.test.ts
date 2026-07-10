@@ -11,7 +11,7 @@ import {
 	SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT,
 	type PersonaDirErrorPayload,
 	type SubagentExposedAPI,
-} from "../../types.ts";
+} from "../../src/protocol/types.ts";
 import { createTempDir, removeTempDir } from "../support/helpers.ts";
 
 function createPiHarness() {
@@ -50,7 +50,10 @@ function createPiHarness() {
 }
 
 function writePersona(dir: string, name: string, scope = "both") {
-	fs.writeFileSync(path.join(dir, `${name}.md`), `---\nname: ${name}\ndescription: Test persona ${name}\nscope: ${scope}\n---\n\nYou are ${name}.\n`);
+	fs.writeFileSync(
+		path.join(dir, `${name}.md`),
+		`---\nname: ${name}\ndescription: Test persona ${name}\nscope: ${scope}\n---\n\nYou are ${name}.\n`,
+	);
 }
 
 describe("persona directory registration events", () => {
@@ -80,13 +83,19 @@ describe("persona directory registration events", () => {
 
 		events.emit(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, { extensionId: "ext-a", path: dir, scope: "internal" });
 
-		assert.equal(api.list().some((agent) => agent.name === "event-persona"), false);
+		assert.equal(
+			api.list().some((agent) => agent.name === "event-persona"),
+			false,
+		);
 		const agent = api.list({ includeInternal: true }).find((candidate) => candidate.name === "event-persona");
 		assert.ok(agent, "expected registered persona in internal list");
 		assert.equal(agent.surface, "internal");
 
 		events.emit(SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT, { extensionId: "ext-a" });
-		assert.equal(api.list({ includeInternal: true }).some((candidate) => candidate.name === "event-persona"), false);
+		assert.equal(
+			api.list({ includeInternal: true }).some((candidate) => candidate.name === "event-persona"),
+			false,
+		);
 	});
 
 	it("emits a collision error without throwing", () => {
@@ -104,12 +113,14 @@ describe("persona directory registration events", () => {
 			events.emit(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, { extensionId: "ext-b", path: second, scope: "internal" });
 		});
 
-		assert.deepEqual(errors, [{
-			extensionId: "ext-b",
-			conflictingExtensionId: "ext-a",
-			personaName: "shared-persona",
-			message: "Subagent persona name 'shared-persona' is already registered by extension 'ext-a'",
-		}]);
+		assert.deepEqual(errors, [
+			{
+				extensionId: "ext-b",
+				conflictingExtensionId: "ext-a",
+				personaName: "shared-persona",
+				message: "Subagent persona name 'shared-persona' is already registered by extension 'ext-a'",
+			},
+		]);
 		const matches = api.list({ includeInternal: true }).filter((candidate) => candidate.name === "shared-persona");
 		assert.equal(matches.length, 1);
 	});

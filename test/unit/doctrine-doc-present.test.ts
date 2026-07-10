@@ -21,8 +21,10 @@ describe("doctrine doc", () => {
 		assert.equal(existsSync(docPath), true);
 	});
 
-	it("has H1 \"Subagent schema decisions\"", () => {
-		const firstH1 = readDoc().split(/\r?\n/).find((line) => line.startsWith("# "));
+	it('has H1 "Subagent schema decisions"', () => {
+		const firstH1 = readDoc()
+			.split(/\r?\n/)
+			.find((line) => line.startsWith("# "));
 		assert.equal(firstH1, "# Subagent schema decisions");
 	});
 
@@ -61,7 +63,6 @@ describe("doctrine doc", () => {
 			"sessionDir",
 			"control",
 			"skill",
-			"chainDir",
 			"artifacts",
 			"progress",
 			"agentScope",
@@ -80,7 +81,7 @@ describe("doctrine doc", () => {
 		const renames = h2Section(readDoc(), "Renames");
 		assert.match(renames, /`prompt`\s*\|\s*`message`/);
 		assert.match(renames, /`tasks`\s*\|\s*`run`/);
-		assert.match(renames, /`sequential`\s*\|\s*`chain`/);
+		assert.match(renames, /`parallel`/);
 	});
 
 	it("baseline version recorded", () => {

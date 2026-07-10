@@ -1,11 +1,12 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import registerSubagentNotify from "../../notify.ts";
-import { setCurrentPi } from "../../current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../types.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { __resetLeafConcurrencyForTest, leafConcurrencyLimit } from "../../src/dispatch/leaf-concurrency.ts";
+import registerSubagentNotify from "../../src/surfaces/notify.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
 
 type Listener = (event: Record<string, unknown>) => void;
@@ -172,7 +173,7 @@ function makeHarness(cwd: string) {
 	const executor = createSubagentExecutor({
 		pi,
 		state,
-		config: { parallel: { concurrency: 1 } },
+		config: { maxConcurrentAgents: 1 },
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry,
@@ -181,13 +182,14 @@ function makeHarness(cwd: string) {
 			agents: ["A", "B", "C"].map((name) => makeAgent(name, { model: "mock/test-model" })),
 		}),
 	} as never);
-	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> => executor.execute(
-		"id",
-		params as never,
-		new AbortController().signal,
-		undefined,
-		makeCtx(cwd) as never,
-	) as Promise<ExecutorResult>;
+	const execute = (params: Record<string, unknown>): Promise<ExecutorResult> =>
+		executor.execute(
+			"id",
+			params as never,
+			new AbortController().signal,
+			undefined,
+			makeCtx(cwd) as never,
+		) as Promise<ExecutorResult>;
 	return { execute, state, sent, completionEvents };
 }
 
@@ -205,18 +207,26 @@ describe("batch notifications", () => {
 
 	beforeEach(() => {
 		tempDir = createTempDir("pi-subagent-batch-notifications-");
+		__resetLeafConcurrencyForTest();
+		leafConcurrencyLimit(1);
 	});
 
 	afterEach(() => {
 		restoreRuntime?.();
 		restoreRuntime = undefined;
+		__resetLeafConcurrencyForTest();
 		removeTempDir(tempDir);
 	});
 
 	it("per-run-default emits one completion notification per child", async () => {
-		restoreRuntime = installFakeRuntime(["one", "two", "three"].map((output) => new FakeAgentSession(async (_task, session) => {
-			session.emit(assistantMessage(output));
-		})));
+		restoreRuntime = installFakeRuntime(
+			["one", "two", "three"].map(
+				(output) =>
+					new FakeAgentSession(async (_task, session) => {
+						session.emit(assistantMessage(output));
+					}),
+			),
+		);
 		const harness = makeHarness(tempDir);
 
 		const result = await harness.execute({
@@ -232,7 +242,10 @@ describe("batch notifications", () => {
 		await waitFor(() => harness.sent.length === 3, "expected three per-child notifications");
 		assert.equal(harness.completionEvents.length, 1);
 		assert.equal(harness.sent.length, 3);
-		assert.deepEqual(harness.sent.map((entry) => entry.message.customType), ["subagent-notify", "subagent-notify", "subagent-notify"]);
+		assert.deepEqual(
+			harness.sent.map((entry) => entry.message.customType),
+			["subagent-notify", "subagent-notify", "subagent-notify"],
+		);
 		assert.ok(harness.sent.every((entry) => entry.message.content?.startsWith("Background task completed:")));
 		assert.ok(harness.sent[0]!.message.content?.includes("(1/3)"));
 		assert.ok(harness.sent[1]!.message.content?.includes("(2/3)"));
@@ -240,9 +253,14 @@ describe("batch notifications", () => {
 	});
 
 	it("rollup-when-batch-true emits one rollup with all child runIds and states", async () => {
-		restoreRuntime = installFakeRuntime(["one", "two", "three"].map((output) => new FakeAgentSession(async (_task, session) => {
-			session.emit(assistantMessage(output));
-		})));
+		restoreRuntime = installFakeRuntime(
+			["one", "two", "three"].map(
+				(output) =>
+					new FakeAgentSession(async (_task, session) => {
+						session.emit(assistantMessage(output));
+					}),
+			),
+		);
 		const harness = makeHarness(tempDir);
 
 		const result = await harness.execute({
@@ -263,18 +281,24 @@ describe("batch notifications", () => {
 		assert.equal(event.total, 3);
 		assert.equal(event.completed, 3);
 		assert.equal(rows.length, 3);
-		assert.deepEqual(rows.map((row) => row.state), ["complete", "complete", "complete"]);
+		assert.deepEqual(
+			rows.map((row) => row.state),
+			["complete", "complete", "complete"],
+		);
 		const content = harness.sent[0]!.message.content ?? "";
 		for (const row of rows) {
-			assert.ok(content.includes(String(row.runId)), `content should include ${String(row.runId)}`);
+			assert.ok(content.includes(String(row.agent)), `content should include ${String(row.agent)}`);
 			assert.ok(content.includes(String(row.state)), `content should include ${String(row.state)}`);
 		}
 	});
 
 	it("interrupt-mid-flight-rollup emits mixed complete and interrupted states", async () => {
+		// concurrency:1 (see makeHarness) means children dispatch serially, so the
+		// first child must complete deterministically before the interrupt rather
+		// than racing a wall-clock margin (fragile under full-suite load). A emits
+		// synchronously and finishes first; B/C are long-running and get interrupted.
 		restoreRuntime = installFakeRuntime([
 			new FakeAgentSession(async (_task, session) => {
-				await delay(20);
 				session.emit(assistantMessage("one"));
 			}),
 			new FakeAgentSession(async (_task, session) => {
@@ -310,15 +334,21 @@ describe("batch notifications", () => {
 		await delay(80);
 		const interrupt = await harness.execute({ action: "interrupt", id: runId });
 		assert.equal(interrupt.isError, undefined, resultText(interrupt));
-		await waitFor(() => harness.sent.length === 1, "expected one interrupted batch rollup notification");
+		// The interrupt now waits for the group to reach a terminal state and
+		// reports the outcome inline in the tool result.
+		assert.match(resultText(interrupt), /interrupted/i);
+		assert.doesNotMatch(resultText(interrupt), /still unwinding/);
+		await waitFor(() => harness.completionEvents.length === 1, "expected the group completion event");
 		const event = harness.completionEvents[0]!;
 		const states = childRows(event).map((row) => row.state);
 		assert.equal(states.length, 3);
 		assert.ok(states.includes("complete"), `expected a completed child, got ${states.join(",")}`);
 		assert.ok(states.includes("interrupted"), `expected an interrupted child, got ${states.join(",")}`);
-		const content = harness.sent[0]!.message.content ?? "";
-		assert.ok(content.includes("complete"));
-		assert.ok(content.includes("interrupted"));
+		// The outcome was already delivered inline by the interrupt tool result, so
+		// the rollup notification is deduped instead of arriving as a redundant
+		// second copy.
+		await delay(50);
+		assert.equal(harness.sent.length, 0, "in-time interrupt must suppress the later rollup notification");
 	});
 
 	it("single-child-batch-degenerate emits one rollup with one entry", async () => {
@@ -344,6 +374,6 @@ describe("batch notifications", () => {
 		assert.equal(event.completed, 1);
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0]!.state, "complete");
-		assert.ok((harness.sent[0]!.message.content ?? "").includes(String(rows[0]!.runId)));
+		assert.ok((harness.sent[0]!.message.content ?? "").includes(String(rows[0]!.agent)));
 	});
 });

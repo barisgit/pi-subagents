@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { Compile } from "typebox/compile";
-import { SubagentParams } from "../../schemas.ts";
-import { createSubagentExecutor, validateSubagentToolInput } from "../../subagent-executor.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
+import { SubagentParams } from "../../src/protocol/schemas.ts";
+import { createSubagentExecutor, validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { createTempDir, events, makeAgent, removeTempDir } from "../support/helpers.ts";
 
 type Listener = (event: Record<string, unknown>) => void;
@@ -42,12 +42,13 @@ class FakeAgentSession {
 	}
 
 	async prompt(task: string): Promise<void> {
-		this.messages.push({ role: "toolResult", toolName: "submit_result", details: { status: "ok", summary: "done", result: this.getLastAssistantText(), artifacts: [] } });
 		await this.promptImpl(task, this);
+		this.lastAssistantText = `<output>${task}</output>`;
 	}
 
+	lastAssistantText = "";
 	getLastAssistantText(): string {
-		return "";
+		return this.lastAssistantText;
 	}
 
 	async abort(): Promise<void> {}
@@ -88,7 +89,7 @@ function makeExecutor(cwd: string) {
 			lastUiContext: null,
 			poller: null,
 		},
-		config: { parallel: { concurrency: 1 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
 		childRegistry: new ChildAgentRegistry(),
@@ -125,7 +126,7 @@ async function execute(cwd: string, params: Record<string, unknown>): Promise<Ex
 
 function text(result: ExecutorResult | null): string {
 	const first = result?.content[0];
-	return first?.type === "text" || first?.text ? first.text ?? "" : "";
+	return first?.type === "text" || first?.text ? (first.text ?? "") : "";
 }
 
 describe("message field", () => {
@@ -167,35 +168,17 @@ describe("message field", () => {
 		assert.deepEqual(seenTasks, ["Shared context for alpha"]);
 	});
 
-	it("previous-substitution-in-chain interpolates upstream output", async () => {
-		const seenTasks: string[] = [];
-		restoreRuntime = installFakeRuntime(["first output", "second output"].map((output) => new FakeAgentSession(async (task, session) => {
-			seenTasks.push(task);
-			session.emit(events.assistantMessage(output) as Record<string, unknown>);
-		})));
-
-		const result = await execute(tempDir, {
-			run: [
-				{ agent: "A", task: "first" },
-				{ agent: "B", task: "second" },
-			],
-			chain: true,
-			message: "Task {task}; previous {previous}",
-		});
-
-		assert.equal(result.isError, undefined, text(result));
-		assert.deepEqual(seenTasks, [
-			"Task first; previous ",
-			"Task second; previous first output",
-		]);
-	});
-
 	it("in-substitution-equals-task resolves {in} like {task}", async () => {
 		const seenTasks: string[] = [];
-		restoreRuntime = installFakeRuntime(["a", "b"].map(() => new FakeAgentSession(async (task, session) => {
-			seenTasks.push(task);
-			session.emit(events.assistantMessage("done") as Record<string, unknown>);
-		})));
+		restoreRuntime = installFakeRuntime(
+			["a", "b"].map(
+				() =>
+					new FakeAgentSession(async (task, session) => {
+						seenTasks.push(task);
+						session.emit(events.assistantMessage("done") as Record<string, unknown>);
+					}),
+			),
+		);
 
 		const result = await execute(tempDir, {
 			run: [

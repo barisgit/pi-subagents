@@ -5,11 +5,10 @@ import {
 	flattenSteps,
 	mapConcurrent,
 	aggregateParallelOutputs,
-	MAX_PARALLEL_CONCURRENCY,
 	type RunnerSubagentStep,
 	type ParallelStepGroup,
 	type RunnerStep,
-} from "../../parallel-utils.ts";
+} from "../../src/dispatch/parallel-utils.ts";
 
 describe("isParallelGroup", () => {
 	it("returns true for a parallel step group", () => {
@@ -69,14 +68,13 @@ describe("flattenSteps", () => {
 	});
 
 	it("handles empty parallel group", () => {
-		const steps: RunnerStep[] = [
-			{ agent: "before", task: "x" },
-			{ parallel: [] },
-			{ agent: "after", task: "y" },
-		];
+		const steps: RunnerStep[] = [{ agent: "before", task: "x" }, { parallel: [] }, { agent: "after", task: "y" }];
 		const flat = flattenSteps(steps);
 		assert.equal(flat.length, 2);
-		assert.deepEqual(flat.map((s) => s.agent), ["before", "after"]);
+		assert.deepEqual(
+			flat.map((s) => s.agent),
+			["before", "after"],
+		);
 	});
 });
 
@@ -165,23 +163,17 @@ describe("aggregateParallelOutputs", () => {
 	});
 
 	it("marks failed tasks", () => {
-		const result = aggregateParallelOutputs([
-			{ agent: "agent-a", output: "partial output", exitCode: 1 },
-		]);
+		const result = aggregateParallelOutputs([{ agent: "agent-a", output: "partial output", exitCode: 1 }]);
 		assert.ok(result.includes("FAILED (exit code 1)"));
 	});
 
 	it("marks empty output", () => {
-		const result = aggregateParallelOutputs([
-			{ agent: "agent-a", output: "", exitCode: 0 },
-		]);
+		const result = aggregateParallelOutputs([{ agent: "agent-a", output: "", exitCode: 0 }]);
 		assert.ok(result.includes("EMPTY OUTPUT"));
 	});
 
 	it("treats whitespace-only output as empty", () => {
-		const result = aggregateParallelOutputs([
-			{ agent: "agent-a", output: "   \n  ", exitCode: 0 },
-		]);
+		const result = aggregateParallelOutputs([{ agent: "agent-a", output: "   \n  ", exitCode: 0 }]);
 		assert.ok(result.includes("EMPTY OUTPUT"));
 	});
 
@@ -192,11 +184,5 @@ describe("aggregateParallelOutputs", () => {
 		]);
 		assert.ok(result.includes("SKIPPED"), "skipped task should show SKIPPED");
 		assert.ok(!result.includes("FAILED"), "skipped task should not show FAILED");
-	});
-});
-
-describe("MAX_PARALLEL_CONCURRENCY", () => {
-	it("is 4", () => {
-		assert.equal(MAX_PARALLEL_CONCURRENCY, 4);
 	});
 });

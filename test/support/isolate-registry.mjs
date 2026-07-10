@@ -12,8 +12,5 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 if (!process.env.PI_SUBAGENTS_REGISTRY_PATH) {
-	process.env.PI_SUBAGENTS_REGISTRY_PATH = path.join(
-		os.tmpdir(),
-		`pi-subagents-test-registry-${process.pid}.jsonl`,
-	);
+	process.env.PI_SUBAGENTS_REGISTRY_PATH = path.join(os.tmpdir(), `pi-subagents-test-registry-${process.pid}.jsonl`);
 }

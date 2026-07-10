@@ -1,0 +1,14 @@
+node_modules/
+dist/
+lib/
+package-lock.json
+.pi/
+.notes/
+*.md
+banner.png
+CHANGELOG.md
+.tsc-errors-baseline.txt
+
+# Workflow recipe fixtures: .js files with YAML frontmatter (not valid JS; the
+# workflow loader strips the header before executing). Prettier can't parse them.
+test/fixtures/

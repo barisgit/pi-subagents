@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
-import registerSubagentNotify from "../../notify.ts";
-import { setCurrentPi } from "../../current-pi.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, SUBAGENT_NOTIFY_DELIVERED_EVENT } from "../../types.ts";
+import registerSubagentNotify from "../../src/surfaces/notify.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
+import {
+	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
+	SUBAGENT_NOTIFY_DELIVERED_EVENT,
+} from "../../src/protocol/types.ts";
 
 /**
  * Build a pi.events stand-in whose `on()` returns an unsubscribe function
@@ -60,18 +65,8 @@ function createPi() {
 	return { events: inner, bus, sent, fire };
 }
 
-const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-
 function asChildSession<T>(fn: () => T): T {
-	const g = globalThis as Record<string, unknown>;
-	const prev = g[CHILD_SESSION_FLAG_KEY];
-	g[CHILD_SESSION_FLAG_KEY] = true;
-	try {
-		return fn();
-	} finally {
-		if (prev === undefined) delete g[CHILD_SESSION_FLAG_KEY];
-		else g[CHILD_SESSION_FLAG_KEY] = prev;
-	}
+	return runInChildSessionContext(fn);
 }
 
 describe("registerSubagentNotify", () => {
@@ -137,14 +132,16 @@ describe("registerSubagentNotify", () => {
 			sessionFile: "/tmp/session.jsonl",
 		});
 
-		assert.deepEqual(sent, [{
-			message: {
-				customType: "subagent-notify",
-				content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
-				display: true,
+		assert.deepEqual(sent, [
+			{
+				message: {
+					customType: "subagent-notify",
+					content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
+					display: true,
+				},
+				options: { triggerTurn: true },
 			},
-			options: { triggerTurn: true },
-		}]);
+		]);
 	});
 
 	it("keeps the host notify subscription alive when a child session activates", () => {
@@ -246,7 +243,8 @@ describe("registerSubagentNotify", () => {
 		assert.deepEqual(sent[0], {
 			message: {
 				customType: "subagent-notify",
-				content: "Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
+				content:
+					"Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
 				display: true,
 			},
 			options: { triggerTurn: true },
@@ -299,9 +297,24 @@ describe("registerSubagentNotify", () => {
 	it("batch rollup aggregates time-separated per-run completions by notifyPolicy", () => {
 		const rollup = createPi();
 		for (const child of [
-			{ runId: "00000000-0000-4000-8000-00000000000a", agent: "A", label: "Alpha check", summary: "from child A" },
-			{ runId: "00000000-0000-4000-8000-00000000000b", agent: "B", label: "Bravo check", summary: "from child B" },
-			{ runId: "00000000-0000-4000-8000-00000000000c", agent: "C", label: "Charlie check", summary: "from child C" },
+			{
+				runId: "00000000-0000-4000-8000-00000000000a",
+				agent: "A",
+				label: "Alpha check",
+				summary: "from child A",
+			},
+			{
+				runId: "00000000-0000-4000-8000-00000000000b",
+				agent: "B",
+				label: "Bravo check",
+				summary: "from child B",
+			},
+			{
+				runId: "00000000-0000-4000-8000-00000000000c",
+				agent: "C",
+				label: "Charlie check",
+				summary: "from child C",
+			},
 		]) {
 			rollup.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
 				id: child.runId,
@@ -330,7 +343,21 @@ describe("registerSubagentNotify", () => {
 		});
 
 		assert.equal(rollup.sent.length, 1);
-		const rollupMessage = rollup.sent[0]!.message as { content?: string; details?: { kind?: string; completed?: number; total?: number; children?: Array<{ label?: string; agent?: string; state?: string; runId?: string }> } };
+		const rollupMessage = rollup.sent[0]!.message as {
+			content?: string;
+			details?: {
+				kind?: string;
+				completed?: number;
+				total?: number;
+				children?: Array<{
+					label?: string;
+					agent?: string;
+					state?: string;
+					runId?: string;
+					resultPreview?: string;
+				}>;
+			};
+		};
 		const rollupContent = rollupMessage.content ?? "";
 		assert.ok(rollupContent.startsWith("Background batch completed:"));
 		for (const label of ["Alpha check", "Bravo check", "Charlie check"]) {
@@ -338,14 +365,35 @@ describe("registerSubagentNotify", () => {
 		}
 		assert.ok(!rollupContent.includes("00000000-0000-4000-8000-00000000000a"));
 		assert.ok(rollupContent.includes("✓ Alpha check (A): complete"));
+		for (const summary of ["from child A", "from child B", "from child C"]) {
+			assert.ok(rollupContent.includes(summary), `rollup should include ${summary}`);
+		}
 		assert.deepEqual(rollupMessage.details, {
 			kind: "batch",
 			completed: 3,
 			total: 3,
 			children: [
-				{ label: "Alpha check", agent: "A", state: "complete", runId: "00000000-0000-4000-8000-00000000000a" },
-				{ label: "Bravo check", agent: "B", state: "complete", runId: "00000000-0000-4000-8000-00000000000b" },
-				{ label: "Charlie check", agent: "C", state: "complete", runId: "00000000-0000-4000-8000-00000000000c" },
+				{
+					label: "Alpha check",
+					agent: "A",
+					state: "complete",
+					runId: "00000000-0000-4000-8000-00000000000a",
+					resultPreview: "from child A",
+				},
+				{
+					label: "Bravo check",
+					agent: "B",
+					state: "complete",
+					runId: "00000000-0000-4000-8000-00000000000b",
+					resultPreview: "from child B",
+				},
+				{
+					label: "Charlie check",
+					agent: "C",
+					state: "complete",
+					runId: "00000000-0000-4000-8000-00000000000c",
+					resultPreview: "from child C",
+				},
 			],
 		});
 
@@ -365,7 +413,11 @@ describe("registerSubagentNotify", () => {
 			});
 		}
 		assert.equal(each.sent.length, 3);
-		assert.ok(each.sent.every((entry) => ((entry.message as { content?: string }).content ?? "").startsWith("Background task completed:")));
+		assert.ok(
+			each.sent.every((entry) =>
+				((entry.message as { content?: string }).content ?? "").startsWith("Background task completed:"),
+			),
+		);
 
 		const silent = createPi();
 		silent.events.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
@@ -392,6 +444,47 @@ describe("registerSubagentNotify", () => {
 			timestamp: Date.now(),
 		});
 		assert.equal(silent.sent.length, 0);
+	});
+
+	it("batch rollup includes child output from aggregate payloads with bounded length", () => {
+		const { events, sent } = createPi();
+		const longOutput = `${"x".repeat(2100)}tail`;
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "group-children-output",
+			runId: "group-children-output",
+			notifyPolicy: "rollup",
+			agent: "A,B",
+			success: true,
+			state: "complete",
+			summary: "group summary",
+			children: [
+				{
+					id: "child-output-a",
+					agent: "A",
+					label: "Alpha check",
+					success: true,
+					state: "complete",
+					output: "output from A",
+				},
+				{
+					id: "child-output-b",
+					agent: "B",
+					label: "Bravo check",
+					success: true,
+					state: "complete",
+					output: longOutput,
+				},
+			],
+			timestamp: Date.now(),
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(content.includes("✓ Alpha check (A): complete"));
+		assert.ok(content.includes("output from A"));
+		assert.ok(content.includes(`${"x".repeat(1999)}…`));
+		assert.ok(!content.includes("tail"));
 	});
 
 	it("a workflow sends exactly one notification carrying the script's return value", () => {
@@ -436,7 +529,10 @@ describe("registerSubagentNotify", () => {
 
 		assert.equal(sent.length, 1, "a workflow completion is exactly one notification");
 		const content = (sent[0].message as { content?: string }).content ?? "";
-		assert.ok(content.includes("**workflow**"), `workflow notification should name the workflow entity, got: ${content}`);
+		assert.ok(
+			content.includes("**workflow**"),
+			`workflow notification should name the workflow entity, got: ${content}`,
+		);
 		assert.ok(content.includes('{ "verified": true }'), "notification must carry the script's return value");
 	});
 
@@ -490,7 +586,11 @@ describe("registerSubagentNotify", () => {
 		// confirmed delivered via message_end before any interrupt.
 		fire("message_end", {
 			type: "message_end",
-			message: { role: "custom", customType: "subagent-notify", content: (sent[0].message as { content?: string }).content },
+			message: {
+				role: "custom",
+				customType: "subagent-notify",
+				content: (sent[0].message as { content?: string }).content,
+			},
 		});
 		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
 
@@ -535,5 +635,88 @@ describe("registerSubagentNotify", () => {
 		fire("agent_start", { type: "agent_start" });
 		fire("agent_end", { type: "agent_end", messages: [{ role: "assistant", stopReason: "aborted" }] });
 		assert.equal(sent.length, 1, "idle-time sends are not interrupt-droppable and must not resend");
+	});
+
+	it("labels an interrupted run as interrupted, not failed", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "notify-interrupted-1",
+			agent: "fixer",
+			success: false,
+			state: "interrupted",
+			exitCode: 1,
+			summary: "Child agent interrupted: interrupt requested",
+			timestamp: 456,
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(
+			content.startsWith("Background task interrupted: **fixer**"),
+			`expected interrupted header, got: ${content.split("\n")[0]}`,
+		);
+		assert.ok(!content.includes("failed"), "interrupted run must not be announced as failed");
+	});
+
+	it("batch rollup shows an interrupted child with the square glyph and interrupted wording", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "group-interrupted-child",
+			runId: "group-interrupted-child",
+			notifyPolicy: "rollup",
+			agent: "A,B",
+			success: false,
+			state: "interrupted",
+			summary: "",
+			children: [
+				{
+					id: "child-int-a",
+					agent: "A",
+					label: "Alpha check",
+					success: true,
+					state: "complete",
+					output: "done",
+				},
+				{
+					id: "child-int-b",
+					agent: "B",
+					label: "Bravo check",
+					success: false,
+					state: "interrupted",
+					exitCode: 1,
+					output: "Child agent interrupted: interrupt requested",
+				},
+			],
+			timestamp: Date.now(),
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(
+			content.includes("\u25a0 Bravo check (B): interrupted"),
+			`missing square interrupted line in: ${content}`,
+		);
+		assert.ok(!content.includes("\u2717"), "interrupted child must not get the failure glyph");
+		assert.ok(content.includes("1/2 tasks complete"));
+	});
+
+	it("still labels a genuine failure as failed", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "notify-failed-1",
+			agent: "worker",
+			success: false,
+			state: "failed",
+			exitCode: 1,
+			summary: "Something broke",
+			timestamp: 789,
+		});
+
+		assert.equal(sent.length, 1);
+		const content = (sent[0]!.message as { content?: string }).content ?? "";
+		assert.ok(content.startsWith("Background task failed: **worker**"));
 	});
 });

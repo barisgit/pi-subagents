@@ -11,7 +11,7 @@ import {
 	findWorktreeTaskCwdConflict,
 	formatWorktreeDiffSummary,
 	type WorktreeSetup,
-} from "../../worktree.ts";
+} from "../../src/dispatch/worktree.ts";
 
 function git(cwd: string, args: string[]): string {
 	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
@@ -35,7 +35,9 @@ function createRepo(prefix: string): string {
 }
 
 function cleanupRepo(repoDir: string): void {
-	try { fs.rmSync(repoDir, { recursive: true, force: true }); } catch {}
+	try {
+		fs.rmSync(repoDir, { recursive: true, force: true });
+	} catch {}
 }
 
 function createHookScript(_repoDir: string, fileName: string, source: string): string {
@@ -46,9 +48,8 @@ function createHookScript(_repoDir: string, fileName: string, source: string): s
 	return hookPath;
 }
 
-const hookScriptSkip = process.platform === "win32"
-	? "Hook script execution differs on Windows CI environments."
-	: undefined;
+const hookScriptSkip =
+	process.platform === "win32" ? "Hook script execution differs on Windows CI environments." : undefined;
 
 describe("worktree", () => {
 	it("createWorktrees returns expected structure", () => {
@@ -107,26 +108,14 @@ describe("worktree", () => {
 	it("findWorktreeTaskCwdConflict allows omitted or matching task cwd values", () => {
 		const sharedCwd = path.join("/tmp", "repo");
 		assert.equal(
-			findWorktreeTaskCwdConflict(
-				[
-					{ agent: "worker-a" },
-					{ agent: "worker-b", cwd: sharedCwd },
-				],
-				sharedCwd,
-			),
+			findWorktreeTaskCwdConflict([{ agent: "worker-a" }, { agent: "worker-b", cwd: sharedCwd }], sharedCwd),
 			undefined,
 		);
 	});
 
 	it("findWorktreeTaskCwdConflict treats relative task cwd values as relative to the shared cwd", () => {
 		const sharedCwd = path.join("/tmp", "repo");
-		assert.equal(
-			findWorktreeTaskCwdConflict(
-				[{ agent: "worker-a", cwd: "." }],
-				sharedCwd,
-			),
-			undefined,
-		);
+		assert.equal(findWorktreeTaskCwdConflict([{ agent: "worker-a", cwd: "." }], sharedCwd), undefined);
 	});
 
 	it("findWorktreeTaskCwdConflict returns the first conflicting task cwd", () => {
@@ -207,68 +196,80 @@ describe("worktree", () => {
 		}
 	});
 
-	it("createWorktrees creates node_modules symlink when node_modules exists", {
-		skip: process.platform === "win32" ? "Symlink behavior differs on Windows CI environments." : undefined,
-	}, () => {
-		const repoDir = createRepo("pi-worktree-node-modules-");
-		const nodeModulesDir = path.join(repoDir, "node_modules");
-		fs.mkdirSync(nodeModulesDir, { recursive: true });
-		fs.writeFileSync(path.join(nodeModulesDir, "fixture.txt"), "fixture\n", "utf-8");
+	it(
+		"createWorktrees creates node_modules symlink when node_modules exists",
+		{
+			skip: process.platform === "win32" ? "Symlink behavior differs on Windows CI environments." : undefined,
+		},
+		() => {
+			const repoDir = createRepo("pi-worktree-node-modules-");
+			const nodeModulesDir = path.join(repoDir, "node_modules");
+			fs.mkdirSync(nodeModulesDir, { recursive: true });
+			fs.writeFileSync(path.join(nodeModulesDir, "fixture.txt"), "fixture\n", "utf-8");
 
-		let setup: WorktreeSetup | undefined;
-		try {
-			setup = createWorktrees(repoDir, "node-modules", 1);
-			const symlinkPath = path.join(setup.worktrees[0]!.path, "node_modules");
-			assert.equal(setup.worktrees[0]!.nodeModulesLinked, true);
-			assert.deepEqual(setup.worktrees[0]!.syntheticPaths, ["node_modules"]);
-			assert.ok(fs.existsSync(symlinkPath), "node_modules link should exist");
-			assert.equal(fs.lstatSync(symlinkPath).isSymbolicLink(), true, "node_modules should be a symlink");
-			assert.equal(fs.realpathSync(symlinkPath), fs.realpathSync(nodeModulesDir));
-		} finally {
-			if (setup) cleanupWorktrees(setup);
-			cleanupRepo(repoDir);
-		}
-	});
+			let setup: WorktreeSetup | undefined;
+			try {
+				setup = createWorktrees(repoDir, "node-modules", 1);
+				const symlinkPath = path.join(setup.worktrees[0]!.path, "node_modules");
+				assert.equal(setup.worktrees[0]!.nodeModulesLinked, true);
+				assert.deepEqual(setup.worktrees[0]!.syntheticPaths, ["node_modules"]);
+				assert.ok(fs.existsSync(symlinkPath), "node_modules link should exist");
+				assert.equal(fs.lstatSync(symlinkPath).isSymbolicLink(), true, "node_modules should be a symlink");
+				assert.equal(fs.realpathSync(symlinkPath), fs.realpathSync(nodeModulesDir));
+			} finally {
+				if (setup) cleanupWorktrees(setup);
+				cleanupRepo(repoDir);
+			}
+		},
+	);
 
-	it("diffWorktrees preserves a tracked node_modules symlink", {
-		skip: process.platform === "win32" ? "Symlink behavior differs on Windows CI environments." : undefined,
-	}, () => {
-		const repoDir = createRepo("pi-worktree-tracked-node-modules-");
-		const vendorDir = path.join(repoDir, "vendor-modules");
-		fs.mkdirSync(vendorDir, { recursive: true });
-		fs.writeFileSync(path.join(vendorDir, "fixture.txt"), "fixture\n", "utf-8");
-		fs.symlinkSync("vendor-modules", path.join(repoDir, "node_modules"));
-		git(repoDir, ["add", "vendor-modules", "-f", "node_modules"]);
-		git(repoDir, ["commit", "-m", "track node_modules symlink"]);
+	it(
+		"diffWorktrees preserves a tracked node_modules symlink",
+		{
+			skip: process.platform === "win32" ? "Symlink behavior differs on Windows CI environments." : undefined,
+		},
+		() => {
+			const repoDir = createRepo("pi-worktree-tracked-node-modules-");
+			const vendorDir = path.join(repoDir, "vendor-modules");
+			fs.mkdirSync(vendorDir, { recursive: true });
+			fs.writeFileSync(path.join(vendorDir, "fixture.txt"), "fixture\n", "utf-8");
+			fs.symlinkSync("vendor-modules", path.join(repoDir, "node_modules"));
+			git(repoDir, ["add", "vendor-modules", "-f", "node_modules"]);
+			git(repoDir, ["commit", "-m", "track node_modules symlink"]);
 
-		let setup: WorktreeSetup | undefined;
-		try {
-			setup = createWorktrees(repoDir, "tracked-node-modules", 1);
-			assert.equal(setup.worktrees[0]!.nodeModulesLinked, false);
-			assert.deepEqual(setup.worktrees[0]!.syntheticPaths, []);
-			fs.writeFileSync(path.join(setup.worktrees[0]!.path, "tracked.txt"), "modified\n", "utf-8");
+			let setup: WorktreeSetup | undefined;
+			try {
+				setup = createWorktrees(repoDir, "tracked-node-modules", 1);
+				assert.equal(setup.worktrees[0]!.nodeModulesLinked, false);
+				assert.deepEqual(setup.worktrees[0]!.syntheticPaths, []);
+				fs.writeFileSync(path.join(setup.worktrees[0]!.path, "tracked.txt"), "modified\n", "utf-8");
 
-			const diffsDir = path.join(repoDir, "artifacts", "tracked-node-modules-diffs");
-			const diffs = diffWorktrees(setup, ["agent-a"], diffsDir);
-			const patch = fs.readFileSync(diffs[0]!.patchPath, "utf-8");
-			assert.doesNotMatch(patch, /diff --git a\/node_modules b\/node_modules/);
-			assert.equal(fs.lstatSync(path.join(setup.worktrees[0]!.path, "node_modules")).isSymbolicLink(), true);
-		} finally {
-			if (setup) cleanupWorktrees(setup);
-			cleanupRepo(repoDir);
-		}
-	});
+				const diffsDir = path.join(repoDir, "artifacts", "tracked-node-modules-diffs");
+				const diffs = diffWorktrees(setup, ["agent-a"], diffsDir);
+				const patch = fs.readFileSync(diffs[0]!.patchPath, "utf-8");
+				assert.doesNotMatch(patch, /diff --git a\/node_modules b\/node_modules/);
+				assert.equal(fs.lstatSync(path.join(setup.worktrees[0]!.path, "node_modules")).isSymbolicLink(), true);
+			} finally {
+				if (setup) cleanupWorktrees(setup);
+				cleanupRepo(repoDir);
+			}
+		},
+	);
 
 	it("runs a repo-relative worktree setup hook and records synthetic paths", { skip: hookScriptSkip }, () => {
 		const repoDir = createRepo("pi-worktree-hook-relative-");
-		const hookPath = createHookScript(repoDir, "setup-hook.mjs", `
+		const hookPath = createHookScript(
+			repoDir,
+			"setup-hook.mjs",
+			`
 import * as fs from "node:fs";
 import * as path from "node:path";
 const payload = JSON.parse(fs.readFileSync(0, "utf-8"));
 fs.mkdirSync(path.join(payload.worktreePath, ".venv"), { recursive: true });
 fs.writeFileSync(path.join(payload.worktreePath, ".venv", "pyvenv.cfg"), "home=/tmp\\n", "utf-8");
 process.stdout.write(JSON.stringify({ syntheticPaths: [".venv"] }));
-`);
+`,
+		);
 
 		let setup: WorktreeSetup | undefined;
 		try {
@@ -284,11 +285,15 @@ process.stdout.write(JSON.stringify({ syntheticPaths: [".venv"] }));
 
 	it("runs an absolute worktree setup hook path", { skip: hookScriptSkip }, () => {
 		const repoDir = createRepo("pi-worktree-hook-absolute-");
-		const hookPath = createHookScript(repoDir, "setup-hook.mjs", `
+		const hookPath = createHookScript(
+			repoDir,
+			"setup-hook.mjs",
+			`
 import * as fs from "node:fs";
 JSON.parse(fs.readFileSync(0, "utf-8"));
 process.stdout.write(JSON.stringify({ syntheticPaths: [] }));
-`);
+`,
+		);
 
 		let setup: WorktreeSetup | undefined;
 		try {
@@ -316,11 +321,15 @@ process.stdout.write(JSON.stringify({ syntheticPaths: [] }));
 
 	it("rejects tracked synthetic paths from hook output", { skip: hookScriptSkip }, () => {
 		const repoDir = createRepo("pi-worktree-hook-tracked-");
-		const hookPath = createHookScript(repoDir, "tracked-hook.mjs", `
+		const hookPath = createHookScript(
+			repoDir,
+			"tracked-hook.mjs",
+			`
 import * as fs from "node:fs";
 JSON.parse(fs.readFileSync(0, "utf-8"));
 process.stdout.write(JSON.stringify({ syntheticPaths: ["tracked.txt"] }));
-`);
+`,
+		);
 		const runId = `hook-tracked-${Date.now().toString(36)}`;
 		try {
 			assert.throws(
@@ -334,11 +343,15 @@ process.stdout.write(JSON.stringify({ syntheticPaths: ["tracked.txt"] }));
 
 	it("rejects absolute synthetic paths from hook output", { skip: hookScriptSkip }, () => {
 		const repoDir = createRepo("pi-worktree-hook-absolute-synthetic-");
-		const hookPath = createHookScript(repoDir, "absolute-path-hook.mjs", `
+		const hookPath = createHookScript(
+			repoDir,
+			"absolute-path-hook.mjs",
+			`
 import * as fs from "node:fs";
 const payload = JSON.parse(fs.readFileSync(0, "utf-8"));
 process.stdout.write(JSON.stringify({ syntheticPaths: [payload.worktreePath + "/.venv"] }));
-`);
+`,
+		);
 		const runId = `hook-absolute-synthetic-${Date.now().toString(36)}`;
 		try {
 			assert.throws(
@@ -352,13 +365,17 @@ process.stdout.write(JSON.stringify({ syntheticPaths: [payload.worktreePath + "/
 
 	it("excludes hook-created synthetic files from captured patch output", { skip: hookScriptSkip }, () => {
 		const repoDir = createRepo("pi-worktree-hook-diff-");
-		const hookPath = createHookScript(repoDir, "setup-copy-hook.mjs", `
+		const hookPath = createHookScript(
+			repoDir,
+			"setup-copy-hook.mjs",
+			`
 import * as fs from "node:fs";
 import * as path from "node:path";
 const payload = JSON.parse(fs.readFileSync(0, "utf-8"));
 fs.writeFileSync(path.join(payload.worktreePath, ".env.local"), "TOKEN=secret\\n", "utf-8");
 process.stdout.write(JSON.stringify({ syntheticPaths: [".env.local"] }));
-`);
+`,
+		);
 
 		let setup: WorktreeSetup | undefined;
 		try {
@@ -379,7 +396,10 @@ process.stdout.write(JSON.stringify({ syntheticPaths: [".env.local"] }));
 	it("cleans up created worktrees when a later hook setup fails", { skip: hookScriptSkip }, () => {
 		const repoDir = createRepo("pi-worktree-hook-cleanup-");
 		const runId = `hook-cleanup-${Date.now().toString(36)}`;
-		const hookPath = createHookScript(repoDir, "flaky-hook.mjs", `
+		const hookPath = createHookScript(
+			repoDir,
+			"flaky-hook.mjs",
+			`
 import * as fs from "node:fs";
 const payload = JSON.parse(fs.readFileSync(0, "utf-8"));
 if (payload.index === 1) {
@@ -387,7 +407,8 @@ if (payload.index === 1) {
 	process.exit(1);
 }
 process.stdout.write(JSON.stringify({ syntheticPaths: [] }));
-`);
+`,
+		);
 		try {
 			assert.throws(
 				() => createWorktrees(repoDir, runId, 2, { setupHook: { hookPath: path.relative(repoDir, hookPath) } }),
@@ -402,19 +423,24 @@ process.stdout.write(JSON.stringify({ syntheticPaths: [] }));
 
 	it("fails when the hook exceeds the configured timeout", { skip: hookScriptSkip }, () => {
 		const repoDir = createRepo("pi-worktree-hook-timeout-");
-		const hookPath = createHookScript(repoDir, "slow-hook.mjs", `
+		const hookPath = createHookScript(
+			repoDir,
+			"slow-hook.mjs",
+			`
 import * as fs from "node:fs";
 JSON.parse(fs.readFileSync(0, "utf-8"));
 setTimeout(() => {
 	process.stdout.write(JSON.stringify({ syntheticPaths: [] }));
 }, 1000);
-`);
+`,
+		);
 		const runId = `hook-timeout-${Date.now().toString(36)}`;
 		try {
 			assert.throws(
-				() => createWorktrees(repoDir, runId, 1, {
-					setupHook: { hookPath: path.relative(repoDir, hookPath), timeoutMs: 50 },
-				}),
+				() =>
+					createWorktrees(repoDir, runId, 1, {
+						setupHook: { hookPath: path.relative(repoDir, hookPath), timeoutMs: 50 },
+					}),
 				/timed out/i,
 			);
 		} finally {

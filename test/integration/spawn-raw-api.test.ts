@@ -4,14 +4,40 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import registerSubagentExtension from "../../index.ts";
-import { SUBAGENT_EXPOSE_API_EVENT, type SubagentExposedAPI } from "../../types.ts";
+import { createHostSubagentApi, registerChildSessionApi } from "../../src/api/exposed-subagent-api.ts";
+import {
+	SUBAGENT_EXPOSE_API_EVENT,
+	SUBAGENT_REQUEST_API_EVENT,
+	type SubagentExposedAPI,
+} from "../../src/protocol/types.ts";
+import { claimPendingChildLineage, pushPendingChildLineage } from "../../src/state/lineage.ts";
+import { getShardPath, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
+import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
+
+function clearLineage(...sessionIds: string[]): void {
+	const globals = globalThis as Record<string, unknown>;
+	const lineageStore = globals["__piSubagentLineageBySession"] as Map<string, unknown> | undefined;
+	const boundSessionFiles = globals["__piSubagentLineageBoundSessionFiles"] as Map<string, unknown> | undefined;
+	for (const sessionId of sessionIds) {
+		lineageStore?.delete(sessionId);
+		boundSessionFiles?.delete(sessionId);
+	}
+}
 
 function createPiHarness() {
 	const events = new EventEmitter();
 	let exposed: SubagentExposedAPI | undefined;
-	const tools: Array<{ name: string }> = [{ name: "read" }, { name: "grep" }, { name: "find" }, { name: "ls" }, { name: "bash" }];
+	let exposeCount = 0;
+	const appendedEntries: Array<{ type: string; data: unknown }> = [];
+	const tools: Array<{ name: string }> = [
+		{ name: "read" },
+		{ name: "grep" },
+		{ name: "find" },
+		{ name: "ls" },
+		{ name: "bash" },
+	];
 	const sessionHandlers = new Map<string, (...args: unknown[]) => unknown>();
 	const pi = {
 		events: {
@@ -29,19 +55,29 @@ function createPiHarness() {
 		registerShortcut: () => {},
 		registerMessageRenderer: () => {},
 		getAllTools: () => tools,
+		getFlag: () => undefined,
 		getSessionName: () => undefined,
 		setSessionName: () => {},
 		sendMessage: () => {},
-		appendEntry: () => {},
+		appendEntry: (type: string, data: unknown) => appendedEntries.push({ type, data }),
 	};
 	events.on(SUBAGENT_EXPOSE_API_EVENT, (api) => {
 		exposed = api as SubagentExposedAPI;
+		exposeCount += 1;
 	});
-	return { pi, getExposed: () => exposed, sessionHandlers };
+	return {
+		pi,
+		events,
+		getExposed: () => exposed,
+		getExposeCount: () => exposeCount,
+		sessionHandlers,
+		appendedEntries,
+	};
 }
 
 function readLastCallArgs(mockPi: MockPi): string[] {
-	const callFile = fs.readdirSync(mockPi.dir)
+	const callFile = fs
+		.readdirSync(mockPi.dir)
 		.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
 		.sort()
 		.at(-1);
@@ -70,6 +106,7 @@ describe("spawnRaw API exposure", () => {
 	});
 
 	afterEach(() => {
+		setRegistryPathForTests(null);
 		removeTempDir(tempDir);
 	});
 
@@ -94,5 +131,240 @@ describe("spawnRaw API exposure", () => {
 		const toolsArg = args[args.indexOf("--tools") + 1] ?? "";
 		assert.ok(extensionArgs.some((arg) => arg.endsWith("subagent-prompt-runtime.ts")));
 		assert.equal(toolsArg, "read,grep,find,ls");
+	});
+
+	it("re-publishes the exposed API when requested", () => {
+		const { pi, events, getExposed, getExposeCount } = createPiHarness();
+		registerSubagentExtension(pi as never);
+		const initialCount = getExposeCount();
+		assert.ok(getExposed(), "expected initial exposed subagent API");
+
+		events.emit(SUBAGENT_REQUEST_API_EVENT);
+
+		assert.equal(getExposeCount(), initialCount + 1);
+		assert.ok(getExposed()?.usageSnapshot, "expected requested API to include usageSnapshot");
+	});
+
+	it("skips root-role lifecycle for an in-process child without delegated environment markers", async () => {
+		const previousRuntimeMode = process.env.PI_SUBAGENT_RUNTIME_MODE;
+		const previousCurrentAgent = process.env.PI_SUBAGENT_CURRENT_AGENT;
+		const agentsDir = path.join(tempDir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(agentsDir, "root-role.md"),
+			"---\nname: root-role\ndescription: Root role fixture\nscope: both\n---\n\nRoot-only prompt.\n",
+		);
+		process.env.PI_SUBAGENT_RUNTIME_MODE = "root";
+		delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+		const { pi, sessionHandlers, appendedEntries } = createPiHarness();
+
+		try {
+			runInChildSessionContext(() => registerSubagentExtension(pi as never));
+			const sessionStart = sessionHandlers.get("session_start");
+			const beforeAgentStart = sessionHandlers.get("before_agent_start");
+			assert.ok(sessionStart, "expected session_start handler");
+			assert.ok(beforeAgentStart, "expected before_agent_start handler");
+			await sessionStart(
+				{},
+				{
+					cwd: tempDir,
+					hasUI: false,
+					ui: {},
+					sessionManager: {
+						getSessionId: () => "session-child-root-lifecycle",
+						getSessionFile: () => null,
+						getEntries: () => [],
+					},
+					modelRegistry: { getAvailable: () => [], find: () => undefined },
+				},
+			);
+
+			assert.deepEqual(appendedEntries, []);
+			assert.equal(await beforeAgentStart({ systemPrompt: "base prompt" }), undefined);
+		} finally {
+			if (previousRuntimeMode === undefined) delete process.env.PI_SUBAGENT_RUNTIME_MODE;
+			else process.env.PI_SUBAGENT_RUNTIME_MODE = previousRuntimeMode;
+			if (previousCurrentAgent === undefined) delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+			else process.env.PI_SUBAGENT_CURRENT_AGENT = previousCurrentAgent;
+		}
+	});
+
+	it("fails closed when spawnRaw has no authoritative session context", async () => {
+		let executionCount = 0;
+		const { pi, getExposed } = createPiHarness();
+		createHostSubagentApi({
+			pi: pi as never,
+			executor: {
+				executeInternal: async () => {
+					executionCount += 1;
+					return {};
+				},
+			} as never,
+			config: {} as never,
+			state: {
+				baseCwd: tempDir,
+				currentSessionId: null,
+				asyncJobs: new Map(),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				cleanupTimers: new Map(),
+				lastUiContext: null,
+				poller: null,
+			} as never,
+			getRegisteredPersonaDirs: () => [],
+			discoverAgents: () => ({ agents: [] }) as never,
+		});
+		const api = getExposed();
+		assert.ok(api?.spawnRaw, "expected exposed spawnRaw API");
+
+		const result = await api.spawnRaw({
+			systemPrompt: "Follow the prompt.",
+			prompt: "Return a result",
+			cwd: tempDir,
+		});
+
+		assert.equal(result.isError, true);
+		assert.deepEqual(result.details, { mode: "single", results: [] });
+		assert.equal(executionCount, 0);
+		assert.match(result.content[0]?.text ?? "", /session context/i);
+	});
+
+	it("returns typed details from the child-session spawnRaw stub", async () => {
+		const { pi, getExposed } = createPiHarness();
+		registerChildSessionApi(pi as never);
+		const api = getExposed();
+		assert.ok(api?.spawnRaw, "expected child-session spawnRaw stub");
+
+		const result = await api.spawnRaw({
+			systemPrompt: "Follow the prompt.",
+			prompt: "Return a result",
+			cwd: tempDir,
+		});
+
+		assert.equal(result.isError, true);
+		assert.deepEqual(result.details, { mode: "single", results: [] });
+	});
+
+	it("binds concurrent child APIs out of order by session file", () => {
+		const firstSessionId = "session-child-api-first";
+		const secondSessionId = "session-child-api-second";
+		const firstSessionFile = path.join(tempDir, "first.jsonl");
+		const secondSessionFile = path.join(tempDir, "second.jsonl");
+		const first = {
+			role: "child" as const,
+			currentAgent: "first-child",
+			parentAgent: "parent-agent",
+			parentSessionId: "session-parent",
+			rootSessionId: "session-parent",
+			depth: 1,
+			runId: "run-child-api-first",
+			canDelegate: false,
+		};
+		const second = {
+			...first,
+			currentAgent: "second-child",
+			runId: "run-child-api-second",
+			canDelegate: true,
+		};
+		pushPendingChildLineage(first, firstSessionFile);
+		pushPendingChildLineage(second, secondSessionFile);
+		const firstHarness = createPiHarness();
+		const secondHarness = createPiHarness();
+		registerChildSessionApi(firstHarness.pi as never);
+		registerChildSessionApi(secondHarness.pi as never);
+
+		try {
+			secondHarness.sessionHandlers.get("session_start")?.(
+				{},
+				{
+					sessionManager: {
+						getSessionId: () => secondSessionId,
+						getSessionFile: () => secondSessionFile,
+					},
+				},
+			);
+			firstHarness.sessionHandlers.get("session_start")?.(
+				{},
+				{
+					sessionManager: {
+						getSessionId: () => firstSessionId,
+						getSessionFile: () => firstSessionFile,
+					},
+				},
+			);
+
+			assert.equal(secondHarness.getExposed()?.lineage(), second);
+			assert.equal(firstHarness.getExposed()?.lineage(), first);
+		} finally {
+			const firstCleanupSessionId = `${firstSessionId}-cleanup`;
+			const secondCleanupSessionId = `${secondSessionId}-cleanup`;
+			claimPendingChildLineage(firstCleanupSessionId, { runId: first.runId, agentName: null });
+			claimPendingChildLineage(secondCleanupSessionId, { runId: second.runId, agentName: null });
+			clearLineage(firstSessionId, secondSessionId, firstCleanupSessionId, secondCleanupSessionId);
+		}
+	});
+
+	it("hydrates usage snapshots from persisted run status after restart", () => {
+		const sessionId = "session-restarted";
+		const registryPath = path.join(tempDir, "runs-index.jsonl");
+		const runRecordDir = path.join(tempDir, "run-a");
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		setRegistryPathForTests(registryPath);
+		const entry = {
+			runId: "run-a",
+			runRecordDir,
+			mode: "single",
+			source: "sync",
+			agentName: "test-agent",
+			rootRunId: "run-a",
+			parentSessionId: sessionId,
+			rootSessionId: sessionId,
+			cwd: tempDir,
+			startedAt: 10,
+		};
+		fs.writeFileSync(registryPath, JSON.stringify(entry) + "\n");
+		fs.mkdirSync(path.dirname(getShardPath(sessionId)), { recursive: true });
+		fs.writeFileSync(getShardPath(sessionId), JSON.stringify(entry) + "\n");
+		fs.writeFileSync(
+			path.join(runRecordDir, "status.json"),
+			JSON.stringify({
+				version: 1,
+				runId: "run-a",
+				mode: "single",
+				state: "complete",
+				startedAt: 10,
+				endedAt: 20,
+				steps: [{ status: "complete", tokens: { input: 11, output: 7, cacheRead: 13, total: 31 } }],
+			}),
+		);
+
+		const { pi, events, getExposed } = createPiHarness();
+		createHostSubagentApi({
+			pi: pi as never,
+			executor: { executeInternal: async () => ({}) } as never,
+			config: {} as never,
+			state: {
+				baseCwd: tempDir,
+				currentSessionId: sessionId,
+				asyncJobs: new Map(),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				cleanupTimers: new Map(),
+				lastUiContext: null,
+				poller: null,
+			} as never,
+			getRegisteredPersonaDirs: () => [],
+			discoverAgents: () => ({ agents: [] }) as never,
+		});
+		events.emit(SUBAGENT_REQUEST_API_EVENT);
+
+		assert.deepEqual(getExposed()?.usageSnapshot().totalUsage, {
+			input: 11,
+			output: 7,
+			cacheRead: 13,
+			cacheWrite: 0,
+			cost: 0,
+			turns: 0,
+		});
 	});
 });

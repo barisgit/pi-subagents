@@ -26,20 +26,21 @@ const urlFor = (relative) => {
 };
 
 const moduleUrl = (relative) => pathToFileURL(path.join(repoRoot, relative)).href;
-const { createSubagentExecutor } = await import(moduleUrl("subagent-executor.ts"));
-const { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } = await import(moduleUrl("in-process-executor.ts"));
-const { readAllEntries, setRegistryPathForTests } = await import(moduleUrl("runs-registry.ts"));
-const { createWorkflowTool } = await import(urlFor("workflow.ts"));
+const { createSubagentExecutor } = await import(moduleUrl("src/dispatch/subagent-executor.ts"));
+const { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } = await import(moduleUrl("src/dispatch/in-process-executor.ts"));
+const { readAllEntries, setRegistryPathForTests } = await import(moduleUrl("src/state/runs-registry.ts"));
+const { createWorkflowTool } = await import(urlFor("src/workflow/workflow.ts"));
 const { makeAgent } = await import(moduleUrl("test/support/helpers.ts"));
 
 class FakeResourceLoader { async reload() {} }
 class FakeSession {
 	messages = [];
+	lastAssistantText = "";
 	subscribe() { return () => {}; }
 	async prompt(task) {
-		this.messages.push({ role: "toolResult", toolName: "submit_result", isError: false, details: { status: "ok", summary: task, result: task, artifacts: [] } });
+		this.lastAssistantText = "<output>" + task + "</output>";
 	}
-	getLastAssistantText() { return "done"; }
+	getLastAssistantText() { return this.lastAssistantText; }
 	async abort() {}
 	dispose() {}
 	setActiveToolsByName() {}
@@ -57,7 +58,7 @@ try {
 	const executor = createSubagentExecutor({
 		pi: { events: { emit: () => {} }, getSessionName: () => undefined, setSessionName: () => {}, getAllTools: () => [] },
 		state: { baseCwd: root, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null, poller: null },
-		config: { parallel: { concurrency: 2 } },
+		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),

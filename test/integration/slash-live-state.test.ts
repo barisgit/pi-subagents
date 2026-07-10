@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 interface SlashLiveStateModule {
-	applySlashUpdate?: typeof import("../../slash-live-state.ts").applySlashUpdate;
-	buildSlashInitialResult?: typeof import("../../slash-live-state.ts").buildSlashInitialResult;
-	clearSlashSnapshots?: typeof import("../../slash-live-state.ts").clearSlashSnapshots;
-	finalizeSlashResult?: typeof import("../../slash-live-state.ts").finalizeSlashResult;
-	getSlashRenderableSnapshot?: typeof import("../../slash-live-state.ts").getSlashRenderableSnapshot;
-	restoreSlashFinalSnapshots?: typeof import("../../slash-live-state.ts").restoreSlashFinalSnapshots;
+	applySlashUpdate?: typeof import("../../src/state/slash-live-state.ts").applySlashUpdate;
+	buildSlashInitialResult?: typeof import("../../src/state/slash-live-state.ts").buildSlashInitialResult;
+	clearSlashSnapshots?: typeof import("../../src/state/slash-live-state.ts").clearSlashSnapshots;
+	finalizeSlashResult?: typeof import("../../src/state/slash-live-state.ts").finalizeSlashResult;
+	getSlashRenderableSnapshot?: typeof import("../../src/state/slash-live-state.ts").getSlashRenderableSnapshot;
+	restoreSlashFinalSnapshots?: typeof import("../../src/state/slash-live-state.ts").restoreSlashFinalSnapshots;
 }
 
 let applySlashUpdate: SlashLiveStateModule["applySlashUpdate"];
@@ -25,7 +25,7 @@ try {
 		finalizeSlashResult,
 		getSlashRenderableSnapshot,
 		restoreSlashFinalSnapshots,
-	} = await import("../../slash-live-state.ts") as SlashLiveStateModule);
+	} = (await import("../../src/state/slash-live-state.ts")) as SlashLiveStateModule);
 } catch {
 	available = false;
 }
@@ -41,18 +41,20 @@ describe("slash live state", { skip: !available ? "slash-live-state.ts not impor
 			requestId: "req-1",
 			currentTool: "find",
 			toolCount: 2,
-			progress: [{
-				agent: "scout",
-				status: "running",
-				task: "scan codebase",
-				currentTool: "find",
-				currentToolArgs: '{"pattern":"**/*.ts"}',
-				recentTools: [{ tool: "ls", args: '{"path":"."}', endMs: 10 }],
-				recentOutput: ["src/index.ts", "src/render.ts"],
-				toolCount: 2,
-				tokens: 120,
-				durationMs: 400,
-			}],
+			progress: [
+				{
+					agent: "scout",
+					status: "running",
+					task: "scan codebase",
+					currentTool: "find",
+					currentToolArgs: '{"pattern":"**/*.ts"}',
+					recentTools: [{ tool: "ls", args: '{"path":"."}', endMs: 10 }],
+					recentOutput: ["src/index.ts", "src/render.ts"],
+					toolCount: 2,
+					tokens: 120,
+					durationMs: 400,
+				},
+			],
 		});
 
 		const snapshot = getSlashRenderableSnapshot!(details);
@@ -74,13 +76,15 @@ describe("slash live state", { skip: !available ? "slash-live-state.ts not impor
 				content: [{ type: "text", text: "Done." }],
 				details: {
 					mode: "single",
-					results: [{
-						agent: "scout",
-						task: "scan codebase",
-						exitCode: 0,
-						messages: [],
-						usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
-					}],
+					results: [
+						{
+							agent: "scout",
+							task: "scan codebase",
+							exitCode: 0,
+							messages: [],
+							usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+						},
+					],
 				},
 			},
 			isError: false,

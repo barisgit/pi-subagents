@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { inspectSubagentStatus } from "../../run-status.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
+import { inspectSubagentStatus } from "../../src/state/run-status.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 
@@ -22,7 +22,13 @@ function tmpRegistry(): string {
 	return root;
 }
 
-function seedChild(root: string, runId: string, parentRunId: string, agentName: string, state: "complete" | "failed"): void {
+function seedChild(
+	root: string,
+	runId: string,
+	parentRunId: string,
+	agentName: string,
+	state: "complete" | "failed",
+): void {
 	const runRecordDir = path.join(root, "runs", runId);
 	fs.mkdirSync(runRecordDir, { recursive: true });
 	fs.writeFileSync(

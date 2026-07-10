@@ -1,0 +1,67 @@
+/**
+ * Pure, dependency-free formatting helpers and shared presentation strings.
+ *
+ * Lives in `shared/` so low layers (state) can format without importing
+ * upward from `surfaces/`. Presentation modules re-export these.
+ */
+
+export const ASYNC_NO_POLL_GUIDANCE =
+	"Avoid polling: Pi will send a completion or needs-attention message and trigger a new turn when this run needs you. Continue independent work or stop if blocked on the result. Use status/sleep checks only when immediate inspection is genuinely necessary.";
+
+/**
+ * Format token count with compact k/M suffixes.
+ */
+export function formatTokens(n: number): string {
+	if (n < 1000) return String(n);
+	if (n < 1000000) return `${(n / 1000).toFixed(1)}k`;
+	return `${(n / 1000000).toFixed(1)}M`;
+}
+
+export function formatTokenCounter(n: number): string {
+	return `${formatTokens(n)}t`;
+}
+
+/**
+ * Format duration in human-readable form
+ */
+export function formatDuration(ms: number): string {
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+	return `${Math.floor(ms / 60000)}m${Math.floor((ms % 60000) / 1000)}s`;
+}
+
+/**
+ * Format a tool call for display
+ */
+export function formatToolCall(name: string, args: Record<string, unknown>, expanded = false): string {
+	switch (name) {
+		case "bash": {
+			const command = typeof args.command === "string" ? args.command : "";
+			const maxLength = expanded ? 240 : 60;
+			return `$ ${command.slice(0, Math.max(0, maxLength - 1))}${command.length > maxLength ? "…" : ""}`;
+		}
+		case "read":
+		case "write":
+		case "edit": {
+			const target =
+				typeof args.path === "string" ? args.path : typeof args.file_path === "string" ? args.file_path : "";
+			return `${name} ${shortenPath(target)}`;
+		}
+		default: {
+			const s = JSON.stringify(args);
+			const maxLength = expanded ? 160 : 40;
+			return `${name} ${s.slice(0, Math.max(0, maxLength - 1))}${s.length > maxLength ? "…" : ""}`;
+		}
+	}
+}
+
+/**
+ * Shorten a path by replacing home directory with ~
+ */
+export function shortenPath(p: string): string {
+	const home = process.env.HOME;
+	if (home && p.startsWith(home)) {
+		return `~${p.slice(home.length)}`;
+	}
+	return p;
+}

@@ -21,7 +21,7 @@ Working rules:
 - If you are asked to maintain progress, keep it accurate and up to date.
 - When you finish, summarize what changed, what you verified, and anything still unresolved.
 
-When running in a chain, expect instructions about:
+When running as part of orchestrated work, expect instructions about:
 - which files to read first
 - where to maintain progress tracking
 - where to write output if a file target is provided

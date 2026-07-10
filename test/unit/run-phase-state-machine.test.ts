@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, describe, it } from "node:test";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import {
-	advanceRunPhase,
-	initialRunPhaseState,
-	setPaused,
-	type RunPhaseState,
-} from "../../run-phase.ts";
+import { advanceRunPhase, initialRunPhaseState, setPaused, type RunPhaseState } from "../../src/state/run-phase.ts";
 
 function event(record: Record<string, unknown>): AgentSessionEvent {
 	return record as AgentSessionEvent;
@@ -92,7 +87,11 @@ describe("RunPhase state machine", () => {
 	});
 
 	it("tool_execution_update moves to tool_streaming preserving toolName", () => {
-		const running = advanceRunPhase(initialRunPhaseState(1000), event({ type: "tool_execution_start", toolName: "bash" }), 1100);
+		const running = advanceRunPhase(
+			initialRunPhaseState(1000),
+			event({ type: "tool_execution_start", toolName: "bash" }),
+			1100,
+		);
 		const state = advanceRunPhase(running, event({ type: "tool_execution_update", toolName: "ignored" }), 1600);
 
 		assertPhase(state, "tool_streaming", 1600, 1600);
@@ -101,7 +100,11 @@ describe("RunPhase state machine", () => {
 	});
 
 	it("tool_execution_end returns to idle and clears toolName", () => {
-		const running = advanceRunPhase(initialRunPhaseState(1000), event({ type: "tool_execution_start", toolName: "read" }), 1100);
+		const running = advanceRunPhase(
+			initialRunPhaseState(1000),
+			event({ type: "tool_execution_start", toolName: "read" }),
+			1100,
+		);
 		const state = advanceRunPhase(running, event({ type: "tool_execution_end", toolName: "read" }), 1700);
 
 		assertPhase(state, "idle", 1700, 1700);
@@ -161,7 +164,11 @@ describe("RunPhase state machine", () => {
 	});
 
 	it("message_end while tool is open keeps the tool phase", () => {
-		const running = advanceRunPhase(initialRunPhaseState(1000), event({ type: "tool_execution_start", toolName: "bash" }), 1100);
+		const running = advanceRunPhase(
+			initialRunPhaseState(1000),
+			event({ type: "tool_execution_start", toolName: "bash" }),
+			1100,
+		);
 		const state = advanceRunPhase(running, event({ type: "message_end" }), 2400);
 
 		assertPhase(state, "tool_running", 1100, 2400);
@@ -179,7 +186,11 @@ describe("RunPhase state machine", () => {
 
 	it("previousPhase is set only when phase changed", () => {
 		const waiting = advanceRunPhase(initialRunPhaseState(1000), event({ type: "turn_start" }), 1100);
-		const stillWaiting = advanceRunPhase(waiting, event({ type: "message_start", message: { role: "assistant" } }), 1200);
+		const stillWaiting = advanceRunPhase(
+			waiting,
+			event({ type: "message_start", message: { role: "assistant" } }),
+			1200,
+		);
 		const thinking = advanceRunPhase(stillWaiting, messageUpdate("thinking_delta"), 1300);
 		const stillThinking = advanceRunPhase(thinking, messageUpdate("thinking_delta"), 1400);
 

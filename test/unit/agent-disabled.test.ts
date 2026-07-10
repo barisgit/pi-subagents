@@ -3,13 +3,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { buildBuiltinOverrideConfig, discoverAgents, discoverAgentsAll } from "../../agents.ts";
-import { handleList } from "../../agent-management.ts";
+import { buildBuiltinOverrideConfig, discoverAgents, discoverAgentsAll } from "../../src/shared/agents.ts";
+import { handleList } from "../../src/surfaces/agent-management.ts";
 
 let tempHome = "";
 let tempProject = "";
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
 function writeJson(filePath: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -30,6 +32,8 @@ describe("builtin agent disabling", () => {
 		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-disabled-project-"));
 		process.env.HOME = tempHome;
 		process.env.USERPROFILE = tempHome;
+		process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
+		process.env.FI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 	});
 
 	afterEach(() => {
@@ -37,6 +41,10 @@ describe("builtin agent disabling", () => {
 		else process.env.HOME = originalHome;
 		if (originalUserProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = originalUserProfile;
+		if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
+		if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
+		else process.env.FI_CODING_AGENT_DIR = originalFiAgentDir;
 		fs.rmSync(tempHome, { recursive: true, force: true });
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
@@ -71,10 +79,11 @@ describe("builtin agent disabling", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("reviewer")
-				&& error.message.includes("disabled"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("reviewer") &&
+				error.message.includes("disabled"),
 		);
 	});
 
@@ -83,7 +92,9 @@ describe("builtin agent disabling", () => {
 			subagents: { disableBuiltins: true },
 		});
 
-		const runtimeBuiltinCount = discoverAgents(tempProject, "both").agents.filter((agent) => agent.source === "builtin").length;
+		const runtimeBuiltinCount = discoverAgents(tempProject, "both").agents.filter(
+			(agent) => agent.source === "builtin",
+		).length;
 		assert.equal(runtimeBuiltinCount, 0);
 
 		const allBuiltins = discoverAgentsAll(tempProject).builtin;
@@ -152,9 +163,10 @@ describe("builtin agent disabling", () => {
 
 		assert.throws(
 			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("disableBuiltins"),
+			(error: unknown) =>
+				error instanceof Error &&
+				error.message.includes(settingsPath) &&
+				error.message.includes("disableBuiltins"),
 		);
 	});
 
@@ -170,10 +182,17 @@ describe("builtin agent disabling", () => {
 			"utf-8",
 		);
 
-		const text = readText(handleList(
-			{},
-			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"] },
-		));
+		const text = readText(
+			handleList(
+				{},
+				{
+					cwd: tempProject,
+					modelRegistry: {
+						getAvailable: () => [],
+					} as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext["modelRegistry"],
+				},
+			),
+		);
 
 		assert.match(text, /Executable agents:/);
 		assert.doesNotMatch(text, /Disabled builtins:/);

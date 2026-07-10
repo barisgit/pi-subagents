@@ -10,8 +10,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { listRunsFromRegistryForOverlay } from "../../async-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../runs-registry.ts";
+import { listRunsFromRegistryForOverlay } from "../../src/state/async-status.ts";
+import {
+	appendRunEntry,
+	getShardPath,
+	setRegistryPathForTests,
+	type RunsRegistryEntry,
+} from "../../src/state/runs-registry.ts";
 
 const tmpRoots: string[] = [];
 
@@ -41,9 +46,7 @@ function makeRun(
 		lastUpdate: startedAt,
 		cwd,
 		currentStep: 0,
-		steps: [
-			{ agent: "fixer", status: runState, startedAt, lastActivityAt: startedAt },
-		],
+		steps: [{ agent: "fixer", status: runState, startedAt, lastActivityAt: startedAt }],
 		lastActivityAt: startedAt,
 	};
 	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify(statusJson));
@@ -83,10 +86,7 @@ describe("listRunsFromRegistryForOverlay sessionCwd scoping", () => {
 
 		const scoped = listRunsFromRegistryForOverlay(20, { sessionCwd: "/scoped/proj" });
 		assert.equal(scoped.recent.length, 3);
-		assert.deepEqual(
-			scoped.recent.map((r) => r.id).sort(),
-			["scoped-a", "scoped-b", "scoped-c"].sort(),
-		);
+		assert.deepEqual(scoped.recent.map((r) => r.id).sort(), ["scoped-a", "scoped-b", "scoped-c"].sort());
 		assert.equal(scoped.active.length, 0);
 	});
 
@@ -137,10 +137,18 @@ describe("listRunsFromRegistryForOverlay sessionCwd scoping", () => {
 		});
 
 		const scoped = listRunsFromRegistryForOverlay(10, { sessionId: "sess-current" });
-		assert.deepEqual(
-			scoped.recent.map((r) => r.id).sort(),
-			["nested", "top"].sort(),
-		);
+		assert.deepEqual(scoped.recent.map((r) => r.id).sort(), ["nested", "top"].sort());
+	});
+
+	it("excludes untagged entries from explicit session scope", () => {
+		const root = tmpRegistry();
+		const untagged = makeRun(root, "untagged", "/scoped/proj", "complete", 100);
+		const shardPath = getShardPath("sess-current");
+		fs.mkdirSync(path.dirname(shardPath), { recursive: true });
+		fs.writeFileSync(shardPath, `${JSON.stringify(untagged)}\n`, "utf-8");
+
+		const scoped = listRunsFromRegistryForOverlay(10, { sessionId: "sess-current" });
+		assert.deepEqual(scoped, { active: [], recent: [] });
 	});
 
 	it("falls back to parentSessionId when rootSessionId is missing (legacy entries)", () => {

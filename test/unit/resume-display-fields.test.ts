@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { statusToSummary } from "../../async-status.ts";
-import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../in-process-executor.ts";
-import { appendRunEntry, setRegistryPathForTests } from "../../runs-registry.ts";
-import { createSubagentExecutor } from "../../subagent-executor.ts";
-import { __setStatusWriterWriteJsonForTest } from "../../status-writer.ts";
-import { setCurrentPi } from "../../current-pi.ts";
+import { statusToRunView } from "../../src/state/async-status.ts";
+import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
+import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
-import type { SubagentState } from "../../types.ts";
+import type { SubagentState } from "../../src/protocol/types.ts";
 
 let tempDir: string | undefined;
 let restoreDeps: (() => void) | undefined;
@@ -23,13 +23,26 @@ afterEach(() => {
 });
 
 function state(cwd: string): SubagentState {
-	return { baseCwd: cwd, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null, poller: null };
+	return {
+		baseCwd: cwd,
+		currentSessionId: null,
+		asyncJobs: new Map(),
+		foregroundControls: new Map(),
+		lastForegroundControlId: null,
+		cleanupTimers: new Map(),
+		lastUiContext: null,
+		poller: null,
+	};
 }
 
 class DoneSession {
-	subscribe() { return () => {}; }
+	subscribe() {
+		return () => {};
+	}
 	setActiveToolsByName() {}
-	getLastAssistantText() { return "done again"; }
+	getLastAssistantText() {
+		return "done again";
+	}
 	dispose() {}
 	async abort() {}
 	async prompt() {}
@@ -39,12 +52,41 @@ function setup() {
 	tempDir = createTempDir("pi-subagent-resume-display-fields-");
 	setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	const events: Array<{ channel: string; data: any }> = [];
-	const pi = { events: { emit: (channel: string, data: unknown) => events.push({ channel, data }) }, getSessionName: () => undefined, setSessionName: () => {}, getAllTools: () => [] };
+	const pi = {
+		events: { emit: (channel: string, data: unknown) => events.push({ channel, data }) },
+		getSessionName: () => undefined,
+		setSessionName: () => {},
+		getAllTools: () => [],
+	};
 	setCurrentPi(pi as never);
-	restoreDeps = __setChildAgentExecutorDepsForTest({ SessionManager: { open: () => ({ getSessionId: () => "same-session" }) } as never, DefaultResourceLoader: class { async reload() {} } as never, getAgentDir: () => tempDir!, createAgentSession: async () => ({ session: new DoneSession() }) as never });
+	restoreDeps = __setChildAgentExecutorDepsForTest({
+		SessionManager: { open: () => ({ getSessionId: () => "same-session" }) } as never,
+		DefaultResourceLoader: class {
+			async reload() {}
+		} as never,
+		getAgentDir: () => tempDir!,
+		createAgentSession: async () => ({ session: new DoneSession() }) as never,
+	});
 	const s = state(tempDir);
-	const executor = createSubagentExecutor({ pi, state: s, config: { parallel: { concurrency: 1 } }, asyncByDefault: false, tempArtifactsDir: tempDir, childRegistry: new ChildAgentRegistry(), expandTilde: (v: string) => v, discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }) } as never);
-	const execute = (params: Record<string, unknown>) => executor.execute("id", params as never, new AbortController().signal, undefined, { cwd: tempDir!, hasUI: false, ui: {}, sessionManager: { getSessionId: () => "parent", getSessionFile: () => null }, modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] }, model: { provider: "mock" } } as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+	const executor = createSubagentExecutor({
+		pi,
+		state: s,
+		config: {},
+		asyncByDefault: false,
+		tempArtifactsDir: tempDir,
+		childRegistry: new ChildAgentRegistry(),
+		expandTilde: (v: string) => v,
+		discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }),
+	} as never);
+	const execute = (params: Record<string, unknown>) =>
+		executor.execute("id", params as never, new AbortController().signal, undefined, {
+			cwd: tempDir!,
+			hasUI: false,
+			ui: {},
+			sessionManager: { getSessionId: () => "parent", getSessionFile: () => null },
+			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
+			model: { provider: "mock" },
+		} as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
 	return { execute, events, state: s };
 }
 
@@ -53,8 +95,31 @@ function seedRun(root: string, startedAt = 4444, extra: Record<string, unknown> 
 	const runRecordDir = path.join(root, runId);
 	fs.mkdirSync(path.join(runRecordDir, "run-0"), { recursive: true });
 	fs.writeFileSync(path.join(runRecordDir, "run-0", "session.jsonl"), "{}\n", "utf8");
-	appendRunEntry({ runId, runRecordDir, mode: "single", source: "sync", agentName: "fixer", rootRunId: runId, cwd: root, startedAt });
-	fs.writeFileSync(path.join(runRecordDir, "status.json"), JSON.stringify({ runId, mode: "single", state: "complete", startedAt, endedAt: startedAt + 1, cwd: root, steps: [{ agent: "fixer", status: "complete" }], ...extra }), "utf8");
+	appendRunEntry({
+		runId,
+		runRecordDir,
+		mode: "single",
+		source: "sync",
+		agentName: "fixer",
+		rootRunId: runId,
+		rootSessionId: "parent",
+		cwd: root,
+		startedAt,
+	});
+	fs.writeFileSync(
+		path.join(runRecordDir, "status.json"),
+		JSON.stringify({
+			runId,
+			mode: "single",
+			state: "complete",
+			startedAt,
+			endedAt: startedAt + 1,
+			cwd: root,
+			steps: [{ agent: "fixer", status: "complete" }],
+			...extra,
+		}),
+		"utf8",
+	);
 	return { runId, runRecordDir, startedAt };
 }
 
@@ -100,7 +165,14 @@ describe("resume display fields", () => {
 	});
 
 	it("defaults missing fields to never-resumed summary values", () => {
-		const legacy = statusToSummary("/tmp/legacy", { runId: "legacy", mode: "single", state: "complete", startedAt: 1_000, endedAt: 2_000, steps: [] });
+		const legacy = statusToRunView("/tmp/legacy", {
+			runId: "legacy",
+			mode: "single",
+			state: "complete",
+			startedAt: 1_000,
+			endedAt: 2_000,
+			steps: [],
+		});
 		assert.equal(legacy.resumeCount, 0);
 		assert.equal(legacy.resumedAt, undefined);
 	});
