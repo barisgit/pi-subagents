@@ -6,7 +6,6 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import registerSubagentExtension from "../../index.ts";
 import { createHostSubagentApi, registerChildSessionApi } from "../../src/api/exposed-subagent-api.ts";
 import {
-	CHILD_SESSION_FLAG_KEY,
 	SUBAGENT_EXPOSE_API_EVENT,
 	SUBAGENT_REQUEST_API_EVENT,
 	type SubagentExposedAPI,
@@ -15,6 +14,7 @@ import { claimPendingChildLineage, pushPendingChildLineage } from "../../src/sta
 import { getShardPath, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
+import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
 
 function clearLineage(...sessionIds: string[]): void {
 	const globals = globalThis as Record<string, unknown>;
@@ -146,8 +146,6 @@ describe("spawnRaw API exposure", () => {
 	});
 
 	it("skips root-role lifecycle for an in-process child without delegated environment markers", async () => {
-		const globalStore = globalThis as Record<string, unknown>;
-		const previousChildFlag = globalStore[CHILD_SESSION_FLAG_KEY];
 		const previousRuntimeMode = process.env.PI_SUBAGENT_RUNTIME_MODE;
 		const previousCurrentAgent = process.env.PI_SUBAGENT_CURRENT_AGENT;
 		const agentsDir = path.join(tempDir, ".pi", "agents");
@@ -156,13 +154,12 @@ describe("spawnRaw API exposure", () => {
 			path.join(agentsDir, "root-role.md"),
 			"---\nname: root-role\ndescription: Root role fixture\nscope: both\n---\n\nRoot-only prompt.\n",
 		);
-		globalStore[CHILD_SESSION_FLAG_KEY] = true;
 		process.env.PI_SUBAGENT_RUNTIME_MODE = "root";
 		delete process.env.PI_SUBAGENT_CURRENT_AGENT;
 		const { pi, sessionHandlers, appendedEntries } = createPiHarness();
 
 		try {
-			registerSubagentExtension(pi as never);
+			runInChildSessionContext(() => registerSubagentExtension(pi as never));
 			const sessionStart = sessionHandlers.get("session_start");
 			const beforeAgentStart = sessionHandlers.get("before_agent_start");
 			assert.ok(sessionStart, "expected session_start handler");
@@ -185,8 +182,6 @@ describe("spawnRaw API exposure", () => {
 			assert.deepEqual(appendedEntries, []);
 			assert.equal(await beforeAgentStart({ systemPrompt: "base prompt" }), undefined);
 		} finally {
-			if (previousChildFlag === undefined) delete globalStore[CHILD_SESSION_FLAG_KEY];
-			else globalStore[CHILD_SESSION_FLAG_KEY] = previousChildFlag;
 			if (previousRuntimeMode === undefined) delete process.env.PI_SUBAGENT_RUNTIME_MODE;
 			else process.env.PI_SUBAGENT_RUNTIME_MODE = previousRuntimeMode;
 			if (previousCurrentAgent === undefined) delete process.env.PI_SUBAGENT_CURRENT_AGENT;

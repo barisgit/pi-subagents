@@ -21,6 +21,7 @@ import { loadConfig, expandTilde } from "../shared/config.ts";
 import { createHostSubagentApi, registerChildSessionApi } from "../api/exposed-subagent-api.ts";
 import { createIdleTracker } from "../surfaces/idle-tracker.ts";
 import { logger } from "../shared/logger.ts";
+import { isInsideChildSession } from "../shared/child-session-context.ts";
 import { resolveAgentToolPatterns } from "../dispatch/resolve-tool-patterns.ts";
 import { leafConcurrencyLimit } from "../dispatch/leaf-concurrency.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
@@ -106,8 +107,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// action calls across activate boundaries) and the singleton runtime
 	// cleanup hook. Per-session globalStore keys are scoped by piId so the
 	// child's listeners don't tear down the host's.
-	const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-	const isChildSession = (globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true;
+	const isChildSession = isInsideChildSession();
 	if (isChildSession) {
 		logger.info("activate: child session - registering scoped subagent runtime");
 		registerChildSessionApi(pi);

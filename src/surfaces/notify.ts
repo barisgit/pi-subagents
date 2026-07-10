@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "../state/completion-dedupe.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { logger } from "../shared/logger.ts";
+import { isInsideChildSession } from "../shared/child-session-context.ts";
 import {
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
@@ -225,9 +226,8 @@ function childResultFrom(result: SubagentResult, child: ChildStepResult, index: 
 
 export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	const unsubscribeStoreKey = "__pi_subagents_notify_unsubscribe__";
-	const childSessionFlagKey = "__piSubagentInsideChildSession";
 	const globalStore = globalThis as Record<string, unknown>;
-	const isChildSession = globalStore[childSessionFlagKey] === true;
+	const isChildSession = isInsideChildSession();
 
 	// CHILD sessions must NEVER touch the host's notify slot. The host owns the
 	// reload-resilient subscription on the user's pi.events bus; a child's

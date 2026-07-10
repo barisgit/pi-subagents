@@ -764,16 +764,6 @@ export function resolveChildMaxSubagentDepth(parentMaxDepth: number, agentMaxDep
 	return normalizedAgent === undefined ? normalizedParent : Math.min(normalizedParent, normalizedAgent);
 }
 
-/**
- * Construction-time marker used only while child extensions are being wired.
- * Delegation authorization must use session lineage instead of this process-global state.
- */
-export const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-
-export function isInsideChildSession(): boolean {
-	return (globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true;
-}
-
 export function normalizeAgentIdentity(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim().toLowerCase();

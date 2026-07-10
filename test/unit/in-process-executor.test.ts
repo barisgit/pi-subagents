@@ -13,6 +13,7 @@ import {
 	type ChildAgentStep,
 } from "../../src/dispatch/in-process-executor.ts";
 import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "../../src/state/lineage.ts";
+import { isInsideChildSession } from "../../src/shared/child-session-context.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -147,14 +148,19 @@ function makeContext(overrides: Partial<ChildAgentContext> = {}): ChildAgentCont
 function installFakeRuntime(
 	sessions: FakeAgentSession[],
 	createHook?: () => void,
-	childSessionId?: string,
+	childSessionId?: string | ((sessionFile: string) => string | undefined),
 	createErrors: Error[] = [],
+	ResourceLoader: typeof FakeResourceLoader = FakeResourceLoader,
 ): void {
 	const restore = __setChildAgentExecutorDepsForTest({
-		DefaultResourceLoader: FakeResourceLoader as never,
+		DefaultResourceLoader: ResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: {
-			open: (file: string) => ({ file, getSessionId: () => childSessionId }) as never,
+			open: (file: string) =>
+				({
+					file,
+					getSessionId: () => (typeof childSessionId === "function" ? childSessionId(file) : childSessionId),
+				}) as never,
 		},
 		createAgentSession: async () => {
 			createHook?.();
@@ -193,6 +199,60 @@ describe("runChildAgent", () => {
 		assert.equal(session.disposeCalls, 1);
 		assert.deepEqual(session.activeToolNames, ["read", "bash"]);
 		assert.equal(events.length, 3);
+	});
+
+	it("keeps overlapping session construction in independent child contexts", async () => {
+		let releaseFirst!: () => void;
+		let markFirstStarted!: () => void;
+		const firstReleased = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		let reloadCount = 0;
+		class InterleavedResourceLoader extends FakeResourceLoader {
+			override async reload(): Promise<void> {
+				assert.equal(isInsideChildSession(), true);
+				reloadCount++;
+				if (reloadCount === 1) {
+					markFirstStarted();
+					await firstReleased;
+				}
+				await super.reload();
+			}
+		}
+		const makeSession = () =>
+			new FakeAgentSession(async (self) => {
+				self.lastAssistantText = "<output>done</output>";
+			});
+		const firstStep = makeStep({ runId: "run-child-context-first" });
+		const secondStep = makeStep({ runId: "run-child-context-second" });
+		installFakeRuntime(
+			[makeSession(), makeSession()],
+			() => assert.equal(isInsideChildSession(), true),
+			(sessionFile) => sessionFile,
+			[],
+			InterleavedResourceLoader,
+		);
+		let firstRun: ReturnType<typeof runChildAgent> | undefined;
+
+		try {
+			firstRun = runChildAgent(firstStep, makeContext());
+			await firstStarted;
+			assert.equal(isInsideChildSession(), false);
+			const secondResult = await runChildAgent(secondStep, makeContext());
+			assert.equal(secondResult.state, "complete");
+			assert.equal(isInsideChildSession(), false);
+			releaseFirst();
+			const firstResult = await firstRun;
+			assert.equal(firstResult.state, "complete");
+			assert.equal(isInsideChildSession(), false);
+		} finally {
+			releaseFirst();
+			await firstRun?.catch(() => {});
+			clearLineage(firstStep.sessionFile, secondStep.sessionFile);
+		}
 	});
 
 	it("increments tool counters on tool_execution_start and tool_execution_end", async () => {

@@ -21,6 +21,7 @@ import {
 // list unfiltered; extension tools like ast_grep/fetch/mcp/scan_files register during
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "../shared/logger.ts";
+import { runInChildSessionContext } from "../shared/child-session-context.ts";
 import {
 	getLineageForSession,
 	pushPendingChildLineage,
@@ -456,7 +457,7 @@ async function executeChildAgent(
 				childCwd: step.cwd,
 			});
 		}
-		session = await createSessionWithFallback(step, ctx);
+		session = await runInChildSessionContext(() => createSessionWithFallback(step, ctx));
 		onSession(session);
 		// Only narrow the active tool set when the agent declared an explicit list.
 		// If activeToolNames is undefined, the session keeps the default (all tools).
@@ -726,24 +727,7 @@ function seedForkSessionFile(input: { sourcePath: string; targetPath: string; ch
 	}
 }
 
-/**
- * Marker on globalThis set while we're constructing a child AgentSession.
- * The pi-subagents extension factory checks this to know it's being invoked
- * inside a child session (versus the host) and bail out of host-only wiring
- * (currentPi pin, pi.events listeners, widget state, etc.).
- */
-const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-function setChildSessionFlag(value: boolean): void {
-	(globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] = value;
-}
-
 async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentContext): Promise<AgentSession> {
-	// Set the child-session flag BEFORE any loader/session work runs. Both
-	// `loader.reload()` and `createAgentSession()` invoke every registered
-	// extension factory (including this package's), and the factory must see
-	// the flag synchronously to skip host wiring.
-	setChildSessionFlag(true);
-
 	const parentLineage = step.parentSessionId ? getLineageForSession(step.parentSessionId) : null;
 	const depth = parentLineage
 		? parentLineage.depth + 1
@@ -809,7 +793,10 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 				} catch {
 					// fall back to the pending-queue + activate-claim path
 				}
-				if (childSid) setChildLineage(childSid, lineage, step.sessionFile);
+				if (childSid) {
+					setChildLineage(childSid, lineage, step.sessionFile);
+					removePendingChildLineage(lineage);
+				}
 
 				const created = await runtimeDeps.createAgentSession({
 					cwd: step.cwd,
@@ -837,8 +824,6 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 		removePendingChildLineage(lineage);
 		removeChildLineageBindings(lineage);
 		throw error;
-	} finally {
-		setChildSessionFlag(false);
 	}
 }
 

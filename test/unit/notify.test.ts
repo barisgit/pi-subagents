@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify from "../../src/surfaces/notify.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
 import {
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
@@ -64,18 +65,8 @@ function createPi() {
 	return { events: inner, bus, sent, fire };
 }
 
-const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-
 function asChildSession<T>(fn: () => T): T {
-	const g = globalThis as Record<string, unknown>;
-	const prev = g[CHILD_SESSION_FLAG_KEY];
-	g[CHILD_SESSION_FLAG_KEY] = true;
-	try {
-		return fn();
-	} finally {
-		if (prev === undefined) delete g[CHILD_SESSION_FLAG_KEY];
-		else g[CHILD_SESSION_FLAG_KEY] = prev;
-	}
+	return runInChildSessionContext(fn);
 }
 
 describe("registerSubagentNotify", () => {
