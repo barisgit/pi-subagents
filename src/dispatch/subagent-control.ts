@@ -145,7 +145,7 @@ export function buildControlEvent(input: {
 	activityAt?: number;
 }): ControlEvent {
 	const ts = input.ts ?? Date.now();
-	const elapsedMs = input.lastActivityAt ? Math.max(0, ts - input.lastActivityAt) : undefined;
+	const elapsedMs = input.lastActivityAt !== undefined ? Math.max(0, ts - input.lastActivityAt) : undefined;
 	const elapsedSeconds = elapsedMs !== undefined ? Math.floor(elapsedMs / 1000) : undefined;
 	const message =
 		elapsedSeconds !== undefined

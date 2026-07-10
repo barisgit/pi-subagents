@@ -2,7 +2,7 @@
 	"metadata": {
 		"version": "1.0.0",
 		"last_run": "2026-06-15T09:03:04.674573Z",
-		"root": "/Users/blaz/Programming_local/Projects/pi-extensions/pi-subagents",
+		"root": ".",
 		"include_patterns": ["src/**/*.ts", "index.ts", "package.json"],
 		"exclude_patterns": ["**/*.test.ts", "dist/**", "node_modules/**", "test/**"],
 		"exceptions": []

@@ -116,6 +116,19 @@ describe("subagent control attention state", () => {
 		});
 	});
 
+	it("includes elapsed time when the last activity timestamp is zero", () => {
+		const event = buildControlEvent({
+			to: "needs_attention",
+			runId: "run-1",
+			agent: "worker",
+			ts: 1_000,
+			lastActivityAt: 0,
+		});
+
+		assert.equal(event.message, "worker needs attention (no observed activity for 1s)");
+		assert.equal(event.activityAt, 0);
+	});
+
 	it("defaults notifications to needs attention", () => {
 		const event = buildControlEvent({ to: "needs_attention", runId: "run-1", agent: "worker" });
 		assert.equal(shouldNotifyControlEvent(config, event), true);
