@@ -17,6 +17,16 @@ import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
 
+function clearLineage(...sessionIds: string[]): void {
+	const globals = globalThis as Record<string, unknown>;
+	const lineageStore = globals["__piSubagentLineageBySession"] as Map<string, unknown> | undefined;
+	const boundSessionFiles = globals["__piSubagentLineageBoundSessionFiles"] as Map<string, unknown> | undefined;
+	for (const sessionId of sessionIds) {
+		lineageStore?.delete(sessionId);
+		boundSessionFiles?.delete(sessionId);
+	}
+}
+
 afterEach(() => {
 	while (restoreFns.length > 0) restoreFns.pop()?.();
 });
@@ -272,11 +282,7 @@ describe("runChildAgent", () => {
 			assert.equal(getLineageForSession(childSessionId)?.parentSessionId, parentSessionId);
 		} finally {
 			claimPendingChildLineage(childSessionId, { runId: null, agentName: null });
-			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
-				| Map<string, unknown>
-				| undefined;
-			lineageStore?.delete(parentSessionId);
-			lineageStore?.delete(childSessionId);
+			clearLineage(parentSessionId, childSessionId);
 		}
 	});
 
@@ -300,10 +306,7 @@ describe("runChildAgent", () => {
 			assert.equal(createCalls, 0);
 			assert.equal(getLineageForSession(parentSessionId), parentLineage);
 		} finally {
-			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
-				| Map<string, unknown>
-				| undefined;
-			lineageStore?.delete(parentSessionId);
+			clearLineage(parentSessionId);
 		}
 	});
 
@@ -359,12 +362,7 @@ describe("runChildAgent", () => {
 				agentName: null,
 				sessionFile: step.sessionFile,
 			});
-			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
-				| Map<string, unknown>
-				| undefined;
-			lineageStore?.delete(firstFailedSessionId);
-			lineageStore?.delete(terminalFailedSessionId);
-			lineageStore?.delete(cleanupSessionId);
+			clearLineage(firstFailedSessionId, terminalFailedSessionId, cleanupSessionId);
 		}
 	});
 
@@ -427,12 +425,7 @@ describe("runChildAgent", () => {
 				null,
 			);
 		} finally {
-			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
-				| Map<string, unknown>
-				| undefined;
-			lineageStore?.delete(failedSessionId);
-			lineageStore?.delete(successfulSessionId);
-			lineageStore?.delete(cleanupSessionId);
+			clearLineage(failedSessionId, successfulSessionId, cleanupSessionId);
 		}
 	});
 
@@ -469,11 +462,7 @@ describe("runChildAgent", () => {
 				null,
 			);
 		} finally {
-			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
-				| Map<string, unknown>
-				| undefined;
-			lineageStore?.delete(activationSessionId);
-			lineageStore?.delete(cleanupSessionId);
+			clearLineage(activationSessionId, cleanupSessionId);
 		}
 	});
 });

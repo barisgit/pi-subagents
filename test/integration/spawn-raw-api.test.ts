@@ -15,6 +15,16 @@ import { getShardPath, setRegistryPathForTests } from "../../src/state/runs-regi
 import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
 
+function clearLineage(...sessionIds: string[]): void {
+	const globals = globalThis as Record<string, unknown>;
+	const lineageStore = globals["__piSubagentLineageBySession"] as Map<string, unknown> | undefined;
+	const boundSessionFiles = globals["__piSubagentLineageBoundSessionFiles"] as Map<string, unknown> | undefined;
+	for (const sessionId of sessionIds) {
+		lineageStore?.delete(sessionId);
+		boundSessionFiles?.delete(sessionId);
+	}
+}
+
 function createPiHarness() {
 	const events = new EventEmitter();
 	let exposed: SubagentExposedAPI | undefined;
@@ -237,13 +247,7 @@ describe("spawnRaw API exposure", () => {
 			const secondCleanupSessionId = `${secondSessionId}-cleanup`;
 			claimPendingChildLineage(firstCleanupSessionId, { runId: first.runId, agentName: null });
 			claimPendingChildLineage(secondCleanupSessionId, { runId: second.runId, agentName: null });
-			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
-				| Map<string, unknown>
-				| undefined;
-			lineageStore?.delete(firstSessionId);
-			lineageStore?.delete(secondSessionId);
-			lineageStore?.delete(firstCleanupSessionId);
-			lineageStore?.delete(secondCleanupSessionId);
+			clearLineage(firstSessionId, secondSessionId, firstCleanupSessionId, secondCleanupSessionId);
 		}
 	});
 
