@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { PersistedRunStatus } from "../protocol/status-types.ts";
+import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
 import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
 
 export type TranscriptLine =
@@ -57,9 +57,10 @@ export function previewArgs(args: unknown, maxLength = ARGS_PREVIEW_MAX): string
 	return `${json.slice(0, Math.max(0, limit - 1))}…`;
 }
 
-function readJsonFile<T>(filePath: string): T | undefined {
+function readStatusFile(filePath: string): PersistedRunStatus | undefined {
 	try {
-		return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+		const parsed = parsePersistedRunStatus(fs.readFileSync(filePath, "utf-8"));
+		return parsed.ok ? parsed.value : undefined;
 	} catch {
 		return undefined;
 	}
@@ -89,39 +90,33 @@ function discoverSessionFiles(
 	runRecordDir: string,
 	status?: PersistedRunStatus,
 ): Array<{ stepIndex: number; filePath: string }> {
-	// 1. Prefer explicit per-step sessionFile recorded in status.json. This is the
-	//    only correct path when fork-reuse runs share the parent's session file
-	//    (which lives outside <runRecordDir>/run-N/).
-	const fromStatus: Array<{ stepIndex: number; filePath: string }> = [];
-	const stepSlots = status?.steps;
-	if (Array.isArray(stepSlots)) {
-		for (let i = 0; i < stepSlots.length; i++) {
-			const raw = stepSlots[i]?.sessionFile;
-			if (typeof raw === "string" && raw && fs.existsSync(raw)) {
-				fromStatus.push({ stepIndex: i, filePath: raw });
-			}
+	const byStep = new Map<number, string>();
+	// Scan <runRecordDir>/run-N/session.jsonl for older steps written before the
+	// sessionFile field was added to status.json.
+	try {
+		for (const entry of fs.readdirSync(runRecordDir)) {
+			const match = /^run-(\d+)$/.exec(entry);
+			if (!match) continue;
+			const stepIndex = Number(match[1]);
+			if (!Number.isInteger(stepIndex) || stepIndex < 0) continue;
+			const filePath = path.join(runRecordDir, entry, "session.jsonl");
+			if (fs.existsSync(filePath)) byStep.set(stepIndex, filePath);
+		}
+	} catch {
+		// Explicit session files may still live outside a missing run record directory.
+	}
+
+	// Prefer each step's explicit sessionFile when present. This is the only
+	// correct path when a session file lives outside <runRecordDir>/run-N/.
+	for (const [stepIndex, step] of (status?.steps ?? []).entries()) {
+		const filePath = step?.sessionFile;
+		if (typeof filePath === "string" && filePath && fs.existsSync(filePath)) {
+			byStep.set(stepIndex, filePath);
 		}
 	}
-	if (fromStatus.length > 0) return fromStatus.sort((a, b) => a.stepIndex - b.stepIndex);
 
-	// 2. Fall back to scanning <runRecordDir>/run-N/session.jsonl for older runs
-	//    written before the sessionFile field was added to status.json.
-	let entries: string[];
-	try {
-		entries = fs.readdirSync(runRecordDir);
-	} catch {
-		return [];
-	}
-	return entries
-		.map((entry) => {
-			const match = /^run-(\d+)$/.exec(entry);
-			if (!match) return undefined;
-			const stepIndex = Number(match[1]);
-			if (!Number.isInteger(stepIndex) || stepIndex < 0) return undefined;
-			const filePath = path.join(runRecordDir, entry, "session.jsonl");
-			return fs.existsSync(filePath) ? { stepIndex, filePath } : undefined;
-		})
-		.filter((entry): entry is { stepIndex: number; filePath: string } => Boolean(entry))
+	return [...byStep.entries()]
+		.map(([stepIndex, filePath]) => ({ stepIndex, filePath }))
 		.sort((a, b) => a.stepIndex - b.stepIndex);
 }
 
@@ -392,7 +387,7 @@ export function readRunTranscript(runRecordDir: string): TranscriptLine[] {
 	const statusPath = path.join(runRecordDir, "status.json");
 	// Read status FIRST so discovery can use it to find session files that live
 	// outside <runRecordDir>/run-N/ (e.g. fork-reuse sharing the parent's file).
-	const status = readJsonFile<PersistedRunStatus>(statusPath);
+	const status = readStatusFile(statusPath);
 	const sessionFiles = discoverSessionFiles(runRecordDir, status);
 	const stats = [fileStat(statusPath), ...sessionFiles.map((session) => fileStat(session.filePath))].filter(
 		(stat): stat is CacheFileStat => Boolean(stat),

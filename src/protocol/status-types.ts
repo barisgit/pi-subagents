@@ -215,7 +215,12 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 	// a present wrong-typed value is a malformed file and fails closed.
 	if (o.runnerPid !== undefined && typeof o.runnerPid !== "number") return { ok: false, reason: "invalid-shape" };
 	if (o.runnerToken !== undefined && typeof o.runnerToken !== "string") return { ok: false, reason: "invalid-shape" };
-	if (o.steps !== undefined && !Array.isArray(o.steps)) return { ok: false, reason: "invalid-shape" };
+	if (
+		o.steps !== undefined &&
+		(!Array.isArray(o.steps) ||
+			o.steps.some((step) => step === null || typeof step !== "object" || typeof step.status !== "string"))
+	)
+		return { ok: false, reason: "invalid-shape" };
 	return { ok: true, value: data as PersistedRunStatus };
 }
 

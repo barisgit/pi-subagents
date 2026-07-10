@@ -35,14 +35,13 @@ function writeStatus(dir: string, patch: Partial<PersistedRunStatus> = {}): void
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify(status, null, 2));
 }
 
-function writeSession(dir: string, stepIndex: number, records: Array<Record<string, unknown>>): void {
+function writeSession(dir: string, stepIndex: number, records: Array<Record<string, unknown>>): string {
 	const runDir = path.join(dir, `run-${stepIndex}`);
 	fs.mkdirSync(runDir, { recursive: true });
 	const session = { type: "session", version: 3, id: "s1", timestamp: "2026-05-20T00:00:00.000Z", cwd: dir };
-	fs.writeFileSync(
-		path.join(runDir, "session.jsonl"),
-		[session, ...records].map((record) => JSON.stringify(record)).join("\n") + "\n",
-	);
+	const sessionFile = path.join(runDir, "session.jsonl");
+	fs.writeFileSync(sessionFile, [session, ...records].map((record) => JSON.stringify(record)).join("\n") + "\n");
+	return sessionFile;
 }
 
 function assistant(timestamp: string, content: unknown[]): Record<string, unknown> {
@@ -61,6 +60,72 @@ describe("readRunTranscript", () => {
 			assert.deepEqual(readRunTranscript(dir), []);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to canonical session files when status steps are malformed", () => {
+		const dir = makeRunDir();
+		try {
+			fs.writeFileSync(
+				path.join(dir, "status.json"),
+				JSON.stringify({ runId: "run-a", mode: "single", state: "complete", startedAt: 1000, steps: {} }),
+			);
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "a", name: "read", input: { path: "a" } },
+				]),
+			]);
+
+			assert.deepEqual(
+				readRunTranscript(dir)
+					.filter((line) => line.kind === "tool")
+					.map((line) => [line.stepIndex, line.toolName]),
+				[[0, "read"]],
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses explicit session files per step without dropping canonical transcripts for other steps", () => {
+		const dir = makeRunDir();
+		const explicitDir = makeRunDir();
+		try {
+			const explicitSessionFile = writeSession(explicitDir, 0, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "tool_use", id: "a", name: "read", input: { path: "a" } },
+				]),
+			]);
+			writeStatus(dir, {
+				mode: "parallel",
+				steps: [
+					{ agent: "fixer", status: "complete", sessionFile: explicitSessionFile },
+					{ agent: "review", status: "complete" },
+				],
+			});
+			writeSession(dir, 0, [
+				assistant("2026-05-20T00:00:01.050Z", [
+					{ type: "tool_use", id: "ignored", name: "write", input: { path: "ignored" } },
+				]),
+			]);
+			writeSession(dir, 1, [
+				assistant("2026-05-20T00:00:01.100Z", [
+					{ type: "tool_use", id: "b", name: "bash", input: { command: "npm test" } },
+				]),
+			]);
+
+			assert.deepEqual(
+				readRunTranscript(dir)
+					.filter((line) => line.kind === "tool")
+					.map((line) => [line.stepIndex, line.toolName]),
+				[
+					[0, "read"],
+					[1, "bash"],
+				],
+			);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(explicitDir, { recursive: true, force: true });
 		}
 	});
 

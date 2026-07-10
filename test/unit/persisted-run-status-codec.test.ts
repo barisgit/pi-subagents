@@ -35,6 +35,11 @@ describe("parsePersistedRunStatus", () => {
 		assert.deepEqual(parsePersistedRunStatus(raw), { ok: false, reason: "invalid-shape" });
 	});
 
+	it("rejects a status with a malformed nested step", () => {
+		const raw = JSON.stringify({ runId: "x", mode: "single", state: "running", startedAt: 1, steps: [null] });
+		assert.deepEqual(parsePersistedRunStatus(raw), { ok: false, reason: "invalid-shape" });
+	});
+
 	it("accepts a valid status with an optional steps array", () => {
 		const value = { runId: "x", mode: "parallel", state: "complete", startedAt: 1, steps: [] };
 		const result = parsePersistedRunStatus(JSON.stringify(value));
