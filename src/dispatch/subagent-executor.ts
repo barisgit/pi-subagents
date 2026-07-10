@@ -223,10 +223,10 @@ function getForegroundControl(state: SubagentState, runId: string | undefined) {
 function formatForegroundActivity(
 	control: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never,
 ): string | undefined {
-	if (control.currentTool && control.currentToolStartedAt) {
+	if (control.currentTool && control.currentToolStartedAt !== undefined) {
 		return `tool ${control.currentTool} for ${Math.floor(Math.max(0, Date.now() - control.currentToolStartedAt) / 1000)}s`;
 	}
-	if (!control.lastActivityAt)
+	if (control.lastActivityAt === undefined)
 		return control.currentActivityState === "needs_attention" ? "needs attention" : undefined;
 	const seconds = Math.floor(Math.max(0, Date.now() - control.lastActivityAt) / 1000);
 	return control.currentActivityState === "needs_attention"

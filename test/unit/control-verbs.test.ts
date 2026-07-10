@@ -128,4 +128,36 @@ describe("control verbs", () => {
 			removeTempDir(tempDir);
 		}
 	});
+
+	it("formats epoch-zero foreground activity timestamps", async () => {
+		const tempDir = createTempDir("pi-subagent-control-zero-");
+		const originalNow = Date.now;
+		Date.now = () => 1_000;
+		try {
+			const harness = makeHarness(tempDir);
+			const control = {
+				runId: "run-zero",
+				mode: "single" as const,
+				startedAt: 0,
+				updatedAt: 0,
+				started: true,
+				currentAgent: "worker",
+				currentTool: "bash" as string | undefined,
+				currentToolStartedAt: 0 as number | undefined,
+				lastActivityAt: 0,
+			};
+			harness.state.foregroundControls.set("run-zero", control);
+
+			assert.match(
+				text(await harness.execute({ action: "status", id: "run-zero" })),
+				/Activity: tool bash for 1s/,
+			);
+			control.currentTool = undefined;
+			control.currentToolStartedAt = undefined;
+			assert.match(text(await harness.execute({ action: "status", id: "run-zero" })), /Activity: active 1s ago/);
+		} finally {
+			Date.now = originalNow;
+			removeTempDir(tempDir);
+		}
+	});
 });
