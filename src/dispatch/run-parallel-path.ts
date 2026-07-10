@@ -156,7 +156,10 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 						? { parentSessionId: input.ctx.sessionManager.getSessionId() }
 						: {}),
 					...(() => {
-						const root = resolveDispatchRootSessionId(input.ctx);
+						const root = resolveDispatchRootSessionId(
+							input.ctx,
+							input.deps.state.currentSessionId ?? undefined,
+						);
 						return root ? { rootSessionId: root } : {};
 					})(),
 					source: "sync",
@@ -376,7 +379,7 @@ export async function runParallelPath(
 			const resumeActions = interruptedChildren
 				.map(
 					(child) =>
-						`- ${child.runId} (${child.agent}): subagent({ action: "resume", id: "${child.runId}", message: "Continue the interrupted work." })`,
+						`- ${child.runId}: subagent({ action: "resume", id: "${child.runId}", message: "Continue the interrupted work." })`,
 				)
 				.join("\n");
 			return {

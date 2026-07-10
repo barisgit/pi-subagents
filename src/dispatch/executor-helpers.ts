@@ -12,6 +12,7 @@ import {
 	type SubagentNeedsAttentionPayload,
 	type SubagentState,
 	type SubagentUsageRecord,
+	type TokenUsage,
 	type Usage,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
@@ -199,6 +200,7 @@ export function mirrorForegroundProgressToStatus(
 	currentStep: number,
 	steps: unknown,
 	executionStartedAt?: number,
+	totalTokens?: TokenUsage,
 ): void {
 	// A foreground run record opens "queued" (it may be blocked on a leaf permit).
 	// This mirror fires only once the child has actually begun executing, so it is
@@ -216,6 +218,7 @@ export function mirrorForegroundProgressToStatus(
 		phase: firstProgress?.phase,
 		phaseStartedAt: firstProgress?.phaseStartedAt,
 		steps: steps as never,
+		...(totalTokens ? { totalTokens } : {}),
 	});
 }
 
@@ -642,7 +645,7 @@ export function shapeSingleForegroundResult(args: {
 			content: [
 				{
 					type: "text",
-					text: `Run ${runId} paused after interrupt (${agent}). Resume with subagent({ action: "resume", id: "${runId}", message: "Continue the interrupted work." }).`,
+					text: `Run ${runId} paused after interrupt. Resume with subagent({ action: "resume", id: "${runId}", message: "Continue the interrupted work." }).`,
 				},
 			],
 			details,

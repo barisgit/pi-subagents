@@ -144,7 +144,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 	const first = steps[0];
 	if (!first) return null;
 	if (mode === "parallel" && hasTasks) {
-		const rootSessionId = resolveDispatchRootSessionId(ctx);
+		const rootSessionId = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 		const parentSessionId = ctx.sessionManager?.getSessionId?.();
 		const notifyPolicy = batchToNotifyPolicy(params.batch);
 		const group = openGroup({
@@ -323,7 +323,10 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						runId: groupRunId,
 						rootRunId: groupRootRunId,
 						...(() => {
-							const rootSessionId = resolveDispatchRootSessionId(ctx);
+							const rootSessionId = resolveDispatchRootSessionId(
+								ctx,
+								deps.state.currentSessionId ?? undefined,
+							);
 							return rootSessionId ? { rootSessionId } : {};
 						})(),
 						mode: "parallel",
@@ -400,7 +403,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 	const runRecordDir = first.step.runRecordDir;
 	const startedAt = Date.now();
 	const asyncParentSessionId = ctx.sessionManager?.getSessionId ? ctx.sessionManager.getSessionId() : undefined;
-	const asyncRootSessionId = resolveDispatchRootSessionId(ctx);
+	const asyncRootSessionId = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 	const initializeMeta = {
 		mode,
 		startedAt,
@@ -557,7 +560,10 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 					runId,
 					rootRunId,
 					...(() => {
-						const rootSessionId = resolveDispatchRootSessionId(ctx);
+						const rootSessionId = resolveDispatchRootSessionId(
+							ctx,
+							deps.state.currentSessionId ?? undefined,
+						);
 						return rootSessionId ? { rootSessionId } : {};
 					})(),
 					mode,

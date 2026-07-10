@@ -235,4 +235,6 @@ export interface StatusPatch {
 	runnerHeartbeatAt?: number;
 	toolName?: string;
 	tokens?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number };
+	/** Optional run aggregate for resume patches whose step tokens include prior attempts. */
+	totalTokens?: TokenUsage;
 }

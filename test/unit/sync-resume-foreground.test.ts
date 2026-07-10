@@ -62,6 +62,9 @@ class FakeSession {
 		};
 	}
 	setActiveToolsByName() {}
+	emit(event: object) {
+		for (const listener of this.listeners) listener(event);
+	}
 	getLastAssistantText() {
 		return this.lastAssistantText;
 	}
@@ -71,9 +74,7 @@ class FakeSession {
 	}
 	prompt(message: string) {
 		this.prompts.push(message);
-		for (const event of this.eventsToEmit.splice(0)) {
-			for (const listener of this.listeners) listener(event);
-		}
+		for (const event of this.eventsToEmit.splice(0)) this.emit(event);
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
@@ -395,7 +396,46 @@ describe("sync resume foreground", () => {
 		assert.equal(status.steps[1].live.toolResultCount, 4);
 		assert.equal(status.steps[1].live.toolErrorCount, 2);
 		assert.equal(status.steps[1].live.tokens, 180);
+		assert.ok(status.steps[1].endedAt > before.steps[1].endedAt);
 		assert.deepEqual(status.steps[0], before.steps[0]);
+	});
+
+	it("carries live usage through another restart before terminal persistence", async () => {
+		const h = setup({ pending: true });
+		const run = writeCompleteMultiStepRun(tempDir!);
+
+		const firstResume = h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "first resumed turn",
+			async: false,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		h.session.emit(events.assistantMessage("<output>partial resumed output</output>"));
+		await waitFor(() => {
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			return status.state === "running" && (status.steps[1].tokens?.total ?? 0) > 30;
+		});
+		const interruptedStatus = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		interruptedStatus.state = "interrupted";
+		interruptedStatus.steps[1].status = "interrupted";
+		h.session.resolvePrompt?.();
+		await firstResume;
+		fs.writeFileSync(path.join(run.runRecordDir, "status.json"), JSON.stringify(interruptedStatus));
+
+		h.session.eventsToEmit = [events.assistantMessage("<output>final resumed output</output>")];
+		const secondResume = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "second resumed turn",
+			async: false,
+		});
+		assert.equal(secondResume.isError, undefined, secondResume.content[0]?.text);
+
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.resumeCount, 2);
+		assert.equal(status.totalTokens.total, 330);
+		assert.equal(status.steps[1].tokens.total, 330);
 	});
 
 	it("background disk resume preserves prior output accounting and live tool counters", async () => {

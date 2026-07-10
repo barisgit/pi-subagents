@@ -1148,12 +1148,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId =
-			ctx.sessionManager.getSessionId() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			ctx.sessionManager.getSessionId() ??
+			deps.state.currentSessionId ??
+			`session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, {
 			preset: normalizedParams.preset,
 			includeInternal: true,
 		}).agents;
-		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
+		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), deps.state.currentSessionId);
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,
 			context: effectiveParams.context,
@@ -1291,7 +1293,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							? { parentSessionId: ctx.sessionManager.getSessionId() }
 							: {}),
 						...(() => {
-							const root = resolveDispatchRootSessionId(ctx);
+							const root = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 							return root ? { rootSessionId: root } : {};
 						})(),
 						source: "sync",
@@ -1425,7 +1427,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							? { parentSessionId: ctx.sessionManager.getSessionId() }
 							: {}),
 						...(() => {
-							const root = resolveDispatchRootSessionId(ctx);
+							const root = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 							return root ? { rootSessionId: root } : {};
 						})(),
 						source: "sync",
@@ -1489,7 +1491,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						runId,
 						rootRunId,
 						...(() => {
-							const rootSessionId = resolveDispatchRootSessionId(ctx);
+							const rootSessionId = resolveDispatchRootSessionId(
+								ctx,
+								deps.state.currentSessionId ?? undefined,
+							);
 							return rootSessionId ? { rootSessionId } : {};
 						})(),
 						mode: details.workflow ? "workflow" : details.mode,
@@ -1570,7 +1575,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				parentSessionFile,
 				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 				...(() => {
-					const root = resolveDispatchRootSessionId(ctx);
+					const root = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 					return root ? { rootSessionId: root } : {};
 				})(),
 				kind: "workflow",
@@ -1667,7 +1672,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								? { parentSessionId: ctx.sessionManager.getSessionId() }
 								: {}),
 							...(() => {
-								const root = resolveDispatchRootSessionId(ctx);
+								const root = resolveDispatchRootSessionId(
+									ctx,
+									deps.state.currentSessionId ?? undefined,
+								);
 								return root ? { rootSessionId: root } : {};
 							})(),
 							source: effectiveAsync ? "async" : "sync",
@@ -1816,7 +1824,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								? { parentSessionId: ctx.sessionManager.getSessionId() }
 								: {}),
 							...(() => {
-								const root = resolveDispatchRootSessionId(ctx);
+								const root = resolveDispatchRootSessionId(
+									ctx,
+									deps.state.currentSessionId ?? undefined,
+								);
 								return root ? { rootSessionId: root } : {};
 							})(),
 							source: effectiveAsync ? "async" : "sync",
@@ -1875,7 +1886,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							runId: group.runId,
 							rootRunId: groupRootRunId,
 							...(() => {
-								const rootSessionId = resolveDispatchRootSessionId(ctx);
+								const rootSessionId = resolveDispatchRootSessionId(
+									ctx,
+									deps.state.currentSessionId ?? undefined,
+								);
 								return rootSessionId ? { rootSessionId } : {};
 							})(),
 							mode: "workflow",

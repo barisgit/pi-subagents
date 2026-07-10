@@ -12,7 +12,7 @@ import {
 import { StatusWriter } from "../state/status-writer.ts";
 import { isRunnerHardDead } from "../state/run-liveness.ts";
 import { getSingleResultOutput, readStatus } from "../shared/utils.ts";
-import { sumTokenUsages, tokenUsageFromTotal, tokenUsageFromUsage } from "../state/usage-totals.ts";
+import { sumTokenUsages, tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../state/usage-totals.ts";
 import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
 import { logger } from "../shared/logger.ts";
@@ -22,6 +22,7 @@ import {
 	type Details,
 	type SingleResult,
 	type SubagentState,
+	type TokenUsage,
 	type Usage,
 	SUBAGENT_COMPLETED_EVENT,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
@@ -51,21 +52,40 @@ function parseChildRunId(id: string): { dispatchRunId: string; stepIndex?: numbe
 	return { dispatchRunId: match[1]!, stepIndex: Number(match[2]) };
 }
 
+function persistedTokenBaseline(status: PersistedRunStatus): TokenUsage | undefined {
+	const stepTokens = sumTokenUsages(...(status.steps ?? []).map((step) => step.tokens));
+	const usageTokens = tokenUsageFromUsage(status.totalUsage);
+	let baseline: TokenUsage | undefined;
+	for (const candidate of [status.totalTokens, usageTokens, stepTokens]) {
+		if (candidate && (!baseline || candidate.total > baseline.total)) baseline = candidate;
+	}
+	return baseline;
+}
+
+function usageFromTokenBaseline(tokens: TokenUsage): Usage {
+	const unclassified = Math.max(0, tokens.total - totalUsageTokens(tokens));
+	return {
+		input: tokens.input,
+		output: tokens.output + unclassified,
+		...(tokens.cacheRead !== undefined ? { cacheRead: tokens.cacheRead } : {}),
+		...(tokens.cacheWrite !== undefined ? { cacheWrite: tokens.cacheWrite } : {}),
+		cost: 0,
+		turns: 0,
+	};
+}
+
 function resumedUsageTotals(status: PersistedRunStatus, usage: Usage | undefined) {
-	const previousTotalUsage =
-		status.totalUsage ??
-		(status.totalTokens
-			? {
-					input: status.totalTokens.input,
-					output: status.totalTokens.output,
-					cacheRead: status.totalTokens.cacheRead ?? 0,
-					cacheWrite: status.totalTokens.cacheWrite ?? 0,
-					cost: 0,
-					turns: 0,
-				}
-			: undefined);
-	const previousTotalTokens =
-		status.totalTokens ?? (status.totalUsage ? tokenUsageFromUsage(status.totalUsage) : undefined);
+	const previousTotalTokens = persistedTokenBaseline(status);
+	const previousTotalUsage = status.totalUsage
+		? {
+				...status.totalUsage,
+				output:
+					status.totalUsage.output +
+					Math.max(0, (previousTotalTokens?.total ?? 0) - totalUsageTokens(status.totalUsage)),
+			}
+		: previousTotalTokens
+			? usageFromTokenBaseline(previousTotalTokens)
+			: undefined;
 	return {
 		totalUsage: sumUsages(previousTotalUsage, usage),
 		totalTokens: sumTokenUsages(previousTotalTokens, tokenUsageFromUsage(usage)),
@@ -257,6 +277,8 @@ async function resumeRun(
 	// activity (startedAt stays immutable for duration semantics).
 	const resumedAt = Date.now();
 	const resumeCount = (target.status.resumeCount ?? 0) + 1;
+	const resumeBaseline = resumedUsageTotals(target.status, undefined);
+	const previousResumeStep = target.status.steps?.[step.stepIndex];
 	statusWriter.initialize({
 		mode: target.status.mode,
 		state: "running",
@@ -265,6 +287,8 @@ async function resumeRun(
 		runnerHeartbeatAt: resumedAt,
 		resumedAt,
 		resumeCount,
+		...(target.status.totalUsage || resumeBaseline.totalTokens ? { totalUsage: resumeBaseline.totalUsage } : {}),
+		...(resumeBaseline.totalTokens ? { totalTokens: resumeBaseline.totalTokens } : {}),
 		cwd: target.cwd,
 		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
 		currentStep: step.stepIndex,
@@ -318,16 +342,27 @@ async function resumeRun(
 		const fg = createForegroundRunController(foregroundControl, {
 			mirror: (firstProgress, index) => {
 				const resumeLiveTokens = tokenUsageFromTotal(firstProgress?.tokens);
+				const resumedStepTokens = sumTokenUsages(previousResumeStep?.tokens, resumeLiveTokens);
+				const resumedTotalTokens = sumTokenUsages(resumeBaseline.totalTokens, resumeLiveTokens);
+				const previousLive = previousResumeStep?.live;
+				const toolCallCount =
+					(previousLive?.toolCallCount ?? previousLive?.toolCount ?? 0) + (firstProgress?.toolCount ?? 0);
+				const resumedLive = {
+					toolCallCount,
+					toolCount: toolCallCount,
+					tokens: resumedStepTokens?.total,
+				};
 				const statusStepPatch = target.status.steps?.map((_, stepIdx) =>
 					stepIdx === step.stepIndex
 						? {
 								agent: firstProgress?.agent ?? target.agentName,
 								status: firstProgress?.status ?? "running",
-								startedAt: target.status.steps?.[step.stepIndex]?.startedAt ?? target.startedAt,
+								startedAt: previousResumeStep?.startedAt ?? target.startedAt,
 								lastActivityAt: firstProgress?.lastActivityAt,
 								currentTool: firstProgress?.currentTool,
 								currentToolStartedAt: firstProgress?.currentToolStartedAt,
-								...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
+								...(resumedStepTokens ? { tokens: resumedStepTokens } : {}),
+								live: resumedLive,
 							}
 						: {},
 				) ?? [
@@ -338,7 +373,8 @@ async function resumeRun(
 						lastActivityAt: firstProgress?.lastActivityAt,
 						currentTool: firstProgress?.currentTool,
 						currentToolStartedAt: firstProgress?.currentToolStartedAt,
-						...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
+						...(resumedStepTokens ? { tokens: resumedStepTokens } : {}),
+						live: resumedLive,
 					},
 				];
 				mirrorForegroundProgressToStatus(
@@ -347,6 +383,7 @@ async function resumeRun(
 					index,
 					statusStepPatch,
 					foregroundControl.executionStartedAt,
+					resumedTotalTokens,
 				);
 			},
 		});
@@ -451,6 +488,8 @@ async function resumeRun(
 			const terminalPatch: Partial<PersistedRunStep> = resultPatch
 				? {
 						...resultPatch,
+						status: terminalState,
+						...(failureMessage ? { error: failureMessage } : {}),
 						tokens: sumTokenUsages(previousStep?.tokens, resultPatch.tokens),
 						live: {
 							...resultLive,
@@ -471,7 +510,14 @@ async function resumeRun(
 				// fields so finalizeTerminal's force-overrides become no-ops
 				// (a patchless `{}` would flip siblings to the run-level end state).
 				steps: target.status.steps?.map((existingStep, index) =>
-					index === step.stepIndex ? { ...existingStep, ...terminalPatch } : existingStep,
+					index === step.stepIndex
+						? {
+								...existingStep,
+								...terminalPatch,
+								endedAt: undefined,
+								durationMs: terminalPatch.durationMs,
+							}
+						: existingStep,
 				) ?? [terminalPatch],
 				...(result && totals
 					? { totalUsage: totals.totalUsage, outputText: getSingleResultOutput(result) }
@@ -494,7 +540,20 @@ async function resumeRun(
 	const asyncCtx = {
 		extensionCtx: data.ctx,
 		abortSignal: detachedAbort.signal,
-		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => statusWriter.enqueue(patch),
+		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => {
+			const resumedStepTokens =
+				patch.stepIndex === step.stepIndex
+					? sumTokenUsages(previousResumeStep?.tokens, patch.tokens)
+					: patch.tokens;
+			const resumedTotalTokens = patch.tokens
+				? sumTokenUsages(resumeBaseline.totalTokens, patch.tokens)
+				: undefined;
+			statusWriter.enqueue({
+				...patch,
+				...(resumedStepTokens ? { tokens: resumedStepTokens } : {}),
+				...(resumedTotalTokens ? { totalTokens: resumedTotalTokens } : {}),
+			});
+		},
 		registry: deps.childRegistry,
 		pi: deps.pi,
 	};

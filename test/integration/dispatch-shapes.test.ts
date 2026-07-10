@@ -114,13 +114,13 @@ function makeState(cwd: string) {
 	};
 }
 
-function makeCtx(cwd: string) {
+function makeCtx(cwd: string, sessionId: string | null = "session-123") {
 	return {
 		cwd,
 		hasUI: false,
 		ui: {},
 		sessionManager: {
-			getSessionId: () => "session-123",
+			getSessionId: () => sessionId ?? undefined,
 			getSessionFile: () => null,
 		},
 		modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
@@ -128,7 +128,7 @@ function makeCtx(cwd: string) {
 	};
 }
 
-function makeExecutor(cwd: string) {
+function makeExecutor(cwd: string, state = makeState(cwd)) {
 	return createSubagentExecutor({
 		pi: {
 			events: { emit: () => {} },
@@ -136,7 +136,7 @@ function makeExecutor(cwd: string) {
 			setSessionName: () => {},
 			getAllTools: () => [],
 		},
-		state: makeState(cwd),
+		state,
 		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: cwd,
@@ -192,6 +192,29 @@ describe("dispatch shapes", () => {
 		assert.equal(result.details?.results?.length, 1);
 		assert.equal(result.details?.results?.[0]?.agent, "explorer");
 		assert.deepEqual(seenTasks, ["x"]);
+	});
+
+	it("stamps the synthesized session fallback on new run records", async () => {
+		restoreRuntime = installFakeRuntime([
+			new FakeAgentSession(async (_task, session) => {
+				session.emit(assistantMessage("done"));
+			}),
+		]);
+		const state = makeState(tempDir);
+		const executor = makeExecutor(tempDir, state);
+		const result = (await executor.execute(
+			"fallback-session",
+			{ run: [{ agent: "explorer", task: "persist ownership" }] } as never,
+			new AbortController().signal,
+			undefined,
+			makeCtx(tempDir, null) as never,
+		)) as ExecutorResult;
+
+		const runId = result.details?.runId;
+		assert.ok(runId);
+		assert.ok(state.currentSessionId);
+		const entry = readAllEntries().find((candidate) => candidate.runId === runId);
+		assert.equal(entry?.rootSessionId, state.currentSessionId);
 	});
 
 	it("fresh foreground terminal status persists output, usage, and live tool counters", async () => {
@@ -253,6 +276,7 @@ describe("dispatch shapes", () => {
 		assert.match(resultText(result), new RegExp(runId));
 		assert.match(resultText(result), /subagent\(\{ action: "resume", id:/);
 		assert.match(resultText(result), /message:/);
+		assert.doesNotMatch(resultText(result), /explorer/);
 	});
 
 	it("prefers the <output> block over the assistant preamble for finalOutput", async () => {
@@ -317,6 +341,7 @@ describe("dispatch shapes", () => {
 			assert.notEqual(child.runId, containerRunId);
 			assert.match(resultText(result), new RegExp(child.runId));
 		}
+		assert.doesNotMatch(resultText(result), /\(A\)|\(B\)/);
 		assert.doesNotMatch(resultText(result), new RegExp(containerRunId));
 		assert.equal(resultText(result).match(/subagent\(\{ action: "resume", id:/g)?.length, 2);
 	});

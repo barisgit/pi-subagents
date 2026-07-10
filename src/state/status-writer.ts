@@ -52,6 +52,8 @@ export interface StatusMeta {
 	runnerHeartbeatAt?: number;
 	resumedAt?: number;
 	resumeCount?: number;
+	totalUsage?: Usage;
+	totalTokens?: TokenUsage;
 }
 
 /**
@@ -78,6 +80,8 @@ export function statusFromMeta(runId: string, meta: StatusMeta): PersistedRunSta
 		...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),
 		...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
 		...(meta.resumeCount !== undefined ? { resumeCount: meta.resumeCount } : {}),
+		...(meta.totalUsage ? { totalUsage: { ...meta.totalUsage } } : {}),
+		...(meta.totalTokens ? { totalTokens: { ...meta.totalTokens } } : {}),
 		steps: meta.steps
 			? meta.steps.map((step) => ({ ...step, live: step.live ? { ...step.live } : undefined }))
 			: [],
