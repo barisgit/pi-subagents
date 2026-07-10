@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
 	buildParallelWorktreeSuffix,
@@ -44,7 +45,7 @@ describe("resolveParallelTaskCwd precedence", () => {
 	});
 
 	it("falls back to params cwd joined with task cwd when no worktree", () => {
-		assert.equal(resolveParallelTaskCwd(task, "/base", undefined, 0), "/base/task-sub");
+		assert.equal(resolveParallelTaskCwd(task, "/base", undefined, 0), path.resolve("/base", "task-sub"));
 	});
 
 	it("uses task cwd alone when there is no params cwd", () => {

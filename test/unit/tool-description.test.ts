@@ -14,7 +14,7 @@ function readRegisteredToolDescription(
 	const indexSource = fs.readFileSync(path.resolve(testDir, "..", "..", sourceFile), "utf-8");
 	const match = indexSource.match(
 		new RegExp(
-			`${descriptionStart}[\\s\\S]*?description:\\s*\`([\\s\\S]*?)\`,\\n\\t\\tparameters: ${parametersName},`,
+			`${descriptionStart}[\\s\\S]*?description:\\s*\`([\\s\\S]*?)\`,\\r?\\n\\t\\tparameters: ${parametersName},`,
 		),
 	);
 	assert.ok(match, `expected to find the registered ${toolName} tool description`);

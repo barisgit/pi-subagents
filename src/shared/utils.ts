@@ -22,7 +22,7 @@ import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
 // File System Utilities
 // ============================================================================
 
-const statusCache = new Map<string, { mtime: number; status: PersistedRunStatus }>();
+const statusCache = new Map<string, { mtime: number; size: number; status: PersistedRunStatus }>();
 /**
  * Ceiling past which a non-terminal status.json with an untouched mtime is treated
  * as an orphan whose owning activation died. The read-path ({@link reconcileStatus})
@@ -90,7 +90,7 @@ export function readStatus(asyncDir: string): PersistedRunStatus | null {
 	}
 
 	const cached = statusCache.get(statusPath);
-	if (cached && cached.mtime === stat.mtimeMs) {
+	if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
 		return cached.status;
 	}
 
@@ -111,7 +111,7 @@ export function readStatus(asyncDir: string): PersistedRunStatus | null {
 	if (!parsed.ok) return null;
 	const status = reconcileStatus(parsed.value, stat.mtimeMs);
 
-	statusCache.set(statusPath, { mtime: stat.mtimeMs, status });
+	statusCache.set(statusPath, { mtime: stat.mtimeMs, size: stat.size, status });
 	if (statusCache.size > 50) {
 		const firstKey = statusCache.keys().next().value;
 		if (firstKey) statusCache.delete(firstKey);

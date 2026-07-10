@@ -236,7 +236,9 @@ test("no legacy call sites", async (t) => {
 			subtest.skip("skipping recursive npm run test:all invocation");
 			return;
 		}
-		const result = spawnSync("npm", ["run", "test:all"], {
+		const npmExecPath = process.env.npm_execpath;
+		assert.ok(npmExecPath, "npm_execpath must be available when the suite is launched through npm");
+		const result = spawnSync(process.execPath, [npmExecPath, "run", "test:all"], {
 			cwd: projectRoot,
 			encoding: "utf-8",
 			stdio: "pipe",
