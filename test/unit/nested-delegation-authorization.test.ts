@@ -376,21 +376,56 @@ it("rejects fallback claims without replacing host or child-parent lineage", () 
 
 	try {
 		for (const entry of cases) {
-			assert.throws(
-				() =>
-					claimPendingChildLineage(entry.sessionId, {
-						runId: null,
-						agentName: null,
-						sessionFile: entry.sessionFile,
-					}),
-				{ message: "Cannot replace an existing session lineage binding." },
-			);
+			const claim = () =>
+				claimPendingChildLineage(entry.sessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: entry.sessionFile,
+				});
+			if (entry.existing.role === "host") {
+				assert.equal(claim(), null);
+			} else {
+				assert.throws(claim, { message: "Cannot replace an existing session lineage binding." });
+			}
 			assert.equal(getLineageForSession(entry.sessionId), entry.existing);
 		}
 	} finally {
 		for (const entry of cases) removePendingChildLineage(entry.pending);
 		clearLineage(hostSessionId);
 		clearLineage(childParentSessionId);
+	}
+});
+
+it("fails closed instead of returning host lineage when a child claim has no session-file hint", () => {
+	const hostSessionId = "session-lineage-claim-host-without-file";
+	const cleanupSessionId = "session-lineage-claim-host-without-file-cleanup";
+	const hostLineage = setHostLineage(hostSessionId, "host-agent");
+	const childLineage = makeChildLineage({ runId: "run-lineage-claim-host-without-file" });
+	pushPendingChildLineage(childLineage);
+
+	try {
+		assert.equal(
+			claimPendingChildLineage(hostSessionId, {
+				runId: null,
+				agentName: null,
+				sessionFile: null,
+			}),
+			null,
+		);
+		assert.equal(getLineageForSession(hostSessionId), hostLineage);
+		assert.equal(
+			claimPendingChildLineage(cleanupSessionId, {
+				runId: childLineage.runId,
+				agentName: null,
+				sessionFile: null,
+			}),
+			childLineage,
+			"the rejected claim must leave the child lineage pending",
+		);
+	} finally {
+		removePendingChildLineage(childLineage);
+		clearLineage(hostSessionId);
+		clearLineage(cleanupSessionId);
 	}
 });
 

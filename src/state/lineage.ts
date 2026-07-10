@@ -148,6 +148,7 @@ export function claimPendingChildLineage(
 	const arr = pending();
 	const existing = store().get(sessionId);
 	if (existing) {
+		if (existing.role !== "child") return null;
 		const pendingIndex = arr.findIndex((candidate) => candidate === existing);
 		if (pendingIndex >= 0) {
 			setChildLineage(sessionId, existing, hints.sessionFile);
