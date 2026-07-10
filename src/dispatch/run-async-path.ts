@@ -210,7 +210,8 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						// (subagent interrupt aborts the registry controller for its runId).
 						// Honor that here so it never launches a leaf session.
 						const registrySignal = deps.childRegistry.signalForRun(prepared.runId);
-						if (registrySignal.aborted || asyncDetachedAbort.signal.aborted) {
+						const childAbortSignal = AbortSignal.any([asyncDetachedAbort.signal, layer0Ctx.abortSignal]);
+						if (registrySignal.aborted || childAbortSignal.aborted) {
 							const now = Date.now();
 							return {
 								runId: prepared.runId,
@@ -238,7 +239,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Ag
 						};
 						const childHandle = dispatchAsyncChild(childStep, {
 							extensionCtx: ctx,
-							abortSignal: asyncDetachedAbort.signal,
+							abortSignal: childAbortSignal,
 							onStatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
 							registry: deps.childRegistry,
 							pi: deps.pi,

@@ -574,6 +574,8 @@ export function singleResultToChildAgentResult(
 	result: SingleResult,
 	prepared: { runId: string; sessionFile: string; stepIndex?: number },
 ): ChildAgentResult {
+	const durationMs = result.progressSummary?.durationMs ?? 0;
+	const endedAt = Date.now();
 	return {
 		runId: prepared.runId,
 		stepIndex: prepared.stepIndex ?? 0,
@@ -583,9 +585,9 @@ export function singleResultToChildAgentResult(
 		toolCallCount: result.toolCallCount ?? result.progressSummary?.toolCount ?? 0,
 		toolResultCount: result.toolResultCount ?? 0,
 		toolErrorCount: result.toolErrorCount ?? 0,
-		durationMs: result.progressSummary?.durationMs ?? 0,
-		startedAt: Date.now() - (result.progressSummary?.durationMs ?? 0),
-		endedAt: Date.now(),
+		durationMs,
+		startedAt: endedAt - durationMs,
+		endedAt,
 		sessionFile: result.sessionFile ?? prepared.sessionFile,
 		...(result.shareUrl ? { shareUrl: result.shareUrl } : {}),
 		...(result.error ? { error: { message: result.error } } : {}),

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { interruptRun } from "../../src/dispatch/layer0-runs.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { STATUS_JSON_VERSION } from "../../src/state/status-writer.ts";
@@ -42,6 +43,21 @@ class FakeAgentSession {
 	setActiveToolsByName(): void {}
 }
 
+class BlockingFakeAgentSession extends FakeAgentSession {
+	private releasePrompt: () => void = () => {};
+	private readonly promptReleased = new Promise<void>((resolve) => {
+		this.releasePrompt = resolve;
+	});
+
+	override async prompt(): Promise<void> {
+		await this.promptReleased;
+	}
+
+	override async abort(): Promise<void> {
+		this.releasePrompt();
+	}
+}
+
 function setupTempHome(prefix: string): string {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	tmpRoots.push(root);
@@ -51,14 +67,14 @@ function setupTempHome(prefix: string): string {
 	return root;
 }
 
-function installFakeRuntime(): void {
+function installFakeRuntime(createSession: () => FakeAgentSession = () => new FakeAgentSession()): void {
 	restoreRuntime = __setChildAgentExecutorDepsForTest({
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: { open: (file: string) => ({ getSessionId: () => `session-${file}` }) as never },
 		createAgentSession: async () =>
 			({
-				session: new FakeAgentSession() as never,
+				session: createSession() as never,
 				extensionsResult: { extensions: [], diagnostics: [] },
 			}) as never,
 	});
@@ -187,6 +203,38 @@ describe("async parallel per-run status", () => {
 			assert.equal(status.mode, "single");
 			assert.equal(status.steps?.length, 1);
 		}
+	});
+
+	it("interrupts an individual running child through its layer0 controller", async () => {
+		const root = setupTempHome("per-run-interrupt-test-");
+		const sessions: BlockingFakeAgentSession[] = [];
+		installFakeRuntime(() => {
+			const session = new BlockingFakeAgentSession();
+			sessions.push(session);
+			return session;
+		});
+		const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
+
+		await execute(root, emitted);
+		await waitForEntries(3);
+		for (let i = 0; i < 50 && sessions.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.equal(sessions.length, 2, "expected both child sessions to be running");
+
+		const entries = readAllEntries();
+		const group = entries.find((entry) => !Object.hasOwn(entry, "agentName"));
+		assert.ok(group);
+		const children = entries.filter((entry) => entry.parentRunId === group.runId);
+		const target = children[0];
+		assert.ok(target);
+		assert.deepEqual(interruptRun(target.runId, { cascade: false }).interruptedRunIds, [target.runId]);
+		await waitForCompleteStatus(target.runRecordDir);
+		const targetStatus = JSON.parse(fs.readFileSync(path.join(target.runRecordDir, "status.json"), "utf-8")) as {
+			state?: string;
+		};
+		assert.equal(targetStatus.state, "interrupted");
+
+		for (const child of children.slice(1)) interruptRun(child.runId, { cascade: false });
+		await Promise.all(children.slice(1).map((child) => waitForCompleteStatus(child.runRecordDir)));
 	});
 
 	it("resolves single-output files before finalizing async single status", async () => {
