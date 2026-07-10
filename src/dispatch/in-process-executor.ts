@@ -759,7 +759,8 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 	const lineage: SubagentLineage = {
 		role: "child",
 		currentAgent: step.agentName,
-		parentAgent: parentLineage?.currentAgent ?? step.parentAgentName ?? null,
+		parentAgent:
+			normalizeAgentIdentity(parentLineage?.currentAgent) ?? normalizeAgentIdentity(step.parentAgentName) ?? null,
 		parentSessionId: step.parentSessionId ?? null,
 		rootSessionId: parentLineage?.rootSessionId ?? step.rootSessionId ?? step.parentSessionId ?? null,
 		depth,

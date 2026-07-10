@@ -668,26 +668,25 @@ function resolveForkReuse(
 	const requestedAgents = collectRequestedAgentNames(params);
 	const currentSessionId = ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined;
 	const currentLineage = currentSessionId ? getLineageForSession(currentSessionId) : null;
-	// Identity resolution order:
-	//   1. Current session lineage
-	//   2. Legacy environment identity when lineage is unavailable
+	// Identity resolution order (fallbacks are unavailable to authoritative child lineage):
+	//   1. Non-blank current session lineage
+	//   2. Legacy environment identity when lineage is unavailable or host identity is blank
 	//   3. Active root role / preset stored by the extension
 	//   4. Single requested agent for a root self-fork
 	const uniqueRequested = [...new Set(requestedAgents)];
-	const currentAgentName = currentLineage
-		? normalizeName(currentLineage.currentAgent)
-		: (normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) ??
-			normalizeName(deps.getActiveRootRoleName?.()) ??
-			(uniqueRequested.length === 1 ? normalizeName(uniqueRequested[0]) : undefined));
+	const currentAgentName =
+		normalizeName(currentLineage?.currentAgent) ??
+		(currentLineage?.role === "child"
+			? undefined
+			: (normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) ??
+				normalizeName(deps.getActiveRootRoleName?.()) ??
+				(uniqueRequested.length === 1 ? normalizeName(uniqueRequested[0]) : undefined)));
 	if (!currentAgentName) {
 		throw new Error("Fork context requires a known current agent identity.");
 	}
 	const mismatchedAgents = uniqueRequested.filter((name) => name !== currentAgentName);
 	if (mismatchedAgents.length > 0) {
-		throw new Error(
-			`Fork context only allows the current agent '${currentAgentName}' to fork itself. ` +
-				`Requested: ${mismatchedAgents.join(", ")}`,
-		);
+		throw new Error("Fork context requires same-agent execution; the requested agent does not match this session.");
 	}
 	const overridePaths = collectForkOverridePaths(params);
 	if (overridePaths.length > 0) {

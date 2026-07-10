@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import registerSubagentExtension from "../../index.ts";
-import { createHostSubagentApi } from "../../src/api/exposed-subagent-api.ts";
+import { createHostSubagentApi, registerChildSessionApi } from "../../src/api/exposed-subagent-api.ts";
 import {
 	SUBAGENT_EXPOSE_API_EVENT,
 	SUBAGENT_REQUEST_API_EVENT,
@@ -160,8 +160,25 @@ describe("spawnRaw API exposure", () => {
 		});
 
 		assert.equal(result.isError, true);
+		assert.deepEqual(result.details, { mode: "single", results: [] });
 		assert.equal(executionCount, 0);
 		assert.match(result.content[0]?.text ?? "", /session context/i);
+	});
+
+	it("returns typed details from the child-session spawnRaw stub", async () => {
+		const { pi, getExposed } = createPiHarness();
+		registerChildSessionApi(pi as never);
+		const api = getExposed();
+		assert.ok(api?.spawnRaw, "expected child-session spawnRaw stub");
+
+		const result = await api.spawnRaw({
+			systemPrompt: "Follow the prompt.",
+			prompt: "Return a result",
+			cwd: tempDir,
+		});
+
+		assert.equal(result.isError, true);
+		assert.deepEqual(result.details, { mode: "single", results: [] });
 	});
 
 	it("hydrates usage snapshots from persisted run status after restart", () => {

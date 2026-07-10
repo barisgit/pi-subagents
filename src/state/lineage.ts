@@ -92,7 +92,7 @@ export function claimPendingChildLineage(
 	const arr = pending();
 	const existing = store().get(sessionId);
 	if (existing) {
-		const pendingIndex = arr.findIndex((candidate) => candidate.runId === existing.runId);
+		const pendingIndex = arr.findIndex((candidate) => candidate === existing);
 		if (pendingIndex >= 0) arr.splice(pendingIndex, 1);
 		return existing;
 	}

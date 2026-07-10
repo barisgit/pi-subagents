@@ -12,6 +12,7 @@ import {
 	type ChildAgentHandle,
 	type ChildAgentStep,
 } from "../../src/dispatch/in-process-executor.ts";
+import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "../../src/state/lineage.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -133,12 +134,12 @@ function makeContext(overrides: Partial<ChildAgentContext> = {}): ChildAgentCont
 	};
 }
 
-function installFakeRuntime(sessions: FakeAgentSession[], createHook?: () => void): void {
+function installFakeRuntime(sessions: FakeAgentSession[], createHook?: () => void, childSessionId?: string): void {
 	const restore = __setChildAgentExecutorDepsForTest({
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: {
-			open: (file: string) => ({ file }) as never,
+			open: (file: string) => ({ file, getSessionId: () => childSessionId }) as never,
 		},
 		createAgentSession: async () => {
 			createHook?.();
@@ -220,6 +221,24 @@ describe("runChildAgent", () => {
 		assert.equal(session.disposeCalls, 1);
 		assert.equal(result.state, "interrupted");
 		assert.equal(result.error?.reason, "stop-now");
+	});
+
+	it("normalizes parent lineage identity before falling back to the step parent identity", async () => {
+		const parentSessionId = "session-parent-blank-identity";
+		const childSessionId = "session-child-parent-fallback";
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		setHostLineage(parentSessionId, "   ");
+		installFakeRuntime([session], undefined, childSessionId);
+
+		try {
+			await runChildAgent(makeStep({ parentSessionId, parentAgentName: "  fallback-agent  " }), makeContext());
+
+			assert.equal(getLineageForSession(childSessionId)?.parentAgent, "fallback-agent");
+		} finally {
+			claimPendingChildLineage(childSessionId, { runId: null, agentName: null });
+		}
 	});
 });
 

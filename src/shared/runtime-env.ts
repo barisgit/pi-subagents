@@ -157,7 +157,7 @@ export function checkNestedDelegationGuard(
 				currentAgent: lineage.currentAgent,
 				parentAgent: lineage.parentAgent ?? undefined,
 				reason:
-					`Nested subagent call blocked: '${lineage.currentAgent}' is not allowed to delegate. ` +
+					"Nested subagent call blocked: this child is not allowed to delegate. " +
 					"Only agents marked canDelegate may make nested subagent calls.",
 			};
 		}
@@ -181,8 +181,8 @@ export function checkNestedDelegationGuard(
 					currentAgent: lineage.currentAgent,
 					parentAgent: lineage.parentAgent ?? undefined,
 					reason:
-						`Nested subagent call blocked: agent '${lineage.currentAgent}' may only delegate to ` +
-						`${allowedTargets.join(", ")}. Requested: ${disallowedTargets.join(", ")}.`,
+						"Nested subagent call blocked: one or more requested agents are not authorized for this child. " +
+						"Retry with an agent from the child session's configured allowlist.",
 				};
 			}
 		}
@@ -205,7 +205,7 @@ export function checkNestedDelegationGuard(
 			currentAgent,
 			parentAgent,
 			reason:
-				`Nested subagent call blocked: '${process.env.PI_SUBAGENT_CURRENT_AGENT}' is not allowed to delegate. ` +
+				"Nested subagent call blocked: this child is not allowed to delegate. " +
 				"Only agents marked canDelegate may make nested subagent calls.",
 		};
 	}
@@ -230,8 +230,8 @@ export function checkNestedDelegationGuard(
 				currentAgent,
 				parentAgent,
 				reason:
-					`Nested subagent call blocked: agent '${process.env.PI_SUBAGENT_CURRENT_AGENT}' may only delegate to ` +
-					`${allowedTargets.join(", ")}. Requested: ${disallowedTargets.join(", ")}.`,
+					"Nested subagent call blocked: one or more requested agents are not authorized for this child. " +
+					"Retry with an agent from the child session's configured allowlist.",
 			};
 		}
 	}

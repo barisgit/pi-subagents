@@ -112,6 +112,83 @@ beforeEach(() => {
 	}
 });
 
+it("removes the exact prebound pending lineage when run ids are duplicate nulls", () => {
+	const preboundSessionId = "session-prebound-null-run-id";
+	const unrelatedSessionId = "session-unrelated-null-run-id";
+	const unrelated = makeChildLineage({ currentAgent: "unrelated-child", runId: null });
+	const prebound = makeChildLineage({ currentAgent: "prebound-child", runId: null });
+	pushPendingChildLineage(unrelated);
+	pushPendingChildLineage(prebound);
+	setLineageForSession(preboundSessionId, prebound);
+
+	try {
+		assert.equal(claimPendingChildLineage(preboundSessionId, { runId: null, agentName: null }), prebound);
+		assert.equal(claimPendingChildLineage(unrelatedSessionId, { runId: null, agentName: null }), unrelated);
+	} finally {
+		clearLineage(preboundSessionId);
+		clearLineage(unrelatedSessionId);
+	}
+});
+
+it("falls back from a blank host lineage identity for self-fork checks", async () => {
+	const cwd = "/tmp/pi-subagent-nested-delegation-authorization";
+	const sessionId = "session-host-fork-blank-identity";
+	process.env.PI_SUBAGENT_CURRENT_AGENT = "target-agent";
+	setLineageForSession(sessionId, {
+		role: "host",
+		currentAgent: "   ",
+		parentAgent: null,
+		parentSessionId: null,
+		rootSessionId: sessionId,
+		depth: 0,
+		runId: null,
+	});
+
+	try {
+		const result = await makeExecutor(cwd).execute(
+			"call-host-fork-blank-identity",
+			{ run: [{ agent: "target-agent", task: "continue", context: "fork" }] },
+			new AbortController().signal,
+			undefined,
+			makeCtx(cwd, sessionId),
+		);
+
+		assert.doesNotMatch(result.content[0]?.text ?? "", /known current agent identity/i);
+		assert.match(result.content[0]?.text ?? "", /persisted parent session/i);
+	} finally {
+		clearLineage(sessionId);
+	}
+});
+
+it("keeps a blank child lineage identity authoritative for self-fork checks", async () => {
+	const cwd = "/tmp/pi-subagent-nested-delegation-authorization";
+	const sessionId = "session-child-fork-blank-identity";
+	process.env.PI_SUBAGENT_CURRENT_AGENT = "target-agent";
+	setLineageForSession(
+		sessionId,
+		makeChildLineage({
+			currentAgent: "   ",
+			runId: "run-child-fork-blank-identity",
+			allowedDelegateAgents: ["target-agent"],
+		}),
+	);
+
+	try {
+		const result = await makeExecutor(cwd).execute(
+			"call-child-fork-blank-identity",
+			{ run: [{ agent: "target-agent", task: "continue", context: "fork" }] },
+			new AbortController().signal,
+			undefined,
+			makeCtx(cwd, sessionId),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /known current agent identity/i);
+	} finally {
+		clearLineage(sessionId);
+	}
+});
+
 afterEach(() => {
 	for (const key of AUTH_ENV_KEYS) {
 		const value = originalEnv.get(key);
@@ -160,6 +237,7 @@ describe("nested delegation authorization", () => {
 
 			assert.equal(result.isError, true);
 			assert.match(result.content[0]?.text ?? "", /not allowed to delegate/i);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /source-agent|parent-agent/i);
 			assert.doesNotMatch(result.content[0]?.text ?? "", /unknown run/i);
 		} finally {
 			clearLineage(sessionId);
@@ -211,6 +289,7 @@ describe("nested delegation authorization", () => {
 			assert.equal(result.isError, true);
 			assert.equal(result.details?.mode, "single");
 			assert.match(result.content[0]?.text ?? "", /not allowed to delegate/i);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /source-agent|parent-agent|target-agent/i);
 		} finally {
 			clearLineage(sessionId);
 		}
@@ -234,7 +313,8 @@ describe("nested delegation authorization", () => {
 			);
 
 			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /may only delegate to allowed-agent/i);
+			assert.match(result.content[0]?.text ?? "", /configured allowlist/i);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /source-agent|parent-agent|allowed-agent|target-agent/i);
 		} finally {
 			clearLineage(sessionId);
 		}
@@ -361,7 +441,11 @@ describe("nested delegation authorization", () => {
 			});
 			await assert.rejects(
 				group.dispatchChild({ role: "target-agent", task: "do work", index: 0 }),
-				/may only delegate to allowed-agent/i,
+				(error: Error) => {
+					assert.match(error.message, /configured allowlist/i);
+					assert.doesNotMatch(error.message, /source-agent|parent-agent|allowed-agent|target-agent/i);
+					return true;
+				},
 			);
 		} finally {
 			clearLineage(sessionId);
@@ -478,6 +562,28 @@ describe("nested delegation authorization", () => {
 
 			assert.doesNotMatch(result.content[0]?.text ?? "", /stale-agent/);
 			assert.match(result.content[0]?.text ?? "", /persisted parent session/i);
+		} finally {
+			clearLineage(sessionId);
+		}
+	});
+
+	it("does not expose agent identities when rejecting a cross-agent fork", async () => {
+		const cwd = "/tmp/pi-subagent-nested-delegation-authorization";
+		const sessionId = "session-child-cross-agent-fork";
+		setLineageForSession(sessionId, makeChildLineage({ runId: "run-child-cross-agent-fork" }));
+
+		try {
+			const result = await makeExecutor(cwd).execute(
+				"call-cross-agent-fork",
+				{ run: [{ agent: "target-agent", task: "continue", context: "fork" }] },
+				new AbortController().signal,
+				undefined,
+				makeCtx(cwd, sessionId),
+			);
+
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /same-agent execution/i);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /source-agent|target-agent/i);
 		} finally {
 			clearLineage(sessionId);
 		}

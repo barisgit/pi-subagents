@@ -6,7 +6,6 @@ import { addUsageInto, emptyUsage } from "../dispatch/executor-helpers.ts";
 import { readShardEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { readStatus } from "../shared/utils.ts";
 import {
-	type Details,
 	type ExtensionConfig,
 	type SpawnRawInput,
 	type SpawnResult,
@@ -140,7 +139,7 @@ export function registerChildSessionApi(pi: ExtensionAPI): void {
 		const api: SubagentExposedAPI = {
 			spawnRaw: async () => ({
 				content: [{ type: "text", text: "spawnRaw is not available inside a child session" }],
-				details: { type: "error", message: "spawnRaw unsupported in child" } as unknown as Details,
+				details: { mode: "single", results: [] },
 				isError: true,
 			}),
 			list: () => [],
@@ -201,10 +200,7 @@ export function createHostSubagentApi(params: CreateHostSubagentApiParams): {
 		if (!ctx) {
 			return {
 				content: [{ type: "text", text: "spawnRaw is unavailable until session context is established" }],
-				details: {
-					type: "error",
-					message: "spawnRaw has no authoritative session context",
-				} as unknown as Details,
+				details: { mode: "single", results: [] },
 				isError: true,
 			};
 		}
