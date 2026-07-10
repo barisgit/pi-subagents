@@ -380,7 +380,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 
 	pi.on("before_agent_start", async (event) => {
-		if (roleManager.isDelegatedSubagentSession()) return;
+		if (isChildSession || roleManager.isDelegatedSubagentSession()) return;
 		const prompt = roleManager.getActiveRootRoleSystemPrompt();
 		if (!prompt) return;
 		return {
@@ -391,7 +391,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		resetSessionState(ctx);
 		hostApi?.republish();
-		if (roleManager.isDelegatedSubagentSession()) return;
+		if (isChildSession || roleManager.isDelegatedSubagentSession()) return;
 		await roleManager.initializeRootRole(ctx);
 	});
 	pi.on("session_shutdown", () => {

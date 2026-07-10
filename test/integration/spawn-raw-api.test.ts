@@ -6,6 +6,7 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import registerSubagentExtension from "../../index.ts";
 import { createHostSubagentApi, registerChildSessionApi } from "../../src/api/exposed-subagent-api.ts";
 import {
+	CHILD_SESSION_FLAG_KEY,
 	SUBAGENT_EXPOSE_API_EVENT,
 	SUBAGENT_REQUEST_API_EVENT,
 	type SubagentExposedAPI,
@@ -29,6 +30,7 @@ function createPiHarness() {
 	const events = new EventEmitter();
 	let exposed: SubagentExposedAPI | undefined;
 	let exposeCount = 0;
+	const appendedEntries: Array<{ type: string; data: unknown }> = [];
 	const tools: Array<{ name: string }> = [
 		{ name: "read" },
 		{ name: "grep" },
@@ -57,13 +59,20 @@ function createPiHarness() {
 		getSessionName: () => undefined,
 		setSessionName: () => {},
 		sendMessage: () => {},
-		appendEntry: () => {},
+		appendEntry: (type: string, data: unknown) => appendedEntries.push({ type, data }),
 	};
 	events.on(SUBAGENT_EXPOSE_API_EVENT, (api) => {
 		exposed = api as SubagentExposedAPI;
 		exposeCount += 1;
 	});
-	return { pi, events, getExposed: () => exposed, getExposeCount: () => exposeCount, sessionHandlers };
+	return {
+		pi,
+		events,
+		getExposed: () => exposed,
+		getExposeCount: () => exposeCount,
+		sessionHandlers,
+		appendedEntries,
+	};
 }
 
 function readLastCallArgs(mockPi: MockPi): string[] {
@@ -134,6 +143,55 @@ describe("spawnRaw API exposure", () => {
 
 		assert.equal(getExposeCount(), initialCount + 1);
 		assert.ok(getExposed()?.usageSnapshot, "expected requested API to include usageSnapshot");
+	});
+
+	it("skips root-role lifecycle for an in-process child without delegated environment markers", async () => {
+		const globalStore = globalThis as Record<string, unknown>;
+		const previousChildFlag = globalStore[CHILD_SESSION_FLAG_KEY];
+		const previousRuntimeMode = process.env.PI_SUBAGENT_RUNTIME_MODE;
+		const previousCurrentAgent = process.env.PI_SUBAGENT_CURRENT_AGENT;
+		const agentsDir = path.join(tempDir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(agentsDir, "root-role.md"),
+			"---\nname: root-role\ndescription: Root role fixture\nscope: both\n---\n\nRoot-only prompt.\n",
+		);
+		globalStore[CHILD_SESSION_FLAG_KEY] = true;
+		process.env.PI_SUBAGENT_RUNTIME_MODE = "root";
+		delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+		const { pi, sessionHandlers, appendedEntries } = createPiHarness();
+
+		try {
+			registerSubagentExtension(pi as never);
+			const sessionStart = sessionHandlers.get("session_start");
+			const beforeAgentStart = sessionHandlers.get("before_agent_start");
+			assert.ok(sessionStart, "expected session_start handler");
+			assert.ok(beforeAgentStart, "expected before_agent_start handler");
+			await sessionStart(
+				{},
+				{
+					cwd: tempDir,
+					hasUI: false,
+					ui: {},
+					sessionManager: {
+						getSessionId: () => "session-child-root-lifecycle",
+						getSessionFile: () => null,
+						getEntries: () => [],
+					},
+					modelRegistry: { getAvailable: () => [], find: () => undefined },
+				},
+			);
+
+			assert.deepEqual(appendedEntries, []);
+			assert.equal(await beforeAgentStart({ systemPrompt: "base prompt" }), undefined);
+		} finally {
+			if (previousChildFlag === undefined) delete globalStore[CHILD_SESSION_FLAG_KEY];
+			else globalStore[CHILD_SESSION_FLAG_KEY] = previousChildFlag;
+			if (previousRuntimeMode === undefined) delete process.env.PI_SUBAGENT_RUNTIME_MODE;
+			else process.env.PI_SUBAGENT_RUNTIME_MODE = previousRuntimeMode;
+			if (previousCurrentAgent === undefined) delete process.env.PI_SUBAGENT_CURRENT_AGENT;
+			else process.env.PI_SUBAGENT_CURRENT_AGENT = previousCurrentAgent;
+		}
 	});
 
 	it("fails closed when spawnRaw has no authoritative session context", async () => {
