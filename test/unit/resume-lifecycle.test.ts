@@ -98,6 +98,7 @@ function seedRun(root: string, startedAt = 4444) {
 		source: "sync",
 		agentName: "fixer",
 		rootRunId: runId,
+		rootSessionId: "parent",
 		cwd: root,
 		startedAt,
 	});

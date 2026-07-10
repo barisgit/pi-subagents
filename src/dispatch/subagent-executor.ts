@@ -75,7 +75,7 @@ import {
 	shapeSingleForegroundResult,
 	singleResultToChildAgentResult,
 	sumUsages,
-	tokenUsageFromResult,
+	terminalStatusStepFromResult,
 	validationError,
 } from "./executor-helpers.ts";
 export {
@@ -1081,6 +1081,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						paramsWithResolvedCwd.id!,
 						paramsWithResolvedCwd.message!,
 						resumeAsyncMode,
+						resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined),
 						resumeData,
 						deps,
 					),
@@ -1147,12 +1148,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId =
-			ctx.sessionManager.getSessionId() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? `session-${randomUUID()}`;
 		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, {
 			preset: normalizedParams.preset,
 			includeInternal: true,
 		}).agents;
-		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
+		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), deps.state.currentSessionId);
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,
 			context: effectiveParams.context,
@@ -1290,7 +1291,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							? { parentSessionId: ctx.sessionManager.getSessionId() }
 							: {}),
 						...(() => {
-							const root = resolveDispatchRootSessionId(ctx);
+							const root = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 							return root ? { rootSessionId: root } : {};
 						})(),
 						source: "sync",
@@ -1424,7 +1425,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							? { parentSessionId: ctx.sessionManager.getSessionId() }
 							: {}),
 						...(() => {
-							const root = resolveDispatchRootSessionId(ctx);
+							const root = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 							return root ? { rootSessionId: root } : {};
 						})(),
 						source: "sync",
@@ -1488,7 +1489,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						runId,
 						rootRunId,
 						...(() => {
-							const rootSessionId = resolveDispatchRootSessionId(ctx);
+							const rootSessionId = resolveDispatchRootSessionId(
+								ctx,
+								deps.state.currentSessionId ?? undefined,
+							);
 							return rootSessionId ? { rootSessionId } : {};
 						})(),
 						mode: details.workflow ? "workflow" : details.mode,
@@ -1504,22 +1508,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					// its result carries interrupted:true with no isError, so honor that first
 					// (mirrors the workflow/group path) instead of falling through to
 					// 'complete'. 'interrupted' is a terminal, resumable state.
-					const interrupted =
-						executionResult?.details?.results?.some((result) => result.interrupted) ?? false;
+					const terminalResults = executionResult?.details?.results ?? [];
+					const interrupted = terminalResults.some((result) => result.interrupted);
+					const totalUsage =
+						executionResult?.details?.totalUsage ??
+						sumUsages(...terminalResults.map((result) => result.usage));
+					const totalTokens = tokenUsageFromUsage(totalUsage);
+					const primaryResult = terminalResults[0];
 					finalizeRun(runHandle, {
 						via: "terminal",
 						state: interrupted ? "interrupted" : executionResult?.isError ? "failed" : "complete",
-						steps:
-							executionResult?.details?.results?.map((result) => ({
-								status: result.interrupted
-									? "interrupted"
-									: result.exitCode === 0
-										? "complete"
-										: "failed",
-								tokens: tokenUsageFromResult(result),
-								durationMs: result.progressSummary?.durationMs,
-								error: result.error,
-							})) ?? [],
+						steps: terminalResults.map(terminalStatusStepFromResult),
+						totalUsage,
+						...(totalTokens ? { totalTokens } : {}),
+						...(primaryResult ? { outputText: getSingleResultOutput(primaryResult) } : {}),
+						...(primaryResult?.error ? { error: primaryResult.error } : {}),
 					});
 					fgWriter.dispose();
 				}
@@ -1547,9 +1550,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		openWorkflowGroup: ({ signal, onUpdate, ctx, requestedAsync }) => {
 			deps.state.baseCwd = ctx.cwd;
 			deps.state.currentSessionId =
-				ctx.sessionManager.getSessionId() ??
-				deps.state.currentSessionId ??
-				`session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+				ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? `session-${randomUUID()}`;
 			const effectiveCwd = ctx.cwd;
 			const agents = deps.discoverAgents(effectiveCwd, "both", { includeInternal: true }).agents;
 			const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
@@ -1570,7 +1571,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				parentSessionFile,
 				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
 				...(() => {
-					const root = resolveDispatchRootSessionId(ctx);
+					const root = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 					return root ? { rootSessionId: root } : {};
 				})(),
 				kind: "workflow",
@@ -1667,7 +1668,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								? { parentSessionId: ctx.sessionManager.getSessionId() }
 								: {}),
 							...(() => {
-								const root = resolveDispatchRootSessionId(ctx);
+								const root = resolveDispatchRootSessionId(
+									ctx,
+									deps.state.currentSessionId ?? undefined,
+								);
 								return root ? { rootSessionId: root } : {};
 							})(),
 							source: effectiveAsync ? "async" : "sync",
@@ -1816,7 +1820,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								? { parentSessionId: ctx.sessionManager.getSessionId() }
 								: {}),
 							...(() => {
-								const root = resolveDispatchRootSessionId(ctx);
+								const root = resolveDispatchRootSessionId(
+									ctx,
+									deps.state.currentSessionId ?? undefined,
+								);
 								return root ? { rootSessionId: root } : {};
 							})(),
 							source: effectiveAsync ? "async" : "sync",
@@ -1875,7 +1882,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							runId: group.runId,
 							rootRunId: groupRootRunId,
 							...(() => {
-								const rootSessionId = resolveDispatchRootSessionId(ctx);
+								const rootSessionId = resolveDispatchRootSessionId(
+									ctx,
+									deps.state.currentSessionId ?? undefined,
+								);
 								return rootSessionId ? { rootSessionId } : {};
 							})(),
 							mode: "workflow",

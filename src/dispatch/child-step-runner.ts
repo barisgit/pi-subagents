@@ -403,6 +403,9 @@ function childResultToSingleResult(
 		result.outputSaveError = resolvedOutput.saveError;
 	}
 	result.finalOutput = fullOutput;
+	result.toolCallCount = childResult.toolCallCount;
+	result.toolResultCount = childResult.toolResultCount;
+	result.toolErrorCount = childResult.toolErrorCount;
 	input.progress.status = result.exitCode === 0 ? "completed" : "failed";
 	input.progress.durationMs = childResult.durationMs || Date.now() - input.startedAt;
 	if (result.error) input.progress.error = result.error;

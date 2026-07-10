@@ -285,6 +285,9 @@ export interface SingleResult {
 	skillsWarning?: string;
 	progress?: AgentProgress;
 	progressSummary?: ProgressSummary;
+	toolCallCount?: number;
+	toolResultCount?: number;
+	toolErrorCount?: number;
 	toolCalls?: ToolCallSummary[];
 	artifactPaths?: ArtifactPaths;
 	truncation?: TruncationResult;

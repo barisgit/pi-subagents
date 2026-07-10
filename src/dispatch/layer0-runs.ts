@@ -253,6 +253,9 @@ export type FinalizeRunPayload =
 			state: "complete" | "failed" | "interrupted";
 			steps: Array<Partial<PersistedRunStep>>;
 			totalTokens?: TokenUsage;
+			totalUsage?: Usage;
+			outputText?: string;
+			error?: string;
 	  };
 
 // finalize ONLY; dispose stays at call sites.
@@ -264,6 +267,9 @@ export function finalizeRun(handle: OpenRunHandle, payload: FinalizeRunPayload):
 			state: payload.state,
 			steps: payload.steps,
 			...(payload.totalTokens !== undefined ? { totalTokens: payload.totalTokens } : {}),
+			...(payload.totalUsage !== undefined ? { totalUsage: payload.totalUsage } : {}),
+			...(payload.outputText !== undefined ? { outputText: payload.outputText } : {}),
+			...(payload.error !== undefined ? { error: payload.error } : {}),
 		});
 	} else {
 		if (handle.variant === "sync-foreground")
