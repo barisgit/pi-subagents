@@ -517,9 +517,10 @@ function formatActivityFacts(input: {
 	currentTool?: string;
 	currentToolStartedAt?: number;
 }): string | undefined {
-	if (input.currentTool && input.currentToolStartedAt)
+	if (input.currentTool && input.currentToolStartedAt !== undefined)
 		return `tool ${input.currentTool} ${formatDuration(Math.max(0, Date.now() - input.currentToolStartedAt))}`;
-	if (!input.lastActivityAt) return input.activityState === "needs_attention" ? "needs attention" : undefined;
+	if (input.lastActivityAt === undefined)
+		return input.activityState === "needs_attention" ? "needs attention" : undefined;
 	const elapsed = formatDuration(Math.max(0, Date.now() - input.lastActivityAt));
 	return input.activityState === "needs_attention" ? `no activity for ${elapsed}` : `active ${elapsed} ago`;
 }

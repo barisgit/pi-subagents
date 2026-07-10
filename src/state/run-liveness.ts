@@ -87,8 +87,13 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
 	if (input.currentTool) return "tool_running";
 	if (input.activityState === "needs_attention") return "needs_attention";
 	const recentMs = input.workingRecentMs ?? RUNNER_WORKING_RECENT_MS;
-	const recentAt = Math.max(input.lastActivityAt ?? 0, heartbeatAt ?? 0);
-	return recentAt > 0 && now - recentAt <= recentMs ? "working" : "quiet";
+	const recentAt =
+		input.lastActivityAt === undefined
+			? heartbeatAt
+			: heartbeatAt === undefined
+				? input.lastActivityAt
+				: Math.max(input.lastActivityAt, heartbeatAt);
+	return recentAt !== undefined && now - recentAt <= recentMs ? "working" : "quiet";
 }
 
 /**

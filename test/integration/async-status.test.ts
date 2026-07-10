@@ -24,6 +24,37 @@ function listLegacyOverlay(root: string, recentLimit = 5): AsyncRunOverlayData {
 }
 
 describe("async status helpers", () => {
+	it("formats epoch-zero tool and activity timestamps", () => {
+		const originalNow = Date.now;
+		Date.now = () => 1_000;
+		try {
+			const text = formatAsyncRunList([
+				{
+					id: "run-zero",
+					asyncDir: "/tmp/run-zero",
+					mode: "single",
+					state: "running",
+					startedAt: 0,
+					lastActivityAt: 0,
+					steps: [
+						{
+							index: 0,
+							agent: "worker",
+							status: "running",
+							currentTool: "bash",
+							currentToolStartedAt: 0,
+						},
+					],
+				},
+			]);
+
+			assert.match(text, /active 1\.0s ago/);
+			assert.match(text, /tool bash 1\.0s/);
+		} finally {
+			Date.now = originalNow;
+		}
+	});
+
 	it("lists only requested states and includes flattened step summaries", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-status-"));
 		try {

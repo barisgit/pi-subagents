@@ -86,6 +86,18 @@ describe("runner identity liveness", () => {
 		assert.equal(hardDead, "lost");
 	});
 
+	it("treats an epoch-zero activity timestamp as recent", () => {
+		assert.equal(
+			deriveRunDisplayState({
+				state: "running",
+				lastActivityAt: 0,
+				now: 1_000,
+				workingRecentMs: 2_000,
+			}),
+			"working",
+		);
+	});
+
 	it("isRunnerHardDead: dead identity => true with a fresh heartbeat; matching token => heartbeat only", () => {
 		assert.equal(
 			isRunnerHardDead({
