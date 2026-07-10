@@ -388,6 +388,28 @@ describe("dashboard selected-run status section", () => {
 		assert.match(lines[2]!, new RegExp(`^ {2}single · id ${runId} · started 09:05$`));
 		assert.doesNotMatch(lines[2]!, /Jul 6/);
 	});
+
+	it("treats lost as authoritative over a stale current phase", () => {
+		const now = new Date(2026, 6, 6, 12, 0).getTime();
+		const summary: AsyncRunSummary = {
+			...makeRun("lost-stale-phase", "/tmp/status-box-lost", "stale phase"),
+			state: "running",
+			displayState: "lost",
+			startedAt: now - 60_000,
+			lastUpdate: now - 10_000,
+			phase: "streaming_text",
+			phaseStartedAt: now - 41_900,
+		};
+		const lines = buildSelectedRunStatusBox(
+			statusTheme,
+			{ ownership: "foreign", run: summary } satisfies LiveRun,
+			80,
+			now,
+		).map(stripAnsi);
+
+		assert.match(lines[0]!, /^stale phase +lost ·/);
+		assert.doesNotMatch(lines.join("\n"), /now writing/);
+	});
 });
 
 describe("dashboard detail pane tool cards", () => {
