@@ -80,9 +80,12 @@ export function leafConcurrencyLimit(maxConcurrentAgents?: number): number {
  * if under the limit). The returned release function frees the slot and clears
  * the run's permit entry; it is safe to call exactly once.
  */
-export async function acquireLeafPermit(runId: string): Promise<() => void> {
+export function acquireLeafPermit(runId: string): Promise<() => void>;
+export function acquireLeafPermit(runId: string, signal: AbortSignal): Promise<(() => void) | undefined>;
+export async function acquireLeafPermit(runId: string, signal?: AbortSignal): Promise<(() => void) | undefined> {
 	const reg = getRegistry();
-	const permit = await reg.semaphore.acquire();
+	const permit = signal ? await reg.semaphore.acquire(signal) : await reg.semaphore.acquire();
+	if (!permit) return undefined;
 	reg.permitsByRunId.set(runId, permit);
 	let released = false;
 	return () => {
