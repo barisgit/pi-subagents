@@ -246,20 +246,23 @@ describe("nested delegation guardrails", () => {
 		const result = checkNestedDelegationGuard(["explorer"]);
 		assert.equal(result.blocked, true);
 		assert.match(result.reason ?? "", /Only agents marked canDelegate/);
+		assert.doesNotMatch(result.reason ?? "", /fixer|explorer/i);
 	});
 
 	it("uses the legacy orchestrator fallback child allowlist when no explicit capability env is set", () => {
 		process.env.PI_SUBAGENT_CURRENT_AGENT = "orchestrator";
 		const result = checkNestedDelegationGuard(["delegate"]);
 		assert.equal(result.blocked, true);
-		assert.match(result.reason ?? "", /explorer, librarian, oracle, designer, fixer/i);
+		assert.match(result.reason ?? "", /configured allowlist/i);
+		assert.doesNotMatch(result.reason ?? "", /orchestrator|delegate|explorer|librarian|oracle|designer|fixer/i);
 	});
 
 	it("blocks nested orchestrators from delegating outside the allowed child set", () => {
 		process.env.PI_SUBAGENT_CURRENT_AGENT = "delegate";
 		const result = checkNestedDelegationGuard(["worker"]);
 		assert.equal(result.blocked, true);
-		assert.match(result.reason ?? "", /explorer, librarian, oracle, designer, fixer/i);
+		assert.match(result.reason ?? "", /configured allowlist/i);
+		assert.doesNotMatch(result.reason ?? "", /delegate|worker|explorer|librarian|oracle|designer|fixer/i);
 	});
 
 	it("allows nested orchestrators to delegate to the allowed child set", () => {
@@ -275,7 +278,8 @@ describe("nested delegation guardrails", () => {
 		assert.equal(checkNestedDelegationGuard(["oracle"]).blocked, false);
 		const blocked = checkNestedDelegationGuard(["explorer"]);
 		assert.equal(blocked.blocked, true);
-		assert.match(blocked.reason ?? "", /oracle, fixer/i);
+		assert.match(blocked.reason ?? "", /configured allowlist/i);
+		assert.doesNotMatch(blocked.reason ?? "", /researcher|oracle|fixer|explorer/i);
 	});
 
 	it("uses explicit capability env to disable even legacy orchestrators", () => {
@@ -284,5 +288,6 @@ describe("nested delegation guardrails", () => {
 		const result = checkNestedDelegationGuard(["explorer"]);
 		assert.equal(result.blocked, true);
 		assert.match(result.reason ?? "", /Only agents marked canDelegate/);
+		assert.doesNotMatch(result.reason ?? "", /orchestrator|explorer/i);
 	});
 });

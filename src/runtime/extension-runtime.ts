@@ -21,6 +21,7 @@ import { loadConfig, expandTilde } from "../shared/config.ts";
 import { createHostSubagentApi, registerChildSessionApi } from "../api/exposed-subagent-api.ts";
 import { createIdleTracker } from "../surfaces/idle-tracker.ts";
 import { logger } from "../shared/logger.ts";
+import { isInsideChildSession } from "../shared/child-session-context.ts";
 import { resolveAgentToolPatterns } from "../dispatch/resolve-tool-patterns.ts";
 import { leafConcurrencyLimit } from "../dispatch/leaf-concurrency.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
@@ -109,8 +110,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// action calls across activate boundaries) and the singleton runtime
 	// cleanup hook. Per-session globalStore keys are scoped by piId so the
 	// child's listeners don't tear down the host's.
-	const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-	const isChildSession = (globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true;
+	const isChildSession = isInsideChildSession();
 	if (isChildSession) {
 		logger.info("activate: child session - registering scoped subagent runtime");
 		registerChildSessionApi(pi);
@@ -234,12 +234,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 		getActiveRootRoleName: () => roleManager.getActiveRootRoleName(),
 	});
-	const hostApi = createHostSubagentApi({ pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents });
+	const hostApi = isChildSession
+		? undefined
+		: createHostSubagentApi({ pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents });
 	const roleManager = createRootRoleManager({
 		pi,
 		config,
 		state,
-		setHostCurrentAgent: hostApi.setCurrentAgent,
+		setHostCurrentAgent: hostApi?.setCurrentAgent ?? (() => {}),
 		notify,
 		normalizeName,
 		getLatestCustomStateName,
@@ -389,7 +391,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 
 	pi.on("before_agent_start", async (event) => {
-		if (roleManager.isDelegatedSubagentSession()) return;
+		if (isChildSession || roleManager.isDelegatedSubagentSession()) return;
 		const prompt = roleManager.getActiveRootRoleSystemPrompt();
 		if (!prompt) return;
 		return {
@@ -399,8 +401,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		resetSessionState(ctx);
-		hostApi.republish();
-		if (roleManager.isDelegatedSubagentSession()) return;
+		hostApi?.republish();
+		if (isChildSession || roleManager.isDelegatedSubagentSession()) return;
 		await roleManager.initializeRootRole(ctx);
 	});
 	pi.on("session_shutdown", () => {

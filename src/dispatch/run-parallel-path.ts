@@ -5,6 +5,7 @@ import type { AgentConfig } from "../shared/agents.ts";
 import { normalizeAvailableModels, resolveModelCandidate } from "./model-fallback.ts";
 import { aggregateParallelOutputs, mapConcurrent } from "./parallel-utils.ts";
 import { recordRun } from "../state/run-history.ts";
+import { getLineageForSession } from "../state/lineage.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
 import { normalizeSkillInput } from "../shared/skills.ts";
 import { resolveSubagentIntercomTarget } from "./intercom-bridge.ts";
@@ -298,7 +299,11 @@ export async function runParallelPath(
 		agentConfigs.push(config);
 	}
 
-	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
+	const currentSessionId = ctx.sessionManager?.getSessionId?.();
+	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(
+		deps.config.maxSubagentDepth,
+		currentSessionId ? getLineageForSession(currentSessionId) : null,
+	);
 	const maxSubagentDepths = agentConfigs.map((config) =>
 		resolveChildMaxSubagentDepth(currentMaxSubagentDepth, config.maxSubagentDepth),
 	);

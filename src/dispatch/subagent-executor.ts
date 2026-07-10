@@ -191,7 +191,6 @@ import {
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_SPAWN_STARTED_EVENT,
 	type SubagentNeedsAttentionPayload,
-	isInsideChildSession,
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
 	truncateOutput,
@@ -667,24 +666,27 @@ function resolveForkReuse(
 ): ForkReuseConfig | undefined {
 	if (params.context !== "fork") return undefined;
 	const requestedAgents = collectRequestedAgentNames(params);
-	// Identity resolution order:
-	//   1. PI_SUBAGENT_CURRENT_AGENT env (set for child agents by the executor)
-	//   2. Active root role / preset stored by index.ts (e.g. picked via /role or auto-activated at startup)
-	//   3. Single requested agent (root self-fork: "fork as main" implies parent IS main)
+	const currentSessionId = ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined;
+	const currentLineage = currentSessionId ? getLineageForSession(currentSessionId) : null;
+	// Identity resolution order (fallbacks are unavailable to authoritative child lineage):
+	//   1. Non-blank current session lineage
+	//   2. Legacy environment identity when lineage is unavailable or host identity is blank
+	//   3. Active root role / preset stored by the extension
+	//   4. Single requested agent for a root self-fork
 	const uniqueRequested = [...new Set(requestedAgents)];
 	const currentAgentName =
-		normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) ??
-		normalizeName(deps.getActiveRootRoleName?.()) ??
-		(uniqueRequested.length === 1 ? normalizeName(uniqueRequested[0]) : undefined);
+		normalizeName(currentLineage?.currentAgent) ??
+		(currentLineage?.role === "child"
+			? undefined
+			: (normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) ??
+				normalizeName(deps.getActiveRootRoleName?.()) ??
+				(uniqueRequested.length === 1 ? normalizeName(uniqueRequested[0]) : undefined)));
 	if (!currentAgentName) {
 		throw new Error("Fork context requires a known current agent identity.");
 	}
 	const mismatchedAgents = uniqueRequested.filter((name) => name !== currentAgentName);
 	if (mismatchedAgents.length > 0) {
-		throw new Error(
-			`Fork context only allows the current agent '${currentAgentName}' to fork itself. ` +
-				`Requested: ${mismatchedAgents.join(", ")}`,
-		);
+		throw new Error("Fork context requires same-agent execution; the requested agent does not match this session.");
 	}
 	const overridePaths = collectForkOverridePaths(params);
 	if (overridePaths.length > 0) {
@@ -692,7 +694,6 @@ function resolveForkReuse(
 			`Fork context requires same-agent execution without prompt/model/skill overrides. Unsupported overrides: ${overridePaths.join(", ")}`,
 		);
 	}
-	const currentSessionId = ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId;
 	if (!currentSessionId) {
 		throw new Error("Fork context requires a known current session id.");
 	}
@@ -798,7 +799,11 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
 	const effectiveOutput: string | false | undefined =
 		rawOutput === true ? agentConfig.output : (rawOutput as string | false | undefined);
-	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
+	const sessionId = ctx.sessionManager.getSessionId();
+	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(
+		deps.config.maxSubagentDepth,
+		sessionId ? getLineageForSession(sessionId) : null,
+	);
 	const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, agentConfig.maxSubagentDepth);
 
 	if (params.context === "fork") {
@@ -1111,8 +1116,18 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			: normalizeRunDispatchParams(paramsWithResolvedCwd);
 		if (runNormalized.error) return runNormalized.error;
 		const dispatchParams = runNormalized.params!;
+		const currentSessionId = ctx.sessionManager.getSessionId();
+		const currentLineage = currentSessionId ? getLineageForSession(currentSessionId) : null;
 
-		const { blocked, depth, maxDepth } = checkSubagentDepth(deps.config.maxSubagentDepth);
+		const normalized = normalizeRepeatedParallelCounts(dispatchParams);
+		if (normalized.error) return normalized.error;
+		const normalizedParams = normalized.params!;
+
+		const nestedGuard = checkNestedDelegationGuard(collectRequestedAgentNames(normalizedParams), currentLineage);
+		if (nestedGuard.blocked) {
+			return buildRequestedModeError(normalizedParams, nestedGuard.reason ?? "Nested subagent call blocked.");
+		}
+		const { blocked, depth, maxDepth } = checkSubagentDepth(deps.config.maxSubagentDepth, currentLineage);
 		if (blocked) {
 			return {
 				content: [
@@ -1127,15 +1142,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				isError: true,
 				details: { mode: "single" as const, results: [] },
 			};
-		}
-
-		const normalized = normalizeRepeatedParallelCounts(dispatchParams);
-		if (normalized.error) return normalized.error;
-		const normalizedParams = normalized.params!;
-
-		const nestedGuard = checkNestedDelegationGuard(collectRequestedAgentNames(normalizedParams));
-		if (nestedGuard.blocked) {
-			return buildRequestedModeError(normalizedParams, nestedGuard.reason ?? "Nested subagent call blocked.");
 		}
 
 		const effectiveParams = applyForceTopLevelAsyncOverride(
@@ -1219,15 +1225,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		// subagent) has no UI to surface its async runs, no notify wake target separate
 		// from the host, and no lifecycle owner to await descendants. Reject early.
 		//
-		// Detection: `isInsideChildSession()` catches the brief activate-construction
-		// window (when the executor is created before the prompt loop runs). For the
-		// normal case — child's prompt loop calling the subagent tool — we look up
-		// lineage by the current session id. Children have role==='child'; the host
-		// has role==='host'; an unknown session falls through as 'not a child'.
-		const currentSid = ctx.sessionManager.getSessionId();
-		const currentLineage = currentSid ? getLineageForSession(currentSid) : null;
-		const dispatchedFromChild = isInsideChildSession() || currentLineage?.role === "child";
-		if (requestedAsync && dispatchedFromChild) {
+		const calledFromChildSession = currentLineage
+			? currentLineage.role === "child"
+			: normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
+		if (requestedAsync && calledFromChildSession) {
 			const mode: "single" | "parallel" = hasTasks ? "parallel" : "single";
 			return {
 				content: [
@@ -1548,9 +1549,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			executeImpl(id, params as InternalSubagentParams, signal, onUpdate, ctx, false),
 		executeInternal: (id, params, signal, onUpdate, ctx) => executeImpl(id, params, signal, onUpdate, ctx, true),
 		openWorkflowGroup: ({ signal, onUpdate, ctx, requestedAsync }) => {
+			const currentSessionId = ctx.sessionManager.getSessionId();
+			const currentLineage = currentSessionId ? getLineageForSession(currentSessionId) : null;
+			const nestedGuard = checkNestedDelegationGuard([], currentLineage);
+			if (nestedGuard.blocked) {
+				throw new Error(nestedGuard.reason ?? "Nested subagent call blocked.");
+			}
+			const { blocked, depth, maxDepth } = checkSubagentDepth(deps.config.maxSubagentDepth, currentLineage);
+			if (blocked) {
+				throw new Error(
+					`Nested subagent call blocked (depth=${depth}, max=${maxDepth}). ` +
+						"You are running at the maximum subagent nesting depth.",
+				);
+			}
 			deps.state.baseCwd = ctx.cwd;
-			deps.state.currentSessionId =
-				ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? `session-${randomUUID()}`;
+			deps.state.currentSessionId = currentSessionId ?? deps.state.currentSessionId ?? `session-${randomUUID()}`;
 			const effectiveCwd = ctx.cwd;
 			const agents = deps.discoverAgents(effectiveCwd, "both", { includeInternal: true }).agents;
 			const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
@@ -1558,6 +1571,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const parentRunId = resolveDispatchParentRunId(ctx);
 			const rootRunId = resolveDispatchRootRunId(ctx, provisionalRunId);
 			const effectiveAsync = requestedAsync ?? deps.asyncByDefault;
+			const calledFromChildSession = currentLineage
+				? currentLineage.role === "child"
+				: normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
+			if (effectiveAsync && calledFromChildSession) {
+				throw new Error("Async workflow dispatch is only allowed from the host session.");
+			}
 			const workflowDetachedAbort = new AbortController();
 			const controlConfig = resolveControlConfig(deps.config.control, undefined);
 			const group = openGroup({
@@ -1647,6 +1666,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					resultSchema,
 					onChildProgress,
 				}) => {
+					const childGuard = checkNestedDelegationGuard([role], currentLineage);
+					if (childGuard.blocked) {
+						throw new Error(childGuard.reason ?? "Nested subagent call blocked.");
+					}
 					const agentConfig = agents.find((agent) => agent.name === role);
 					let result: SingleResult | undefined;
 					const handle = spawnRun(
@@ -1716,7 +1739,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									cwd: effectiveCwd,
 									interruptSignal: layer0Ctx.abortSignal,
 									maxSubagentDepth: resolveChildMaxSubagentDepth(
-										resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth),
+										resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth, currentLineage),
 										agentConfig.maxSubagentDepth,
 									),
 									mode: "parallel",

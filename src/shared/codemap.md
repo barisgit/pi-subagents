@@ -17,6 +17,7 @@ Shared is the low-level utility/persona/config layer for `pi-subagents`: filesys
 - `config.ts` — locates/loads subagent config from primary or legacy `~/.pi/agent` paths and expands `~/` paths, logging parse/load failures.
 - `artifacts.ts` — computes artifact directories/paths, writes input/output/json/metadata artifacts, and performs best-effort age cleanup for temp and session artifact dirs.
 - `current-pi.ts` — process-global active `ExtensionAPI` holder on `globalThis` for long-lived callbacks that need the current non-stale Pi action surface after reload/session changes.
+- `child-session-context.ts` — process-global `AsyncLocalStorage` singleton that scopes extension activation to the child construction async tree without leaking identity across concurrent children or host reloads.
 - `file-coalescer.ts` — timer-backed per-file debounce/coalescing primitive for repeated file events.
 - `frontmatter.ts` — tiny markdown YAML-ish frontmatter parser returning string key/value metadata plus body.
 - `logger.ts` — swallowed-failure extension logger writing to `~/.pi/logs/extensions/pi-subagents.log` or `PI_SUBAGENTS_LOG_PATH`, never stdout/stderr.

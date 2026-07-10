@@ -10,6 +10,7 @@ import * as os from "node:os";
 import {
 	DEFAULT_SUBAGENT_MAX_DEPTH,
 	LEGACY_ALLOWED_NESTED_CHILD_AGENT_NAMES,
+	type SubagentLineage,
 	isNestedOrchestratorAgent,
 	normalizeAgentIdentity,
 	normalizeMaxSubagentDepth,
@@ -62,7 +63,14 @@ export function resolveTempScopeId(options?: {
 	return "shared";
 }
 
-export function resolveCurrentMaxSubagentDepth(configMaxDepth?: number): number {
+export function resolveCurrentMaxSubagentDepth(configMaxDepth?: number, lineage?: SubagentLineage | null): number {
+	const lineageMaxDepth = normalizeMaxSubagentDepth(lineage?.maxSubagentDepth);
+	if (lineage?.role === "child") {
+		return lineageMaxDepth ?? 0;
+	}
+	if (lineage?.role === "host") {
+		return normalizeMaxSubagentDepth(configMaxDepth) ?? DEFAULT_SUBAGENT_MAX_DEPTH;
+	}
 	return (
 		normalizeMaxSubagentDepth(process.env.PI_SUBAGENT_MAX_DEPTH) ??
 		normalizeMaxSubagentDepth(configMaxDepth) ??
@@ -70,7 +78,24 @@ export function resolveCurrentMaxSubagentDepth(configMaxDepth?: number): number 
 	);
 }
 
-export function checkSubagentDepth(configMaxDepth?: number): { blocked: boolean; depth: number; maxDepth: number } {
+export function checkSubagentDepth(
+	configMaxDepth?: number,
+	lineage?: SubagentLineage | null,
+): { blocked: boolean; depth: number; maxDepth: number } {
+	if (lineage?.role === "host") {
+		const maxDepth = normalizeMaxSubagentDepth(configMaxDepth) ?? DEFAULT_SUBAGENT_MAX_DEPTH;
+		return { blocked: 0 >= maxDepth, depth: 0, maxDepth };
+	}
+	if (lineage?.role === "child") {
+		const validDepth = Number.isInteger(lineage.depth) && lineage.depth >= 0;
+		const maxDepth = normalizeMaxSubagentDepth(lineage.maxSubagentDepth);
+		const depth = validDepth ? lineage.depth : 0;
+		return {
+			blocked: !validDepth || maxDepth === undefined || depth >= maxDepth,
+			depth,
+			maxDepth: maxDepth ?? 0,
+		};
+	}
 	const depth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
 	const maxDepth = resolveCurrentMaxSubagentDepth(configMaxDepth);
 	const blocked = Number.isFinite(depth) && depth >= maxDepth;
@@ -103,12 +128,71 @@ function parseEnvAgentList(value: string | undefined): string[] | undefined {
 	return normalized.length > 0 ? normalized : undefined;
 }
 
-export function checkNestedDelegationGuard(requestedAgents: string[]): {
+export function checkNestedDelegationGuard(
+	requestedAgents: string[],
+	lineage?: SubagentLineage | null,
+): {
 	blocked: boolean;
 	currentAgent?: string;
 	parentAgent?: string;
 	reason?: string;
 } {
+	if (lineage?.role === "host") return { blocked: false, currentAgent: lineage.currentAgent };
+	if (lineage?.role === "child") {
+		if (
+			typeof lineage.canDelegate !== "boolean" ||
+			(lineage.allowedDelegateAgents !== undefined && !Array.isArray(lineage.allowedDelegateAgents)) ||
+			normalizeMaxSubagentDepth(lineage.maxSubagentDepth) === undefined
+		) {
+			return {
+				blocked: true,
+				currentAgent: lineage.currentAgent,
+				parentAgent: lineage.parentAgent ?? undefined,
+				reason: "Nested subagent call blocked: child delegation authorization is unavailable.",
+			};
+		}
+		if (!lineage.canDelegate) {
+			return {
+				blocked: true,
+				currentAgent: lineage.currentAgent,
+				parentAgent: lineage.parentAgent ?? undefined,
+				reason:
+					"Nested subagent call blocked: this child is not allowed to delegate. " +
+					"Only agents marked canDelegate may make nested subagent calls.",
+			};
+		}
+
+		const targets = [
+			...new Set(
+				requestedAgents
+					.map((agent) => normalizeAgentIdentity(agent))
+					.filter((agent): agent is string => Boolean(agent)),
+			),
+		];
+		if (lineage.allowedDelegateAgents !== undefined) {
+			const allowedTargets = lineage.allowedDelegateAgents
+				.map((agent) => normalizeAgentIdentity(agent))
+				.filter((agent): agent is string => Boolean(agent));
+			const allowedTargetSet = new Set(allowedTargets);
+			const disallowedTargets = targets.filter((agent) => !allowedTargetSet.has(agent));
+			if (disallowedTargets.length > 0) {
+				return {
+					blocked: true,
+					currentAgent: lineage.currentAgent,
+					parentAgent: lineage.parentAgent ?? undefined,
+					reason:
+						"Nested subagent call blocked: one or more requested agents are not authorized for this child. " +
+						"Retry with an agent from the child session's configured allowlist.",
+				};
+			}
+		}
+		return {
+			blocked: false,
+			currentAgent: lineage.currentAgent,
+			parentAgent: lineage.parentAgent ?? undefined,
+		};
+	}
+
 	const currentAgent = normalizeAgentIdentity(process.env.PI_SUBAGENT_CURRENT_AGENT);
 	const parentAgent = normalizeAgentIdentity(process.env.PI_SUBAGENT_PARENT_AGENT);
 	if (!currentAgent) return { blocked: false };
@@ -121,7 +205,7 @@ export function checkNestedDelegationGuard(requestedAgents: string[]): {
 			currentAgent,
 			parentAgent,
 			reason:
-				`Nested subagent call blocked: '${process.env.PI_SUBAGENT_CURRENT_AGENT}' is not allowed to delegate. ` +
+				"Nested subagent call blocked: this child is not allowed to delegate. " +
 				"Only agents marked canDelegate may make nested subagent calls.",
 		};
 	}
@@ -146,8 +230,8 @@ export function checkNestedDelegationGuard(requestedAgents: string[]): {
 				currentAgent,
 				parentAgent,
 				reason:
-					`Nested subagent call blocked: agent '${process.env.PI_SUBAGENT_CURRENT_AGENT}' may only delegate to ` +
-					`${allowedTargets.join(", ")}. Requested: ${disallowedTargets.join(", ")}.`,
+					"Nested subagent call blocked: one or more requested agents are not authorized for this child. " +
+					"Retry with an agent from the child session's configured allowlist.",
 			};
 		}
 	}

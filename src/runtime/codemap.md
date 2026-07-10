@@ -12,7 +12,7 @@ Runtime activation layer for the pi-subagents extension. It owns per-activation 
 `root-role-manager.ts` is a closure-backed state machine over `activeWorkflowName`, `activeRootRoleName`, and `activeRootRole`. It uses discovery (`discoverAgents` + preset/default-role selection), command completion, and UI selection as inputs, then applies role effects through Pi SDK calls. Runtime preset settings written by `pi.setModel()` / `pi.setThinkingLevel()` are wrapped by `withRuntimePresetSettingsPreserved()` so temporary role activation does not permanently mutate `~/.pi/agent/settings.json` keys (`defaultProvider`, `defaultModel`, `defaultThinkingLevel`).
 
 ## Flow
-1. Activation starts in `registerSubagentExtension(pi)` and detects child sessions through `globalThis.__piSubagentInsideChildSession`.
+1. Activation starts in `registerSubagentExtension(pi)` and detects child sessions through the async-local construction context in `../shared/child-session-context.ts`.
 2. Host activations pin `currentPi`, clean stale runtime listeners/timers from previous reloads, load config, configure XML stripping, create `SubagentState`, cleanup artifact dirs, and initialize idle/widget/async trackers.
 3. Runtime constructs `ChildAgentRegistry`, persona-dir registry, `createSubagentExecutor()`, `createHostSubagentApi()`, and `createRootRoleManager()`; agent discovery is wrapped to include config, registered persona dirs, and resolved tool patterns.
 4. Runtime registers message renderers, slash/prompt-template bridges, `subagent` and `workflow` tools, slash commands, `/role`, notify/control/persona event listeners, and `tool_result` widget refresh handling.

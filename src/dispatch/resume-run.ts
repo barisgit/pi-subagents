@@ -16,6 +16,7 @@ import { sumTokenUsages, tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTok
 import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
 import { logger } from "../shared/logger.ts";
+import { getLineageForSession } from "../state/lineage.ts";
 import { createForegroundRunController } from "./foreground-run-controller.ts";
 import { registerRunController, releaseRunController } from "./layer0-runs.ts";
 import {
@@ -29,8 +30,14 @@ import {
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_SPAWN_STARTED_EVENT,
+	normalizeAgentIdentity,
+	resolveChildMaxSubagentDepth,
 } from "../protocol/types.ts";
-import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
+import {
+	checkNestedDelegationGuard,
+	checkSubagentDepth,
+	resolveCurrentMaxSubagentDepth,
+} from "../shared/runtime-env.ts";
 import type { ExecutionContextData, ExecutorDeps, ForegroundControlRef } from "./executor-types.ts";
 import {
 	asyncStartedResult,
@@ -193,6 +200,37 @@ async function resumeRun(
 	data: ExecutionContextData,
 	deps: ExecutorDeps,
 ): Promise<AgentToolResult<Details>> {
+	const currentSessionId = data.ctx.sessionManager.getSessionId() ?? undefined;
+	const currentLineage = currentSessionId ? getLineageForSession(currentSessionId) : null;
+	const depthGuard = checkSubagentDepth(deps.config.maxSubagentDepth, currentLineage);
+	if (depthGuard.blocked) {
+		return validationError(
+			`Nested subagent call blocked (depth=${depthGuard.depth}, max=${depthGuard.maxDepth}). ` +
+				"You are running at the maximum subagent nesting depth.",
+		);
+	}
+	const delegationGuard = checkNestedDelegationGuard([], currentLineage);
+	if (delegationGuard.blocked) {
+		return validationError(delegationGuard.reason ?? "Nested subagent call blocked.");
+	}
+	const calledFromChildSession = currentLineage
+		? currentLineage.role === "child"
+		: normalizeAgentIdentity(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
+	if (asyncMode === true && calledFromChildSession) {
+		return validationError("Async resume is only allowed from the host session.");
+	}
+	const authorizeTarget = (agentName: string | undefined): AgentToolResult<Details> | null => {
+		const targetGuard = checkNestedDelegationGuard(
+			agentName ? [agentName] : ["__unresolved_resume_target__"],
+			currentLineage,
+		);
+		if (!targetGuard.blocked) return null;
+		return validationError(
+			agentName
+				? (targetGuard.reason ?? "Nested subagent call blocked.")
+				: "Nested subagent call blocked because the resume target could not be authorized.",
+		);
+	};
 	const parsed = parseChildRunId(runId);
 	const tracked = state.asyncJobs.get(parsed.dispatchRunId);
 	// Key the in-flight guard by the canonical target (dispatchRunId + step), not the raw caller
@@ -219,6 +257,11 @@ async function resumeRun(
 			? handles[0]
 			: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
 	if (handle) {
+		const targetAgent =
+			tracked?.agents?.[parsed.stepIndex ?? 0] ??
+			childRegistry.getRunView(parsed.dispatchRunId)?.steps[parsed.stepIndex ?? 0]?.agent;
+		const authorizationError = authorizeTarget(targetAgent);
+		if (authorizationError) return authorizationError;
 		const error = await postResumeMessage(handle, runId, message);
 		if (error) return error;
 		if (tracked) {
@@ -239,8 +282,12 @@ async function resumeRun(
 		const messageText = error instanceof Error ? error.message : String(error);
 		return validationError(messageText);
 	}
+	const authorizationError = authorizeTarget(target.agentName);
+	if (authorizationError) return authorizationError;
 	const agentConfig = data.agents.find((agent) => agent.name === target.agentName) ?? data.agents[0];
 	if (!agentConfig) return validationError(`No agent config available to resume run ${runId}.`);
+	const configAuthorizationError = authorizeTarget(agentConfig.name);
+	if (configAuthorizationError) return configAuthorizationError;
 	const built = buildAsyncChildStep({
 		data: {
 			...data,
@@ -255,7 +302,10 @@ async function resumeRun(
 		task: message,
 		stepIndex: parsed.stepIndex ?? 0,
 		cwd: target.cwd,
-		maxSubagentDepth: resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth),
+		maxSubagentDepth: resolveChildMaxSubagentDepth(
+			resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth, currentLineage),
+			agentConfig.maxSubagentDepth,
+		),
 	});
 	if ("error" in built) return built.error;
 	const step: ChildAgentStep = {

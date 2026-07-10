@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
-import { CHILD_SESSION_FLAG_KEY, isInsideChildSession } from "../../src/protocol/types.ts";
+import { isInsideChildSession, runInChildSessionContext } from "../../src/shared/child-session-context.ts";
 import type { SubagentLineage } from "../../src/state/lineage.ts";
 
 const globalStore = globalThis as Record<string, unknown>;
@@ -20,23 +20,38 @@ function clearLineage(sessionId: string): void {
 	m?.delete(sessionId);
 }
 
-afterEach(() => {
-	delete globalStore[CHILD_SESSION_FLAG_KEY];
-});
-
 describe("isInsideChildSession", () => {
-	it("returns false when the flag is unset", () => {
+	it("is false outside child construction and true only inside its async context", () => {
+		assert.equal(isInsideChildSession(), false);
+		runInChildSessionContext(() => assert.equal(isInsideChildSession(), true));
 		assert.equal(isInsideChildSession(), false);
 	});
 
-	it("returns true only when the flag is exactly the boolean true", () => {
-		globalStore[CHILD_SESSION_FLAG_KEY] = true;
-		assert.equal(isInsideChildSession(), true);
-		globalStore[CHILD_SESSION_FLAG_KEY] = false;
+	it("isolates overlapping child construction from each other and the host", async () => {
+		let releaseFirst!: () => void;
+		let markFirstStarted!: () => void;
+		const firstReleased = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const first = runInChildSessionContext(async () => {
+			assert.equal(isInsideChildSession(), true);
+			markFirstStarted();
+			await firstReleased;
+			assert.equal(isInsideChildSession(), true);
+		});
+
+		await firstStarted;
 		assert.equal(isInsideChildSession(), false);
-		globalStore[CHILD_SESSION_FLAG_KEY] = "true";
+		await runInChildSessionContext(async () => {
+			await Promise.resolve();
+			assert.equal(isInsideChildSession(), true);
+		});
 		assert.equal(isInsideChildSession(), false);
-		globalStore[CHILD_SESSION_FLAG_KEY] = 1;
+		releaseFirst();
+		await first;
 		assert.equal(isInsideChildSession(), false);
 	});
 });
@@ -77,79 +92,7 @@ describe("subagent executor child-session async guard", () => {
 		});
 	}
 
-	function makeCtx(cwd: string) {
-		return {
-			cwd,
-			hasUI: false,
-			ui: {},
-			sessionManager: {
-				getSessionId: () => "session-child",
-				getSessionFile: () => null,
-			},
-			modelRegistry: { getAvailable: () => [] },
-		};
-	}
-
-	it("rejects async:true single dispatch from inside a child session", async () => {
-		globalStore[CHILD_SESSION_FLAG_KEY] = true;
-		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
-		const result = await executor.execute(
-			"id-single",
-			{ run: [{ agent: "tester", task: "do stuff" }], async: true },
-			new AbortController().signal,
-			undefined,
-			makeCtx("/tmp/pi-subagent-child-async-guard"),
-		);
-		assert.equal(result.isError, true);
-		assert.equal(result.details?.mode, "single");
-		assert.match(result.content[0]?.text ?? "", /only allowed from the host session/i);
-		assert.match(result.content[0]?.text ?? "", /async/i);
-	});
-
-	it("rejects async:true parallel dispatch from inside a child session", async () => {
-		globalStore[CHILD_SESSION_FLAG_KEY] = true;
-		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
-		const result = await executor.execute(
-			"id-parallel",
-			{
-				run: [
-					{ agent: "tester", task: "a" },
-					{ agent: "tester", task: "b" },
-				],
-				async: true,
-			},
-			new AbortController().signal,
-			undefined,
-			makeCtx("/tmp/pi-subagent-child-async-guard"),
-		);
-		assert.equal(result.isError, true);
-		assert.equal(result.details?.mode, "parallel");
-		assert.match(result.content[0]?.text ?? "", /only allowed from the host session/i);
-	});
-
-	it("does NOT reject async:true when called from the host session (flag unset)", async () => {
-		// We don't need the run to actually complete; we just need to be sure the
-		// child-async guard does not fire. The guard sits before validation, so an
-		// unknown agent will surface a different (non-guard) error path; that's fine.
-		delete globalStore[CHILD_SESSION_FLAG_KEY];
-		const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
-		const result = await executor.execute(
-			"id-host",
-			{ run: [{ agent: "tester", task: "ok" }], async: true },
-			new AbortController().signal,
-			undefined,
-			makeCtx("/tmp/pi-subagent-child-async-guard"),
-		);
-		// Whatever the outcome, it must not be the child-async guard message.
-		const text = result.content[0]?.text ?? "";
-		assert.equal(/only allowed from the host session/i.test(text), false);
-	});
-
 	it("rejects async:true when the CURRENT session has child lineage (mid-prompt-loop)", async () => {
-		// Real-world case: the brief construction-time flag is already cleared by the
-		// time the child's prompt loop invokes the subagent tool. Lineage is the
-		// durable signal that this session is a child.
-		delete globalStore[CHILD_SESSION_FLAG_KEY];
 		const sid = "session-child-lineage";
 		setLineageForSession(sid, {
 			role: "child",
@@ -159,6 +102,9 @@ describe("subagent executor child-session async guard", () => {
 			rootSessionId: "session-host",
 			depth: 1,
 			runId: "run-abc",
+			canDelegate: true,
+			allowedDelegateAgents: ["tester"],
+			maxSubagentDepth: 2,
 		});
 		try {
 			const executor = makeExecutor("/tmp/pi-subagent-child-async-guard");
@@ -186,7 +132,6 @@ describe("subagent executor child-session async guard", () => {
 	});
 
 	it("does NOT reject async:true when the CURRENT session has host lineage", async () => {
-		delete globalStore[CHILD_SESSION_FLAG_KEY];
 		const sid = "session-host-lineage";
 		setLineageForSession(sid, {
 			role: "host",

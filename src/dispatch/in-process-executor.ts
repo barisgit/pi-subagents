@@ -21,7 +21,14 @@ import {
 // list unfiltered; extension tools like ast_grep/fetch/mcp/scan_files register during
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "../shared/logger.ts";
-import { pushPendingChildLineage, setChildLineage } from "../state/lineage.ts";
+import { runInChildSessionContext } from "../shared/child-session-context.ts";
+import {
+	getLineageForSession,
+	pushPendingChildLineage,
+	removeChildLineageBindings,
+	removePendingChildLineage,
+	setChildLineage,
+} from "../state/lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhaseState } from "../state/run-phase.ts";
 import {
 	SUBAGENT_PHASE_CHANGE_EVENT,
@@ -30,6 +37,7 @@ import {
 	type SubagentLineage,
 	type SubagentPhaseChangePayload,
 	type SubagentStuckPayload,
+	normalizeAgentIdentity,
 } from "../protocol/types.ts";
 import type {
 	ChildAgentExitState,
@@ -463,7 +471,7 @@ async function executeChildAgent(
 				childCwd: step.cwd,
 			});
 		}
-		session = await createSessionWithFallback(step, ctx);
+		session = await runInChildSessionContext(() => createSessionWithFallback(step, ctx));
 		onSession(session);
 		// Only narrow the active tool set when the agent declared an explicit list.
 		// If activeToolNames is undefined, the session keeps the default (all tools).
@@ -676,9 +684,10 @@ async function executeChildAgent(
  * to a regular copy. Sessions in the multi-MB range pay a real disk cost there;
  * APFS (default macOS) and btrfs/xfs make this free.
  *
- * The clone preserves the parent's session header (and therefore sessionId).
- * That's acceptable: fork children are short-lived and not resumed independently;
- * the runRecordDir layout + runs-index.jsonl identify the fork uniquely.
+ * The source branch was already created by SessionManager.createBranchedSession,
+ * so its header has a fresh sessionId distinct from the parent plus a
+ * parentSession link. The clone preserves that already-branched identity in the
+ * child's canonical run file.
  *
  * Idempotent: if the target already exists (e.g. a retry after a transient
  * failure), the existing file is preserved.
@@ -732,39 +741,41 @@ function seedForkSessionFile(input: { sourcePath: string; targetPath: string; ch
 	}
 }
 
-/**
- * Marker on globalThis set while we're constructing a child AgentSession.
- * The pi-subagents extension factory checks this to know it's being invoked
- * inside a child session (versus the host) and bail out of host-only wiring
- * (currentPi pin, pi.events listeners, widget state, etc.).
- */
-const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-function setChildSessionFlag(value: boolean): void {
-	(globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] = value;
-}
-
 async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentContext): Promise<AgentSession> {
-	// Set the child-session flag BEFORE any loader/session work runs. Both
-	// `loader.reload()` and `createAgentSession()` invoke every registered
-	// extension factory (including this package's), and the factory must see
-	// the flag synchronously to skip host wiring.
-	setChildSessionFlag(true);
-
+	const parentLineage = step.parentSessionId ? getLineageForSession(step.parentSessionId) : null;
+	const depth = parentLineage
+		? parentLineage.depth + 1
+		: (() => {
+				const envParentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
+				return Number.isFinite(envParentDepth) ? envParentDepth + 1 : 1;
+			})();
+	const canDelegate = step.agentConfig.canDelegate === true;
+	const allowedDelegateAgents = step.agentConfig.allowedDelegateAgents
+		? [
+				...new Set(
+					step.agentConfig.allowedDelegateAgents
+						.map((agent) => normalizeAgentIdentity(agent))
+						.filter((agent): agent is string => Boolean(agent)),
+				),
+			]
+		: undefined;
 	// Queue this child's lineage so its activate can claim it once it knows its
-	// own session id. Depth = parent's depth + 1; we don't have the parent's
-	// depth here, but rootSessionId tells charters/consumers how to reconstruct
-	// the tree if needed. depth 0 = host, 1 = first-level child, etc.
+	// own session id.
 	const lineage: SubagentLineage = {
 		role: "child",
 		currentAgent: step.agentName,
-		parentAgent: step.parentAgentName ?? null,
+		parentAgent:
+			normalizeAgentIdentity(parentLineage?.currentAgent) ?? normalizeAgentIdentity(step.parentAgentName) ?? null,
 		parentSessionId: step.parentSessionId ?? null,
-		rootSessionId: step.rootSessionId ?? step.parentSessionId ?? null,
-		depth: 1, // minimum; refined by child activate using rootSessionId vs parentSessionId
+		rootSessionId: parentLineage?.rootSessionId ?? step.rootSessionId ?? step.parentSessionId ?? null,
+		depth,
 		runId: step.runId,
 		rootRunId: step.rootRunId ?? step.runId,
+		canDelegate,
+		...(allowedDelegateAgents ? { allowedDelegateAgents } : {}),
+		maxSubagentDepth: step.maxSubagentDepth,
 	};
-	pushPendingChildLineage(lineage);
+	pushPendingChildLineage(lineage, step.sessionFile);
 	try {
 		const loader = new runtimeDeps.DefaultResourceLoader({
 			cwd: step.cwd,
@@ -787,13 +798,18 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 				// race where the SDK's session_start may already have fired by the
 				// time the extension attaches its listener.
 				const sessionManager = runtimeDeps.SessionManager.open(step.sessionFile);
+				let childSid: string | undefined;
 				try {
-					const childSid = sessionManager.getSessionId();
-					if (typeof childSid === "string" && childSid.length > 0) {
-						setChildLineage(childSid, lineage);
+					const resolvedSessionId = sessionManager.getSessionId();
+					if (typeof resolvedSessionId === "string" && resolvedSessionId.length > 0) {
+						childSid = resolvedSessionId;
 					}
 				} catch {
 					// fall back to the pending-queue + activate-claim path
+				}
+				if (childSid) {
+					setChildLineage(childSid, lineage, step.sessionFile);
+					removePendingChildLineage(lineage);
 				}
 
 				const created = await runtimeDeps.createAgentSession({
@@ -813,11 +829,15 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 			} catch (error) {
 				lastError = error;
 				if (!isAuthFailure(error) || index === models.length - 1) throw error;
+				removeChildLineageBindings(lineage);
+				pushPendingChildLineage(lineage, step.sessionFile);
 			}
 		}
 		throw lastError ?? new Error("No model candidates available for child agent");
-	} finally {
-		setChildSessionFlag(false);
+	} catch (error) {
+		removePendingChildLineage(lineage);
+		removeChildLineageBindings(lineage);
+		throw error;
 	}
 }
 

@@ -195,6 +195,9 @@ export interface SubagentLineage {
 	depth: number;
 	runId: string | null;
 	rootRunId?: string | null;
+	canDelegate?: boolean;
+	allowedDelegateAgents?: string[];
+	maxSubagentDepth?: number;
 }
 
 export interface SubagentUsageRecord {
@@ -764,18 +767,6 @@ export function resolveChildMaxSubagentDepth(parentMaxDepth: number, agentMaxDep
 	const normalizedParent = normalizeMaxSubagentDepth(parentMaxDepth) ?? DEFAULT_SUBAGENT_MAX_DEPTH;
 	const normalizedAgent = normalizeMaxSubagentDepth(agentMaxDepth);
 	return normalizedAgent === undefined ? normalizedParent : Math.min(normalizedParent, normalizedAgent);
-}
-
-/**
- * Async dispatch is only allowed from the host session. Child (in-process) sessions
- * have no UI to surface async runs, no notify wake target separate from the host, and
- * no lifecycle owner to await descendants. The guard returns true when the current
- * activate-time globalThis flag indicates we are inside a child session.
- */
-export const CHILD_SESSION_FLAG_KEY = "__piSubagentInsideChildSession";
-
-export function isInsideChildSession(): boolean {
-	return (globalThis as Record<string, unknown>)[CHILD_SESSION_FLAG_KEY] === true;
 }
 
 export function normalizeAgentIdentity(value: unknown): string | undefined {
