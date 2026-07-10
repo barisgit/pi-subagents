@@ -1,6 +1,8 @@
 # Dispatch patterns
 
-Use the `run` shape for direct subagent dispatch. Top-level `run` items are independent and may run in parallel. Use the `workflow` tool when later work depends on earlier output.
+Start with the narrowest effective path. Keep focused, tightly coupled, sequential work inline when current context is sufficient. A same-role fork is almost the inline agent in another branch—same role/model and inherited context—so use it only when isolation or concurrency provides concrete value. Delegate for substantial context isolation, specialist capability, independent parallel progress, background work the parent can overlap, or justified independent review; not merely because work is non-trivial.
+
+Use the `run` shape for direct subagent dispatch. Prefer one child. Use 2–3 top-level `run` items when genuinely independent; use 4 only with explicit decomposition and non-overlapping ownership. Use the `workflow` tool when justified delegated work depends on earlier output.
 
 ## Single
 
@@ -12,7 +14,7 @@ subagent({
 
 ## Parallel
 
-Use multiple top-level tasks for independent branches. Add `batch:true` when you want one completion rollup instead of one notification per child.
+Use multiple top-level tasks only for independent branches. Prefer 2–3; use 4 only with explicit decomposition, non-overlapping ownership, and acceptance criteria. Add `batch:true` when you want one completion rollup instead of one notification per child.
 
 ```ts
 subagent({
@@ -117,16 +119,13 @@ return await agent("<synthesis-role>", "Combine these reports into prioritized n
 ```ts
 workflow({ script: `
 phase("produce");
-let change = await agent("<implementation-role>", "Implement the smallest safe patch for the reported failure.");
-phase("verify");
-for (let round = 0; round < 3; round++) {
-  const verdict = await agent("<verification-role>", "Try to disprove this patch and return approved/blockers: " + change, {
-    schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false },
-  });
-  if (verdict.approved) return { change, verdict };
-  change = await agent("<implementation-role>", "Address these blockers: " + verdict.blockers.join("\n"));
-}
-return { status: "needs-attention", change };
+const change = await agent("<implementation-role>", "Implement the smallest safe patch for the reported failure.");
+phase("verify once");
+const verdict = await agent("<verification-role>", "Try to disprove this medium/high-risk patch and return approved/blockers: " + change, {
+  schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false },
+});
+if (verdict.approved) return { change, verdict };
+return { status: "needs-attention", change, blockers: verdict.blockers };
 ` })
 ```
 
@@ -139,4 +138,4 @@ subagent({
 })
 ```
 
-Do not poll by default after starting async work; continue independent work or wait for the host notification.
+Choose `async` whenever no remaining work, synthesis, or response in the current turn requires the child result. After dispatching, end the turn or continue only independent work without polling so the caller—or, at the root, the user—can keep working while children run; the host notifies you on completion or needs-attention. Use synchronous dispatch whenever any later work, synthesis, or response in the same turn must consume the result.
