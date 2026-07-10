@@ -255,6 +255,7 @@ describe("runChildAgent", () => {
 			assert.equal(getLineageForSession(childSessionId)?.parentAgent, "fallback-agent");
 		} finally {
 			claimPendingChildLineage(childSessionId, { runId: null, agentName: null });
+			clearLineage(parentSessionId, childSessionId);
 		}
 	});
 
