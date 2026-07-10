@@ -379,7 +379,7 @@ export async function runInProcessChildStep(input: {
 	});
 }
 
-function childResultToSingleResult(
+export function childResultToSingleResult(
 	childResult: ChildAgentResult,
 	input: {
 		resultShell: SingleResult;
@@ -418,10 +418,10 @@ function childResultToSingleResult(
 	result.toolResultCount = childResult.toolResultCount;
 	result.toolErrorCount = childResult.toolErrorCount;
 	input.progress.status = result.exitCode === 0 ? "completed" : "failed";
-	input.progress.durationMs = childResult.durationMs || Date.now() - input.startedAt;
+	input.progress.durationMs = childResult.durationMs ?? Date.now() - input.startedAt;
 	if (result.error) input.progress.error = result.error;
 	result.progressSummary = {
-		toolCount: childResult.toolCallCount || input.progress.toolCount,
+		toolCount: childResult.toolCallCount ?? input.progress.toolCount,
 		tokens: totalUsageTokens(result.usage),
 		durationMs: input.progress.durationMs,
 	};
