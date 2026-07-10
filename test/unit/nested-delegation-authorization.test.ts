@@ -240,6 +240,39 @@ it("fails closed without consuming duplicate session-file lineage authorization"
 	}
 });
 
+it("preserves an existing binding when duplicate session-file claims are ambiguous", () => {
+	const sessionId = "session-file-ambiguous-existing";
+	const staleCleanupSessionId = "session-file-ambiguous-existing-stale-cleanup";
+	const currentCleanupSessionId = "session-file-ambiguous-existing-current-cleanup";
+	const sessionFile = "/tmp/session-file-ambiguous-existing.jsonl";
+	const existing = makeChildLineage({ runId: "run-session-file-ambiguous-existing" });
+	const stale = makeChildLineage({ runId: "run-session-file-ambiguous-existing-stale" });
+	const current = makeChildLineage({ runId: "run-session-file-ambiguous-existing-current" });
+	setChildLineage(sessionId, existing, sessionFile);
+	pushPendingChildLineage(stale, sessionFile);
+	pushPendingChildLineage(current, sessionFile);
+
+	try {
+		assert.equal(
+			claimPendingChildLineage(sessionId, { runId: null, agentName: null, sessionFile }),
+			existing,
+			"an ambiguous pending claim must not hide the authoritative existing binding",
+		);
+		assert.equal(getLineageForSession(sessionId), existing);
+		assert.equal(claimPendingChildLineage(staleCleanupSessionId, { runId: stale.runId, agentName: null }), stale);
+		assert.equal(
+			claimPendingChildLineage(currentCleanupSessionId, { runId: current.runId, agentName: null }),
+			current,
+		);
+	} finally {
+		removePendingChildLineage(stale);
+		removePendingChildLineage(current);
+		clearLineage(sessionId);
+		clearLineage(staleCleanupSessionId);
+		clearLineage(currentCleanupSessionId);
+	}
+});
+
 it("removes only the exact pending lineage and clears its session-file hint", () => {
 	const sessionId = "session-file-exact-removal";
 	const sessionFile = "/tmp/session-file-exact-removal.jsonl";

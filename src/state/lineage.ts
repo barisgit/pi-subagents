@@ -159,7 +159,7 @@ export function claimPendingChildLineage(
 			let matchedIndex = -1;
 			for (let index = 0; index < arr.length; index++) {
 				if (sessionFiles.get(arr[index]!) !== hints.sessionFile) continue;
-				if (matchedIndex >= 0) return null;
+				if (matchedIndex >= 0) return existing;
 				matchedIndex = index;
 			}
 			if (matchedIndex >= 0) {
