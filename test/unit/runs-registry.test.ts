@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
 	appendRunEntry,
+	parseRunsRegistryEntryLine,
 	readAllEntries,
 	setRegistryPathForTests,
 	type RunsRegistryEntry,
@@ -66,6 +67,22 @@ describe("runs registry", () => {
 			readAllEntries().map((e) => e.runId),
 			["newer", "older"],
 		);
+	});
+
+	it("rejects records with invalid required or optional fields", () => {
+		const valid = entry("valid", 100);
+		const invalid = [
+			{ ...valid, mode: "chain" },
+			{ ...valid, source: "process" },
+			{ ...valid, cwd: 42 },
+			{ ...valid, startedAt: Number.NaN },
+			{ ...valid, agentNames: ["A", 42] },
+			{ ...valid, phaseIndex: "one" },
+			{ runId: valid.runId, runRecordDir: valid.runRecordDir },
+		];
+
+		for (const record of invalid) assert.equal(parseRunsRegistryEntryLine(JSON.stringify(record)), undefined);
+		assert.deepEqual(parseRunsRegistryEntryLine(JSON.stringify(valid)), valid);
 	});
 
 	it("skips malformed lines", () => {

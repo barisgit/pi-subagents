@@ -284,14 +284,14 @@ export function listRunsFromRegistryForOverlay(
 	// user session. We match on rootSessionId for nested runs and fall back to
 	// parentSessionId for legacy entries that predate the rootSessionId field.
 	// sessionCwd is the looser project-scoped fallback when no sessionId is
-	// known. In every mode entries with unknown metadata are kept permissively
-	// so legacy and in-flight rows do not silently vanish.
+	// known. Cwd remains permissive for legacy and in-flight rows; explicit
+	// session scope is strict because untagged entries cannot be attributed safely.
 	let scoped = all;
 	if (options.sessionId) {
 		const sid = options.sessionId;
 		scoped = scoped.filter((run) => {
 			const tag = run.rootSessionId ?? run.parentSessionId;
-			return !tag || tag === sid;
+			return tag === sid;
 		});
 	} else if (options.sessionCwd) {
 		scoped = scoped.filter((run) => !run.cwd || run.cwd === options.sessionCwd);

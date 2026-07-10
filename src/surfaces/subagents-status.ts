@@ -124,7 +124,7 @@ function entryMatchesOverlayScope(
 ): boolean {
 	if (scope.sessionId) {
 		const tag = entry.rootSessionId ?? entry.parentSessionId;
-		return !tag || tag === scope.sessionId;
+		return tag === scope.sessionId;
 	}
 	if (scope.sessionCwd) return !entry.cwd || entry.cwd === scope.sessionCwd;
 	return true;

@@ -85,6 +85,53 @@ export interface ReadOptions {
 	limit?: number; // most-recent first; default unlimited
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOptionalString(record: Record<string, unknown>, key: string): boolean {
+	return record[key] === undefined || typeof record[key] === "string";
+}
+
+function hasOptionalFiniteNumber(record: Record<string, unknown>, key: string): boolean {
+	return record[key] === undefined || (typeof record[key] === "number" && Number.isFinite(record[key]));
+}
+
+function hasOptionalStringArray(record: Record<string, unknown>, key: string): boolean {
+	return (
+		record[key] === undefined ||
+		(Array.isArray(record[key]) && record[key].every((item) => typeof item === "string"))
+	);
+}
+
+function isRunsRegistryEntry(value: unknown): value is RunsRegistryEntry {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.runId === "string" &&
+		typeof value.runRecordDir === "string" &&
+		(value.mode === "single" || value.mode === "parallel") &&
+		(value.source === "sync" || value.source === "async") &&
+		typeof value.cwd === "string" &&
+		typeof value.startedAt === "number" &&
+		Number.isFinite(value.startedAt) &&
+		hasOptionalString(value, "agentName") &&
+		hasOptionalStringArray(value, "agentNames") &&
+		(value.kind === undefined || value.kind === "workflow") &&
+		hasOptionalFiniteNumber(value, "phaseIndex") &&
+		hasOptionalString(value, "phaseTitle") &&
+		hasOptionalString(value, "parallelGroupId") &&
+		hasOptionalString(value, "pipelineId") &&
+		hasOptionalFiniteNumber(value, "pipelineItemIndex") &&
+		hasOptionalFiniteNumber(value, "pipelineStageIndex") &&
+		hasOptionalString(value, "pipelineItemLabel") &&
+		hasOptionalString(value, "label") &&
+		hasOptionalString(value, "parentSessionId") &&
+		hasOptionalString(value, "rootSessionId") &&
+		hasOptionalString(value, "parentRunId") &&
+		hasOptionalString(value, "rootRunId")
+	);
+}
+
 export function parseRunsRegistryEntryLine(line: string): RunsRegistryEntry | undefined {
 	let parsed: unknown;
 	try {
@@ -92,14 +139,7 @@ export function parseRunsRegistryEntryLine(line: string): RunsRegistryEntry | un
 	} catch {
 		return undefined;
 	}
-	if (
-		parsed &&
-		typeof (parsed as RunsRegistryEntry).runId === "string" &&
-		typeof (parsed as RunsRegistryEntry).runRecordDir === "string"
-	) {
-		return parsed as RunsRegistryEntry;
-	}
-	return undefined;
+	return isRunsRegistryEntry(parsed) ? parsed : undefined;
 }
 
 function parseEntriesFromFile(filePath: string, opts: ReadOptions): RunsRegistryEntry[] {
