@@ -109,7 +109,7 @@ export class ChildAgentRegistry {
 	}
 
 	async abortAll(reason: string): Promise<void> {
-		await Promise.all(this.list().map((handle) => this.abortRun(handle.runId, reason)));
+		await Promise.all([...this.handles.keys()].map((runId) => this.abortRun(runId, reason)));
 	}
 
 	async abortRun(runId: string, reason: string): Promise<void> {

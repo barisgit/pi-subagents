@@ -202,4 +202,26 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		assert.ok(view, "view outlives the handle");
 		assert.equal(view.id, RUN_ID);
 	});
+
+	it("aborts each handle once when a run has multiple steps", async () => {
+		const registry = new ChildAgentRegistry();
+		const calls: string[] = [];
+		for (const stepIndex of [0, 1]) {
+			registry.register({
+				runId: RUN_ID,
+				stepIndex,
+				get session(): never {
+					throw new Error("session not available in test");
+				},
+				completed: Promise.resolve({} as ChildAgentResult),
+				async abort(reason: string): Promise<void> {
+					calls.push(`${stepIndex}:${reason}`);
+				},
+			});
+		}
+
+		await registry.abortAll("shutdown");
+
+		assert.deepEqual(calls, ["0:shutdown", "1:shutdown"]);
+	});
 });
