@@ -247,6 +247,17 @@ describe("StatusWriter", () => {
 		assert.equal((status.steps as Array<Record<string, unknown>>)[0]!.status, "interrupted");
 	});
 
+	it("computes terminal duration when a step starts at epoch zero", () => {
+		const dir = tempDir("pi-status-writer-zero-start-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1" });
+		writer.initialize({ mode: "single", state: "running", steps: [{ agent: "fixer", status: "running" }] });
+
+		writer.finalizeTerminal({ steps: [{ startedAt: 0 }] });
+
+		const status = readStatus(dir) as { endedAt: number; steps: Array<{ durationMs?: number }> };
+		assert.equal(status.steps[0]!.durationMs, status.endedAt);
+	});
+
 	it("finalize applies the shared terminal scalar convention (phase idle, phaseStartedAt cleared, version stamped, heartbeat at endedAt)", async () => {
 		// Guards the shared finalizeRunScalars convention from the async-writer
 		// side (the sync writeSyncRunStatusEnd side is guarded by

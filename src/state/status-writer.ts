@@ -201,7 +201,7 @@ export class StatusWriter {
 				...(patch.live ? { live: { ...step.live, ...patch.live } } : {}),
 				status,
 				endedAt: patch.endedAt ?? endedAt,
-				durationMs: patch.durationMs ?? (startedAt ? endedAt - startedAt : undefined),
+				durationMs: patch.durationMs ?? (startedAt !== undefined ? endedAt - startedAt : undefined),
 			};
 		});
 		this.status.steps = steps;
