@@ -83,11 +83,13 @@ export function applyPatchToStatus(
 	}
 	// Persist live token usage so nested-child readers (which can only see the
 	// on-disk status.json, not the runner's in-memory progress) show running
-	// token counts instead of ~0 until finalize. Only step.tokens is set; the
-	// run total is derived by summing steps when status.totalTokens is absent
-	// (inlineTokenCount fallback), so a single live step never clobbers a
-	// multi-step aggregate. finalize() later writes the authoritative total.
+	// token counts instead of ~0 until finalize. Ordinary patches set only
+	// step.tokens; resume patches may also carry an aggregate that includes prior
+	// attempts. finalize() later writes the authoritative total.
 	if (patch.tokens && patch.tokens.total > 0) {
 		step.tokens = { ...patch.tokens };
+	}
+	if (patch.totalTokens && patch.totalTokens.total > 0) {
+		status.totalTokens = { ...patch.totalTokens };
 	}
 }

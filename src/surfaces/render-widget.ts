@@ -72,8 +72,12 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 	const desc = describeAgentLabel(
 		agents.length ? agents : [fallbackName],
 		job.mode ?? "single",
-		job.agentColor ?? colorForAgentName(fallbackName),
-		job.agentColors ?? agents.map((a) => colorForAgentName(a)),
+		// Empty string is the tracker's "no live color yet" sentinel (step.live?.color ?? ""),
+		// not an explicit color; treat it as absent so each slot falls back by role name.
+		job.agentColor || colorForAgentName(fallbackName),
+		job.agentColors
+			? job.agentColors.map((c, i) => c || colorForAgentName(agents[i] ?? fallbackName))
+			: agents.map((a) => colorForAgentName(a)),
 	);
 	const tint = (text: string, color: string | undefined): string => {
 		const bold = themeBold(theme, text);
@@ -305,7 +309,7 @@ function ensureWidgetAnimation(): void {
 	if (widgetTimer) return;
 	widgetTimer = setInterval(() => {
 		if (!hasAnimatedWidgetJobs(latestWidgetJobs)) {
-			stopWidgetAnimation();
+			stopWidgetTimer();
 			return;
 		}
 		refreshAnimatedWidget();
@@ -313,11 +317,15 @@ function ensureWidgetAnimation(): void {
 	widgetTimer.unref?.();
 }
 
-export function stopWidgetAnimation(): void {
+function stopWidgetTimer(): void {
 	if (widgetTimer) {
 		clearInterval(widgetTimer);
 		widgetTimer = undefined;
 	}
+}
+
+export function stopWidgetAnimation(): void {
+	stopWidgetTimer();
 	latestWidgetCtx = undefined;
 	latestWidgetTui = undefined;
 	latestWidgetJobs = [];
@@ -351,5 +359,5 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[], clien
 	if (client) client.widgets.set("aboveEditor", WIDGET_KEY, factory as Parameters<UtilsClient["widgets"]["set"]>[2]);
 	else ctx.ui.setWidget(WIDGET_KEY, factory);
 	if (hasAnimatedWidgetJobs(jobs)) ensureWidgetAnimation();
-	else stopWidgetAnimation();
+	else stopWidgetTimer();
 }

@@ -7,7 +7,7 @@ import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../sr
 import { __resetLeafConcurrencyForTest } from "../../src/dispatch/leaf-concurrency.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
-import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
+import { createTempDir, events, makeAgent, removeTempDir } from "../support/helpers.ts";
 import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../src/protocol/types.ts";
 
 let tempDir: string | undefined;
@@ -50,14 +50,23 @@ function makeState(cwd: string): SubagentState {
 class FakeSession {
 	prompts: string[] = [];
 	messages: unknown[] = [];
+	eventsToEmit: object[] = [];
+	lastAssistantText = "<output>resumed output</output>";
 	resolvePrompt: (() => void) | undefined;
 	promptPromise: Promise<void> | undefined;
-	subscribe() {
-		return () => {};
+	private listeners: Array<(event: object) => void> = [];
+	subscribe(listener: (event: object) => void) {
+		this.listeners.push(listener);
+		return () => {
+			this.listeners = this.listeners.filter((candidate) => candidate !== listener);
+		};
 	}
 	setActiveToolsByName() {}
+	emit(event: object) {
+		for (const listener of this.listeners) listener(event);
+	}
 	getLastAssistantText() {
-		return "<output>resumed output</output>";
+		return this.lastAssistantText;
 	}
 	dispose() {}
 	abort() {
@@ -65,6 +74,7 @@ class FakeSession {
 	}
 	prompt(message: string) {
 		this.prompts.push(message);
+		for (const event of this.eventsToEmit.splice(0)) this.emit(event);
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
@@ -189,6 +199,7 @@ function writeCompleteRun(root: string, runId = "resume-run") {
 		source: "sync",
 		agentName: "fixer",
 		rootRunId: runId,
+		rootSessionId: "parent-session",
 		cwd: root,
 		startedAt: 1234,
 	});
@@ -208,7 +219,7 @@ function writeCompleteRun(root: string, runId = "resume-run") {
 	return { runRecordDir, sessionFile };
 }
 
-function writeCompleteParallelRun(root: string, runId = "parallel-run") {
+function writeCompleteMultiStepRun(root: string, runId = "multi-step-run") {
 	const runRecordDir = path.join(root, runId);
 	const step0Session = path.join(runRecordDir, "run-0", "session.jsonl");
 	const step1Session = path.join(runRecordDir, "run-1", "session.jsonl");
@@ -219,10 +230,11 @@ function writeCompleteParallelRun(root: string, runId = "parallel-run") {
 	appendRunEntry({
 		runId,
 		runRecordDir,
-		mode: "parallel",
+		mode: "single",
 		source: "sync",
-		agentNames: ["fixer", "fixer"],
+		agentName: "fixer",
 		rootRunId: runId,
+		rootSessionId: "parent-session",
 		cwd: root,
 		startedAt: 1000,
 	});
@@ -230,11 +242,12 @@ function writeCompleteParallelRun(root: string, runId = "parallel-run") {
 		path.join(runRecordDir, "status.json"),
 		JSON.stringify({
 			runId,
-			mode: "parallel",
+			mode: "single",
 			state: "complete",
 			startedAt: 1000,
 			endedAt: 6000,
 			cwd: root,
+			totalTokens: { input: 20, output: 10, total: 30 },
 			steps: [
 				{
 					agent: "fixer",
@@ -250,6 +263,15 @@ function writeCompleteParallelRun(root: string, runId = "parallel-run") {
 					startedAt: 5000,
 					endedAt: 6000,
 					durationMs: 1000,
+					tokens: { input: 20, output: 10, total: 30 },
+					live: {
+						outputText: "old output",
+						toolCallCount: 3,
+						toolResultCount: 2,
+						toolErrorCount: 1,
+						toolCount: 3,
+						tokens: 30,
+					},
 					sessionFile: step1Session,
 				},
 			],
@@ -344,8 +366,8 @@ describe("sync resume foreground", () => {
 
 	it("foreground step resume finalizes only the resumed step and preserves sibling step fields", async () => {
 		const h = setup();
-		const run = writeCompleteParallelRun(tempDir!);
-		await h.execute({ action: "resume", id: "parallel-run:1", message: "continue", async: false });
+		const run = writeCompleteMultiStepRun(tempDir!);
+		await h.execute({ action: "resume", id: "multi-step-run:1", message: "continue", async: false });
 		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
 		// The resumed step (1) is finalized.
 		assert.equal(status.steps[1].status, "complete");
@@ -355,6 +377,120 @@ describe("sync resume foreground", () => {
 		assert.equal(status.steps[0].status, "complete");
 		assert.equal(status.steps[0].endedAt, 5000);
 		assert.equal(status.steps[0].durationMs, 4000);
+	});
+
+	it("foreground disk resume refreshes terminal output, aggregate usage, and live tool counters", async () => {
+		const h = setup();
+		const run = writeCompleteMultiStepRun(tempDir!);
+		const before = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		h.session.lastAssistantText = "<output>refreshed resume output</output>";
+		h.session.eventsToEmit = [
+			events.toolStart("read"),
+			events.toolEnd("read"),
+			events.toolStart("bash"),
+			{ type: "tool_execution_end", toolName: "bash", isError: true },
+			events.assistantMessage("<output>refreshed resume output</output>"),
+		];
+
+		const result = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "continue",
+			async: false,
+		});
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.state, "complete");
+		assert.equal(status.outputText, "refreshed resume output");
+		assert.equal(status.totalUsage.input, 120);
+		assert.equal(status.totalUsage.output, 60);
+		assert.equal(status.totalTokens.input, 120);
+		assert.equal(status.totalTokens.output, 60);
+		assert.equal(status.totalTokens.total, 180);
+		assert.equal(status.steps[1].tokens.total, 180);
+		assert.equal(status.steps[1].live.outputText, "refreshed resume output");
+		assert.equal(status.steps[1].live.toolCallCount, 5);
+		assert.equal(status.steps[1].live.toolResultCount, 4);
+		assert.equal(status.steps[1].live.toolErrorCount, 2);
+		assert.equal(status.steps[1].live.tokens, 180);
+		assert.ok(status.steps[1].endedAt > before.steps[1].endedAt);
+		assert.deepEqual(status.steps[0], before.steps[0]);
+	});
+
+	it("carries live usage through another restart before terminal persistence", async () => {
+		const h = setup({ pending: true });
+		const run = writeCompleteMultiStepRun(tempDir!);
+
+		const firstResume = h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "first resumed turn",
+			async: false,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		h.session.emit(events.assistantMessage("<output>partial resumed output</output>"));
+		await waitFor(() => {
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			return status.state === "running" && (status.steps[1].tokens?.total ?? 0) > 30;
+		});
+		const interruptedStatus = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		interruptedStatus.state = "interrupted";
+		interruptedStatus.steps[1].status = "interrupted";
+		h.session.resolvePrompt?.();
+		await firstResume;
+		fs.writeFileSync(path.join(run.runRecordDir, "status.json"), JSON.stringify(interruptedStatus));
+
+		h.session.eventsToEmit = [events.assistantMessage("<output>final resumed output</output>")];
+		const secondResume = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "second resumed turn",
+			async: false,
+		});
+		assert.equal(secondResume.isError, undefined, secondResume.content[0]?.text);
+
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.resumeCount, 2);
+		assert.equal(status.totalTokens.total, 330);
+		assert.equal(status.steps[1].tokens.total, 330);
+	});
+
+	it("background disk resume preserves prior output accounting and live tool counters", async () => {
+		const h = setup();
+		const run = writeCompleteMultiStepRun(tempDir!);
+		const before = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		h.session.lastAssistantText = "<output>refreshed background output</output>";
+		h.session.eventsToEmit = [
+			events.toolStart("read"),
+			events.toolEnd("read"),
+			events.toolStart("bash"),
+			{ type: "tool_execution_end", toolName: "bash", isError: true },
+			events.assistantMessage("<output>refreshed background output</output>"),
+		];
+
+		const result = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "continue",
+			async: true,
+		});
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		await waitFor(() => {
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			return status.state === "complete";
+		});
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.outputText, "refreshed background output");
+		assert.equal(status.totalUsage.input, 120);
+		assert.equal(status.totalUsage.output, 60);
+		assert.equal(status.totalTokens.total, 180);
+		assert.equal(status.steps[1].tokens.total, 180);
+		assert.equal(status.steps[1].live.toolCallCount, 5);
+		assert.equal(status.steps[1].live.toolResultCount, 4);
+		assert.equal(status.steps[1].live.toolErrorCount, 2);
+		assert.equal(status.steps[1].live.toolCount, 5);
+		assert.equal(status.steps[1].live.tokens, 180);
+		assert.deepEqual(status.steps[0], before.steps[0]);
 	});
 
 	it("foreground concurrent guard rejects same run and runId:0 alias while pending", async () => {

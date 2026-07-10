@@ -4,8 +4,11 @@ import {
 	DEFAULT_NEEDS_ATTENTION_AFTER_MS,
 	buildControlEvent,
 	claimControlNotification,
+	claimControlNotificationKey,
 	controlNotificationKey,
+	createControlNotificationDedupeStore,
 	deriveActivityState,
+	evictControlNotificationsForRunId,
 	formatControlIntercomMessage,
 	formatControlNoticeMessage,
 	isControlEventAllowed,
@@ -105,6 +108,7 @@ describe("subagent control attention state", () => {
 			from: undefined,
 			to: "needs_attention",
 			ts: 1_000,
+			activityAt: 100,
 			runId: "run-1",
 			agent: "worker",
 			index: 2,
@@ -177,15 +181,37 @@ describe("subagent control attention state", () => {
 		assert.equal(isControlEventAllowed({ runFinalized: true }), false);
 	});
 
-	it("dedupes notifications once per child target and attention state", () => {
-		const event = buildControlEvent({ to: "needs_attention", runId: "run-1", agent: "worker", index: 0 });
-		const seen = new Set<string>();
+	it("dedupes notifications once per child target and event transition", () => {
+		const event = buildControlEvent({
+			to: "needs_attention",
+			runId: "run-1",
+			agent: "worker",
+			index: 0,
+			ts: 1_000,
+			activityAt: 500,
+		});
+		const seen = createControlNotificationDedupeStore();
+		const legacySeen = new Set<string>();
 
 		assert.equal(
 			controlNotificationKey(event, "subagent-worker-run-1-1"),
 			"subagent-worker-run-1-1:needs_attention",
 		);
-		assert.equal(claimControlNotification(resolveControlConfig(), event, seen, "subagent-worker-run-1-1"), true);
-		assert.equal(claimControlNotification(resolveControlConfig(), event, seen, "subagent-worker-run-1-1"), false);
+		assert.equal(claimControlNotification(config, event, legacySeen, "subagent-worker-run-1-1"), true);
+		assert.equal(claimControlNotification(config, event, legacySeen, "subagent-worker-run-1-1"), false);
+		assert.equal(claimControlNotificationKey(event, seen, "subagent-worker-run-1-1"), true);
+		assert.equal(claimControlNotificationKey(event, seen, "subagent-worker-run-1-1"), false);
+		assert.equal(claimControlNotificationKey({ ...event, ts: 2_000 }, seen, "subagent-worker-run-1-1"), false);
+		assert.equal(
+			claimControlNotificationKey({ ...event, ts: 3_000, activityAt: 2_500 }, seen, "subagent-worker-run-1-1"),
+			true,
+		);
+		assert.equal(seen.byRunId.get("run-1")?.size, 1);
+
+		const delimiterRun = { ...event, runId: "run-1:0", index: undefined, activityAt: 500 };
+		assert.equal(claimControlNotificationKey(delimiterRun, seen), true);
+		evictControlNotificationsForRunId(seen, "run-1");
+		assert.equal(seen.byRunId.has("run-1"), false);
+		assert.equal(seen.byRunId.has("run-1:0"), true);
 	});
 });

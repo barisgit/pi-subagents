@@ -9,20 +9,24 @@ Delegate to control context, latency, and perspective. The tool schema is alread
 
 ## Inline or delegate
 
-Stay inline for a single-file read, one obvious edit, a direct factual answer, or final synthesis.
+Start with the narrowest effective path. Stay inline for focused, tightly coupled, sequential work when current context is sufficient—including a few related files, local repository lookups, and an inspect/edit/test loop.
 
-Delegate when work needs any of these:
+A same-role `context:"fork"` is almost the inline agent in another branch: it keeps the same role/model and inherits the parent context. It provides isolation or concurrency, not specialist capability or an independent perspective, and it still adds a handoff. Use it only when that boundary has concrete value; use `fresh` for role changes or deliberately clean context.
 
-- **Context isolation** — read-only recon, cross-file tracing, or implementation that would pollute the parent thread.
-- **A delegated lane** — a configured child can own a bounded outcome better than the parent thread.
-- **Parallel perspective** — independent branches can run at once.
-- **Background time** — tests, builds, research, or reviews can continue with `async:true`.
-- **Same-role branching** — use `context:"fork"` only for self-forks, not role changes.
+Delegate only when a bounded child provides at least one concrete advantage:
+
+- **Substantial context isolation** — noisy read-heavy recon, logs, broad cross-file tracing, or an isolated implementation branch would materially pollute the parent.
+- **Specialist capability** — a configured role is materially better suited to the outcome.
+- **Independent parallel progress** — branches do not depend on each other and the parent can continue useful work.
+- **Background time** — choose `async:true` whenever no remaining work, synthesis, or response in the current turn requires the child result. After dispatching, end the turn or continue only independent work without polling so the caller—or, at the root, the user—can keep working; the host notifies you on completion or when attention is needed. Use synchronous dispatch whenever any later work, synthesis, or response in the same turn must consume the result.
+- **Independent review** — risk justifies a separate judgment and existing verification is insufficient.
+
+Do not delegate merely because work is non-trivial or a matching role exists. Prefer one child. Use 2–3 for genuinely independent branches; use 4 only with explicit decomposition, non-overlapping ownership, and acceptance criteria.
 
 ## Pick the shape
 
-- Use one `run` task for a bounded handoff.
-- Put multiple top-level `run` tasks in parallel when they do not depend on each other.
+- Use no child when inline work is sufficient; otherwise use one `run` task for a bounded handoff by default.
+- Put 2–3 top-level `run` tasks in parallel only when they are genuinely independent. Use 4 only with explicit decomposition and non-overlapping ownership.
 - Use the `workflow` tool for sequential or dependent orchestration: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps.
 - Set `batch:true` when several children should return one rollup notification.
 - Use `action:"list"` if agent names are uncertain; use status/interrupt/resume only for live run management.
@@ -35,21 +39,15 @@ Delegate when work needs any of these:
 ```ts
 workflow({ script: `
 phase("inspect");
-const areas = ["api", "state", "tests", "docs"];
-const findings = await parallel(areas.map((area) => () =>
-  agent("<investigation-role>", "Inspect " + area + " and return concise findings.")
-));
+const finding = await agent("<investigation-role>", "Inspect the bounded area and return only decision-relevant evidence.");
 phase("implement");
-let change = await agent("<implementation-role>", "Implement the smallest safe change using: " + findings.join("\n"));
-phase("verify loop");
-for (let round = 0; round < 3; round++) {
-  const verdict = await agent("<verification-role>", "Independently verify this change and return approved/blockers: " + change, {
-    schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false },
-  });
-  if (verdict.approved) return { change, findings, verdict };
-  change = await agent("<implementation-role>", "Address these verification blockers: " + verdict.blockers.join("\n"));
-}
-return { status: "needs-attention", change, findings };
+const change = await agent("<implementation-role>", "Implement the smallest safe change using: " + finding);
+phase("verify once");
+const verdict = await agent("<verification-role>", "Independently verify this medium/high-risk change and return approved/blockers: " + change, {
+  schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false },
+});
+if (verdict.approved) return { change, finding, verdict };
+return { status: "needs-attention", change, finding, blockers: verdict.blockers };
 ` })
 ```
 
@@ -73,7 +71,7 @@ subagent({
 
 Open exactly the reference that matches the decision you are making:
 
-- `references/dispatch-patterns.md` — choosing single, parallel, async, worktree, or swarm-style dispatch.
+- `references/dispatch-patterns.md` — choosing single, parallel, async, worktree, or background dispatch.
 - `references/context-fork.md` — before setting `context:"fork"`; confirms same-agent-only branching.
 - `references/resume.md` — resuming or messaging a live async run.
 - `references/batch-notifications.md` — setting `batch:true` and interpreting rollup payloads.

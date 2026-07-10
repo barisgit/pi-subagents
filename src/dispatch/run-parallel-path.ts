@@ -62,6 +62,7 @@ interface ForegroundParallelRunInput {
 	concurrencyLimit: number;
 	liveResults: (SingleResult | undefined)[];
 	liveProgress: (AgentProgress | undefined)[];
+	children: NonNullable<Details["children"]>;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	worktreeSetup?: WorktreeSetup;
 }
@@ -156,7 +157,10 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 						? { parentSessionId: input.ctx.sessionManager.getSessionId() }
 						: {}),
 					...(() => {
-						const root = resolveDispatchRootSessionId(input.ctx);
+						const root = resolveDispatchRootSessionId(
+							input.ctx,
+							input.deps.state.currentSessionId ?? undefined,
+						);
 						return root ? { rootSessionId: root } : {};
 					})(),
 					source: "sync",
@@ -247,6 +251,12 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 					},
 				},
 			);
+			input.children[index] = {
+				runId: handle.runId,
+				agent: task.agent,
+				...(task.label ? { label: task.label } : {}),
+				stepIndex: index,
+			};
 			await awaitRun(handle);
 			if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
 			return result;
@@ -314,6 +324,7 @@ export async function runParallelPath(
 	const behaviors = agentConfigs.map((config) => resolveStepBehavior(config, {}));
 	const liveResults: (SingleResult | undefined)[] = new Array(tasks.length).fill(undefined);
 	const liveProgress: (AgentProgress | undefined)[] = new Array(tasks.length).fill(undefined);
+	const children: NonNullable<Details["children"]> = [];
 	const foregroundControl = deps.state.foregroundControls.get(runId);
 	const { setup: worktreeSetup, errorResult } = createParallelWorktreeSetup(
 		params.worktree,
@@ -354,6 +365,7 @@ export async function runParallelPath(
 			maxSubagentDepths,
 			liveResults,
 			liveProgress,
+			children,
 			onUpdate,
 			worktreeSetup,
 		});
@@ -367,19 +379,26 @@ export async function runParallelPath(
 			if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);
 		}
 
-		const interrupted = results.find((result) => result.interrupted);
-		if (interrupted) {
+		const interruptedChildren = children.filter((child) => results[child.stepIndex]?.interrupted);
+		if (interruptedChildren.length > 0) {
+			const resumeActions = interruptedChildren
+				.map(
+					(child) =>
+						`- ${child.runId}: subagent({ action: "resume", id: "${child.runId}", message: "Continue the interrupted work." })`,
+				)
+				.join("\n");
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Parallel run paused after interrupt (${interrupted.agent}). Waiting for explicit next action.`,
+						text: `Parallel run paused after interrupt. Resume interrupted children individually:\n${resumeActions}`,
 					},
 				],
 				details: compactForegroundDetails({
 					mode: "parallel",
 					runId,
 					results,
+					children,
 					progress: params.includeProgress ? allProgress : undefined,
 					artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 				}),
@@ -423,6 +442,7 @@ export async function runParallelPath(
 				mode: "parallel",
 				runId,
 				results,
+				children,
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 			}),

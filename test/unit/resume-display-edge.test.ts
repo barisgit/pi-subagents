@@ -110,6 +110,7 @@ function seedRun(root: string, runId = "edge-run", startedAt = 1_000, extra: Rec
 		source: "sync" as const,
 		agentName: "fixer",
 		rootRunId: runId,
+		rootSessionId: "parent",
 		cwd: root,
 		startedAt,
 	};

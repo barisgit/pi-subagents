@@ -364,7 +364,7 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 	// constructed and returned synchronously (the async contract hands back all N
 	// handles before any child runs). The permit is released when the leaf settles.
 	const completed = (async () => {
-		const releasePermit = await acquireLeafPermit(step.runId);
+		const releasePermit = await acquireLeafPermit(step.runId, combinedSignal);
 		try {
 			const result = await executeChildAgent(step, teedCtx, combinedSignal, (createdSession) => {
 				session = createdSession;
@@ -373,7 +373,7 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 			ctx.registry.finalizeView(step.runId, result);
 			return result;
 		} finally {
-			releasePermit();
+			releasePermit?.();
 			ctx.registry.delete(step.runId, step.stepIndex);
 		}
 	})();
@@ -442,6 +442,20 @@ async function executeChildAgent(
 	};
 
 	try {
+		if (signal.aborted) {
+			const result = baseResult("interrupted", {
+				message: `Child agent interrupted: ${abortReason(signal)}`,
+				reason: abortReason(signal),
+			});
+			ctx.onStatusUpdate?.({
+				runId: step.runId,
+				stepIndex: step.stepIndex,
+				state: result.state,
+				endedAt: result.endedAt,
+				outputText: result.outputText,
+			});
+			return result;
+		}
 		ctx.onStatusUpdate?.({
 			runId: step.runId,
 			stepIndex: step.stepIndex,

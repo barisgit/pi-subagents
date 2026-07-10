@@ -3,9 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { ChildAgentRegistry } from "../../src/dispatch/in-process-executor.ts";
 import { inspectSubagentStatus } from "../../src/state/run-status.ts";
 import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
+import type { SubagentState } from "../../src/protocol/types.ts";
 
 const tmpRoots: string[] = [];
 const originalHome = process.env.HOME;
@@ -31,6 +34,9 @@ function appendStatusRun(
 		label?: string;
 		mode?: "single" | "parallel";
 		tokens?: number;
+		cwd?: string;
+		parentSessionId?: string;
+		rootSessionId?: string;
 	},
 ): void {
 	const runRecordDir = path.join(root, "runs", entry.runId);
@@ -42,7 +48,7 @@ function appendStatusRun(
 		startedAt: entry.startedAt,
 		lastUpdate: entry.endedAt ?? entry.startedAt + 1,
 		...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
-		cwd: root,
+		cwd: entry.cwd ?? root,
 		currentStep: 0,
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 		...(entry.label ? { label: entry.label } : {}),
@@ -71,7 +77,9 @@ function appendStatusRun(
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 		...(entry.rootRunId ? { rootRunId: entry.rootRunId } : {}),
 		...(entry.label ? { label: entry.label } : {}),
-		cwd: root,
+		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
+		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
+		cwd: entry.cwd ?? root,
 		startedAt: entry.startedAt,
 	});
 }
@@ -97,6 +105,48 @@ function statusText(params: Parameters<typeof inspectSubagentStatus>[0]): string
 	return result.content.map((item) => ("text" in item ? item.text : "")).join("\n");
 }
 
+async function executorStatusText(root: string, sessionId: string): Promise<string> {
+	const state: SubagentState = {
+		baseCwd: root,
+		currentSessionId: null,
+		asyncJobs: new Map(),
+		foregroundControls: new Map(),
+		lastForegroundControlId: null,
+		cleanupTimers: new Map(),
+		lastUiContext: null,
+		poller: null,
+	};
+	const executor = createSubagentExecutor({
+		pi: {
+			events: { emit: () => {} },
+			getAllTools: () => [],
+			getSessionName: () => undefined,
+			setSessionName: () => {},
+		},
+		state,
+		config: {},
+		asyncByDefault: false,
+		tempArtifactsDir: root,
+		childRegistry: new ChildAgentRegistry(),
+		expandTilde: (value: string) => value,
+		discoverAgents: () => ({ agents: [] }),
+	} as never);
+	const result = await executor.execute(
+		"status-after-reload",
+		{ action: "status" },
+		new AbortController().signal,
+		undefined,
+		{
+			cwd: root,
+			hasUI: false,
+			ui: {},
+			sessionManager: { getSessionId: () => sessionId, getSessionFile: () => null },
+		} as never,
+	);
+	assert.equal(result.isError, undefined);
+	return result.content.map((item) => ("text" in item ? item.text : "")).join("\n");
+}
+
 afterEach(() => {
 	setRegistryPathForTests(null);
 	if (originalHome === undefined) delete process.env.HOME;
@@ -105,6 +155,54 @@ afterEach(() => {
 });
 
 describe("action status list", () => {
+	it("recovers interrupted runs after reload without crossing same-cwd session boundaries", async () => {
+		const root = tmpRegistry();
+		const otherCwd = path.join(root, "other-project");
+		appendStatusRun(root, {
+			runId: "session-a-interrupted",
+			agentName: "worker",
+			state: "interrupted",
+			startedAt: 1000,
+			endedAt: 1100,
+			rootSessionId: "root-session-a",
+		});
+		appendStatusRun(root, {
+			runId: "session-b-interrupted",
+			agentName: "worker",
+			state: "interrupted",
+			startedAt: 2000,
+			endedAt: 2100,
+			parentSessionId: "root-session-b",
+		});
+		appendStatusRun(root, {
+			runId: "legacy-same-cwd",
+			agentName: "worker",
+			state: "interrupted",
+			startedAt: 3000,
+			endedAt: 3100,
+		});
+		appendStatusRun(root, {
+			runId: "legacy-other-cwd",
+			agentName: "worker",
+			state: "interrupted",
+			startedAt: 4000,
+			endedAt: 4100,
+			cwd: otherCwd,
+		});
+
+		const sessionA = await executorStatusText(root, "root-session-a");
+		assert.match(sessionA, /session-a-interrupted/);
+		assert.doesNotMatch(sessionA, /session-b-interrupted/);
+		assert.doesNotMatch(sessionA, /legacy-same-cwd/);
+		assert.doesNotMatch(sessionA, /legacy-other-cwd/);
+
+		const sessionB = await executorStatusText(root, "root-session-b");
+		assert.match(sessionB, /session-b-interrupted/);
+		assert.doesNotMatch(sessionB, /session-a-interrupted/);
+		assert.doesNotMatch(sessionB, /legacy-same-cwd/);
+		assert.doesNotMatch(sessionB, /legacy-other-cwd/);
+	});
+
 	it("includes completed runs by default and excludes them when includeCompleted is false", () => {
 		const root = tmpRegistry();
 		appendStatusRun(root, {
@@ -115,16 +213,25 @@ describe("action status list", () => {
 			endedAt: 2000,
 		});
 		appendStatusRun(root, { runId: "live-run", agentName: "qa", state: "running", startedAt: 3000 });
+		appendStatusRun(root, {
+			runId: "interrupted-run",
+			agentName: "worker",
+			state: "interrupted",
+			startedAt: 4000,
+			endedAt: 5000,
+		});
 
 		const defaultText = statusText({ sessionCwd: root });
-		assert.match(defaultText, /^Subagent runs: 2/m);
+		assert.match(defaultText, /^Subagent runs: 3/m);
 		assert.doesNotMatch(defaultText, /^Active async runs:/m);
 		assert.match(defaultText, /done-run/);
 		assert.match(defaultText, /live-run/);
+		assert.match(defaultText, /interrupted-run/);
 
 		const activeOnlyText = statusText({ sessionCwd: root, includeCompleted: false });
 		assert.doesNotMatch(activeOnlyText, /done-run/);
 		assert.match(activeOnlyText, /live-run/);
+		assert.match(activeOnlyText, /interrupted-run/);
 	});
 
 	it("renders parallel group children nested under the group header", () => {

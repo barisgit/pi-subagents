@@ -68,6 +68,8 @@ export interface ControlEvent {
 	from?: ActivityState;
 	to: ActivityState;
 	ts: number;
+	/** Stable activity baseline identifying this stall episode across extension reloads. */
+	activityAt?: number;
 	agent: string;
 	index?: number;
 	runId: string;
@@ -288,6 +290,9 @@ export interface SingleResult {
 	skillsWarning?: string;
 	progress?: AgentProgress;
 	progressSummary?: ProgressSummary;
+	toolCallCount?: number;
+	toolResultCount?: number;
+	toolErrorCount?: number;
 	toolCalls?: ToolCallSummary[];
 	artifactPaths?: ArtifactPaths;
 	truncation?: TruncationResult;

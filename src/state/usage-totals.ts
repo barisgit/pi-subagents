@@ -35,6 +35,23 @@ export function tokenUsageFromTotal(total: number | undefined): TokenUsage | und
 	return value > 0 ? { input: 0, output: 0, total: value } : undefined;
 }
 
+export function sumTokenUsages(...usages: Array<TokenUsage | undefined>): TokenUsage | undefined {
+	const input = usages.reduce((sum, usage) => sum + tokenField(usage?.input), 0);
+	const output = usages.reduce((sum, usage) => sum + tokenField(usage?.output), 0);
+	const cacheRead = usages.reduce((sum, usage) => sum + tokenField(usage?.cacheRead), 0);
+	const cacheWrite = usages.reduce((sum, usage) => sum + tokenField(usage?.cacheWrite), 0);
+	const total = usages.reduce((sum, usage) => sum + tokenField(usage?.total), 0);
+	return total > 0
+		? {
+				input,
+				output,
+				...(cacheRead > 0 ? { cacheRead } : {}),
+				...(cacheWrite > 0 ? { cacheWrite } : {}),
+				total,
+			}
+		: undefined;
+}
+
 /** Build the persisted TokenUsage shape from a richer Usage aggregate. */
 export function tokenUsageFromUsage(usage: UsageTokenFields | undefined): TokenUsage | undefined {
 	const input = tokenField(usage?.input);

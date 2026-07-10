@@ -4,8 +4,10 @@ import { EventEmitter } from "node:events";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { interruptRun, registerRunController, releaseRunController } from "../../src/dispatch/layer0-runs.ts";
+import { __resetLeafConcurrencyForTest, leafConcurrencyLimit } from "../../src/dispatch/leaf-concurrency.ts";
 import { setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { readStatus } from "../../src/shared/utils.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
 import * as path from "node:path";
@@ -168,6 +170,7 @@ describe("async-path shared controller registration", () => {
 	let restoreRuntime: (() => void) | undefined;
 
 	beforeEach(() => {
+		__resetLeafConcurrencyForTest();
 		tempDir = createTempDir("pi-subagent-async-controller-");
 		setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	});
@@ -175,6 +178,7 @@ describe("async-path shared controller registration", () => {
 	afterEach(() => {
 		restoreRuntime?.();
 		restoreRuntime = undefined;
+		__resetLeafConcurrencyForTest();
 		setRegistryPathForTests(null);
 		removeTempDir(tempDir);
 	});
@@ -221,6 +225,59 @@ describe("async-path shared controller registration", () => {
 			[],
 			"finalize must release the shared-map controller (a leaked one would still abort)",
 		);
+	});
+
+	it("interrupts a child queued for a leaf permit without starting or releasing one", async () => {
+		leafConcurrencyLimit(1);
+		const sessions = [
+			new FakeAgentSession(async () => {
+				await new Promise<void>(() => {});
+			}),
+			new FakeAgentSession(async (_task, session) => {
+				session.emit(assistantMessage("done"));
+			}),
+		];
+		restoreRuntime = installFakeRuntime(sessions);
+		const harness = makeHarness(tempDir);
+
+		const first = await harness.execute({ async: true, run: [{ agent: "A", task: "hold permit" }] });
+		const firstRunId = first.details?.runId;
+		assert.ok(firstRunId);
+		await waitFor(() => sessions.length === 1, "first child never acquired its leaf permit");
+
+		const second = await harness.execute({ async: true, run: [{ agent: "A", task: "wait for permit" }] });
+		const secondRunId = second.details?.runId;
+		const secondDir = second.details?.asyncDir;
+		assert.ok(secondRunId);
+		assert.ok(secondDir);
+		await delay(20);
+		assert.equal(sessions.length, 1, "queued child must not create a session");
+
+		const interrupted = interruptRun(secondRunId, { cascade: true });
+		assert.ok(interrupted.interruptedRunIds.includes(secondRunId));
+		await waitFor(
+			() => harness.completionEvents.some((event) => event.runId === secondRunId),
+			"queued child did not complete promptly after interrupt",
+		);
+		const secondCompletion = harness.completionEvents.find((event) => event.runId === secondRunId);
+		assert.equal(secondCompletion?.state, "interrupted");
+		assert.equal(readStatus(secondDir)?.state, "interrupted");
+		assert.equal(sessions.length, 1, "interrupted waiter must not create a session");
+
+		const third = await harness.execute({ async: true, run: [{ agent: "A", task: "remain queued" }] });
+		const thirdRunId = third.details?.runId;
+		assert.ok(thirdRunId);
+		await delay(20);
+		assert.equal(sessions.length, 1, "interrupting a waiter must not release the occupied permit");
+
+		interruptRun(firstRunId, { cascade: true });
+		await waitFor(
+			() => harness.completionEvents.some((event) => event.runId === thirdRunId),
+			"next queued child did not acquire after the holder released",
+		);
+		const thirdCompletion = harness.completionEvents.find((event) => event.runId === thirdRunId);
+		assert.equal(thirdCompletion?.state, "complete");
+		assert.equal(sessions.length, 0, "exactly one queued child should create the remaining session");
 	});
 
 	it("interruptAsyncRun succeeds when only the target is aborted via the layer0 fallback", async () => {

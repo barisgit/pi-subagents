@@ -43,6 +43,7 @@ describe("resolveResumeTarget", () => {
 			agentName: "fixer",
 			parentRunId: "group-run",
 			rootRunId: "group-run",
+			rootSessionId: "root-session",
 			cwd: root,
 			startedAt: 111,
 		});
@@ -58,7 +59,7 @@ describe("resolveResumeTarget", () => {
 			steps: [{ agent: "fixer", status: "complete", sessionFile }],
 		});
 
-		const target = resolveResumeTarget("child-run");
+		const target = resolveResumeTarget("child-run", 0, "root-session");
 
 		assert.equal(target.sessionFile, sessionFile);
 		assert.equal(target.parentRunId, "group-run");
@@ -75,6 +76,7 @@ describe("resolveResumeTarget", () => {
 			source: "sync",
 			agentName: "explorer",
 			rootRunId: "single-run",
+			rootSessionId: "root-session",
 			cwd: root,
 			startedAt: 222,
 		});
@@ -88,7 +90,7 @@ describe("resolveResumeTarget", () => {
 			steps: [{ agent: "explorer", status: "complete" }],
 		});
 
-		const target = resolveResumeTarget("single-run");
+		const target = resolveResumeTarget("single-run", 0, "root-session");
 
 		assert.equal(target.sessionFile, path.join(runRecordDir, "run-0", "session.jsonl"));
 		assert.equal(target.startedAt, 222);
@@ -109,6 +111,7 @@ describe("resolveResumeTarget", () => {
 			source: "async",
 			agentNames: ["explorer", "fixer"],
 			rootRunId: "parallel-run",
+			rootSessionId: "root-session",
 			cwd: root,
 			startedAt: 333,
 		});
@@ -126,7 +129,10 @@ describe("resolveResumeTarget", () => {
 			],
 		});
 
-		assert.throws(() => resolveResumeTarget("parallel-run", 1), /parallel group; resume an individual child runId/);
+		assert.throws(
+			() => resolveResumeTarget("parallel-run", 1, "root-session"),
+			/parallel group; resume an individual child runId/,
+		);
 	});
 
 	it("unknown runId is rejected", () => {

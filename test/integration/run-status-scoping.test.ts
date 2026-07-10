@@ -143,3 +143,47 @@ describe("inspectSubagentStatus no-id list scoping", () => {
 		assert.doesNotMatch(text, /noise-/);
 	});
 });
+
+describe("inspectSubagentStatus ID lookup", () => {
+	it("prefers an exact ID over a newer prefix match", () => {
+		const root = tmpRegistry();
+		const now = Date.now();
+		makeEntry(root, "lookup-exact", { withStatus: { state: "complete" }, startedAt: now });
+		makeEntry(root, "lookup-exact-longer", { withStatus: { state: "complete" }, startedAt: now + 1 });
+
+		const result = inspectSubagentStatus({ id: "lookup-exact" });
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		assert.equal(result.isError, undefined);
+		assert.match(text, /^Run: lookup-exact$/m);
+	});
+
+	it("rejects an ambiguous ID prefix", () => {
+		const root = tmpRegistry();
+		const now = Date.now();
+		makeEntry(root, "lookup-shared-alpha", { withStatus: { state: "complete" }, startedAt: now });
+		makeEntry(root, "lookup-shared-beta", { withStatus: { state: "complete" }, startedAt: now + 1 });
+
+		const result = inspectSubagentStatus({ id: "lookup-shared" });
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		assert.equal(result.isError, true);
+		assert.match(text, /ambiguous/i);
+		assert.match(text, /lookup-shared-alpha/);
+		assert.match(text, /lookup-shared-beta/);
+	});
+
+	it("deduplicates and caps ambiguous ID prefix matches", () => {
+		const root = tmpRegistry();
+		const now = Date.now();
+		const runIds = Array.from({ length: 12 }, (_, index) => `lookup-many-${String(index).padStart(2, "0")}`);
+		for (const [index, runId] of runIds.entries()) makeEntry(root, runId, { startedAt: now + index });
+		makeEntry(root, runIds[0]!, { startedAt: now + runIds.length });
+
+		const result = inspectSubagentStatus({ id: "lookup-many" });
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+		assert.equal(result.isError, true);
+		assert.equal(
+			text,
+			'Run ID prefix "lookup-many" is ambiguous (12 matches). Matches: lookup-many-00, lookup-many-01, lookup-many-02, lookup-many-03, lookup-many-04, lookup-many-05, lookup-many-06, lookup-many-07, lookup-many-08, lookup-many-09. 2 additional matches omitted. Provide a longer ID.',
+		);
+	});
+});

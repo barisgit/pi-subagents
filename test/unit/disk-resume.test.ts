@@ -101,12 +101,12 @@ function setup(opts: { pending?: boolean } = {}) {
 		expandTilde: (v: string) => v,
 		discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }),
 	} as never);
-	const execute = (params: Record<string, unknown>) =>
+	const execute = (params: Record<string, unknown>, callerSessionId: string | null = "parent-session") =>
 		executor.execute("id", params as never, new AbortController().signal, undefined, {
 			cwd: tempDir!,
 			hasUI: false,
 			ui: {},
-			sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => null },
+			sessionManager: { getSessionId: () => callerSessionId ?? undefined, getSessionFile: () => null },
 			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
 			model: { provider: "mock" },
 		} as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
@@ -134,7 +134,11 @@ function readSessionId(sessionFile: string): string {
 	return header.id;
 }
 
-function writeCompleteRun(root: string, runId = "resume-run") {
+function writeCompleteRun(
+	root: string,
+	runId = "resume-run",
+	lineage: { rootSessionId?: string; parentSessionId?: string } = { rootSessionId: "parent-session" },
+) {
 	const runRecordDir = path.join(root, runId);
 	const sessionFile = path.join(runRecordDir, "run-0", "session.jsonl");
 	const sessionId = `session-${path.basename(root)}-${runId}`;
@@ -151,6 +155,8 @@ function writeCompleteRun(root: string, runId = "resume-run") {
 		source: "sync",
 		agentName: "fixer",
 		rootRunId: runId,
+		...(lineage.rootSessionId ? { rootSessionId: lineage.rootSessionId } : {}),
+		...(lineage.parentSessionId ? { parentSessionId: lineage.parentSessionId } : {}),
 		cwd: root,
 		startedAt: 1234,
 	});
@@ -171,6 +177,57 @@ function writeCompleteRun(root: string, runId = "resume-run") {
 }
 
 describe("disk resume", () => {
+	it("requires matching root-session ownership for every disk resume", async () => {
+		const h = setup();
+		writeCompleteRun(tempDir!, "root-mismatch", { rootSessionId: "other-session" });
+		writeCompleteRun(tempDir!, "parent-mismatch", { parentSessionId: "other-session" });
+		writeCompleteRun(tempDir!, "same-session", { rootSessionId: "parent-session" });
+		writeCompleteRun(tempDir!, "legacy-run", {});
+		writeCompleteRun(tempDir!, "missing-caller", { rootSessionId: "parent-session" });
+		writeCompleteRun(tempDir!, "state-fallback", { rootSessionId: "parent-session" });
+
+		const rootMismatch = await h.execute(
+			{ action: "resume", id: "root-mismatch", message: "continue", async: false },
+			"parent-session",
+		);
+		assert.equal(rootMismatch.isError, true);
+		assert.match(rootMismatch.content[0]?.text ?? "", /root session other-session/);
+
+		const parentMismatch = await h.execute(
+			{ action: "resume", id: "parent-mismatch", message: "continue", async: false },
+			"parent-session",
+		);
+		assert.equal(parentMismatch.isError, true);
+		assert.match(parentMismatch.content[0]?.text ?? "", /root session other-session/);
+
+		const sameSession = await h.execute(
+			{ action: "resume", id: "same-session", message: "continue", async: false },
+			"parent-session",
+		);
+		assert.equal(sameSession.isError, undefined, sameSession.content[0]?.text);
+
+		const legacy = await h.execute(
+			{ action: "resume", id: "legacy-run", message: "continue", async: false },
+			"parent-session",
+		);
+		assert.equal(legacy.isError, true);
+		assert.match(legacy.content[0]?.text ?? "", /no root-session ownership metadata/);
+
+		const missingCaller = await h.execute(
+			{ action: "resume", id: "missing-caller", message: "continue", async: false },
+			null,
+		);
+		assert.equal(missingCaller.isError, true);
+		assert.match(missingCaller.content[0]?.text ?? "", /current root session is unavailable/);
+
+		h.state.currentSessionId = "parent-session";
+		const stateFallback = await h.execute(
+			{ action: "resume", id: "state-fallback", message: "continue", async: false },
+			null,
+		);
+		assert.equal(stateFallback.isError, undefined, stateFallback.content[0]?.text);
+	});
+
 	it("reopen from disk appends a follow-up to the existing session file", async () => {
 		const h = setup();
 		const run = writeCompleteRun(tempDir!);

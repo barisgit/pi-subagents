@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { PersistedRunStatus, PersistedRunStep } from "../protocol/status-types.ts";
 import {
 	type ChildAgentHandle,
 	type ChildAgentResult,
@@ -10,8 +11,8 @@ import {
 } from "./in-process-executor.ts";
 import { StatusWriter } from "../state/status-writer.ts";
 import { isRunnerHardDead } from "../state/run-liveness.ts";
-import { readStatus } from "../shared/utils.ts";
-import { tokenUsageFromTotal } from "../state/usage-totals.ts";
+import { getSingleResultOutput, readStatus } from "../shared/utils.ts";
+import { sumTokenUsages, tokenUsageFromTotal, tokenUsageFromUsage, totalUsageTokens } from "../state/usage-totals.ts";
 import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { evictCompletionDedupeForRunId } from "../state/completion-dedupe.ts";
 import { logger } from "../shared/logger.ts";
@@ -22,6 +23,8 @@ import {
 	type Details,
 	type SingleResult,
 	type SubagentState,
+	type TokenUsage,
+	type Usage,
 	SUBAGENT_COMPLETED_EVENT,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_STARTED_EVENT,
@@ -44,7 +47,8 @@ import {
 	mirrorForegroundProgressToStatus,
 	safeEmit,
 	shapeSingleForegroundResult,
-	tokenUsageFromResult,
+	sumUsages,
+	terminalStatusStepFromResult,
 	validationError,
 } from "./executor-helpers.ts";
 import { buildAsyncChildStep, runInProcessChildStep } from "./child-step-runner.ts";
@@ -53,6 +57,46 @@ function parseChildRunId(id: string): { dispatchRunId: string; stepIndex?: numbe
 	const match = id.match(/^(.*):(\d+)$/);
 	if (!match) return { dispatchRunId: id };
 	return { dispatchRunId: match[1]!, stepIndex: Number(match[2]) };
+}
+
+function persistedTokenBaseline(status: PersistedRunStatus): TokenUsage | undefined {
+	const stepTokens = sumTokenUsages(...(status.steps ?? []).map((step) => step.tokens));
+	const usageTokens = tokenUsageFromUsage(status.totalUsage);
+	let baseline: TokenUsage | undefined;
+	for (const candidate of [status.totalTokens, usageTokens, stepTokens]) {
+		if (candidate && (!baseline || candidate.total > baseline.total)) baseline = candidate;
+	}
+	return baseline;
+}
+
+function usageFromTokenBaseline(tokens: TokenUsage): Usage {
+	const unclassified = Math.max(0, tokens.total - totalUsageTokens(tokens));
+	return {
+		input: tokens.input,
+		output: tokens.output + unclassified,
+		...(tokens.cacheRead !== undefined ? { cacheRead: tokens.cacheRead } : {}),
+		...(tokens.cacheWrite !== undefined ? { cacheWrite: tokens.cacheWrite } : {}),
+		cost: 0,
+		turns: 0,
+	};
+}
+
+function resumedUsageTotals(status: PersistedRunStatus, usage: Usage | undefined) {
+	const previousTotalTokens = persistedTokenBaseline(status);
+	const previousTotalUsage = status.totalUsage
+		? {
+				...status.totalUsage,
+				output:
+					status.totalUsage.output +
+					Math.max(0, (previousTotalTokens?.total ?? 0) - totalUsageTokens(status.totalUsage)),
+			}
+		: previousTotalTokens
+			? usageFromTokenBaseline(previousTotalTokens)
+			: undefined;
+	return {
+		totalUsage: sumUsages(previousTotalUsage, usage),
+		totalTokens: sumTokenUsages(previousTotalTokens, tokenUsageFromUsage(usage)),
+	};
 }
 export interface ResumeTarget {
 	runId: string;
@@ -68,9 +112,25 @@ export interface ResumeTarget {
 	registryEntry: RunsRegistryEntry;
 }
 
-export function resolveResumeTarget(runId: string, stepIndex = 0): ResumeTarget {
+export function resolveResumeTarget(runId: string, stepIndex = 0, requestingRootSessionId?: string): ResumeTarget {
 	const entry = readAllEntries().find((candidate) => candidate.runId === runId);
 	if (!entry) throw new Error(`Unknown runId '${runId}'.`);
+	const recordedRootSessionId = entry.rootSessionId ?? entry.parentSessionId;
+	if (!recordedRootSessionId) {
+		throw new Error(
+			`Run ${runId} has no root-session ownership metadata and cannot be resumed safely after restart.`,
+		);
+	}
+	if (!requestingRootSessionId) {
+		throw new Error(
+			`Run ${runId} belongs to root session ${recordedRootSessionId}; the current root session is unavailable.`,
+		);
+	}
+	if (recordedRootSessionId !== requestingRootSessionId) {
+		throw new Error(
+			`Run ${runId} belongs to root session ${recordedRootSessionId}, not the current root session ${requestingRootSessionId}. Resume it from its owning root session.`,
+		);
+	}
 	if (entry.mode === "parallel")
 		throw new Error(`Run ${runId} is a parallel group; resume an individual child runId instead.`);
 	const status = readStatus(entry.runRecordDir);
@@ -136,6 +196,7 @@ async function resumeRun(
 	runId: string,
 	message: string,
 	asyncMode: boolean | undefined,
+	requestingRootSessionId: string | undefined,
 	data: ExecutionContextData,
 	deps: ExecutorDeps,
 ): Promise<AgentToolResult<Details>> {
@@ -215,7 +276,7 @@ async function resumeRun(
 	}
 	let target: ResumeTarget;
 	try {
-		target = resolveResumeTarget(parsed.dispatchRunId, parsed.stepIndex ?? 0);
+		target = resolveResumeTarget(parsed.dispatchRunId, parsed.stepIndex ?? 0, requestingRootSessionId);
 		assertResumableTarget(target);
 	} catch (error) {
 		const messageText = error instanceof Error ? error.message : String(error);
@@ -266,6 +327,8 @@ async function resumeRun(
 	// activity (startedAt stays immutable for duration semantics).
 	const resumedAt = Date.now();
 	const resumeCount = (target.status.resumeCount ?? 0) + 1;
+	const resumeBaseline = resumedUsageTotals(target.status, undefined);
+	const previousResumeStep = target.status.steps?.[step.stepIndex];
 	statusWriter.initialize({
 		mode: target.status.mode,
 		state: "running",
@@ -274,20 +337,25 @@ async function resumeRun(
 		runnerHeartbeatAt: resumedAt,
 		resumedAt,
 		resumeCount,
+		...(target.status.totalUsage || resumeBaseline.totalTokens ? { totalUsage: resumeBaseline.totalUsage } : {}),
+		...(resumeBaseline.totalTokens ? { totalTokens: resumeBaseline.totalTokens } : {}),
 		cwd: target.cwd,
 		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
 		currentStep: step.stepIndex,
 		sessionFile: target.sessionFile,
 		sessionDir: target.runRecordDir,
-		steps: target.status.steps?.map((statusStep, index) => ({
-			agent: statusStep.agent,
-			...(statusStep.label ? { label: statusStep.label } : {}),
-			status: index === step.stepIndex ? "running" : statusStep.status,
-			startedAt: statusStep.startedAt ?? target.startedAt,
-			...(index === step.stepIndex ? { lastActivityAt: resumedAt } : {}),
-			sessionFile: statusStep.sessionFile ?? (index === step.stepIndex ? target.sessionFile : undefined),
-			...(statusStep.live ? { live: statusStep.live } : {}),
-		})) ?? [
+		steps: target.status.steps?.map((statusStep, index) => {
+			const isResumedStep = index === step.stepIndex;
+			return {
+				...statusStep,
+				status: isResumedStep ? "running" : statusStep.status,
+				startedAt: statusStep.startedAt ?? target.startedAt,
+				...(isResumedStep
+					? { endedAt: undefined, durationMs: undefined, error: undefined, lastActivityAt: resumedAt }
+					: {}),
+				sessionFile: statusStep.sessionFile ?? (isResumedStep ? target.sessionFile : undefined),
+			};
+		}) ?? [
 			{
 				agent: target.agentName,
 				status: "running",
@@ -324,16 +392,27 @@ async function resumeRun(
 		const fg = createForegroundRunController(foregroundControl, {
 			mirror: (firstProgress, index) => {
 				const resumeLiveTokens = tokenUsageFromTotal(firstProgress?.tokens);
+				const resumedStepTokens = sumTokenUsages(previousResumeStep?.tokens, resumeLiveTokens);
+				const resumedTotalTokens = sumTokenUsages(resumeBaseline.totalTokens, resumeLiveTokens);
+				const previousLive = previousResumeStep?.live;
+				const toolCallCount =
+					(previousLive?.toolCallCount ?? previousLive?.toolCount ?? 0) + (firstProgress?.toolCount ?? 0);
+				const resumedLive = {
+					toolCallCount,
+					toolCount: toolCallCount,
+					tokens: resumedStepTokens?.total,
+				};
 				const statusStepPatch = target.status.steps?.map((_, stepIdx) =>
 					stepIdx === step.stepIndex
 						? {
 								agent: firstProgress?.agent ?? target.agentName,
 								status: firstProgress?.status ?? "running",
-								startedAt: target.status.steps?.[step.stepIndex]?.startedAt ?? target.startedAt,
+								startedAt: previousResumeStep?.startedAt ?? target.startedAt,
 								lastActivityAt: firstProgress?.lastActivityAt,
 								currentTool: firstProgress?.currentTool,
 								currentToolStartedAt: firstProgress?.currentToolStartedAt,
-								...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
+								...(resumedStepTokens ? { tokens: resumedStepTokens } : {}),
+								live: resumedLive,
 							}
 						: {},
 				) ?? [
@@ -344,7 +423,8 @@ async function resumeRun(
 						lastActivityAt: firstProgress?.lastActivityAt,
 						currentTool: firstProgress?.currentTool,
 						currentToolStartedAt: firstProgress?.currentToolStartedAt,
-						...(resumeLiveTokens ? { tokens: resumeLiveTokens } : {}),
+						...(resumedStepTokens ? { tokens: resumedStepTokens } : {}),
+						live: resumedLive,
 					},
 				];
 				mirrorForegroundProgressToStatus(
@@ -353,6 +433,7 @@ async function resumeRun(
 					index,
 					statusStepPatch,
 					foregroundControl.executionStartedAt,
+					resumedTotalTokens,
 				);
 			},
 		});
@@ -417,6 +498,10 @@ async function resumeRun(
 					rootRunId: target.rootRunId,
 				},
 			});
+			fg.finalizeStep(step.stepIndex, {
+				progress: result.progress,
+				finalOutput: getSingleResultOutput(result),
+			});
 			emitSyncLifecycleEvent(deps.pi, result.exitCode === 0 ? SUBAGENT_COMPLETED_EVENT : SUBAGENT_FAILED_EVENT, {
 				...eventPayload,
 				exitCode: result.exitCode,
@@ -439,28 +524,56 @@ async function resumeRun(
 			});
 			return validationError(`Failed to resume run ${runId}: ${failureMessage}`);
 		} finally {
+			const terminalState = result?.interrupted
+				? "interrupted"
+				: result?.exitCode === 0 && !failureMessage
+					? "complete"
+					: "failed";
+			const previousStep = target.status.steps?.[step.stepIndex];
+			const resultPatch = result ? terminalStatusStepFromResult(result) : undefined;
+			const previousLive = previousStep?.live;
+			const resultLive = resultPatch?.live;
+			const toolCallCount =
+				(previousLive?.toolCallCount ?? previousLive?.toolCount ?? 0) + (resultLive?.toolCallCount ?? 0);
+			const terminalPatch: Partial<PersistedRunStep> = resultPatch
+				? {
+						...resultPatch,
+						status: terminalState,
+						...(failureMessage ? { error: failureMessage } : {}),
+						tokens: sumTokenUsages(previousStep?.tokens, resultPatch.tokens),
+						live: {
+							...resultLive,
+							toolCallCount,
+							toolResultCount: (previousLive?.toolResultCount ?? 0) + (resultLive?.toolResultCount ?? 0),
+							toolErrorCount: (previousLive?.toolErrorCount ?? 0) + (resultLive?.toolErrorCount ?? 0),
+							toolCount: toolCallCount,
+							tokens:
+								(previousLive?.tokens ?? previousStep?.tokens?.total ?? 0) +
+								(resultLive?.tokens ?? resultPatch.tokens?.total ?? 0),
+						},
+					}
+				: { status: "failed", error: failureMessage };
+			const totals = result ? resumedUsageTotals(target.status, result.usage) : undefined;
 			statusWriter.finalizeTerminal({
-				state: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
+				state: terminalState,
 				// Only the resumed step is finalized; siblings echo their existing
 				// fields so finalizeTerminal's force-overrides become no-ops
 				// (a patchless `{}` would flip siblings to the run-level end state).
 				steps: target.status.steps?.map((existingStep, index) =>
 					index === step.stepIndex
 						? {
-								status: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
-								tokens: result ? tokenUsageFromResult(result) : undefined,
-								durationMs: result?.progressSummary?.durationMs,
-								error: result?.error ?? failureMessage,
+								...existingStep,
+								...terminalPatch,
+								endedAt: undefined,
+								durationMs: terminalPatch.durationMs,
 							}
 						: existingStep,
-				) ?? [
-					{
-						status: result?.exitCode === 0 && !failureMessage ? "complete" : "failed",
-						tokens: result ? tokenUsageFromResult(result) : undefined,
-						durationMs: result?.progressSummary?.durationMs,
-						error: result?.error ?? failureMessage,
-					},
-				],
+				) ?? [terminalPatch],
+				...(result && totals
+					? { totalUsage: totals.totalUsage, outputText: getSingleResultOutput(result) }
+					: {}),
+				...(totals?.totalTokens ? { totalTokens: totals.totalTokens } : {}),
+				...(failureMessage || result?.error ? { error: failureMessage ?? result?.error } : {}),
 				sessionFile: result?.sessionFile ?? target.sessionFile,
 			});
 			statusWriter.dispose();
@@ -477,7 +590,20 @@ async function resumeRun(
 	const asyncCtx = {
 		extensionCtx: data.ctx,
 		abortSignal: detachedAbort.signal,
-		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => statusWriter.enqueue(patch),
+		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => {
+			const resumedStepTokens =
+				patch.stepIndex === step.stepIndex
+					? sumTokenUsages(previousResumeStep?.tokens, patch.tokens)
+					: patch.tokens;
+			const resumedTotalTokens = patch.tokens
+				? sumTokenUsages(resumeBaseline.totalTokens, patch.tokens)
+				: undefined;
+			statusWriter.enqueue({
+				...patch,
+				...(resumedStepTokens ? { tokens: resumedStepTokens } : {}),
+				...(resumedTotalTokens ? { totalTokens: resumedTotalTokens } : {}),
+			});
+		},
 		registry: deps.childRegistry,
 		pi: deps.pi,
 	};
@@ -486,7 +612,20 @@ async function resumeRun(
 		let result: ChildAgentResult | undefined;
 		try {
 			result = await childHandle.completed;
-			await statusWriter.finalize(result);
+			const previousStep = target.status.steps?.[step.stepIndex];
+			const previousLive = previousStep?.live;
+			const persistedResult = {
+				...result,
+				toolCallCount: (previousLive?.toolCallCount ?? previousLive?.toolCount ?? 0) + result.toolCallCount,
+				toolResultCount: (previousLive?.toolResultCount ?? 0) + result.toolResultCount,
+				toolErrorCount: (previousLive?.toolErrorCount ?? 0) + result.toolErrorCount,
+			};
+			const totals = resumedUsageTotals(target.status, result.usage);
+			const stepTokens = sumTokenUsages(previousStep?.tokens, tokenUsageFromUsage(result.usage));
+			await statusWriter.finalize(persistedResult, {
+				totalUsage: totals.totalUsage,
+				...(stepTokens ? { stepTokens } : {}),
+			});
 			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
 				id: target.runId,
 				runId: target.runId,

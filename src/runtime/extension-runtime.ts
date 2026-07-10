@@ -60,6 +60,9 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	SLASH_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
+	SUBAGENT_COMPLETED_EVENT,
+	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_NOTIFY_DELIVERED_EVENT,
 	SUBAGENT_REGISTER_PERSONA_DIR_EVENT,
 	SUBAGENT_UNREGISTER_PERSONA_DIR_EVENT,
@@ -199,8 +202,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		widgetClient ??= connect(pi, { ctx, clientId: "pi-subagents" });
 		return widgetClient;
 	};
+	const { controlEventHandler, controlRunTerminalHandler } = registerControlNotices({
+		pi,
+		isChildSession,
+		globalStore,
+	});
 	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered } =
-		createAsyncJobTracker(pi, state, { idleTracker, getWidgetClient });
+		createAsyncJobTracker(pi, state, { idleTracker, getWidgetClient, onRunTerminal: controlRunTerminalHandler });
 	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
@@ -331,10 +339,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	}
 	registerSubagentNotify(pi);
 
-	const { controlEventHandler } = registerControlNotices({ pi, isChildSession, globalStore });
 	const eventUnsubscribes = [
 		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
+		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, controlRunTerminalHandler),
+		pi.events.on(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, controlRunTerminalHandler),
+		pi.events.on(SUBAGENT_COMPLETED_EVENT, controlRunTerminalHandler),
+		pi.events.on(SUBAGENT_FAILED_EVENT, controlRunTerminalHandler),
 		pi.events.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, handleDelivered),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_REGISTER_PERSONA_DIR_EVENT, (payload: unknown) =>

@@ -12,9 +12,9 @@ export interface RunStatusParams {
 	id?: string;
 	runId?: string;
 	dir?: string;
-	// Scope for the no-id list mode. When set, the returned list is filtered to
-	// runs belonging to the current session's tree (rootSessionId/parentSessionId)
-	// or, as a fallback, the current cwd. Without these, every entry in
+	// Scope for the no-id list mode. A session ID strictly selects that root
+	// session's tree; cwd is used only when no session identity is available.
+	// Without either value, every entry in
 	// runs-index.jsonl across every project ever spawned would be returned —
 	// including thousands of long-dead test temp-dir runs that synthesize a
 	// fake `queued` summary because their status.json no longer exists.
@@ -27,6 +27,7 @@ export interface RunStatusParams {
 // hundreds of entries from one long-running session; the agent rarely needs
 // more than the freshest handful to understand what's still running.
 const DEFAULT_LIST_LIMIT = 30;
+const AMBIGUOUS_PREFIX_SAMPLE_LIMIT = 10;
 
 function activityText(activityState: unknown, lastActivityAt: unknown): string | undefined {
 	if (typeof lastActivityAt !== "number") return undefined;
@@ -34,20 +35,16 @@ function activityText(activityState: unknown, lastActivityAt: unknown): string |
 	return activityState === "needs_attention" ? `no activity for ${seconds}s` : `active ${seconds}s ago`;
 }
 
-// Mirrors the scoping rule used by listRunsFromRegistryForOverlay: sessionId
-// is the strict match (rootSessionId/parentSessionId), sessionCwd is the looser
-// project fallback. Entries with unknown lineage are kept permissively so
-// legacy/in-flight rows don't silently vanish.
+// Session tags are authoritative. Untagged legacy rows cannot be attributed
+// safely when multiple root sessions share a cwd, so session-scoped discovery
+// excludes them; callers without a session ID retain the cwd fallback.
 function scopeRunsForSession<T extends { rootSessionId?: string; parentSessionId?: string; cwd?: string }>(
 	runs: T[],
 	scope: { sessionId?: string; sessionCwd?: string },
 ): T[] {
 	if (scope.sessionId) {
 		const sid = scope.sessionId;
-		return runs.filter((run) => {
-			const tag = run.rootSessionId ?? run.parentSessionId;
-			return !tag || tag === sid;
-		});
+		return runs.filter((run) => (run.rootSessionId ?? run.parentSessionId) === sid);
 	}
 	if (scope.sessionCwd) {
 		const cwd = scope.sessionCwd;
@@ -61,8 +58,8 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 		try {
 			const states =
 				params.includeCompleted === false
-					? (["queued", "running", "lost"] as const)
-					: (["queued", "running", "lost", "complete", "failed", "paused"] as const);
+					? (["queued", "running", "lost", "interrupted"] as const)
+					: (["queued", "running", "lost", "complete", "failed", "paused", "interrupted"] as const);
 			const all = listRunsFromRegistry({ states: [...states] });
 			const scoped = scopeRunsForSession(all, { sessionId: params.sessionId, sessionCwd: params.sessionCwd });
 			const runs = scoped
@@ -90,8 +87,30 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 	if (params.dir) {
 		asyncDir = path.resolve(params.dir);
 	} else if (resolvedId) {
+		const lookupId = resolvedId;
 		registryEntries = readAllEntries();
-		registryMatch = registryEntries.find((entry) => entry.runId.startsWith(resolvedId!));
+		const exactMatch = registryEntries.find((entry) => entry.runId === lookupId);
+		const prefixMatches = exactMatch ? [] : registryEntries.filter((entry) => entry.runId.startsWith(lookupId));
+		const prefixMatchIds = [...new Set(prefixMatches.map((entry) => entry.runId))].sort();
+		if (prefixMatchIds.length > 1) {
+			const displayedMatches = prefixMatchIds.slice(0, AMBIGUOUS_PREFIX_SAMPLE_LIMIT);
+			const omittedMatchCount = prefixMatchIds.length - displayedMatches.length;
+			const omittedMatches =
+				omittedMatchCount > 0
+					? ` ${omittedMatchCount} additional match${omittedMatchCount === 1 ? "" : "es"} omitted.`
+					: "";
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Run ID prefix "${lookupId}" is ambiguous (${prefixMatchIds.length} matches). Matches: ${displayedMatches.join(", ")}.${omittedMatches} Provide a longer ID.`,
+					},
+				],
+				isError: true,
+				details: { mode: "single", results: [] },
+			};
+		}
+		registryMatch = exactMatch ?? prefixMatches[0];
 		if (registryMatch) {
 			asyncDir = registryMatch.runRecordDir;
 			resolvedId = registryMatch.runId;

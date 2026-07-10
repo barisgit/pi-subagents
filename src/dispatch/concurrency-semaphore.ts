@@ -5,6 +5,7 @@ export interface ConcurrencyPermit {
 
 interface Waiter {
 	resolve: () => void;
+	removeAbortListener: () => void;
 }
 
 /**
@@ -54,8 +55,11 @@ export class ConcurrencySemaphore {
 		this.dispatchWaiters();
 	}
 
-	acquire(): Promise<ConcurrencyPermit> {
-		return this.acquirePermit(this.createPermit());
+	acquire(): Promise<ConcurrencyPermit>;
+	acquire(signal: AbortSignal): Promise<ConcurrencyPermit | undefined>;
+	acquire(signal?: AbortSignal): Promise<ConcurrencyPermit | undefined> {
+		const permit = this.createPermit();
+		return signal ? this.acquirePermit(permit, signal) : this.acquirePermit(permit);
 	}
 
 	private createPermit(): SemaphorePermit {
@@ -67,7 +71,10 @@ export class ConcurrencySemaphore {
 		);
 	}
 
-	private acquirePermit(permit: SemaphorePermit): Promise<ConcurrencyPermit> {
+	private acquirePermit(permit: SemaphorePermit): Promise<ConcurrencyPermit>;
+	private acquirePermit(permit: SemaphorePermit, signal: AbortSignal): Promise<ConcurrencyPermit | undefined>;
+	private acquirePermit(permit: SemaphorePermit, signal?: AbortSignal): Promise<ConcurrencyPermit | undefined> {
+		if (signal?.aborted) return Promise.resolve(undefined);
 		if (this.activePermits < this.maxPermits && this.waiters.length === 0) {
 			this.activePermits++;
 			permit.markHeld();
@@ -75,12 +82,26 @@ export class ConcurrencySemaphore {
 		}
 
 		return new Promise((resolve) => {
-			this.waiters.push({
+			const waiter: Waiter = {
+				removeAbortListener: () => {},
 				resolve: () => {
+					waiter.removeAbortListener();
 					permit.markHeld();
 					resolve(permit);
 				},
-			});
+			};
+			this.waiters.push(waiter);
+			if (signal) {
+				const onAbort = () => {
+					const index = this.waiters.indexOf(waiter);
+					if (index < 0) return;
+					this.waiters.splice(index, 1);
+					signal.removeEventListener("abort", onAbort);
+					resolve(undefined);
+				};
+				waiter.removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+				signal.addEventListener("abort", onAbort, { once: true });
+			}
 		});
 	}
 

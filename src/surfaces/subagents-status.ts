@@ -1316,6 +1316,7 @@ function renderStatusBoxLine(theme: Theme, width: number, text: string): string 
 }
 
 function selectedRunCurrentLine(run: LiveRun, now: number): string | undefined {
+	if (runIsLost(run)) return undefined;
 	const phase = formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool);
 	if (phase) return `now ${phase}`;
 	if (!run.run.currentTool) return undefined;
