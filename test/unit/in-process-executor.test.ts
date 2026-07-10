@@ -134,7 +134,12 @@ function makeContext(overrides: Partial<ChildAgentContext> = {}): ChildAgentCont
 	};
 }
 
-function installFakeRuntime(sessions: FakeAgentSession[], createHook?: () => void, childSessionId?: string): void {
+function installFakeRuntime(
+	sessions: FakeAgentSession[],
+	createHook?: () => void,
+	childSessionId?: string,
+	createErrors: Error[] = [],
+): void {
 	const restore = __setChildAgentExecutorDepsForTest({
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
@@ -143,6 +148,8 @@ function installFakeRuntime(sessions: FakeAgentSession[], createHook?: () => voi
 		},
 		createAgentSession: async () => {
 			createHook?.();
+			const createError = createErrors.shift();
+			if (createError) throw createError;
 			const session = sessions.shift();
 			if (!session) throw new Error("No fake session queued");
 			return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
@@ -238,6 +245,235 @@ describe("runChildAgent", () => {
 			assert.equal(getLineageForSession(childSessionId)?.parentAgent, "fallback-agent");
 		} finally {
 			claimPendingChildLineage(childSessionId, { runId: null, agentName: null });
+		}
+	});
+
+	it("preserves parent lineage when a fork child uses a distinct session id", async () => {
+		const parentSessionId = "session-fork-parent";
+		const childSessionId = "session-fork-child";
+		const forkSource = path.join(tempDir("pi-in-process-fork-source-"), "branched.jsonl");
+		fs.writeFileSync(forkSource, '{"type":"session","id":"session-fork-child"}\n');
+		const step = makeStep({
+			parentSessionId,
+			forkReuse: { sessionFile: forkSource, agentName: "fixer" },
+		});
+		const parentLineage = setHostLineage(parentSessionId, "parent-agent");
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		installFakeRuntime([session], undefined, childSessionId);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "complete");
+			assert.notEqual(childSessionId, parentSessionId);
+			assert.equal(getLineageForSession(parentSessionId), parentLineage);
+			assert.equal(getLineageForSession(childSessionId)?.parentSessionId, parentSessionId);
+		} finally {
+			claimPendingChildLineage(childSessionId, { runId: null, agentName: null });
+			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
+				| Map<string, unknown>
+				| undefined;
+			lineageStore?.delete(parentSessionId);
+			lineageStore?.delete(childSessionId);
+		}
+	});
+
+	it("fails a colliding fork child without replacing parent lineage", async () => {
+		const parentSessionId = "session-fork-collision-parent";
+		const forkSource = path.join(tempDir("pi-in-process-fork-collision-"), "branched.jsonl");
+		fs.writeFileSync(forkSource, '{"type":"session","id":"session-fork-collision-parent"}\n');
+		const step = makeStep({
+			parentSessionId,
+			forkReuse: { sessionFile: forkSource, agentName: "fixer" },
+		});
+		const parentLineage = setHostLineage(parentSessionId, "parent-agent");
+		let createCalls = 0;
+		installFakeRuntime([], () => createCalls++, parentSessionId);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "failed");
+			assert.equal(result.error?.message, "Cannot replace an existing session lineage binding.");
+			assert.equal(createCalls, 0);
+			assert.equal(getLineageForSession(parentSessionId), parentLineage);
+		} finally {
+			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
+				| Map<string, unknown>
+				| undefined;
+			lineageStore?.delete(parentSessionId);
+		}
+	});
+
+	it("cleans failed lineage after model fallback is exhausted when session id is unavailable", async () => {
+		const firstFailedSessionId = "session-failed-setup-first";
+		const terminalFailedSessionId = "session-failed-setup-terminal";
+		const cleanupSessionId = "session-failed-setup-cleanup";
+		const attemptSessionIds = [firstFailedSessionId, terminalFailedSessionId];
+		const step = makeStep({
+			runId: "run-failed-setup",
+			modelCandidates: [{ provider: "test", id: "model-b" } as never],
+		});
+		let createCalls = 0;
+		let firstClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		let terminalClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		installFakeRuntime(
+			[],
+			() => {
+				if (createCalls === 1) assert.equal(getLineageForSession(firstFailedSessionId), null);
+				const claimed = claimPendingChildLineage(attemptSessionIds[createCalls]!, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				});
+				assert.equal(claimed?.runId, step.runId);
+				if (createCalls === 0) firstClaim = claimed;
+				else terminalClaim = claimed;
+				createCalls++;
+			},
+			undefined,
+			[new Error("authentication failed for model-a"), new Error("authentication failed for model-b")],
+		);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "failed");
+			assert.equal(createCalls, 2);
+			assert.equal(firstClaim, terminalClaim);
+			assert.equal(getLineageForSession(firstFailedSessionId), null);
+			assert.equal(getLineageForSession(terminalFailedSessionId), null);
+			assert.equal(
+				claimPendingChildLineage(cleanupSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				null,
+			);
+		} finally {
+			claimPendingChildLineage(cleanupSessionId, {
+				runId: step.runId,
+				agentName: null,
+				sessionFile: step.sessionFile,
+			});
+			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
+				| Map<string, unknown>
+				| undefined;
+			lineageStore?.delete(firstFailedSessionId);
+			lineageStore?.delete(terminalFailedSessionId);
+			lineageStore?.delete(cleanupSessionId);
+		}
+	});
+
+	it("cleans an auth-failed attempt binding before fallback succeeds when session id is unavailable", async () => {
+		const failedSessionId = "session-auth-fallback-failed-attempt";
+		const successfulSessionId = "session-auth-fallback-successful-attempt";
+		const cleanupSessionId = "session-auth-fallback-attempt-cleanup";
+		const attemptSessionIds = [failedSessionId, successfulSessionId];
+		const step = makeStep({
+			runId: "run-auth-fallback-attempt-cleanup",
+			modelCandidates: [{ provider: "test", id: "model-b" } as never],
+		});
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		let createCalls = 0;
+		let firstClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		let successfulClaim: ReturnType<typeof claimPendingChildLineage> = null;
+		installFakeRuntime(
+			[session],
+			() => {
+				if (createCalls === 1) assert.equal(getLineageForSession(failedSessionId), null);
+				const claimed = claimPendingChildLineage(attemptSessionIds[createCalls]!, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				});
+				assert.equal(claimed?.runId, step.runId);
+				if (createCalls === 0) firstClaim = claimed;
+				else successfulClaim = claimed;
+				createCalls++;
+			},
+			undefined,
+			[new Error("authentication failed for model-a")],
+		);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+
+			assert.equal(result.state, "complete");
+			assert.equal(createCalls, 2);
+			assert.equal(firstClaim, successfulClaim);
+			assert.equal(getLineageForSession(failedSessionId), null);
+			assert.equal(getLineageForSession(successfulSessionId), successfulClaim);
+			assert.equal(getLineageForSession(successfulSessionId)?.runId, step.runId);
+			assert.equal(
+				claimPendingChildLineage(successfulSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				successfulClaim,
+			);
+			assert.equal(
+				claimPendingChildLineage(cleanupSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				null,
+			);
+		} finally {
+			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
+				| Map<string, unknown>
+				| undefined;
+			lineageStore?.delete(failedSessionId);
+			lineageStore?.delete(successfulSessionId);
+			lineageStore?.delete(cleanupSessionId);
+		}
+	});
+
+	it("preserves pending lineage through auth fallback until successful activation can claim it", async () => {
+		const activationSessionId = "session-auth-fallback-success";
+		const cleanupSessionId = "session-auth-fallback-success-cleanup";
+		const step = makeStep({
+			runId: "run-auth-fallback-success",
+			modelCandidates: [{ provider: "test", id: "model-b" } as never],
+		});
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		let createCalls = 0;
+		installFakeRuntime([session], () => createCalls++, undefined, [new Error("authentication failed for model-a")]);
+
+		try {
+			const result = await runChildAgent(step, makeContext());
+			const claimed = claimPendingChildLineage(activationSessionId, {
+				runId: null,
+				agentName: null,
+				sessionFile: step.sessionFile,
+			});
+
+			assert.equal(result.state, "complete");
+			assert.equal(createCalls, 2);
+			assert.equal(claimed?.runId, step.runId);
+			assert.equal(
+				claimPendingChildLineage(cleanupSessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: step.sessionFile,
+				}),
+				null,
+			);
+		} finally {
+			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
+				| Map<string, unknown>
+				| undefined;
+			lineageStore?.delete(activationSessionId);
+			lineageStore?.delete(cleanupSessionId);
 		}
 	});
 });

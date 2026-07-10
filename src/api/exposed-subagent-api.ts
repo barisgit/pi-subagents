@@ -158,10 +158,15 @@ export function registerChildSessionApi(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		const sid = ctx.sessionManager?.getSessionId?.();
 		if (typeof sid !== "string" || sid.length === 0) return;
+		const sessionFile = ctx.sessionManager?.getSessionFile?.() ?? null;
 		// Fallback: claim from the pending queue if the in-process executor's
 		// pre-registered-by-sid lineage didn't land for this session. Normally
 		// lineage is already in the store keyed by sid before activate runs.
-		lineage = claimPendingChildLineage(sid, { runId: null, agentName: null });
+		lineage = claimPendingChildLineage(sid, {
+			runId: null,
+			agentName: null,
+			sessionFile,
+		});
 		if (!lineage) {
 			lineage = {
 				role: "child",
@@ -175,7 +180,7 @@ export function registerChildSessionApi(pi: ExtensionAPI): void {
 				allowedDelegateAgents: [],
 				maxSubagentDepth: 0,
 			};
-			setChildLineage(sid, lineage);
+			setChildLineage(sid, lineage, sessionFile);
 		}
 		publish();
 	});

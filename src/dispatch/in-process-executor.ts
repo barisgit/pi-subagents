@@ -21,7 +21,13 @@ import {
 // list unfiltered; extension tools like ast_grep/fetch/mcp/scan_files register during
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "../shared/logger.ts";
-import { getLineageForSession, pushPendingChildLineage, setChildLineage } from "../state/lineage.ts";
+import {
+	getLineageForSession,
+	pushPendingChildLineage,
+	removeChildLineageBindings,
+	removePendingChildLineage,
+	setChildLineage,
+} from "../state/lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, type RunPhaseState } from "../state/run-phase.ts";
 import {
 	SUBAGENT_PHASE_CHANGE_EVENT,
@@ -663,9 +669,10 @@ async function executeChildAgent(
  * to a regular copy. Sessions in the multi-MB range pay a real disk cost there;
  * APFS (default macOS) and btrfs/xfs make this free.
  *
- * The clone preserves the parent's session header (and therefore sessionId).
- * That's acceptable: fork children are short-lived and not resumed independently;
- * the runRecordDir layout + runs-index.jsonl identify the fork uniquely.
+ * The source branch was already created by SessionManager.createBranchedSession,
+ * so its header has a fresh sessionId distinct from the parent plus a
+ * parentSession link. The clone preserves that already-branched identity in the
+ * child's canonical run file.
  *
  * Idempotent: if the target already exists (e.g. a retry after a transient
  * failure), the existing file is preserved.
@@ -770,7 +777,7 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 		...(allowedDelegateAgents ? { allowedDelegateAgents } : {}),
 		maxSubagentDepth: step.maxSubagentDepth,
 	};
-	pushPendingChildLineage(lineage);
+	pushPendingChildLineage(lineage, step.sessionFile);
 	try {
 		const loader = new runtimeDeps.DefaultResourceLoader({
 			cwd: step.cwd,
@@ -793,14 +800,16 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 				// race where the SDK's session_start may already have fired by the
 				// time the extension attaches its listener.
 				const sessionManager = runtimeDeps.SessionManager.open(step.sessionFile);
+				let childSid: string | undefined;
 				try {
-					const childSid = sessionManager.getSessionId();
-					if (typeof childSid === "string" && childSid.length > 0) {
-						setChildLineage(childSid, lineage);
+					const resolvedSessionId = sessionManager.getSessionId();
+					if (typeof resolvedSessionId === "string" && resolvedSessionId.length > 0) {
+						childSid = resolvedSessionId;
 					}
 				} catch {
 					// fall back to the pending-queue + activate-claim path
 				}
+				if (childSid) setChildLineage(childSid, lineage, step.sessionFile);
 
 				const created = await runtimeDeps.createAgentSession({
 					cwd: step.cwd,
@@ -819,9 +828,15 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 			} catch (error) {
 				lastError = error;
 				if (!isAuthFailure(error) || index === models.length - 1) throw error;
+				removeChildLineageBindings(lineage);
+				pushPendingChildLineage(lineage, step.sessionFile);
 			}
 		}
 		throw lastError ?? new Error("No model candidates available for child agent");
+	} catch (error) {
+		removePendingChildLineage(lineage);
+		removeChildLineageBindings(lineage);
+		throw error;
 	} finally {
 		setChildSessionFlag(false);
 	}

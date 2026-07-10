@@ -10,6 +10,7 @@ import {
 	SUBAGENT_REQUEST_API_EVENT,
 	type SubagentExposedAPI,
 } from "../../src/protocol/types.ts";
+import { claimPendingChildLineage, pushPendingChildLineage } from "../../src/state/lineage.ts";
 import { getShardPath, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
@@ -179,6 +180,71 @@ describe("spawnRaw API exposure", () => {
 
 		assert.equal(result.isError, true);
 		assert.deepEqual(result.details, { mode: "single", results: [] });
+	});
+
+	it("binds concurrent child APIs out of order by session file", () => {
+		const firstSessionId = "session-child-api-first";
+		const secondSessionId = "session-child-api-second";
+		const firstSessionFile = path.join(tempDir, "first.jsonl");
+		const secondSessionFile = path.join(tempDir, "second.jsonl");
+		const first = {
+			role: "child" as const,
+			currentAgent: "first-child",
+			parentAgent: "parent-agent",
+			parentSessionId: "session-parent",
+			rootSessionId: "session-parent",
+			depth: 1,
+			runId: "run-child-api-first",
+			canDelegate: false,
+		};
+		const second = {
+			...first,
+			currentAgent: "second-child",
+			runId: "run-child-api-second",
+			canDelegate: true,
+		};
+		pushPendingChildLineage(first, firstSessionFile);
+		pushPendingChildLineage(second, secondSessionFile);
+		const firstHarness = createPiHarness();
+		const secondHarness = createPiHarness();
+		registerChildSessionApi(firstHarness.pi as never);
+		registerChildSessionApi(secondHarness.pi as never);
+
+		try {
+			secondHarness.sessionHandlers.get("session_start")?.(
+				{},
+				{
+					sessionManager: {
+						getSessionId: () => secondSessionId,
+						getSessionFile: () => secondSessionFile,
+					},
+				},
+			);
+			firstHarness.sessionHandlers.get("session_start")?.(
+				{},
+				{
+					sessionManager: {
+						getSessionId: () => firstSessionId,
+						getSessionFile: () => firstSessionFile,
+					},
+				},
+			);
+
+			assert.equal(secondHarness.getExposed()?.lineage(), second);
+			assert.equal(firstHarness.getExposed()?.lineage(), first);
+		} finally {
+			const firstCleanupSessionId = `${firstSessionId}-cleanup`;
+			const secondCleanupSessionId = `${secondSessionId}-cleanup`;
+			claimPendingChildLineage(firstCleanupSessionId, { runId: first.runId, agentName: null });
+			claimPendingChildLineage(secondCleanupSessionId, { runId: second.runId, agentName: null });
+			const lineageStore = (globalThis as Record<string, unknown>)["__piSubagentLineageBySession"] as
+				| Map<string, unknown>
+				| undefined;
+			lineageStore?.delete(firstSessionId);
+			lineageStore?.delete(secondSessionId);
+			lineageStore?.delete(firstCleanupSessionId);
+			lineageStore?.delete(secondCleanupSessionId);
+		}
 	});
 
 	it("hydrates usage snapshots from persisted run status after restart", () => {

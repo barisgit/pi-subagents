@@ -112,7 +112,7 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 		SessionManager: {
 			open: (file: string) => {
 				opened = file;
-				return { getSessionId: () => "same-session-id" };
+				return { getSessionId: () => readSessionId(file), getSessionFile: () => file };
 			},
 		} as never,
 		DefaultResourceLoader: class {
@@ -160,11 +160,28 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 	};
 }
 
+function readSessionId(sessionFile: string): string {
+	const firstLine = fs.readFileSync(sessionFile, "utf8").split("\n", 1)[0];
+	const header: unknown = JSON.parse(firstLine ?? "");
+	if (typeof header !== "object" || header === null || !("id" in header) || typeof header.id !== "string") {
+		throw new Error("Invalid fake session header.");
+	}
+	return header.id;
+}
+
+function writeSessionHeader(sessionFile: string, sessionId: string, cwd: string): void {
+	fs.writeFileSync(
+		sessionFile,
+		`${JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd })}\n`,
+		"utf8",
+	);
+}
+
 function writeCompleteRun(root: string, runId = "resume-run") {
 	const runRecordDir = path.join(root, runId);
 	const sessionFile = path.join(runRecordDir, "run-0", "session.jsonl");
 	fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-	fs.writeFileSync(sessionFile, '{"sessionId":"same-session-id"}\n', "utf8");
+	writeSessionHeader(sessionFile, `session-${path.basename(root)}-${runId}-0`, root);
 	appendRunEntry({
 		runId,
 		runRecordDir,
@@ -197,8 +214,8 @@ function writeCompleteParallelRun(root: string, runId = "parallel-run") {
 	const step1Session = path.join(runRecordDir, "run-1", "session.jsonl");
 	fs.mkdirSync(path.dirname(step0Session), { recursive: true });
 	fs.mkdirSync(path.dirname(step1Session), { recursive: true });
-	fs.writeFileSync(step0Session, '{"sessionId":"same-session-id"}\n', "utf8");
-	fs.writeFileSync(step1Session, '{"sessionId":"same-session-id"}\n', "utf8");
+	writeSessionHeader(step0Session, `session-${path.basename(root)}-${runId}-0`, root);
+	writeSessionHeader(step1Session, `session-${path.basename(root)}-${runId}-1`, root);
 	appendRunEntry({
 		runId,
 		runRecordDir,

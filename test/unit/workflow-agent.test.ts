@@ -136,11 +136,8 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 		const restore = __setChildAgentExecutorDepsForTest({
 			DefaultResourceLoader: FakeResourceLoader as never,
 			getAgentDir: () => "/tmp/pi-agent",
-			SessionManager: { open: () => ({ getSessionId: () => "child-session" }) as never },
-			createAgentSession: (async (options: {
-				model?: { provider: string; id: string };
-				tools?: string[];
-			}) => {
+			SessionManager: { open: (file: string) => ({ getSessionId: () => `session-${file}` }) as never },
+			createAgentSession: (async (options: { model?: { provider: string; id: string }; tools?: string[] }) => {
 				created.push(options);
 				return {
 					session: new FakeSession() as never,

@@ -77,7 +77,7 @@ function setup(opts: { pending?: boolean } = {}) {
 		SessionManager: {
 			open: (file: string) => {
 				opened = file;
-				return { getSessionId: () => "same-session-id" };
+				return { getSessionId: () => readSessionId(file), getSessionFile: () => file };
 			},
 		} as never,
 		DefaultResourceLoader: class {
@@ -125,11 +125,25 @@ function setup(opts: { pending?: boolean } = {}) {
 	};
 }
 
+function readSessionId(sessionFile: string): string {
+	const firstLine = fs.readFileSync(sessionFile, "utf8").split("\n", 1)[0];
+	const header: unknown = JSON.parse(firstLine ?? "");
+	if (typeof header !== "object" || header === null || !("id" in header) || typeof header.id !== "string") {
+		throw new Error("Invalid fake session header.");
+	}
+	return header.id;
+}
+
 function writeCompleteRun(root: string, runId = "resume-run") {
 	const runRecordDir = path.join(root, runId);
 	const sessionFile = path.join(runRecordDir, "run-0", "session.jsonl");
+	const sessionId = `session-${path.basename(root)}-${runId}`;
 	fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-	fs.writeFileSync(sessionFile, '{"sessionId":"same-session-id"}\n', "utf8");
+	fs.writeFileSync(
+		sessionFile,
+		`${JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: root })}\n`,
+		"utf8",
+	);
 	appendRunEntry({
 		runId,
 		runRecordDir,
@@ -153,7 +167,7 @@ function writeCompleteRun(root: string, runId = "resume-run") {
 		}),
 		"utf8",
 	);
-	return { runRecordDir, sessionFile };
+	return { runRecordDir, sessionFile, sessionId };
 }
 
 describe("disk resume", () => {
@@ -171,13 +185,13 @@ describe("disk resume", () => {
 
 	it("same thread identity keeps one runId and one registry row", async () => {
 		const h = setup();
-		writeCompleteRun(tempDir!);
+		const run = writeCompleteRun(tempDir!);
 		await h.execute({ action: "resume", id: "resume-run", message: "continue", async: false });
 		assert.deepEqual(
 			readAllEntries().map((entry) => entry.runId),
 			["resume-run"],
 		);
-		assert.equal(h.createdSessionId, "same-session-id");
+		assert.equal(h.createdSessionId, run.sessionId);
 	});
 
 	it("live handle path does not require disk status", async () => {

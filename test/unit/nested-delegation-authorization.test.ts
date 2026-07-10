@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import {
 	claimPendingChildLineage,
+	getLineageForSession,
 	pushPendingChildLineage,
+	removeChildLineageBindings,
+	removePendingChildLineage,
+	setChildLineage,
 	setHostLineage,
 	type SubagentLineage,
 } from "../../src/state/lineage.ts";
@@ -11,6 +15,8 @@ import type { WorkflowGroupHandle } from "../../src/workflow/workflow.ts";
 
 const globalStore = globalThis as Record<string, unknown>;
 const LINEAGE_STORE_KEY = "__piSubagentLineageBySession";
+const PENDING_SESSION_FILES_KEY = "__piSubagentLineagePendingSessionFiles";
+const BOUND_SESSION_FILES_KEY = "__piSubagentLineageBoundSessionFiles";
 const AUTH_ENV_KEYS = [
 	"PI_SUBAGENT_CURRENT_AGENT",
 	"PI_SUBAGENT_PARENT_AGENT",
@@ -33,6 +39,8 @@ function setLineageForSession(sessionId: string, lineage: SubagentLineage): void
 function clearLineage(sessionId: string): void {
 	const store = globalStore[LINEAGE_STORE_KEY] as Map<string, SubagentLineage> | undefined;
 	store?.delete(sessionId);
+	const sessionFiles = globalStore[BOUND_SESSION_FILES_KEY] as Map<string, string> | undefined;
+	sessionFiles?.delete(sessionId);
 }
 
 function makeChildLineage(overrides: Partial<SubagentLineage> = {}): SubagentLineage {
@@ -127,6 +135,353 @@ it("removes the exact prebound pending lineage when run ids are duplicate nulls"
 	} finally {
 		clearLineage(preboundSessionId);
 		clearLineage(unrelatedSessionId);
+	}
+});
+
+it("claims concurrent pending lineages out of order by session file", () => {
+	const firstSessionId = "session-file-first";
+	const secondSessionId = "session-file-second";
+	const firstSessionFile = "/tmp/session-file-first.jsonl";
+	const secondSessionFile = "/tmp/session-file-second.jsonl";
+	const first = makeChildLineage({ currentAgent: "first-child", runId: "run-session-file-first" });
+	const second = makeChildLineage({ currentAgent: "second-child", runId: "run-session-file-second" });
+	pushPendingChildLineage(first, firstSessionFile);
+	pushPendingChildLineage(second, secondSessionFile);
+
+	try {
+		assert.equal(
+			claimPendingChildLineage(secondSessionId, {
+				runId: null,
+				agentName: null,
+				sessionFile: secondSessionFile,
+			}),
+			second,
+		);
+		assert.equal(
+			claimPendingChildLineage(firstSessionId, {
+				runId: null,
+				agentName: null,
+				sessionFile: firstSessionFile,
+			}),
+			first,
+		);
+	} finally {
+		claimPendingChildLineage(firstSessionId, { runId: first.runId, agentName: null });
+		claimPendingChildLineage(secondSessionId, { runId: second.runId, agentName: null });
+		clearLineage(firstSessionId);
+		clearLineage(secondSessionId);
+	}
+});
+
+it("fails closed when a session file does not match the pending lineage", () => {
+	const sessionId = "session-file-match";
+	const sessionFile = "/tmp/session-file-match.jsonl";
+	const lineage = makeChildLineage({ runId: "run-session-file-match" });
+	pushPendingChildLineage(lineage, sessionFile);
+
+	try {
+		assert.equal(
+			claimPendingChildLineage("session-file-mismatch", {
+				runId: null,
+				agentName: null,
+				sessionFile: "/tmp/other-session-file.jsonl",
+			}),
+			null,
+		);
+		assert.equal(claimPendingChildLineage(sessionId, { runId: null, agentName: null, sessionFile }), lineage);
+	} finally {
+		claimPendingChildLineage(sessionId, { runId: lineage.runId, agentName: null });
+		clearLineage(sessionId);
+	}
+});
+
+it("fails closed without consuming duplicate session-file lineage authorization", () => {
+	const sessionId = "session-file-ambiguous";
+	const staleCleanupSessionId = "session-file-ambiguous-stale-cleanup";
+	const currentCleanupSessionId = "session-file-ambiguous-current-cleanup";
+	const sessionFile = "/tmp/session-file-ambiguous.jsonl";
+	const stale = makeChildLineage({
+		currentAgent: "stale-authorized-child",
+		runId: "run-session-file-ambiguous-stale",
+		canDelegate: true,
+	});
+	const current = makeChildLineage({
+		currentAgent: "current-blocked-child",
+		runId: "run-session-file-ambiguous-current",
+		canDelegate: false,
+		allowedDelegateAgents: [],
+	});
+	pushPendingChildLineage(stale, sessionFile);
+	pushPendingChildLineage(current, sessionFile);
+
+	try {
+		assert.equal(
+			claimPendingChildLineage(sessionId, { runId: null, agentName: null, sessionFile }),
+			null,
+			"ambiguous session-file authorization must not select the stale authorized lineage",
+		);
+		assert.equal(getLineageForSession(sessionId), null);
+		assert.equal(
+			claimPendingChildLineage(staleCleanupSessionId, { runId: stale.runId, agentName: null }),
+			stale,
+			"the stale lineage must remain pending",
+		);
+		assert.equal(
+			claimPendingChildLineage(currentCleanupSessionId, { runId: current.runId, agentName: null }),
+			current,
+			"the current lineage must remain pending",
+		);
+	} finally {
+		removePendingChildLineage(stale);
+		removePendingChildLineage(current);
+		clearLineage(sessionId);
+		clearLineage(staleCleanupSessionId);
+		clearLineage(currentCleanupSessionId);
+	}
+});
+
+it("removes only the exact pending lineage and clears its session-file hint", () => {
+	const sessionId = "session-file-exact-removal";
+	const sessionFile = "/tmp/session-file-exact-removal.jsonl";
+	const removed = makeChildLineage({ runId: "run-session-file-exact-removal" });
+	const kept = { ...removed };
+	pushPendingChildLineage(removed, sessionFile);
+	pushPendingChildLineage(kept, sessionFile);
+
+	try {
+		removePendingChildLineage(removed);
+		const sessionFiles = globalStore[PENDING_SESSION_FILES_KEY] as WeakMap<SubagentLineage, string>;
+		assert.equal(sessionFiles.has(removed), false);
+		assert.equal(claimPendingChildLineage(sessionId, { runId: null, agentName: null, sessionFile }), kept);
+	} finally {
+		removePendingChildLineage(removed);
+		removePendingChildLineage(kept);
+		clearLineage(sessionId);
+	}
+});
+
+it("removes every session binding for the exact lineage object", () => {
+	const firstSessionId = "session-lineage-binding-first";
+	const secondSessionId = "session-lineage-binding-second";
+	const distinctSessionId = "session-lineage-binding-distinct";
+	const lineage = makeChildLineage({ runId: "run-lineage-binding" });
+	const distinct = { ...lineage };
+	setChildLineage(firstSessionId, lineage, "/tmp/session-lineage-binding-first.jsonl");
+	setChildLineage(secondSessionId, lineage, "/tmp/session-lineage-binding-second.jsonl");
+	setChildLineage(distinctSessionId, distinct, "/tmp/session-lineage-binding-distinct.jsonl");
+
+	try {
+		removeChildLineageBindings(lineage);
+
+		assert.equal(getLineageForSession(firstSessionId), null);
+		assert.equal(getLineageForSession(secondSessionId), null);
+		assert.equal(getLineageForSession(distinctSessionId), distinct);
+		const sessionFiles = globalStore[BOUND_SESSION_FILES_KEY] as Map<string, string> | undefined;
+		assert.equal(sessionFiles?.has(firstSessionId), false);
+		assert.equal(sessionFiles?.has(secondSessionId), false);
+		assert.equal(sessionFiles?.get(distinctSessionId), "/tmp/session-lineage-binding-distinct.jsonl");
+	} finally {
+		clearLineage(firstSessionId);
+		clearLineage(secondSessionId);
+		clearLineage(distinctSessionId);
+	}
+});
+
+it("rejects colliding child bindings without replacing host or child-parent lineage", () => {
+	const hostSessionId = "session-lineage-collision-host";
+	const childParentSessionId = "session-lineage-collision-child-parent";
+	const hostLineage = setHostLineage(hostSessionId, "host-agent");
+	const childParentLineage = makeChildLineage({
+		currentAgent: "child-parent-agent",
+		parentSessionId: hostSessionId,
+		rootSessionId: hostSessionId,
+	});
+	const collidingLineage = makeChildLineage({ currentAgent: "colliding-child" });
+	setChildLineage(childParentSessionId, childParentLineage);
+
+	try {
+		for (const [sessionId, existing] of [
+			[hostSessionId, hostLineage],
+			[childParentSessionId, childParentLineage],
+		] as const) {
+			assert.throws(() => setChildLineage(sessionId, collidingLineage), {
+				message: "Cannot replace an existing session lineage binding.",
+			});
+			assert.equal(getLineageForSession(sessionId), existing);
+		}
+	} finally {
+		clearLineage(hostSessionId);
+		clearLineage(childParentSessionId);
+	}
+});
+
+it("rejects fallback claims without replacing host or child-parent lineage", () => {
+	const hostSessionId = "session-lineage-claim-collision-host";
+	const childParentSessionId = "session-lineage-claim-collision-child-parent";
+	const hostLineage = setHostLineage(hostSessionId, "host-agent");
+	const childParentLineage = makeChildLineage({
+		currentAgent: "claim-child-parent-agent",
+		parentSessionId: hostSessionId,
+		rootSessionId: hostSessionId,
+	});
+	setChildLineage(childParentSessionId, childParentLineage);
+	const cases = [
+		{
+			sessionId: hostSessionId,
+			sessionFile: "/tmp/session-lineage-claim-collision-host.jsonl",
+			existing: hostLineage,
+			pending: makeChildLineage({ currentAgent: "claim-colliding-host-child" }),
+		},
+		{
+			sessionId: childParentSessionId,
+			sessionFile: "/tmp/session-lineage-claim-collision-child-parent.jsonl",
+			existing: childParentLineage,
+			pending: makeChildLineage({ currentAgent: "claim-colliding-child-parent" }),
+		},
+	] as const;
+	for (const entry of cases) pushPendingChildLineage(entry.pending, entry.sessionFile);
+
+	try {
+		for (const entry of cases) {
+			assert.throws(
+				() =>
+					claimPendingChildLineage(entry.sessionId, {
+						runId: null,
+						agentName: null,
+						sessionFile: entry.sessionFile,
+					}),
+				{ message: "Cannot replace an existing session lineage binding." },
+			);
+			assert.equal(getLineageForSession(entry.sessionId), entry.existing);
+		}
+	} finally {
+		for (const entry of cases) removePendingChildLineage(entry.pending);
+		clearLineage(hostSessionId);
+		clearLineage(childParentSessionId);
+	}
+});
+
+it("allows exact same-object child lineage rebinding", () => {
+	const sessionId = "session-lineage-same-object-rebinding";
+	const lineage = makeChildLineage({ runId: "run-lineage-same-object-rebinding" });
+
+	try {
+		setChildLineage(sessionId, lineage);
+		assert.doesNotThrow(() => setChildLineage(sessionId, lineage));
+		assert.equal(getLineageForSession(sessionId), lineage);
+	} finally {
+		clearLineage(sessionId);
+	}
+});
+
+it("allows a resumed child lineage to rebind the same session id and file", () => {
+	const sessionId = "session-lineage-resume-same-file";
+	const sessionFile = "/tmp/session-lineage-resume-same-file.jsonl";
+	const previous = makeChildLineage({ runId: "run-lineage-resume-previous" });
+	const resumed = makeChildLineage({ runId: "run-lineage-resume-current" });
+
+	try {
+		setChildLineage(sessionId, previous, sessionFile);
+		assert.doesNotThrow(() => setChildLineage(sessionId, resumed, sessionFile));
+		assert.equal(getLineageForSession(sessionId), resumed);
+	} finally {
+		clearLineage(sessionId);
+	}
+});
+
+it("rejects a different-file collision for the same child session id", () => {
+	const sessionId = "session-lineage-resume-different-file";
+	const previous = makeChildLineage({ runId: "run-lineage-different-file-previous" });
+	const colliding = makeChildLineage({ runId: "run-lineage-different-file-current" });
+
+	try {
+		setChildLineage(sessionId, previous, "/tmp/session-lineage-different-file-previous.jsonl");
+		assert.throws(
+			() => setChildLineage(sessionId, colliding, "/tmp/session-lineage-different-file-current.jsonl"),
+			{ message: "Cannot replace an existing session lineage binding." },
+		);
+		assert.equal(getLineageForSession(sessionId), previous);
+	} finally {
+		clearLineage(sessionId);
+	}
+});
+
+it("returns and consumes the newly rebound pending lineage for a resumed session", () => {
+	const sessionId = "session-lineage-claim-resume";
+	const cleanupSessionId = "session-lineage-claim-resume-cleanup";
+	const sessionFile = "/tmp/session-lineage-claim-resume.jsonl";
+	const previous = makeChildLineage({ runId: "run-lineage-claim-resume-previous" });
+	const resumed = makeChildLineage({ runId: "run-lineage-claim-resume-current" });
+	setChildLineage(sessionId, previous, sessionFile);
+	pushPendingChildLineage(resumed, sessionFile);
+
+	try {
+		assert.equal(claimPendingChildLineage(sessionId, { runId: null, agentName: null, sessionFile }), resumed);
+		assert.equal(getLineageForSession(sessionId), resumed);
+		assert.equal(
+			claimPendingChildLineage(cleanupSessionId, { runId: null, agentName: null, sessionFile }),
+			null,
+			"the rebound lineage must be consumed only after it is safely bound",
+		);
+	} finally {
+		removePendingChildLineage(resumed);
+		clearLineage(sessionId);
+		clearLineage(cleanupSessionId);
+	}
+});
+
+it("leaves a rejected different-file claim pending", () => {
+	const sessionId = "session-lineage-claim-different-file";
+	const cleanupSessionId = "session-lineage-claim-different-file-cleanup";
+	const previous = makeChildLineage({ runId: "run-lineage-claim-different-file-previous" });
+	const colliding = makeChildLineage({ runId: "run-lineage-claim-different-file-current" });
+	const collidingSessionFile = "/tmp/session-lineage-claim-different-file-current.jsonl";
+	setChildLineage(sessionId, previous, "/tmp/session-lineage-claim-different-file-previous.jsonl");
+	pushPendingChildLineage(colliding, collidingSessionFile);
+
+	try {
+		assert.throws(
+			() =>
+				claimPendingChildLineage(sessionId, {
+					runId: null,
+					agentName: null,
+					sessionFile: collidingSessionFile,
+				}),
+			{ message: "Cannot replace an existing session lineage binding." },
+		);
+		assert.equal(getLineageForSession(sessionId), previous);
+		removeChildLineageBindings(previous);
+		assert.equal(
+			claimPendingChildLineage(cleanupSessionId, {
+				runId: null,
+				agentName: null,
+				sessionFile: collidingSessionFile,
+			}),
+			colliding,
+		);
+	} finally {
+		removePendingChildLineage(colliding);
+		clearLineage(sessionId);
+		clearLineage(cleanupSessionId);
+	}
+});
+
+it("does not retain a child session-file hint on a host binding", () => {
+	const sessionId = "session-lineage-host-file-hint";
+	setChildLineage(
+		sessionId,
+		makeChildLineage({ runId: "run-lineage-host-file-hint" }),
+		"/tmp/session-lineage-host-file-hint.jsonl",
+	);
+	const sessionFiles = globalStore[BOUND_SESSION_FILES_KEY] as Map<string, string>;
+	const lineageStore = globalStore[LINEAGE_STORE_KEY] as Map<string, SubagentLineage>;
+	lineageStore.delete(sessionId);
+
+	try {
+		assert.equal(setHostLineage(sessionId, "host-agent").role, "host");
+		assert.equal(sessionFiles.has(sessionId), false);
+	} finally {
+		clearLineage(sessionId);
 	}
 });
 
