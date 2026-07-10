@@ -46,7 +46,7 @@
 		"lint:fix": "biome lint --write",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"prepare": "husky"
+		"prepare": "node .husky/install.mjs"
 	},
 	"lint-staged": {
 		"*.{ts,mjs}": [
