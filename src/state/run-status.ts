@@ -27,6 +27,7 @@ export interface RunStatusParams {
 // hundreds of entries from one long-running session; the agent rarely needs
 // more than the freshest handful to understand what's still running.
 const DEFAULT_LIST_LIMIT = 30;
+const AMBIGUOUS_PREFIX_SAMPLE_LIMIT = 10;
 
 function activityText(activityState: unknown, lastActivityAt: unknown): string | undefined {
 	if (typeof lastActivityAt !== "number") return undefined;
@@ -86,8 +87,30 @@ export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<
 	if (params.dir) {
 		asyncDir = path.resolve(params.dir);
 	} else if (resolvedId) {
+		const lookupId = resolvedId;
 		registryEntries = readAllEntries();
-		registryMatch = registryEntries.find((entry) => entry.runId.startsWith(resolvedId!));
+		const exactMatch = registryEntries.find((entry) => entry.runId === lookupId);
+		const prefixMatches = exactMatch ? [] : registryEntries.filter((entry) => entry.runId.startsWith(lookupId));
+		const prefixMatchIds = [...new Set(prefixMatches.map((entry) => entry.runId))].sort();
+		if (prefixMatchIds.length > 1) {
+			const displayedMatches = prefixMatchIds.slice(0, AMBIGUOUS_PREFIX_SAMPLE_LIMIT);
+			const omittedMatchCount = prefixMatchIds.length - displayedMatches.length;
+			const omittedMatches =
+				omittedMatchCount > 0
+					? ` ${omittedMatchCount} additional match${omittedMatchCount === 1 ? "" : "es"} omitted.`
+					: "";
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Run ID prefix "${lookupId}" is ambiguous (${prefixMatchIds.length} matches). Matches: ${displayedMatches.join(", ")}.${omittedMatches} Provide a longer ID.`,
+					},
+				],
+				isError: true,
+				details: { mode: "single", results: [] },
+			};
+		}
+		registryMatch = exactMatch ?? prefixMatches[0];
 		if (registryMatch) {
 			asyncDir = registryMatch.runRecordDir;
 			resolvedId = registryMatch.runId;
