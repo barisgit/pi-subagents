@@ -14,7 +14,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
-// 0.75 SDK: tools are referenced by string name; the session resolves builtins and
+// Pi SDK contract: tools are referenced by string name; the session resolves builtins and
 // extension-registered tools against its _toolRegistry. The `tools` option at
 // createAgentSession is the allowlist that gates _both_ builtins AND extension tools
 // (via _refreshToolRegistry's isAllowedTool check). So we pass the full requested name

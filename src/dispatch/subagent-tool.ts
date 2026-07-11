@@ -12,7 +12,7 @@ export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeo
 } {
 	const { executor } = deps;
 	const throwEmptyFailure = <T>(result: SubagentToolResult<T>): SubagentToolResult<T> => {
-		// SDK 0.75 marks a registered tool call failed only when execute throws.
+		// The Pi SDK marks a registered tool call failed only when execute throws.
 		// Preserve populated Details for partial child failures; empty failures carry
 		// no renderer/persistence value beyond their text and must use the SDK path.
 		const details = result.details;
