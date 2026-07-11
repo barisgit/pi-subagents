@@ -1,3 +1,6 @@
+// Side-effect: scrub live-session env vars so standalone `tsx --test file`
+// runs are hermetic too (npm scripts already wire this via --import).
+import "./scrub-env.mjs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
