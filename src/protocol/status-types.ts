@@ -207,14 +207,14 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 		return { ok: false, reason: "invalid-shape" };
 	const validStates = ["queued", "running", "complete", "failed", "paused", "lost", "interrupted", "skipped"];
 	if (typeof o.state !== "string" || !validStates.includes(o.state)) return { ok: false, reason: "invalid-shape" };
-	if (typeof o.startedAt !== "number") return { ok: false, reason: "invalid-shape" };
+	if (typeof o.startedAt !== "number" || !Number.isFinite(o.startedAt)) return { ok: false, reason: "invalid-shape" };
 	// executionStartedAt is optional and additive: absent is valid (old records),
 	// but a present non-number is a malformed file and fails closed.
-	if (o.executionStartedAt !== undefined && typeof o.executionStartedAt !== "number")
+	if (o.executionStartedAt !== undefined && !isFiniteNumber(o.executionStartedAt))
 		return { ok: false, reason: "invalid-shape" };
 	// runnerPid/runnerToken are optional and additive (old records omit them);
 	// a present wrong-typed value is a malformed file and fails closed.
-	if (o.runnerPid !== undefined && typeof o.runnerPid !== "number") return { ok: false, reason: "invalid-shape" };
+	if (o.runnerPid !== undefined && !isFiniteNumber(o.runnerPid)) return { ok: false, reason: "invalid-shape" };
 	if (o.runnerToken !== undefined && typeof o.runnerToken !== "string") return { ok: false, reason: "invalid-shape" };
 	if (
 		o.steps !== undefined &&
@@ -223,7 +223,32 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 	)
 		return { ok: false, reason: "invalid-shape" };
 	if (o.mode === "chain") o.mode = "parallel";
+	// Liveness/progress timestamps drive stale + hard-dead arithmetic in
+	// run-liveness.ts; a malformed value would make every comparison NaN-false
+	// and freeze a dead run as "quiet" forever. Fail closed by STRIPPING the
+	// malformed optional field instead of rejecting the record: rejection hides
+	// the run entirely (readStatus -> null), while absence keeps it visible and
+	// lets the existing fallbacks and staleness reaping recover it. Non-finite
+	// values (JSON 1e400 parses to Infinity) are equally poisonous and stripped.
+	for (const field of OPTIONAL_LIVENESS_NUMBER_FIELDS) {
+		if (o[field] !== undefined && !isFiniteNumber(o[field])) delete o[field];
+	}
 	return { ok: true, value: data as PersistedRunStatus };
+}
+
+const OPTIONAL_LIVENESS_NUMBER_FIELDS = [
+	"lastActivityAt",
+	"currentToolStartedAt",
+	"endedAt",
+	"lastUpdate",
+	"runnerHeartbeatAt",
+	"resumedAt",
+	"resumeCount",
+	"phaseStartedAt",
+] as const;
+
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
 }
 
 export interface StatusPatch {

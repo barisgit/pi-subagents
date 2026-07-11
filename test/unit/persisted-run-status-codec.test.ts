@@ -98,3 +98,80 @@ describe("parsePersistedRunStatus", () => {
 		});
 	});
 });
+
+describe("parsePersistedRunStatus liveness-field validation", () => {
+	const base = { runId: "x", mode: "single", state: "running", startedAt: 1_000 };
+
+	it("strips a malformed runnerHeartbeatAt instead of trusting it (fails closed to absence)", () => {
+		const result = parsePersistedRunStatus(JSON.stringify({ ...base, runnerHeartbeatAt: "invalid" }));
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.equal(result.value.runnerHeartbeatAt, undefined);
+			assert.equal(result.value.state, "running");
+		}
+	});
+
+	it("strips malformed lastUpdate/lastActivityAt/endedAt values", () => {
+		const raw = JSON.stringify({ ...base, lastUpdate: "soon", lastActivityAt: {}, endedAt: [1] });
+		const result = parsePersistedRunStatus(raw);
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.equal(result.value.lastUpdate, undefined);
+			assert.equal(result.value.lastActivityAt, undefined);
+			assert.equal(result.value.endedAt, undefined);
+		}
+	});
+
+	it("strips non-finite JSON numbers (1e400 parses to Infinity)", () => {
+		const raw =
+			'{"runId":"x","mode":"single","state":"running","startedAt":1000,"runnerHeartbeatAt":1e400,"lastUpdate":-1e400}';
+		const result = parsePersistedRunStatus(raw);
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.equal(result.value.runnerHeartbeatAt, undefined);
+			assert.equal(result.value.lastUpdate, undefined);
+		}
+	});
+
+	it("strips malformed phaseStartedAt/currentToolStartedAt/resumedAt/resumeCount", () => {
+		const raw = JSON.stringify({
+			...base,
+			phaseStartedAt: "x",
+			currentToolStartedAt: null,
+			resumedAt: false,
+			resumeCount: "2",
+		});
+		const result = parsePersistedRunStatus(raw);
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.equal(result.value.phaseStartedAt, undefined);
+			assert.equal(result.value.currentToolStartedAt, undefined);
+			assert.equal(result.value.resumedAt, undefined);
+			assert.equal(result.value.resumeCount, undefined);
+		}
+	});
+
+	it("keeps well-formed liveness fields untouched (backward-readable)", () => {
+		const value = { ...base, runnerHeartbeatAt: 2_000, lastUpdate: 2_100, lastActivityAt: 2_050, endedAt: 3_000 };
+		const result = parsePersistedRunStatus(JSON.stringify(value));
+		assert.deepEqual(result, { ok: true, value });
+	});
+
+	it("rejects a non-finite required startedAt (invalid-shape)", () => {
+		const raw = '{"runId":"x","mode":"single","state":"running","startedAt":1e400}';
+		assert.deepEqual(parsePersistedRunStatus(raw), { ok: false, reason: "invalid-shape" });
+	});
+
+	it("rejects a non-finite executionStartedAt/runnerPid (identity + additive fields stay whole-record strict)", () => {
+		assert.deepEqual(
+			parsePersistedRunStatus(
+				'{"runId":"x","mode":"single","state":"running","startedAt":1,"executionStartedAt":1e400}',
+			),
+			{ ok: false, reason: "invalid-shape" },
+		);
+		assert.deepEqual(
+			parsePersistedRunStatus('{"runId":"x","mode":"single","state":"running","startedAt":1,"runnerPid":1e400}'),
+			{ ok: false, reason: "invalid-shape" },
+		);
+	});
+});
