@@ -293,6 +293,10 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 			try {
 				const settled = await Promise.allSettled(childRuns.map((child) => child.handle.completed));
 				const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []));
+				// A rejected child (execution threw past the leaf's own catch) has no
+				// ChildAgentResult, but it still counts: dropping it shrinks `total`
+				// and can report success despite a lost child.
+				const anyRejected = settled.some((entry) => entry.status === "rejected");
 				const finalResult = results.find((result) => result.state !== "complete") ?? results.at(-1);
 				const totalUsage: Usage = emptyUsage();
 				for (const entry of settled) {
@@ -300,12 +304,13 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 					if (entry.value.usage) addUsageInto(totalUsage, entry.value.usage as Usage);
 				}
 				const childResults = childRuns
-					.flatMap((child, index) => {
+					.map((child, index) => {
 						const entry = settled[index];
-						if (entry?.status !== "fulfilled") return [];
-						const r = entry.value;
-						return [
-							{
+						if (entry?.status !== "fulfilled") {
+							// Rejected child: keep it in the aggregate as a failed entry so
+							// total always equals the number of dispatched tasks.
+							const reason = entry ? String(entry.reason) : "child result missing";
+							return {
 								id: child.handle.runId,
 								runId: child.handle.runId,
 								dispatchRunId: groupRunId,
@@ -313,15 +318,32 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 								stepIndex: child.originalStepIndex,
 								agent: child.item.step.agentName,
 								...(child.item.step.label ? { label: child.item.step.label } : {}),
-								state: r.state,
-								success: r.state === "complete",
-								exitCode: r.exitCode,
-								output: r.outputText ?? "",
-								summary: r.outputText ?? "",
-								durationMs: r.durationMs,
-								sessionFile: r.sessionFile,
-							},
-						];
+								state: "failed" as const,
+								success: false,
+								exitCode: 1,
+								output: reason,
+								summary: reason,
+								durationMs: 0,
+								sessionFile: child.handle.sessionFile,
+							};
+						}
+						const r = entry.value;
+						return {
+							id: child.handle.runId,
+							runId: child.handle.runId,
+							dispatchRunId: groupRunId,
+							...(params.batch === true ? { batchId: groupRunId } : {}),
+							stepIndex: child.originalStepIndex,
+							agent: child.item.step.agentName,
+							...(child.item.step.label ? { label: child.item.step.label } : {}),
+							state: r.state,
+							success: r.state === "complete",
+							exitCode: r.exitCode,
+							output: r.outputText ?? "",
+							summary: r.outputText ?? "",
+							durationMs: r.durationMs,
+							sessionFile: r.sessionFile,
+						};
 					})
 					.sort((a, b) => a.stepIndex - b.stepIndex);
 				if (!parentRunId) {
@@ -349,10 +371,10 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 						parentRunId,
 						rootRunId: groupRootRunId,
 						notifyPolicy,
-						success: finalResult?.state === "complete",
+						success: !anyRejected && finalResult?.state === "complete",
 						agent: steps.map(({ step }) => step.agentName).join(","),
 						summary: finalResult?.outputText ?? "",
-						state: finalResult?.state,
+						state: anyRejected ? "failed" : finalResult?.state,
 						results: childResults,
 						children: childResults,
 						total: childResults.length,
@@ -539,28 +561,49 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 			});
 			const completeAgent =
 				mode === "parallel" ? steps.map(({ step }) => step.agentName).join(",") : first.step.agentName;
-			const childResults = settled
-				.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []))
-				.sort((a, b) => a.stepIndex - b.stepIndex)
-				.map((r) => {
-					const step = steps.find((candidate) => candidate.step.stepIndex === r.stepIndex)?.step;
-					const childRunId = childCompletionRunId(runId, r.stepIndex, steps.length);
+			// Rejected children must stay in the aggregate as failed entries so the
+			// completion payload's total always equals the number of dispatched tasks.
+			const settledResults = settled
+				.map((entry, index): ChildAgentResult => {
+					if (entry.status === "fulfilled") return entry.value;
+					const now = Date.now();
+					const stepIndex = steps[index]?.step.stepIndex ?? index;
 					return {
-						id: childRunId,
-						runId: childRunId,
-						dispatchRunId: runId,
-						...(params.batch === true ? { batchId: runId } : {}),
-						stepIndex: r.stepIndex,
-						agent: step?.agentName ?? "unknown",
-						state: r.state,
-						success: r.state === "complete",
-						exitCode: r.exitCode,
-						output: r.outputText ?? "",
-						summary: r.outputText ?? "",
-						durationMs: r.durationMs,
-						sessionFile: r.sessionFile,
+						runId,
+						stepIndex,
+						state: "failed",
+						exitCode: 1,
+						outputText: String(entry.reason),
+						toolCallCount: 0,
+						toolResultCount: 0,
+						toolErrorCount: 0,
+						durationMs: now - startedAt,
+						startedAt,
+						endedAt: now,
+						sessionFile: steps[index]?.step.sessionFile ?? first.step.sessionFile,
+						error: { message: String(entry.reason) },
 					};
-				});
+				})
+				.sort((a, b) => a.stepIndex - b.stepIndex);
+			const childResults = settledResults.map((r) => {
+				const step = steps.find((candidate) => candidate.step.stepIndex === r.stepIndex)?.step;
+				const childRunId = childCompletionRunId(runId, r.stepIndex, steps.length);
+				return {
+					id: childRunId,
+					runId: childRunId,
+					dispatchRunId: runId,
+					...(params.batch === true ? { batchId: runId } : {}),
+					stepIndex: r.stepIndex,
+					agent: step?.agentName ?? "unknown",
+					state: r.state,
+					success: r.state === "complete",
+					exitCode: r.exitCode,
+					output: r.outputText ?? "",
+					summary: r.outputText ?? "",
+					durationMs: r.durationMs,
+					sessionFile: r.sessionFile,
+				};
+			});
 			if (!parentRunId) {
 				publishSubagentUsage(deps.pi, deps.state, {
 					runId,

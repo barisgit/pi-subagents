@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { readAllEntries, appendRunEntry } from "../state/runs-registry.ts";
 import { readStatus } from "../shared/utils.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
@@ -211,31 +213,47 @@ export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): Ope
 		sessionFile: opts.initialize.sessionFile ?? sessionDefault,
 		sessionDir: opts.initialize.sessionDir ?? sessionDirDefault,
 	});
-	appendRunEntry({
-		runId,
-		runRecordDir: paths.runRecordDir,
-		mode: "single",
-		source: opts.source ?? "sync",
-		agentName: step.agentName,
-		...(opts.initialize.label ? { label: opts.initialize.label } : {}),
-		...(opts.phaseIndex !== undefined ? { phaseIndex: opts.phaseIndex } : {}),
-		...(opts.phaseTitle ? { phaseTitle: opts.phaseTitle } : {}),
-		...(opts.parallelGroupId ? { parallelGroupId: opts.parallelGroupId } : {}),
-		...(opts.pipeline
-			? {
-					pipelineId: opts.pipeline.id,
-					pipelineItemIndex: opts.pipeline.itemIndex,
-					pipelineStageIndex: opts.pipeline.stageIndex,
-					...(opts.pipeline.itemLabel ? { pipelineItemLabel: opts.pipeline.itemLabel } : {}),
-				}
-			: {}),
-		...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
-		rootRunId: opts.rootRunId ?? runId,
-		...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
-		...(opts.rootSessionId ? { rootSessionId: opts.rootSessionId } : {}),
-		cwd: step.cwd,
-		startedAt,
-	});
+	try {
+		appendRunEntry({
+			runId,
+			runRecordDir: paths.runRecordDir,
+			mode: "single",
+			source: opts.source ?? "sync",
+			agentName: step.agentName,
+			...(opts.initialize.label ? { label: opts.initialize.label } : {}),
+			...(opts.phaseIndex !== undefined ? { phaseIndex: opts.phaseIndex } : {}),
+			...(opts.phaseTitle ? { phaseTitle: opts.phaseTitle } : {}),
+			...(opts.parallelGroupId ? { parallelGroupId: opts.parallelGroupId } : {}),
+			...(opts.pipeline
+				? {
+						pipelineId: opts.pipeline.id,
+						pipelineItemIndex: opts.pipeline.itemIndex,
+						pipelineStageIndex: opts.pipeline.stageIndex,
+						...(opts.pipeline.itemLabel ? { pipelineItemLabel: opts.pipeline.itemLabel } : {}),
+					}
+				: {}),
+			...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
+			rootRunId: opts.rootRunId ?? runId,
+			...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
+			...(opts.rootSessionId ? { rootSessionId: opts.rootSessionId } : {}),
+			cwd: step.cwd,
+			startedAt,
+		});
+	} catch (error) {
+		// The registry is the sole discovery path: a status.json without a global
+		// row is an invisible orphan. Roll back the partial commit (best effort)
+		// and surface ONE clear error instead of a half-registered run.
+		statusWriter.dispose();
+		try {
+			fs.rmSync(path.join(paths.runRecordDir, "status.json"), { force: true });
+		} catch {
+			// best-effort cleanup; the registry row is absent so the dir is unreachable anyway
+		}
+		throw new Error(
+			`Failed to register run ${runId} in the runs registry: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error instanceof Error ? error : undefined },
+		);
+	}
 	return {
 		runId,
 		runRecordDir: paths.runRecordDir,
@@ -350,6 +368,28 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 					sessionFile: handle.sessionFile,
 					timestamp: Date.now(),
 					error,
+				});
+				// A rejected leaf must not leave status.json frozen non-terminal
+				// (queued/running forever): finalize the persisted record as failed
+				// before the writer is disposed, then rethrow for the awaiting caller.
+				const endedAt = Date.now();
+				finalizeRun(handle, {
+					via: "result",
+					result: {
+						runId,
+						stepIndex: 0,
+						state: "failed",
+						exitCode: 1,
+						outputText: "",
+						toolCallCount: 0,
+						toolResultCount: 0,
+						toolErrorCount: 0,
+						durationMs: endedAt - startedAt,
+						startedAt,
+						endedAt,
+						sessionFile: handle.sessionFile,
+						error: { message: error instanceof Error ? error.message : String(error) },
+					},
 				});
 				throw error;
 			},

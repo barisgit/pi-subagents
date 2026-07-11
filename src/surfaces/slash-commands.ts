@@ -351,7 +351,6 @@ const parseAgentArgs = (
 	args: string,
 	command: string,
 	ctx: ExtensionContext,
-	preset?: string,
 ): { steps: ParsedStep[]; task: string } | null => {
 	const input = args.trim();
 	const usage = `Usage: /${command} agent1 "task1" -> agent2 "task2"`;
@@ -407,13 +406,6 @@ const parseAgentArgs = (
 		ctx.ui.notify(usage, "error");
 		return null;
 	}
-	const agents = discoverAgents(state.baseCwd, "both", { preset, surface: "subagent" }).agents;
-	for (const step of steps) {
-		if (!agents.find((a) => a.name === step.name)) {
-			ctx.ui.notify(`Unknown agent: ${step.name}`, "error");
-			return null;
-		}
-	}
 	if (command === "parallel" && !steps.some((s) => s.task) && !sharedTask) {
 		ctx.ui.notify("At least one step must have a task", "error");
 		return null;
@@ -467,7 +459,8 @@ export function registerSlashCommands(
 				...(inline.output !== undefined ? { output: inline.output } : {}),
 				...(fork ? { context: "fork" as const } : {}),
 			};
-			const params: SubagentParamsLike = { run: [taskParam] };
+			const params: SubagentParamsLike & { preset?: string } = { run: [taskParam] };
+			if (presetResolution.preset) params.preset = presetResolution.preset;
 			if (bg) params.async = true;
 			await runSlashSubagent(pi, ctx, params);
 		},
@@ -480,7 +473,7 @@ export function registerSlashCommands(
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const { args: parallelArgs, config: topLevel } = extractTopLevelInlineConfig(cleanedArgs);
-			const parsed = parseAgentArgs(state, parallelArgs, "parallel", ctx, topLevel.preset);
+			const parsed = parseAgentArgs(state, parallelArgs, "parallel", ctx);
 			if (!parsed) return;
 			const presetResolution = resolveSlashPreset(
 				topLevel.preset,
@@ -490,12 +483,26 @@ export function registerSlashCommands(
 				ctx.ui.notify(presetResolution.error, "error");
 				return;
 			}
-			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
+			// Validate against the catalog of the RESOLVED preset (per-step presets
+			// included), not the top-level preset alone -- a strict-preset agent is
+			// otherwise rejected before its preset is even considered.
+			const agents = discoverAgents(state.baseCwd, "both", {
+				preset: presetResolution.preset,
+				surface: "subagent",
+			}).agents;
+			for (const step of parsed.steps) {
+				if (!agents.find((a) => a.name === step.name)) {
+					ctx.ui.notify(`Unknown agent: ${step.name}`, "error");
+					return;
+				}
+			}
+			const tasks = parsed.steps.map(({ name, task: stepTask }) => ({
 				agent: name,
 				task: stepTask ?? parsed.task,
 				...(fork ? { context: "fork" as const } : {}),
 			}));
-			const params: SubagentParamsLike = { run: tasks };
+			const params: SubagentParamsLike & { preset?: string } = { run: tasks };
+			if (presetResolution.preset) params.preset = presetResolution.preset;
 			if (bg) params.async = true;
 			await runSlashSubagent(pi, ctx, params);
 		},

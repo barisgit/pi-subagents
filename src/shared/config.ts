@@ -11,11 +11,28 @@ export function resolveConfigPath(): string {
 	return SUBAGENT_CONFIG_PRIMARY;
 }
 
+// Disk-boundary codec: untrusted JSON is only trusted after a shape check.
+// Fails closed (null) on anything that is not a plain object, so activation
+// never dereferences properties on null/array/scalar config content.
+function parseExtensionConfig(raw: string): ExtensionConfig | null {
+	let data: unknown;
+	try {
+		data = JSON.parse(raw);
+	} catch {
+		return null;
+	}
+	if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
+	return data as ExtensionConfig;
+}
+
 export function loadConfig(): ExtensionConfig {
 	const configPath = resolveConfigPath();
 	try {
 		if (fs.existsSync(configPath)) {
-			return JSON.parse(fs.readFileSync(configPath, "utf-8")) as ExtensionConfig;
+			const parsed = parseExtensionConfig(fs.readFileSync(configPath, "utf-8"));
+			if (parsed) return parsed;
+			logger.warn("Malformed subagent config; falling back to defaults", { configPath });
+			return {};
 		}
 	} catch (error) {
 		logger.error("Failed to load subagent config", error instanceof Error ? error : undefined, {

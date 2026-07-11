@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { spawnRun, awaitRun, type Layer0PreparedRunStep, type Layer0RunAgent } from "../../src/dispatch/layer0-runs.ts";
+import {
+	openRunRecord,
+	spawnRun,
+	awaitRun,
+	type Layer0PreparedRunStep,
+	type Layer0RunAgent,
+} from "../../src/dispatch/layer0-runs.ts";
 import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 
@@ -96,5 +102,68 @@ describe("Layer-0 spawnRun", () => {
 		const status = JSON.parse(fs.readFileSync(path.join(handle.runRecordDir, "status.json"), "utf8"));
 		assert.equal(status.state, "queued");
 		assert.equal(status.steps[0].status, "queued");
+	});
+});
+
+describe("Layer-0 openRunRecord registration", () => {
+	function openTwice(root: string) {
+		const runId = "fixed-run-id";
+		const runRecordDir = path.join(root, "runs", runId);
+		const open = () =>
+			openRunRecord(
+				{ agentName: "fixer", task: "retry me", cwd: root },
+				{
+					runId,
+					runRecordDir,
+					sessionFile: path.join(runRecordDir, "session.jsonl"),
+					rootRunId: runId,
+					source: "async",
+					variant: "async-detached",
+					initialize: { mode: "single", cwd: root, startedAt: Date.now(), currentStep: 0, steps: [] },
+				},
+			);
+		return { open, runRecordDir };
+	}
+
+	it("retrying the same runId does not duplicate global registry rows", () => {
+		const root = setupTempHome("layer0-open-retry-test-");
+		const { open } = openTwice(root);
+		open().statusWriter.dispose();
+		open().statusWriter.dispose();
+		assert.equal(readAllEntries().length, 1);
+	});
+
+	it("cleans up status.json and surfaces one clear error when the global registry append fails", () => {
+		const root = setupTempHome("layer0-open-cleanup-test-");
+		// Point the registry path at a DIRECTORY so appendFileSync fails.
+		const registryDir = path.join(root, "registry-as-dir");
+		fs.mkdirSync(registryDir, { recursive: true });
+		setRegistryPathForTests(registryDir);
+		const { open, runRecordDir } = openTwice(root);
+		assert.throws(open, /register/i);
+		assert.equal(
+			fs.existsSync(path.join(runRecordDir, "status.json")),
+			false,
+			"partial status.json must be cleaned up",
+		);
+	});
+});
+
+describe("Layer-0 spawnRun rejection", () => {
+	it("finalizes status.json as failed when runAgent rejects", async () => {
+		const root = setupTempHome("layer0-spawn-reject-test-");
+		const runAgent: Layer0RunAgent = async () => {
+			throw new Error("leaf exploded");
+		};
+		const handle = spawnRun(
+			{ agentName: "fixer", task: "boom", cwd: root },
+			{ rootRunId: "root-run", notifyPolicy: "silent", runAgent, defaultSessionDir: path.join(root, "runs") },
+		);
+		await assert.rejects(handle.completed, /leaf exploded/);
+		const status = JSON.parse(fs.readFileSync(path.join(handle.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.state, "failed");
+		assert.equal(typeof status.endedAt, "number");
+		assert.match(String(status.error), /leaf exploded/);
+		assert.equal(status.steps[0].status, "failed");
 	});
 });

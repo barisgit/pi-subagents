@@ -100,4 +100,19 @@ describe("loadConfig", () => {
 		fs.writeFileSync(mod.SUBAGENT_CONFIG_PRIMARY, "{ not valid json");
 		assert.deepStrictEqual(mod.loadConfig(), {});
 	});
+
+	// Fail closed: valid JSON that is not a plain object must never leak out as
+	// ExtensionConfig -- extension-runtime dereferences properties on the result
+	// immediately during activation, so a null/array/scalar would crash the load.
+	for (const [label, raw] of [
+		["null", "null"],
+		["an array", "[]"],
+		["a number", "42"],
+		["a string", '"str"'],
+	] as const) {
+		test(`returns {} and does not throw when the file contains ${label}`, () => {
+			fs.writeFileSync(mod.SUBAGENT_CONFIG_PRIMARY, raw);
+			assert.deepStrictEqual(mod.loadConfig(), {});
+		});
+	}
 });

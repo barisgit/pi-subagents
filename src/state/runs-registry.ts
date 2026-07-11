@@ -13,6 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { logger } from "../shared/logger.ts";
 
 export interface RunsRegistryEntry {
 	runId: string;
@@ -69,15 +70,34 @@ export function getShardPath(sessionId: string): string {
 	return path.join(path.dirname(getRegistryPath()), "sessions", sessionId + ".jsonl");
 }
 
+/**
+ * Register a run in the global index (source of truth for discovery) and, best
+ * effort, in its session shard. Idempotent by runId: a retry after a partial
+ * earlier attempt must not duplicate rows, so an already-registered runId is a
+ * no-op. The shard is a derived per-session view (readers that miss a shard row
+ * only lose session scoping, never the run itself), so a shard write failure is
+ * logged and swallowed rather than orphaning the already-committed global row.
+ * A GLOBAL append failure still throws: without that row the run is
+ * undiscoverable, and the caller owns cleanup of anything it wrote first.
+ */
 export function appendRunEntry(entry: RunsRegistryEntry): void {
 	const filePath = getRegistryPath();
+	if (readAllEntries().some((existing) => existing.runId === entry.runId)) return;
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	fs.appendFileSync(filePath, JSON.stringify(entry) + "\n", "utf8");
 	const shardKey = entry.rootSessionId ?? entry.parentSessionId;
 	if (shardKey) {
-		const shardPath = getShardPath(shardKey);
-		fs.mkdirSync(path.dirname(shardPath), { recursive: true });
-		fs.appendFileSync(shardPath, JSON.stringify(entry) + "\n", "utf8");
+		try {
+			const shardPath = getShardPath(shardKey);
+			fs.mkdirSync(path.dirname(shardPath), { recursive: true });
+			fs.appendFileSync(shardPath, JSON.stringify(entry) + "\n", "utf8");
+		} catch (error) {
+			logger.warn("runs registry: session shard append failed; global row remains authoritative", {
+				runId: entry.runId,
+				shardKey,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 }
 
@@ -157,7 +177,15 @@ function parseEntriesFromFile(filePath: string, opts: ReadOptions): RunsRegistry
 		if (entry) entries.push(entry);
 	}
 	entries.reverse(); // most-recent first
-	return opts.limit !== undefined ? entries.slice(0, opts.limit) : entries;
+	// Dedupe by runId, keeping the newest row: rows written by a retried
+	// registration (or a legacy pre-idempotency file) must not surface twice.
+	const seen = new Set<string>();
+	const deduped = entries.filter((entry) => {
+		if (seen.has(entry.runId)) return false;
+		seen.add(entry.runId);
+		return true;
+	});
+	return opts.limit !== undefined ? deduped.slice(0, opts.limit) : deduped;
 }
 
 export function readAllEntries(opts: ReadOptions = {}): RunsRegistryEntry[] {

@@ -104,3 +104,34 @@ describe("runs registry", () => {
 		);
 	});
 });
+
+describe("runs registry registration hardening", () => {
+	it("re-appending the same runId is a no-op (idempotent append)", () => {
+		const registryPath = tmpRegistry();
+		const first = entry("run-a", 100);
+		appendRunEntry(first);
+		appendRunEntry(first);
+		const lines = fs.readFileSync(registryPath, "utf-8").trim().split("\n");
+		assert.equal(lines.length, 1);
+		assert.deepEqual(readAllEntries(), [first]);
+	});
+
+	it("dedupes by runId on read, keeping the newest row", () => {
+		const registryPath = tmpRegistry();
+		const older = entry("run-a", 100);
+		const newer = { ...entry("run-a", 200), label: "retry" };
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+		fs.writeFileSync(registryPath, JSON.stringify(older) + "\n" + JSON.stringify(newer) + "\n", "utf-8");
+		assert.deepEqual(readAllEntries(), [newer]);
+	});
+
+	it("a shard write failure neither throws nor orphans the global row (global is source of truth)", () => {
+		const registryPath = tmpRegistry();
+		// Force the shard append to fail: occupy the sessions/ dir with a FILE.
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+		fs.writeFileSync(path.join(path.dirname(registryPath), "sessions"), "not a dir", "utf-8");
+		const withShard = { ...entry("run-shard", 100), rootSessionId: "sess-1" };
+		appendRunEntry(withShard); // must not throw
+		assert.deepEqual(readAllEntries(), [withShard]);
+	});
+});
