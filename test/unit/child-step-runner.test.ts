@@ -12,9 +12,25 @@ describe("combineOptionalSignals", () => {
 		assert.equal(getEventListeners(second.signal, "abort").length, 1);
 		first.abort("stop");
 
-		assert.equal(combined.aborted, true);
-		assert.equal(combined.reason, "stop");
+		assert.equal(combined.signal.aborted, true);
+		assert.equal(combined.signal.reason, "stop");
 		assert.equal(getEventListeners(second.signal, "abort").length, 0);
+	});
+
+	it("dispose removes listeners from all source signals without aborting", () => {
+		const first = new AbortController();
+		const second = new AbortController();
+
+		const combined = combineOptionalSignals(first.signal, second.signal);
+		assert.equal(getEventListeners(first.signal, "abort").length, 1);
+		assert.equal(getEventListeners(second.signal, "abort").length, 1);
+		combined.dispose();
+
+		assert.equal(getEventListeners(first.signal, "abort").length, 0);
+		assert.equal(getEventListeners(second.signal, "abort").length, 0);
+		assert.equal(combined.signal.aborted, false);
+		first.abort("late");
+		assert.equal(combined.signal.aborted, false);
 	});
 });
 

@@ -90,17 +90,20 @@ export function buildAsyncChildStep(input: {
 	return { step: prepared.step, cleanTask, agentConfig, outputSnapshot: captureSingleOutputSnapshot(outputPath) };
 }
 
-export function combineOptionalSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+export function combineOptionalSignals(...signals: Array<AbortSignal | undefined>): {
+	signal: AbortSignal;
+	dispose: () => void;
+} {
 	const controller = new AbortController();
 	const listeners = new Map<AbortSignal, () => void>();
-	const cleanup = () => {
+	const dispose = () => {
 		for (const [signal, listener] of listeners) signal.removeEventListener("abort", listener);
 		listeners.clear();
 	};
 	const abort = (signal: AbortSignal) => {
 		if (!controller.signal.aborted) {
 			controller.abort(signal.reason);
-			cleanup();
+			dispose();
 		}
 	};
 	for (const signal of signals) {
@@ -114,7 +117,7 @@ export function combineOptionalSignals(...signals: Array<AbortSignal | undefined
 		listeners.set(signal, listener);
 		signal.addEventListener("abort", listener, { once: true });
 	}
-	return controller.signal;
+	return { signal: controller.signal, dispose };
 }
 
 function appendProgressOutput(progress: AgentProgress, text: string): void {
@@ -280,10 +283,11 @@ export async function runInProcessChildStep(input: {
 		if (shouldEmit) emitUpdate();
 	};
 	let childResult: ChildAgentResult | undefined;
+	const combinedAbort = combineOptionalSignals(data.signal, input.interruptSignal);
 	try {
 		childResult = await runChildAgent(step, {
 			extensionCtx: data.ctx,
-			abortSignal: combineOptionalSignals(data.signal, input.interruptSignal),
+			abortSignal: combinedAbort.signal,
 			onEvent: (_stepIndex: number, event: AgentSessionEvent) => {
 				const record = event as Record<string, unknown>;
 				const now = Date.now();
@@ -364,6 +368,9 @@ export async function runInProcessChildStep(input: {
 		});
 	} finally {
 		activityTicker.stop();
+		// Drop this child's listeners from the long-lived parent/interrupt signals
+		// so completed children do not accumulate listeners on them.
+		combinedAbort.dispose();
 	}
 	if (!childResult) throw new Error(`Child agent did not produce a result for ${childRunId}`);
 	progress.activityState = undefined;
