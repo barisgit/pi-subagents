@@ -10,7 +10,6 @@ let tempProject = "";
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPreset = process.env.PI_PRESET;
-const originalLegacyPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
 const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
@@ -45,7 +44,6 @@ describe("agent presets", () => {
 		process.env.PI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 		process.env.FI_CODING_AGENT_DIR = path.join(tempHome, ".pi", "agent");
 		delete process.env.PI_PRESET;
-		delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 		writeProjectAgent("fixer");
 	});
 
@@ -56,8 +54,6 @@ describe("agent presets", () => {
 		else process.env.USERPROFILE = originalUserProfile;
 		if (originalPreset === undefined) delete process.env.PI_PRESET;
 		else process.env.PI_PRESET = originalPreset;
-		if (originalLegacyPreset === undefined) delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
-		else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
 		if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
 		if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
@@ -67,7 +63,7 @@ describe("agent presets", () => {
 	});
 
 	it("applies explicit preset overlays during discovery", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
+		writeJson(path.join(tempHome, ".pi", "agent", "subagent.json"), {
 			defaultPreset: "default-preset",
 			presets: {
 				fast: { agents: { fixer: { model: "openai/gpt-5-mini", thinking: "high" } } },
@@ -86,17 +82,15 @@ describe("agent presets", () => {
 		assert.deepEqual(result.preset.warnings, []);
 	});
 
-	it("resolves preset precedence as explicit > PI_PRESET > legacy env > config default", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
+	it("resolves preset precedence as explicit > PI_PRESET > config default", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "subagent.json"), {
 			defaultPreset: "config-default",
 			presets: {
 				"config-default": { agents: { fixer: { model: "anthropic/claude-sonnet-4" } } },
-				legacy: { agents: { fixer: { model: "google/gemini-2.5-pro" } } },
 				env: { agents: { fixer: { model: "openai/gpt-4.1" } } },
 				explicit: { agents: { fixer: { model: "openai/gpt-5" } } },
 			},
 		});
-		process.env.OH_MY_OPENCODE_SLIM_PRESET = "legacy";
 		process.env.PI_PRESET = "env";
 
 		const envResult = discoverAgents(tempProject, "project");
@@ -111,7 +105,7 @@ describe("agent presets", () => {
 	});
 
 	it("returns warnings when the requested preset is missing and leaves agents unchanged", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
+		writeJson(path.join(tempHome, ".pi", "agent", "subagent.json"), {
 			presets: {
 				fast: { agents: { fixer: { model: "openai/gpt-5-mini" } } },
 			},
@@ -142,7 +136,7 @@ You are charter-qa.
 			"utf-8",
 		);
 
-		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
+		writeJson(path.join(tempHome, ".pi", "agent", "subagent.json"), {
 			presets: {
 				workflow: {
 					strictAgents: true,
@@ -188,7 +182,7 @@ You are charter-qa.
 	it("supports strict workflow role catalogs and main/subagent surface filtering", () => {
 		writeProjectAgent("build", "anthropic/claude-sonnet-4", "surface: main");
 		writeProjectAgent("explorer", "anthropic/claude-sonnet-4", "surface: subagent");
-		writeJson(path.join(tempHome, ".pi", "agent", "extensions", "subagent", "config.json"), {
+		writeJson(path.join(tempHome, ".pi", "agent", "subagent.json"), {
 			presets: {
 				workflow: {
 					defaultRole: "build",

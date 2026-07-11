@@ -651,7 +651,7 @@ export interface PresetConfig {
 	agentOverrides?: Record<string, AgentPresetOverlay>;
 }
 
-export type PresetSource = "param" | "PI_PRESET" | "OH_MY_OPENCODE_SLIM_PRESET" | "config.defaultPreset";
+export type PresetSource = "param" | "PI_PRESET" | "config.defaultPreset";
 
 export interface DiscoveryPresetInfo {
 	requested?: string;

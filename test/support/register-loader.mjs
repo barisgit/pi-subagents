@@ -14,6 +14,7 @@
  */
 
 import { register } from "node:module";
+import "./scrub-env.mjs";
 import "./isolate-registry.mjs";
 
 register(new URL("./ts-loader.mjs", import.meta.url));

@@ -6,11 +6,8 @@ import { logger } from "./logger.ts";
 import type { ExtensionConfig } from "../protocol/types.ts";
 
 export const SUBAGENT_CONFIG_PRIMARY = path.join(getAgentDir(), "subagent.json");
-export const SUBAGENT_CONFIG_LEGACY = path.join(getAgentDir(), "extensions", "subagent", "config.json");
 
 export function resolveConfigPath(): string {
-	if (fs.existsSync(SUBAGENT_CONFIG_PRIMARY)) return SUBAGENT_CONFIG_PRIMARY;
-	if (fs.existsSync(SUBAGENT_CONFIG_LEGACY)) return SUBAGENT_CONFIG_LEGACY;
 	return SUBAGENT_CONFIG_PRIMARY;
 }
 

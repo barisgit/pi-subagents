@@ -31,16 +31,16 @@ before(async () => {
 	process.env.HOME = tmpHome;
 	process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
 	process.env.FI_CODING_AGENT_DIR = tmpAgentDir;
-	fs.mkdirSync(path.join(tmpAgentDir, "extensions", "subagent"), { recursive: true });
+	fs.mkdirSync(tmpAgentDir, { recursive: true });
 	// Cache-bust so the module re-evaluates under the temp env set above, rather
 	// than returning a copy cached from an earlier import under the real HOME.
 	mod = (await import(`../../src/shared/config.ts?hermetic=${Date.now()}`)) as ConfigModule;
 	// Defense in depth: never let this suite touch a path outside the temp tree,
 	// even if env resolution silently regresses in the future.
-	if (!mod.SUBAGENT_CONFIG_PRIMARY.startsWith(tmpHome) || !mod.SUBAGENT_CONFIG_LEGACY.startsWith(tmpHome)) {
+	if (!mod.SUBAGENT_CONFIG_PRIMARY.startsWith(tmpHome)) {
 		throw new Error(
-			`config.test.ts refused to run: config paths escaped the temp dir (would risk the real user config). ` +
-				`primary=${mod.SUBAGENT_CONFIG_PRIMARY} legacy=${mod.SUBAGENT_CONFIG_LEGACY} tmpHome=${tmpHome}`,
+			`config.test.ts refused to run: config path escaped the temp dir (would risk the real user config). ` +
+				`primary=${mod.SUBAGENT_CONFIG_PRIMARY} tmpHome=${tmpHome}`,
 		);
 	}
 });
@@ -73,22 +73,14 @@ describe("expandTilde", () => {
 	});
 });
 
-describe("resolveConfigPath precedence", () => {
-	test("prefers the primary path when it exists", () => {
+describe("resolveConfigPath", () => {
+	test("returns the primary path when it exists", () => {
 		fs.writeFileSync(mod.SUBAGENT_CONFIG_PRIMARY, "{}");
-		fs.writeFileSync(mod.SUBAGENT_CONFIG_LEGACY, "{}");
 		assert.strictEqual(mod.resolveConfigPath(), mod.SUBAGENT_CONFIG_PRIMARY);
 	});
 
-	test("falls back to the legacy path when only it exists", () => {
+	test("returns the primary path when it does not exist", () => {
 		fs.rmSync(mod.SUBAGENT_CONFIG_PRIMARY, { force: true });
-		fs.writeFileSync(mod.SUBAGENT_CONFIG_LEGACY, "{}");
-		assert.strictEqual(mod.resolveConfigPath(), mod.SUBAGENT_CONFIG_LEGACY);
-	});
-
-	test("returns the primary path when neither exists", () => {
-		fs.rmSync(mod.SUBAGENT_CONFIG_PRIMARY, { force: true });
-		fs.rmSync(mod.SUBAGENT_CONFIG_LEGACY, { force: true });
 		assert.strictEqual(mod.resolveConfigPath(), mod.SUBAGENT_CONFIG_PRIMARY);
 	});
 });
@@ -96,12 +88,10 @@ describe("resolveConfigPath precedence", () => {
 describe("loadConfig", () => {
 	test("returns {} when no config file is present", () => {
 		fs.rmSync(mod.SUBAGENT_CONFIG_PRIMARY, { force: true });
-		fs.rmSync(mod.SUBAGENT_CONFIG_LEGACY, { force: true });
 		assert.deepStrictEqual(mod.loadConfig(), {});
 	});
 
 	test("parses and returns the config from the primary file", () => {
-		fs.rmSync(mod.SUBAGENT_CONFIG_LEGACY, { force: true });
 		fs.writeFileSync(mod.SUBAGENT_CONFIG_PRIMARY, JSON.stringify({ asyncByDefault: true }));
 		assert.deepStrictEqual(mod.loadConfig(), { asyncByDefault: true });
 	});

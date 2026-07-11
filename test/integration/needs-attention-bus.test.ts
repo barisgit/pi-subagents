@@ -117,10 +117,9 @@ function cleanupPoller(state: SubagentState): void {
 	state.cleanupTimers.clear();
 }
 
-function createControlNoticeHarness(legacyKeys: string[] = []) {
+function createControlNoticeHarness() {
 	const sent: Array<{ details?: { event?: ControlEvent } }> = [];
 	const globalStore: Record<string, unknown> = {};
-	if (legacyKeys.length > 0) globalStore.__piSubagentVisibleControlNotices = new Set(legacyKeys);
 	const pi = {
 		sendMessage(message: { details?: { event?: ControlEvent } }) {
 			sent.push(message);
@@ -171,7 +170,7 @@ describe("needs-attention reaches parent", () => {
 	});
 
 	it("suppresses older and equal activity transitions without moving the baseline backward", () => {
-		const { globalStore, register, sent } = createControlNoticeHarness(["out-of-order-r1:0:needs_attention:2000"]);
+		const { globalStore, register, sent } = createControlNoticeHarness();
 		const notices = register();
 		const transition: ControlEvent = {
 			type: "needs_attention",
@@ -184,86 +183,35 @@ describe("needs-attention reaches parent", () => {
 			message: "worker needs attention",
 		};
 
+		notices.controlEventHandler({ event: transition, source: "async" });
 		notices.controlEventHandler({
-			event: { ...transition, activityAt: 1_000 },
+			event: { ...transition, ts: 4_000, activityAt: 1_000 },
 			source: "async",
 		});
 		notices.controlEventHandler({
-			event: { ...transition, ts: 4_000 },
+			event: { ...transition, ts: 5_000 },
 			source: "async",
 		});
 		notices.controlEventHandler({
-			event: { ...transition, ts: 5_000, activityAt: 1_500 },
+			event: { ...transition, ts: 6_000, activityAt: 1_500 },
 			source: "async",
 		});
 
 		const seen = globalStore.__piSubagentVisibleControlNotices as ControlNotificationDedupeStore;
 		assert.deepEqual(
 			sent.map((message) => message.details?.event?.activityAt),
-			[],
+			[2_000],
 		);
 		assert.deepEqual([...(seen.byRunId.get("out-of-order-r1")?.values() ?? [])], [2_000]);
 
 		notices.controlEventHandler({
-			event: { ...transition, ts: 6_000, activityAt: 3_000 },
+			event: { ...transition, ts: 7_000, activityAt: 3_000 },
 			source: "async",
 		});
 		assert.deepEqual(
 			sent.map((message) => message.details?.event?.activityAt),
-			[3_000],
+			[2_000, 3_000],
 		);
-	});
-
-	it("migrates a timestamp-keyed continuing stall without redelivery", () => {
-		const { globalStore, register, sent } = createControlNoticeHarness(["legacy-r1:0:needs_attention:1000"]);
-		const notices = register();
-		const transition: ControlEvent = {
-			type: "needs_attention",
-			to: "needs_attention",
-			ts: 2_000,
-			activityAt: 500,
-			runId: "legacy-r1",
-			agent: "worker",
-			index: 0,
-			message: "worker needs attention",
-		};
-
-		notices.controlEventHandler({
-			event: transition,
-			source: "async",
-		});
-
-		assert.equal(sent.length, 0);
-		const seen = globalStore.__piSubagentVisibleControlNotices as ControlNotificationDedupeStore;
-		assert.equal(seen.byRunId.get("legacy-r1")?.size, 1);
-		assert.equal(seen.legacyKeys.size, 0);
-
-		seen.legacyKeys.add("legacy-r1:0:needs_attention");
-		notices.controlRunTerminalHandler({ runId: "legacy-r1", agent: "worker", taskIndex: 0 });
-		notices.controlEventHandler({
-			event: { ...transition, ts: 4_000, activityAt: 3_000 },
-			source: "async",
-		});
-		assert.equal(sent.length, 1);
-	});
-
-	it("aggregate terminal events evict every migrated step-scoped key for the run", () => {
-		const { globalStore, register } = createControlNoticeHarness([
-			"parallel-r1:0:needs_attention",
-			"parallel-r1:0:needs_attention:1000",
-			"parallel-r1:1:needs_attention:2000",
-			"other-r1:0:needs_attention:3000",
-		]);
-		const notices = register();
-
-		notices.controlRunTerminalHandler({
-			id: "parallel-r1",
-			runId: "parallel-r1",
-			agent: "worker,reviewer",
-		});
-
-		const seen = globalStore.__piSubagentVisibleControlNotices as ControlNotificationDedupeStore;
-		assert.deepEqual([...seen.legacyKeys], ["other-r1:0:needs_attention:3000"]);
 	});
 
 	it("reload rehydration does not redeliver the same continuing stall", (t) => {

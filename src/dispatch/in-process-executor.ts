@@ -79,10 +79,7 @@ export interface PhaseEventHandler {
 	getState(): RunPhaseState;
 }
 
-function emitPhaseChange(
-	pi: PhaseEventHandlerOptions["pi"] | undefined,
-	payload: SubagentPhaseChangePayload,
-): void {
+function emitPhaseChange(pi: PhaseEventHandlerOptions["pi"] | undefined, payload: SubagentPhaseChangePayload): void {
 	try {
 		const events = pi?.events;
 		if (!events || typeof events.emit !== "function") {
@@ -162,54 +159,7 @@ export interface PhaseTickerHandle {
 	stop(): void;
 }
 
-interface LegacyPhaseTickerOptions {
-	runId: string;
-	stepIndex: number;
-	onStatusUpdate: (patch: StatusPatch) => void;
-	intervalMs?: number;
-	quietThresholdMs?: number;
-	now?: () => number;
-	setIntervalFn?: typeof setInterval;
-	clearIntervalFn?: typeof clearInterval;
-	stuckThresholdMs?: number;
-	onStuck?: (payload: SubagentStuckPayload) => void;
-}
-
-type LegacyPhaseTickerHandle = PhaseTickerHandle & { notifyEvent(now: number): void };
-
-export function createPhaseTicker(options: PhaseTickerOptions): PhaseTickerHandle;
-export function createPhaseTicker(
-	getPhaseState: () => RunPhaseState,
-	options: LegacyPhaseTickerOptions,
-	initialNow?: number,
-): LegacyPhaseTickerHandle;
-export function createPhaseTicker(
-	optionsOrGetPhaseState: PhaseTickerOptions | (() => RunPhaseState),
-	legacyOptions?: LegacyPhaseTickerOptions,
-	initialNow?: number,
-): PhaseTickerHandle | LegacyPhaseTickerHandle {
-	const now =
-		legacyOptions?.now ??
-		(typeof optionsOrGetPhaseState === "function" ? undefined : optionsOrGetPhaseState.now) ??
-		Date.now;
-	let legacyLastEventAt = initialNow ?? now();
-	const options: PhaseTickerOptions =
-		typeof optionsOrGetPhaseState === "function"
-			? {
-					intervalMs: legacyOptions?.intervalMs,
-					quietMs: legacyOptions?.quietThresholdMs,
-					stuckThresholdMs: legacyOptions?.stuckThresholdMs,
-					getPhaseState: optionsOrGetPhaseState,
-					getLastEventAt: () => legacyLastEventAt,
-					onStatusUpdate: legacyOptions!.onStatusUpdate,
-					onStuck: legacyOptions?.onStuck,
-					now,
-					setIntervalFn: legacyOptions?.setIntervalFn,
-					clearIntervalFn: legacyOptions?.clearIntervalFn,
-					runId: legacyOptions!.runId,
-					stepIndex: legacyOptions!.stepIndex,
-				}
-			: optionsOrGetPhaseState;
+export function createPhaseTicker(options: PhaseTickerOptions): PhaseTickerHandle {
 	const intervalMs = options.intervalMs ?? 5_000;
 	const quietMs = options.quietMs ?? 4_000;
 	const stuckThresholdMs = options.stuckThresholdMs ?? 60_000;
@@ -290,9 +240,6 @@ export function createPhaseTicker(
 			if (stopped) return;
 			stopped = true;
 			clearIntervalFn(timer);
-		},
-		notifyEvent(now: number): void {
-			legacyLastEventAt = now;
 		},
 	};
 }

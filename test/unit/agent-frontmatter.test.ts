@@ -10,7 +10,6 @@ const tempDirs: string[] = [];
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalPreset = process.env.PI_PRESET;
-const originalLegacyPreset = process.env.OH_MY_OPENCODE_SLIM_PRESET;
 const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalFiAgentDir = process.env.FI_CODING_AGENT_DIR;
 
@@ -22,7 +21,6 @@ beforeEach(() => {
 	process.env.PI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
 	process.env.FI_CODING_AGENT_DIR = path.join(homeDir, ".pi", "agent");
 	delete process.env.PI_PRESET;
-	delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
 });
 
 afterEach(() => {
@@ -37,8 +35,6 @@ afterEach(() => {
 	else process.env.USERPROFILE = originalUserProfile;
 	if (originalPreset === undefined) delete process.env.PI_PRESET;
 	else process.env.PI_PRESET = originalPreset;
-	if (originalLegacyPreset === undefined) delete process.env.OH_MY_OPENCODE_SLIM_PRESET;
-	else process.env.OH_MY_OPENCODE_SLIM_PRESET = originalLegacyPreset;
 	if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
 	if (originalFiAgentDir === undefined) delete process.env.FI_CODING_AGENT_DIR;
@@ -331,19 +327,19 @@ Do work
 });
 
 describe("project agent directory discovery", () => {
-	it("discovers project agents from both .agents and .pi/agents", () => {
+	it("reads project agents only from .pi/agents and ignores .agents", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-agent-dirs-"));
 		tempDirs.push(dir);
 		fs.mkdirSync(path.join(dir, ".agents", "skills"), { recursive: true });
 		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
 		fs.writeFileSync(
-			path.join(dir, ".agents", "legacy.md"),
+			path.join(dir, ".agents", "ignored.md"),
 			`---
-name: legacy
-description: Legacy
+name: ignored
+description: Ignored
 ---
 
-Legacy prompt
+Ignored prompt
 `,
 			"utf-8",
 		);
@@ -360,10 +356,9 @@ Canonical prompt
 		);
 
 		const result = discoverAgents(dir, "project");
-		assert.ok(
-			result.agents.find(
-				(agent) => agent.name === "legacy" && agent.filePath === path.join(dir, ".agents", "legacy.md"),
-			),
+		assert.equal(
+			result.agents.find((agent) => agent.name === "ignored"),
+			undefined,
 		);
 		assert.ok(
 			result.agents.find(
@@ -372,41 +367,6 @@ Canonical prompt
 			),
 		);
 		assert.equal(result.projectAgentsDir, path.join(dir, ".pi", "agents"));
-	});
-
-	it("prefers .pi/agents over .agents on project agent name collisions", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-agent-collision-"));
-		tempDirs.push(dir);
-		fs.mkdirSync(path.join(dir, ".agents"), { recursive: true });
-		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
-		fs.writeFileSync(
-			path.join(dir, ".agents", "shared.md"),
-			`---
-name: shared
-description: Legacy shared
----
-
-Legacy prompt
-`,
-			"utf-8",
-		);
-		fs.writeFileSync(
-			path.join(dir, ".pi", "agents", "shared.md"),
-			`---
-name: shared
-description: Canonical shared
----
-
-Canonical prompt
-`,
-			"utf-8",
-		);
-
-		const shared = discoverAgents(dir, "project").agents.find((agent) => agent.name === "shared");
-		assert.ok(shared);
-		assert.equal(shared.filePath, path.join(dir, ".pi", "agents", "shared.md"));
-		assert.equal(shared.description, "Canonical shared");
-		assert.equal(shared.systemPrompt.trim(), "Canonical prompt");
 	});
 
 	it("uses the project root for the canonical project agent dir even when only .agents exists", () => {

@@ -60,15 +60,15 @@ describe("Path resolution for .agents and ~/.agents", () => {
 		assert.strictEqual(resolved?.path, path.join(userSkillsDir, "test-skill-2.md"));
 	});
 
-	test("should resolve project agents from both .agents and .pi/agents", () => {
-		const legacyDir = path.join(cwdDir, ".agents");
+	test("should resolve project agents only from .pi/agents, ignoring .agents", () => {
+		const ignoredDir = path.join(cwdDir, ".agents");
 		const agentsDir = path.join(cwdDir, ".pi", "agents");
 		fs.mkdirSync(path.join(cwdDir, ".agents", "skills"), { recursive: true });
-		fs.mkdirSync(legacyDir, { recursive: true });
+		fs.mkdirSync(ignoredDir, { recursive: true });
 		fs.mkdirSync(agentsDir, { recursive: true });
 		fs.writeFileSync(
-			path.join(legacyDir, "test-agent-legacy.md"),
-			"---\nname: test-agent-legacy\ndescription: Legacy agent\n---\nLegacy content",
+			path.join(ignoredDir, "test-agent-ignored.md"),
+			"---\nname: test-agent-ignored\ndescription: Ignored agent\n---\nIgnored content",
 		);
 		fs.writeFileSync(
 			path.join(agentsDir, "test-agent-1.md"),
@@ -76,25 +76,10 @@ describe("Path resolution for .agents and ~/.agents", () => {
 		);
 
 		const result = discoverAgents(cwdDir, "project", { config: {} });
-		const legacyAgent = result.agents.find((a) => a.name === "test-agent-legacy");
+		const ignoredAgent = result.agents.find((a) => a.name === "test-agent-ignored");
 		const agent = result.agents.find((a) => a.name === "test-agent-1");
-		assert.ok(legacyAgent);
-		assert.strictEqual(legacyAgent?.filePath, path.join(legacyDir, "test-agent-legacy.md"));
+		assert.strictEqual(ignoredAgent, undefined);
 		assert.ok(agent);
 		assert.strictEqual(agent?.filePath, path.join(agentsDir, "test-agent-1.md"));
-	});
-
-	test("should resolve agents in ~/.agents", () => {
-		const userAgentsDir = path.join(realHomeDir, ".agents");
-		fs.mkdirSync(userAgentsDir, { recursive: true });
-		fs.writeFileSync(
-			path.join(userAgentsDir, "test-agent-2.md"),
-			"---\nname: test-agent-2\ndescription: Test agent\n---\nAgent content",
-		);
-
-		const result = discoverAgents(cwdDir, "user", { config: {} });
-		const agent = result.agents.find((a) => a.name === "test-agent-2");
-		assert.ok(agent);
-		assert.strictEqual(agent?.filePath, path.join(userAgentsDir, "test-agent-2.md"));
 	});
 });

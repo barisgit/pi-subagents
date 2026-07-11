@@ -10,7 +10,6 @@
  *
  * Config file: ~/.pi/agent/subagent.json
  *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
- * Legacy config is still read from ~/.pi/agent/extensions/subagent/config.json when the primary file is absent.
  *
  * This file is intentionally a thin entry-point shell: the pi extension manifest
  * (package.json) registers `./index.ts`, so the real composition root lives in

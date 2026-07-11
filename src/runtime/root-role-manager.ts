@@ -84,7 +84,6 @@ export function createRootRoleManager(deps: {
 		return (
 			normalizeName(pi.getFlag("preset")) ??
 			normalizeName(process.env.PI_PRESET) ??
-			normalizeName(process.env.OH_MY_OPENCODE_SLIM_PRESET) ??
 			normalizeName(config.defaultPreset)
 		);
 	}

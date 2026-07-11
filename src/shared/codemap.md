@@ -14,7 +14,7 @@ Shared is the low-level utility/persona/config layer for `pi-subagents`: filesys
 - `persona-registry.ts` — maintains extension-registered internal persona directories, validates absolute internal registrations, detects cross-extension persona name conflicts, and emits protocol error events.
 - `root-role-selection.ts` — picks the root role from role flag, env, restored state, default, then first available role.
 - `settings.ts` — resolves per-step behavior by overlaying step overrides on `AgentConfig` defaults for output, reads, progress, skills, and model.
-- `config.ts` — locates/loads subagent config from primary or legacy `~/.pi/agent` paths and expands `~/` paths, logging parse/load failures.
+- `config.ts` — loads subagent config from `~/.pi/agent/subagent.json` and expands `~/` paths, logging parse/load failures.
 - `artifacts.ts` — computes artifact directories/paths, writes input/output/json/metadata artifacts, and performs best-effort age cleanup for temp and session artifact dirs.
 - `current-pi.ts` — process-global active `ExtensionAPI` holder on `globalThis` for long-lived callbacks that need the current non-stale Pi action surface after reload/session changes.
 - `child-session-context.ts` — process-global `AsyncLocalStorage` singleton that scopes extension activation to the child construction async tree without leaking identity across concurrent children or host reloads.

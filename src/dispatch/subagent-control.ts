@@ -184,13 +184,12 @@ export function isControlEventAllowed(input: { runFinalized: boolean }): boolean
 export interface ControlNotificationDedupeStore {
 	version: 1;
 	byRunId: Map<string, Map<string, number>>;
-	legacyKeys: Set<string>;
 }
 
 function isControlNotificationDedupeStore(value: unknown): value is ControlNotificationDedupeStore {
 	if (!value || typeof value !== "object") return false;
 	const candidate = value as Partial<ControlNotificationDedupeStore>;
-	if (candidate.version !== 1 || !(candidate.byRunId instanceof Map) || !(candidate.legacyKeys instanceof Set)) {
+	if (candidate.version !== 1 || !(candidate.byRunId instanceof Map)) {
 		return false;
 	}
 	for (const [runId, scopes] of candidate.byRunId) {
@@ -199,56 +198,18 @@ function isControlNotificationDedupeStore(value: unknown): value is ControlNotif
 			if (typeof scope !== "string" || typeof activityAt !== "number") return false;
 		}
 	}
-	for (const key of candidate.legacyKeys) {
-		if (typeof key !== "string") return false;
-	}
 	return true;
 }
 
 export function createControlNotificationDedupeStore(existing?: unknown): ControlNotificationDedupeStore {
 	if (isControlNotificationDedupeStore(existing)) return existing;
-	const legacyKeys = new Set<string>();
-	if (existing instanceof Set) {
-		for (const key of existing) {
-			if (typeof key === "string") legacyKeys.add(key);
-		}
-	}
-	return { version: 1, byRunId: new Map(), legacyKeys };
+	// Unknown shapes (including stores written by older versions) are dropped
+	// wholesale: fail closed to a fresh store rather than half-migrating.
+	return { version: 1, byRunId: new Map() };
 }
 
 function controlNotificationScopeKey(event: ControlEvent, childIntercomTarget?: string): string {
 	return JSON.stringify([event.index ?? null, childIntercomTarget ?? null, event.type]);
-}
-
-function consumeLegacyControlNotification(
-	store: ControlNotificationDedupeStore,
-	event: ControlEvent,
-	childIntercomTarget?: string,
-): number | undefined {
-	const childKey = childIntercomTarget ?? (event.index !== undefined ? `${event.runId}:${event.index}` : event.runId);
-	const legacyBase = `${childKey}:${event.type}`;
-	const transitionAt = event.activityAt ?? event.ts;
-	let matched = false;
-	let untimestamped = false;
-	let latestEventAt: number | undefined;
-	for (const key of store.legacyKeys) {
-		if (key === legacyBase) {
-			matched = true;
-			untimestamped = true;
-			store.legacyKeys.delete(key);
-			continue;
-		}
-		if (!key.startsWith(`${legacyBase}:`)) continue;
-		matched = true;
-		const eventAt = Number(key.slice(legacyBase.length + 1));
-		if (Number.isFinite(eventAt)) latestEventAt = Math.max(latestEventAt ?? eventAt, eventAt);
-		store.legacyKeys.delete(key);
-	}
-	if (!matched) return undefined;
-	if (untimestamped || latestEventAt === undefined || event.activityAt === undefined) {
-		return Math.max(latestEventAt ?? transitionAt, transitionAt);
-	}
-	return event.activityAt <= latestEventAt ? latestEventAt : undefined;
 }
 
 export function controlNotificationKey(event: ControlEvent, childIntercomTarget?: string): string {
@@ -266,27 +227,13 @@ export function claimControlNotificationKey(
 	const runScopes = store.byRunId.get(event.runId) ?? new Map<string, number>();
 	const previousTransitionAt = runScopes.get(scope);
 	if (previousTransitionAt !== undefined && transitionAt <= previousTransitionAt) return false;
-	const legacyTransitionAt = consumeLegacyControlNotification(store, event, childIntercomTarget);
-	runScopes.set(scope, legacyTransitionAt ?? transitionAt);
+	runScopes.set(scope, transitionAt);
 	store.byRunId.set(event.runId, runScopes);
-	return legacyTransitionAt === undefined;
+	return true;
 }
 
-export function evictControlNotificationsForRunId(
-	store: ControlNotificationDedupeStore,
-	runId: string,
-	additionalLegacyChildKeys: readonly string[] = [],
-): void {
+export function evictControlNotificationsForRunId(store: ControlNotificationDedupeStore, runId: string): void {
 	store.byRunId.delete(runId);
-	const additionalLegacyBases = additionalLegacyChildKeys.map((childKey) => `${childKey}:needs_attention`);
-	for (const key of store.legacyKeys) {
-		if (
-			(key.startsWith(`${runId}:`) && key.includes(":needs_attention")) ||
-			additionalLegacyBases.some((base) => key === base || key.startsWith(`${base}:`))
-		) {
-			store.legacyKeys.delete(key);
-		}
-	}
 }
 
 export function claimControlNotification(

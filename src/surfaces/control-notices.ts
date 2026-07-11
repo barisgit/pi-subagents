@@ -6,7 +6,6 @@ import {
 	evictControlNotificationsForRunId,
 	formatControlNoticeMessage,
 } from "../dispatch/subagent-control.ts";
-import { resolveSubagentIntercomTarget } from "../dispatch/intercom-bridge.ts";
 import type { ControlEvent } from "../protocol/types.ts";
 
 const SUBAGENT_CONTROL_MESSAGE_TYPE = "subagent_control_notice";
@@ -50,24 +49,10 @@ export function registerControlNotices(params: {
 		);
 	};
 	const controlRunTerminalHandler = (payload: unknown) => {
-		const details = payload as {
-			agent?: unknown;
-			id?: unknown;
-			index?: unknown;
-			runId?: unknown;
-			taskIndex?: unknown;
-		};
+		const details = payload as { id?: unknown; runId?: unknown };
 		const runId = typeof details.runId === "string" ? details.runId : details.id;
 		if (typeof runId !== "string") return;
-		const index =
-			typeof details.index === "number"
-				? details.index
-				: typeof details.taskIndex === "number"
-					? details.taskIndex
-					: undefined;
-		const additionalLegacyChildKeys =
-			typeof details.agent === "string" ? [resolveSubagentIntercomTarget(runId, details.agent, index)] : [];
-		evictControlNotificationsForRunId(visibleControlNotices, runId, additionalLegacyChildKeys);
+		evictControlNotificationsForRunId(visibleControlNotices, runId);
 	};
 	pi.registerMessageRenderer<SubagentControlMessageDetails>(
 		SUBAGENT_CONTROL_MESSAGE_TYPE,
