@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -59,6 +60,7 @@ class FakeAgentSession {
 	promptCalls = 0;
 	messages: unknown[] = [];
 	lastAssistantText = "";
+	exportImpl?: () => Promise<string>;
 	readonly promptImpl: (session: FakeAgentSession) => Promise<void>;
 
 	constructor(promptImpl: (session: FakeAgentSession) => Promise<void>) {
@@ -95,6 +97,10 @@ class FakeAgentSession {
 
 	getLastAssistantText(): string {
 		return this.lastAssistantText;
+	}
+
+	async exportToHtml(): Promise<string> {
+		return this.exportImpl ? await this.exportImpl() : "https://example.test/share";
 	}
 }
 
@@ -298,6 +304,57 @@ describe("runChildAgent", () => {
 		assert.equal(session.disposeCalls, 1);
 		assert.equal(result.state, "interrupted");
 		assert.equal(result.error?.reason, "stop-now");
+	});
+
+	it("returns interrupted when an acknowledged abort arrives during exportToHtml", async () => {
+		let rejectExport!: (error: Error) => void;
+		let markExportStarted!: () => void;
+		const exportStarted = new Promise<void>((resolve) => {
+			markExportStarted = resolve;
+		});
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		session.exportImpl = () => {
+			markExportStarted();
+			return new Promise<string>((_resolve, reject) => {
+				rejectExport = reject;
+			});
+		};
+		installFakeRuntime([session]);
+
+		const handle = dispatchAsyncChild(
+			makeStep({ runId: "run-abort-mid-export", shareEnabled: true }),
+			makeContext(),
+		);
+		await exportStarted;
+		const abortDone = handle.abort("stop-mid-export");
+		rejectExport(new Error("session aborted during export"));
+		await abortDone;
+		const result = await handle.completed;
+
+		assert.equal(result.state, "interrupted");
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.error?.reason, "stop-mid-export");
+	});
+
+	it("leaves no abort listeners on a long-lived parent signal after children complete normally", async () => {
+		const parent = new AbortController();
+		const baseline = getEventListeners(parent.signal, "abort").length;
+
+		for (let index = 0; index < 5; index++) {
+			const session = new FakeAgentSession(async (self) => {
+				self.lastAssistantText = "<output>done</output>";
+			});
+			installFakeRuntime([session]);
+			const result = await runChildAgent(
+				makeStep({ runId: `run-listener-${index}` }),
+				makeContext({ abortSignal: parent.signal }),
+			);
+			assert.equal(result.state, "complete");
+		}
+
+		assert.equal(getEventListeners(parent.signal, "abort").length, baseline);
 	});
 
 	it("normalizes parent lineage identity before falling back to the step parent identity", async () => {

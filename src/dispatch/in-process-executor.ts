@@ -277,11 +277,12 @@ export function dispatchAsyncChild(step: ChildAgentStep, ctx: ChildAgentContext)
 function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAgentHandle {
 	let session: AgentSession | undefined;
 	const localAbort = new AbortController();
-	const combinedSignal = combineAbortSignals([
+	const combinedAbort = combineAbortSignals([
 		ctx.abortSignal,
 		ctx.registry.signalForRun(step.runId),
 		localAbort.signal,
 	]);
+	const combinedSignal = combinedAbort.signal;
 
 	// Seed the registry's in-memory RunView mirror from dispatch metadata. Only
 	// the async paths thread runViewSeed, so this naturally gates to async (sync
@@ -315,6 +316,9 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 			return result;
 		} finally {
 			releasePermit?.();
+			// Drop this child's listeners from the long-lived source signals so
+			// completed children do not accumulate on the parent tool signal.
+			combinedAbort.dispose();
 			ctx.registry.delete(step.runId, step.stepIndex);
 		}
 	})();
@@ -575,14 +579,39 @@ async function executeChildAgent(
 			return result;
 		}
 
-		const result = baseResult("complete");
+		let shareUrl: string | undefined;
+		let shareError: { message: string } | undefined;
 		if (step.shareEnabled) {
 			try {
-				result.shareUrl = await session.exportToHtml();
+				shareUrl = await session.exportToHtml();
 			} catch (error) {
-				result.error = { message: formatError(error) };
+				shareError = { message: formatError(error) };
 			}
 		}
+
+		// An interrupt acknowledged after the prompt settled (e.g. mid-export) must
+		// win over a success report: promptOrAbort only races prompts, so recheck
+		// the signal here before committing to "complete". A child that genuinely
+		// finished before the abort was signaled has already passed this point.
+		if (signal.aborted) {
+			await session.abort();
+			const result = baseResult("interrupted", {
+				message: `Child agent interrupted: ${abortReason(signal)}`,
+				reason: abortReason(signal),
+			});
+			ctx.onStatusUpdate?.({
+				runId: step.runId,
+				stepIndex: step.stepIndex,
+				state: result.state,
+				endedAt: result.endedAt,
+				outputText: result.outputText,
+			});
+			return result;
+		}
+
+		const result = baseResult("complete");
+		if (shareUrl !== undefined) result.shareUrl = shareUrl;
+		if (shareError) result.error = shareError;
 		ctx.onStatusUpdate?.({
 			runId: step.runId,
 			stepIndex: step.stepIndex,
@@ -865,19 +894,30 @@ function handleSessionEvent(
 	return phaseEvents.handle(event, now, patchBody);
 }
 
-function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+function combineAbortSignals(signals: AbortSignal[]): { signal: AbortSignal; dispose: () => void } {
 	const controller = new AbortController();
+	const listeners = new Map<AbortSignal, () => void>();
+	const dispose = () => {
+		for (const [signal, listener] of listeners) signal.removeEventListener("abort", listener);
+		listeners.clear();
+	};
 	const abort = (signal: AbortSignal) => {
-		if (!controller.signal.aborted) controller.abort(signal.reason);
+		if (!controller.signal.aborted) {
+			controller.abort(signal.reason);
+			dispose();
+		}
 	};
 	for (const signal of signals) {
+		if (listeners.has(signal)) continue;
 		if (signal.aborted) {
 			abort(signal);
 			break;
 		}
-		signal.addEventListener("abort", () => abort(signal), { once: true });
+		const listener = () => abort(signal);
+		listeners.set(signal, listener);
+		signal.addEventListener("abort", listener, { once: true });
 	}
-	return controller.signal;
+	return { signal: controller.signal, dispose };
 }
 
 async function promptOrAbort(promptPromise: Promise<void>, signal: AbortSignal): Promise<boolean> {
