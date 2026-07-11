@@ -250,9 +250,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
 		return createSlashResultComponent(details, options, theme, () => {
-			// TODO(sdk-0.75-shape): message renderers do not receive TUI; keep the old
-			// optional runtime hook when present without typing it into the SDK surface.
-			(state.lastUiContext?.ui as unknown as { requestRender?: () => void }).requestRender?.();
+			// Permanent SDK constraint: MessageRenderer receives no TUI handle and
+			// ExtensionUIContext exposes no repaint API, so animation ticks probe an
+			// optional runtime-only requestRender hook when the host provides one.
+			const hook = (state.lastUiContext?.ui as { requestRender?: () => void } | undefined)?.requestRender;
+			hook?.();
 		});
 	});
 

@@ -170,9 +170,9 @@ export function createAsyncJobTracker(
 	// delivered event before this tracker's own complete handler runs.
 	const deliveredRunIds = new Set<string>();
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
+		// renderWidget captures TUI.requestRender for animation ticks; the SDK's
+		// ExtensionUIContext exposes no repaint API of its own.
 		renderWidget(ctx, jobs, getWidgetClient?.(ctx));
-		// TODO(sdk-0.75-shape): ExtensionUIContext no longer exposes requestRender;
-		// renderWidget now captures TUI.requestRender for animation ticks.
 	};
 	const scheduleCleanup = (asyncId: string) => {
 		const existingTimer = state.cleanupTimers.get(asyncId);

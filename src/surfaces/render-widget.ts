@@ -297,12 +297,9 @@ function buildWidgetComponent(theme: Theme): Component {
 
 function refreshAnimatedWidget(): void {
 	if (!latestWidgetCtx?.hasUI || latestWidgetJobs.length === 0) return;
-	if (latestWidgetTui) latestWidgetTui.requestRender();
-	else {
-		// TODO(sdk-0.75-shape): tests and older runtimes may still expose this
-		// optional UI hook; 0.75 widgets use TUI.requestRender once the factory runs.
-		(latestWidgetCtx.ui as unknown as { requestRender?: () => void }).requestRender?.();
-	}
+	// The widget factory captures TUI.requestRender; before the factory has run
+	// there is nothing on screen to repaint yet.
+	latestWidgetTui?.requestRender();
 }
 
 function ensureWidgetAnimation(): void {
