@@ -7,7 +7,8 @@ Subagent dispatch and child-agent execution layer for the pi-subagents extension
 ## Design
 
 - `subagent-executor.ts` is the orchestrator/router (the largest module): it exposes `executeInternal`/`execute`/`openWorkflowGroup` and routes each call to the correct execution path. It is deliberately thin on logic and delegates to the extracted path modules.
-- Execution paths are extracted as pure `(data, deps)` functions: `run-async-path.ts` (detached async single + parallel; returns `null` when not async so the router falls through) and `run-parallel-path.ts` (foreground parallel with worktree setup/cleanup and shared foreground control). `resume-run.ts` handles resuming a prior run.
+- Execution paths are extracted as pure `(data, deps)` functions: `run-async-path.ts` (detached async single + parallel; returns `null` when not async so the router falls through), `run-parallel-path.ts` (foreground parallel with worktree setup/cleanup and shared foreground control), and `run-single-path.ts` (single foreground run). `resume-run.ts` handles resuming a prior run.
+- Executor-side input handling and control verbs are extracted alongside: `dispatch-input.ts` (slim-input validation + run/count normalization, `validateSubagentToolInput`), `execution-input.ts` (execution-input validation, fork-reuse resolution, `withForkContext`/error-result builders), `interrupt-control.ts` (foreground status/interrupt targeting + async interrupt wait machinery).
 - Type/helper homes were split to fix import direction and break cycles: `executor-types.ts` is a pure type leaf (dispatch path/step/model types); `executor-helpers.ts` holds runtime helper VALUES (`safeEmit`, `validationError`, `emptyUsage`, `normalizeAvailableModels` consumers, aggregate-completion + result-conversion builders); `child-step-runner.ts` builds and runs a single child step; `child-agent-registry.ts` is the in-memory `ChildAgentRegistry` (per-activation, NOT a global singleton; holds the live `RunView` mirror); `prepare-child-step.ts` assembles child config/model/tools before dispatch.
 - `layer0-runs.ts` is the single run-record dispatch funnel: `openRunRecord` (formerly `openRunPersistence`) constructs the one `StatusWriter` and appends to the run registry for every variant (`group-child` | `sync-foreground` | `async-detached`).
 - `in-process-executor.ts` runs children through the host `AgentSession` — async children run IN-PROCESS, not as subprocesses. Child loader/session construction runs inside `shared/child-session-context.ts` so concurrent extension activations remain session-scoped. `worktree.ts` is the ONLY `child_process` spawn in the codebase (git worktree add/remove). `startChildAgent` (the single chokepoint all paths funnel through) acquires one leaf permit from `leaf-concurrency.ts` before prompting and releases it when the child settles.
@@ -48,8 +49,12 @@ Subagent dispatch and child-agent execution layer for the pi-subagents extension
 - `prompt-template-bridge.ts` — registers prompt-template delegation hooks.
 - `resolve-tool-patterns.ts` — converts simple `*` glob tool patterns to RegExp and expands allowed tools.
 - `resume-run.ts` — resumes a prior run (single-child resume path, hand-built completion payload).
+- `dispatch-input.ts` — slim-input validation + dispatch-param/count normalization (`validateSubagentToolInput`, `normalizeRunDispatchParams`).
+- `execution-input.ts` — execution-input validation, requested-agent collection, fork-reuse resolution, `withForkContext`/error-result builders.
+- `interrupt-control.ts` — foreground status/interrupt helpers + async interrupt wait machinery (`interruptAsyncRun`, `interruptAllAsyncRuns`).
 - `run-async-path.ts` — detached async single + parallel dispatch path; returns `null` when not async.
 - `run-parallel-path.ts` — foreground parallel dispatch with worktree setup/cleanup and shared foreground control.
+- `run-single-path.ts` — single foreground run dispatch path (`runSinglePath`).
 - `subagent-control.ts` — formats foreground control + notification/attention events and control verbs.
 - `subagent-executor.ts` — orchestrator/router: `executeInternal`/`execute`/`openWorkflowGroup`, routes to the path modules.
 - `subagent-prompt-runtime.ts` — PI_SUBAGENT_* prompt env constants + project-context/skills strip helpers.

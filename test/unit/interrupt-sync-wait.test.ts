@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { EventEmitter } from "node:events";
 import * as path from "node:path";
-import { createSubagentExecutor, __setInterruptWaitMsForTest } from "../../src/dispatch/subagent-executor.ts";
+import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { __setInterruptWaitMsForTest } from "../../src/dispatch/interrupt-control.ts";
 import {
 	ChildAgentRegistry,
 	type ChildAgentHandle,
