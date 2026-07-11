@@ -330,7 +330,10 @@ describe(
 			assert.match((sent[1] as { content?: string }).content ?? "", /parallel finished/);
 		});
 
-		// SKIP: pre-existing integration failure unrelated to subagent-liveness charter; see commit 6a501e7
+		// SKIP: non-hermetic — validates agents against the real user-level
+		// subagent.json preset catalog, so it breaks on any machine whose config
+		// lacks these agents under preset "fast". Hermetic coverage lives in
+		// test/unit/slash-preset-dispatch.test.ts.
 		it.skip("forwards preset config from /run, and /parallel", async () => {
 			const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
 			const events = createEventBus();

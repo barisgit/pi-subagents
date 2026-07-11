@@ -3,7 +3,10 @@ import { validationError } from "./executor-helpers.ts";
 import type { SubagentToolResult } from "../protocol/types.ts";
 import { buildRequestedModeError } from "./execution-input.ts";
 
-const SLIM_TOP_LEVEL_KEYS = new Set(["run", "async", "batch", "worktree", "message", "action", "id"]);
+// "preset" is not part of the model-facing tool schema (additionalProperties:
+// false blocks it there); it is accepted here so internal surfaces such as the
+// slash commands can thread a resolved preset into dispatch.
+const SLIM_TOP_LEVEL_KEYS = new Set(["run", "async", "batch", "worktree", "message", "action", "id", "preset"]);
 const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "output"]);
 export const ALLOWED_CONTROL_ACTIONS = ["list", "status", "interrupt", "resume"] as const;
 const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);

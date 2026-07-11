@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { registerSlashCommands } from "../../src/surfaces/slash-commands.ts";
+import { normalizeRunDispatchParams, validateSubagentToolInput } from "../../src/dispatch/dispatch-input.ts";
 import type { SubagentState } from "../../src/protocol/types.ts";
 
 const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
@@ -118,6 +119,24 @@ function setupSlashHarness() {
 // (the config default), `b-agent` only under preset B. Selecting preset=B must
 // carry through to the dispatched params -- otherwise execution rediscovers
 // under the default preset and the B-only agent fails or loses its overlay.
+describe("preset survives the dispatch validation seam", () => {
+	// InternalSubagentParams has no `run` field; the executor casts the slim
+	// tool input into it at the execute() seam, so the test mirrors that shape.
+	const slimInput: Parameters<typeof normalizeRunDispatchParams>[0] & {
+		run: Array<{ agent: string; task: string }>;
+	} = { run: [{ agent: "a", task: "t" }], preset: "B" };
+
+	it("validateSubagentToolInput accepts a top-level preset", () => {
+		assert.equal(validateSubagentToolInput(slimInput), null);
+	});
+
+	it("normalizeRunDispatchParams preserves preset on the normalized params", () => {
+		const normalized = normalizeRunDispatchParams(slimInput);
+		assert.equal(normalized.error, undefined);
+		assert.equal(normalized.params?.preset, "B");
+	});
+});
+
 describe("slash preset dispatch", () => {
 	beforeEach(() => {
 		tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-slash-preset-home-"));
