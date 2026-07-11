@@ -497,7 +497,24 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 			// Progress must never affect the workflow result.
 		}
 	};
-	const ctx = vm.createContext({ agent, parallel, pipeline, phase });
+	// Keep the sandbox's global prototype chain out of the host realm. Passing an
+	// object literal here exposes host Object -> Function through
+	// `this.constructor.constructor`. Disabling string code generation also blocks
+	// the context's own Function/eval constructors. node:vm is still an isolation
+	// aid rather than a security boundary, but these options close the direct host
+	// process escape while preserving the four callable workflow globals.
+	const sandbox = Object.assign(Object.create(null) as Record<string, unknown>, {
+		agent,
+		parallel,
+		pipeline,
+		phase,
+	});
+	// Host callables otherwise retain Function.prototype, which exposes the host
+	// Function constructor even when the global object itself has no prototype.
+	for (const callable of [agent, parallel, pipeline, phase]) Object.setPrototypeOf(callable, null);
+	const ctx = vm.createContext(sandbox, {
+		codeGeneration: { strings: false, wasm: false },
+	});
 
 	liveRuns.add(runState);
 	try {

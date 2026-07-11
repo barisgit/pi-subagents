@@ -306,13 +306,12 @@ export interface SingleResult {
 /**
  * Extension-owned tool result. Extends the SDK's `AgentToolResult` with the
  * `isError` flag that the SDK dropped from its result shape: the SDK signals
- * tool failure by throwing from `execute`, but throwing would discard our
- * `Details` payload (the loop replaces content and details with a synthetic
- * error result), so validation/dispatch failures are returned as normal
- * results instead. The extra field is ignored by the host loop and consumed
- * only by our own surfaces (slash/prompt-template bridges, spawnRaw API,
- * tests). Values are structurally assignable to `AgentToolResult` at the
- * registered-tool boundary.
+ * tool failure by throwing from `execute`. Registered-tool adapters throw for
+ * empty validation/dispatch failures so the host records them as failures,
+ * but retain this flag for partial failures whose `Details` payload must reach
+ * renderers and persistence. The extra field is ignored by the host loop and
+ * consumed by our own surfaces (slash/prompt-template bridges, spawnRaw API,
+ * tests). Values remain structurally assignable to `AgentToolResult`.
  */
 export interface SubagentToolResult<T = Details> extends AgentToolResult<T> {
 	isError?: boolean;

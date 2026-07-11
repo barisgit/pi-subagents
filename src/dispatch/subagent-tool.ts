@@ -11,6 +11,23 @@ export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeo
 	workflowTool: ReturnType<typeof createWorkflowTool>;
 } {
 	const { executor } = deps;
+	const throwEmptyFailure = <T>(result: SubagentToolResult<T>): SubagentToolResult<T> => {
+		// SDK 0.75 marks a registered tool call failed only when execute throws.
+		// Preserve populated Details for partial child failures; empty failures carry
+		// no renderer/persistence value beyond their text and must use the SDK path.
+		const details = result.details;
+		const hasResults =
+			details !== null &&
+			typeof details === "object" &&
+			"results" in details &&
+			Array.isArray(details.results) &&
+			details.results.length > 0;
+		if (result.isError && !hasResults) {
+			const text = result.content.find((part) => part.type === "text")?.text ?? "Subagent tool failed";
+			throw new Error(text);
+		}
+		return result;
+	};
 
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
@@ -39,14 +56,15 @@ Run management: Use { action: "list" } when available agents are unknown or may 
 Author agents as files under \`agents/<name>.md\`. For advanced patterns see skills/subagent.`,
 		parameters: SubagentParams,
 
-		execute(id, params, signal, onUpdate, ctx) {
-			return executor.execute(
+		async execute(id, params, signal, onUpdate, ctx) {
+			const result = await executor.execute(
 				id,
 				params as unknown as Parameters<typeof executor.execute>[1],
 				signal as AbortSignal,
 				onUpdate,
 				ctx,
 			);
+			return throwEmptyFailure(result);
 		},
 
 		renderCall(args, theme) {
@@ -84,6 +102,10 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 	const workflowTool = createWorkflowTool({
 		openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
 	});
+	const executeWorkflow = workflowTool.execute;
+	if (executeWorkflow) {
+		workflowTool.execute = async (...args) => throwEmptyFailure(await executeWorkflow(...args));
+	}
 	workflowTool.renderResult = (result, options, theme, context) => {
 		const subagentResult = result as SubagentToolResult;
 		syncResultAnimation(subagentResult, context);

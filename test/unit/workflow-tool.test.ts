@@ -19,6 +19,22 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 			dispatch: async () => ({ result: "unused" }),
 		});
 
+		it("does not expose the host process through the sandbox global prototype chain", async () => {
+			const result = await executeWorkflow(
+				"try { return this.constructor.constructor('return process.version')(); } catch (error) { return error.name; }",
+			);
+
+			assert.equal((result.content[0] as { text?: string } | undefined)?.text, "EvalError");
+		});
+
+		it("disables dynamic string code generation inside the workflow context", async () => {
+			const result = await executeWorkflow(
+				"try { Function('return 1')(); return 'escaped'; } catch (error) { return error.name; }",
+			);
+
+			assert.equal((result.content[0] as { text?: string } | undefined)?.text, "EvalError");
+		});
+
 		assert.equal(tool.name, "workflow");
 		assert.deepEqual(
 			validateToolArguments(tool, {
