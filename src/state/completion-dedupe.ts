@@ -40,7 +40,7 @@ export function buildCompletionKey(data: CompletionDataLike, fallback: string): 
 	].join(":");
 }
 
-export function pruneSeenMap(seen: Map<string, number>, now: number, ttlMs: number): void {
+function pruneSeenMap(seen: Map<string, number>, now: number, ttlMs: number): void {
 	for (const [key, ts] of seen.entries()) {
 		if (now - ts > ttlMs) seen.delete(key);
 	}

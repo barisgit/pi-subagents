@@ -337,7 +337,7 @@ export function buildParallelModeError(message: string): AgentToolResult<Details
 	};
 }
 
-export function tokenUsageFromResult(
+function tokenUsageFromResult(
 	result: SingleResult,
 ): { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number } | undefined {
 	return tokenUsageFromUsage(result.usage);

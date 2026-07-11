@@ -4,21 +4,21 @@ export const PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT = "prompt-template:subagent
 export const PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT = "prompt-template:subagent:update";
 export const PROMPT_TEMPLATE_SUBAGENT_CANCEL_EVENT = "prompt-template:subagent:cancel";
 
-export interface PromptTemplateDelegationTask {
+interface PromptTemplateDelegationTask {
 	agent: string;
 	task: string;
 	model?: string;
 	cwd?: string;
 }
 
-export interface PromptTemplateDelegationParallelResult {
+interface PromptTemplateDelegationParallelResult {
 	agent: string;
 	messages: unknown[];
 	isError: boolean;
 	errorText?: string;
 }
 
-export interface PromptTemplateDelegationRequest {
+interface PromptTemplateDelegationRequest {
 	requestId: string;
 	agent: string;
 	task: string;
@@ -29,7 +29,7 @@ export interface PromptTemplateDelegationRequest {
 	worktree?: boolean;
 }
 
-export interface PromptTemplateDelegationResponse extends PromptTemplateDelegationRequest {
+interface PromptTemplateDelegationResponse extends PromptTemplateDelegationRequest {
 	messages: unknown[];
 	parallelResults?: PromptTemplateDelegationParallelResult[];
 	contentText?: string;
@@ -37,7 +37,7 @@ export interface PromptTemplateDelegationResponse extends PromptTemplateDelegati
 	errorText?: string;
 }
 
-export interface PromptTemplateDelegationTaskProgress {
+interface PromptTemplateDelegationTaskProgress {
 	index?: number;
 	agent: string;
 	status?: string;
@@ -52,7 +52,7 @@ export interface PromptTemplateDelegationTaskProgress {
 	tokens?: number;
 }
 
-export interface PromptTemplateDelegationUpdate {
+interface PromptTemplateDelegationUpdate {
 	requestId: string;
 	currentTool?: string;
 	currentToolArgs?: string;
@@ -130,7 +130,7 @@ function parseDelegationTasks(tasks: unknown): PromptTemplateDelegationTask[] {
 	return parsed;
 }
 
-export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegationRequest | undefined {
+function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegationRequest | undefined {
 	if (!data || typeof data !== "object") return undefined;
 	const value = data as Partial<PromptTemplateDelegationRequest> & { tasks?: unknown };
 	if (typeof value.requestId !== "string" || !value.requestId) return undefined;
@@ -159,7 +159,7 @@ export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegat
 	};
 }
 
-export function firstTextContent(content: unknown): string | undefined {
+function firstTextContent(content: unknown): string | undefined {
 	if (!Array.isArray(content)) return undefined;
 	for (const part of content) {
 		if (!part || typeof part !== "object") continue;

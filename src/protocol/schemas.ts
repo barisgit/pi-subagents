@@ -47,9 +47,8 @@ export const SubagentParams = Type.Object(
 );
 
 export type Task = Static<typeof TaskSchema>;
-export type Step = Task;
 export type SubagentToolInput = {
-	run?: Step[];
+	run?: Task[];
 	async?: boolean;
 	batch?: boolean;
 	worktree?: boolean;
@@ -57,10 +56,3 @@ export type SubagentToolInput = {
 	action?: "list" | "status" | "interrupt" | "resume";
 	id?: string;
 };
-
-// Back-compat export names for older internal schema tests/imports; the shapes are slim.
-export const TaskItem = TaskSchema;
-export const TopLevelTaskItem = TaskSchema;
-export const SequentialStepSchema = TaskSchema;
-export const ParallelTaskSchema = TaskSchema;
-export const ParallelStepSchema = Type.Array(TaskSchema, { minItems: 1 });

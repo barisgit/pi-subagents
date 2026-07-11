@@ -56,7 +56,3 @@ export function getCurrentPi(): ExtensionAPI {
 	}
 	return pi;
 }
-
-export function peekCurrentPiId(): string | undefined {
-	return store().piId;
-}

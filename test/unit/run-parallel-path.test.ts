@@ -8,7 +8,7 @@ import {
 	runParallelPath,
 } from "../../src/dispatch/run-parallel-path.ts";
 import type { WorktreeSetup } from "../../src/dispatch/worktree.ts";
-import type { ExecutionContextData, ExecutorDeps, TaskParam } from "../../src/dispatch/subagent-executor.ts";
+import type { ExecutionContextData, ExecutorDeps, TaskParam } from "../../src/dispatch/executor-types.ts";
 
 function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
 	const entry = result.content[0];

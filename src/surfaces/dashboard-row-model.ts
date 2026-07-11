@@ -62,7 +62,7 @@ export function parentRunIdOf(run: LiveRun): string | undefined {
 // rows are direct matches only when their own session/cwd metadata matches; the
 // overlay separately keeps descendants of matching rows so nested runs with
 // stale lineage still render under their visible parent.
-export function runMatchesSession(
+function runMatchesSession(
 	run: LiveRun,
 	scope: { sessionId?: string; sessionCwd?: string } | string | undefined,
 ): boolean {

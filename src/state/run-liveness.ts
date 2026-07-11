@@ -5,7 +5,7 @@ import { processGlobal } from "../shared/process-global.ts";
 
 export const RUNNER_HEARTBEAT_STALE_MS = 15_000;
 export const RUNNER_HARD_DEAD_MS = 30_000;
-export const RUNNER_WORKING_RECENT_MS = 5_000;
+const RUNNER_WORKING_RECENT_MS = 5_000;
 
 /**
  * Per-PROCESS runner identity token. Lives on globalThis (processGlobal) so it

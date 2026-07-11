@@ -69,30 +69,30 @@ export function mergeAgentsForScope(
 	return Array.from(agentMap.values());
 }
 
-export type AgentSource = "builtin" | "user" | "project";
-export type SystemPromptMode = "append" | "replace";
+type AgentSource = "builtin" | "user" | "project";
+type SystemPromptMode = "append" | "replace";
 
-export function defaultSystemPromptMode(name: string): SystemPromptMode {
+function defaultSystemPromptMode(name: string): SystemPromptMode {
 	return name === "delegate" ? "append" : "replace";
 }
 
-export function defaultInheritProjectContext(name: string): boolean {
+function defaultInheritProjectContext(name: string): boolean {
 	return name === "delegate";
 }
 
-export function defaultInheritSkills(): boolean {
+function defaultInheritSkills(): boolean {
 	return false;
 }
 
-export function defaultSurface(): AgentSurface {
+function defaultSurface(): AgentSurface {
 	return "both";
 }
 
-export function defaultCanDelegate(name: string): boolean {
+function defaultCanDelegate(name: string): boolean {
 	return name === "orchestrator" || name === "delegate";
 }
 
-export function defaultAllowedDelegateAgents(name: string): string[] | undefined {
+function defaultAllowedDelegateAgents(name: string): string[] | undefined {
 	return defaultCanDelegate(name) ? ["explorer", "librarian", "oracle", "designer", "fixer"] : undefined;
 }
 
@@ -123,7 +123,7 @@ export interface BuiltinAgentOverrideConfig {
 	tools?: string[] | false;
 }
 
-export interface BuiltinAgentOverrideInfo {
+interface BuiltinAgentOverrideInfo {
 	scope: "user" | "project";
 	path: string;
 	base: BuiltinAgentOverrideBase;
@@ -496,11 +496,11 @@ function findNearestProjectRoot(cwd: string): string | null {
 	}
 }
 
-export function getUserAgentSettingsPath(): string {
+function getUserAgentSettingsPath(): string {
 	return path.join(getAgentDir(), "settings.json");
 }
 
-export function getProjectAgentSettingsPath(cwd: string): string | null {
+function getProjectAgentSettingsPath(cwd: string): string | null {
 	const projectRoot = findNearestProjectRoot(cwd);
 	return projectRoot ? path.join(projectRoot, ".pi", "settings.json") : null;
 }
@@ -775,34 +775,6 @@ export function buildBuiltinOverrideConfig(
 	if (!arraysEqual(draftTools, baseTools)) override.tools = draftTools ? [...draftTools] : false;
 
 	return Object.keys(override).length > 0 ? override : undefined;
-}
-
-export function saveBuiltinAgentOverride(
-	cwd: string,
-	name: string,
-	scope: "user" | "project",
-	override: BuiltinAgentOverrideConfig,
-): string {
-	const filePath = scope === "project" ? getProjectAgentSettingsPath(cwd) : getUserAgentSettingsPath();
-	if (!filePath) throw new Error("Project override is not available here. No project config root was found.");
-
-	const settings = readSettingsFileStrict(filePath);
-	const subagents =
-		settings.subagents && typeof settings.subagents === "object" && !Array.isArray(settings.subagents)
-			? { ...(settings.subagents as Record<string, unknown>) }
-			: {};
-	const agentOverrides =
-		subagents.agentOverrides &&
-		typeof subagents.agentOverrides === "object" &&
-		!Array.isArray(subagents.agentOverrides)
-			? { ...(subagents.agentOverrides as Record<string, unknown>) }
-			: {};
-
-	agentOverrides[name] = cloneOverrideValue(override);
-	subagents.agentOverrides = agentOverrides;
-	settings.subagents = subagents;
-	writeSettingsFile(filePath, settings);
-	return filePath;
 }
 
 export function removeBuiltinAgentOverride(cwd: string, name: string, scope: "user" | "project"): string {

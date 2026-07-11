@@ -6,7 +6,7 @@
 
 export type RunMode = "single" | "parallel";
 
-export type RunHandleStyle = "compact" | "verbose";
+type RunHandleStyle = "compact" | "verbose";
 
 export interface RunHandleInput {
 	mode: RunMode;

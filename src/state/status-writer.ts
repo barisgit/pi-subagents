@@ -422,7 +422,7 @@ function mergeValue(target: Record<string, unknown>, source: Record<string, unkn
  * string), clear the current tool + activity, stamp the schema version, and
  * persist the run total token usage when provided.
  */
-export function stampTerminalScalars(
+function stampTerminalScalars(
 	status: PersistedRunStatus,
 	fields: { state: PersistedRunStatus["state"]; endedAt: number; totalTokens?: TokenUsage },
 ): void {

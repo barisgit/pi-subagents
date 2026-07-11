@@ -507,7 +507,7 @@ export function resolveSkillPath(skillName: string, cwd: string): { path: string
 	return { path: skill.filePath, source: skill.source };
 }
 
-export function readSkill(skillName: string, skillPath: string, source: SkillSource): ResolvedSkill | undefined {
+function readSkill(skillName: string, skillPath: string, source: SkillSource): ResolvedSkill | undefined {
 	try {
 		const stat = fs.statSync(skillPath);
 		const cached = skillCache.get(skillPath);

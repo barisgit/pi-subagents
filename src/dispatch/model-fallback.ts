@@ -1,4 +1,3 @@
-import type { Usage } from "../protocol/types.ts";
 import type { ModelInfo } from "./executor-types.ts";
 
 export type AvailableModelInfo = ModelInfo;
@@ -8,19 +7,11 @@ export interface ModelRefInfo {
 	id: string;
 }
 
-export interface ModelAttemptSummary {
-	model: string;
-	success: boolean;
-	exitCode?: number | null;
-	error?: string;
-	usage?: Usage;
-}
-
 export function normalizeAvailableModels(models: Array<{ provider: string; id: string }>): ModelInfo[] {
 	return models.map((model) => ({ provider: model.provider, id: model.id, fullId: `${model.provider}/${model.id}` }));
 }
 
-export function splitThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
+function splitThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
 	const colonIdx = model.lastIndexOf(":");
 	if (colonIdx === -1) return { baseModel: model, thinkingSuffix: "" };
 	return {
@@ -122,11 +113,4 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 export function isRetryableModelFailure(error: string | undefined): boolean {
 	if (!error) return false;
 	return RETRYABLE_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
-}
-
-export function formatModelAttemptNote(attempt: ModelAttemptSummary, nextModel?: string): string {
-	const failure = attempt.error?.trim() || `exit ${attempt.exitCode ?? 1}`;
-	return nextModel
-		? `[fallback] ${attempt.model} failed: ${failure}. Retrying with ${nextModel}.`
-		: `[fallback] ${attempt.model} failed: ${failure}.`;
 }

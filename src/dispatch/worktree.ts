@@ -9,7 +9,7 @@ export interface WorktreeSetup {
 	baseCommit: string;
 }
 
-export interface WorktreeInfo {
+interface WorktreeInfo {
 	path: string;
 	agentCwd: string;
 	branch: string;
@@ -35,7 +35,7 @@ export interface WorktreeTaskCwdConflict {
 	cwd: string;
 }
 
-export interface WorktreeSetupHookConfig {
+interface WorktreeSetupHookConfig {
 	hookPath: string;
 	timeoutMs?: number;
 }

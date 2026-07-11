@@ -35,30 +35,10 @@ import {
 } from "./in-process-executor.ts";
 import { parkLeafPermit } from "./leaf-concurrency.ts";
 import { prepareChildStep } from "./prepare-child-step.ts";
-import type {
-	AsyncDispatchStep,
-	ExecutionContextData,
-	ExecutorDeps,
-	ForegroundControlRef,
-	InternalSubagentParams,
-	TaskParam,
-} from "./executor-types.ts";
-export type {
-	AsyncDispatchStep,
-	ExecutionContextData,
-	ExecutorDeps,
-	ForegroundControlRef,
-	ModelInfo,
-	TaskParam,
-} from "./executor-types.ts";
+import type { ExecutionContextData, ExecutorDeps, InternalSubagentParams, TaskParam } from "./executor-types.ts";
 import {
-	addUsageInto,
-	applyForegroundProgress,
-	asyncStartedResult,
 	batchToNotifyPolicy,
 	buildAsyncAggregateCompletePayload,
-	buildParallelModeError,
-	buildParallelWorktreeTaskCwdError,
 	createForegroundControlNotifier,
 	emitRunAnchor,
 	emitSyncLifecycleEvent,
@@ -67,7 +47,6 @@ import {
 	interruptForegroundOnNeedsAttention,
 	mirrorForegroundProgressToStatus,
 	publishSubagentUsage,
-	resolveChildTools,
 	resolveDispatchParentRunId,
 	resolveDispatchRootRunId,
 	resolveDispatchRootSessionId,
@@ -78,33 +57,7 @@ import {
 	terminalStatusStepFromResult,
 	validationError,
 } from "./executor-helpers.ts";
-export {
-	addUsageInto,
-	applyForegroundProgress,
-	asyncStartedResult,
-	batchToNotifyPolicy,
-	buildParallelModeError,
-	buildParallelWorktreeTaskCwdError,
-	createForegroundControlNotifier,
-	emitRunAnchor,
-	emitSyncLifecycleEvent,
-	emptyUsage,
-	getRequestedModeLabel,
-	interruptForegroundOnNeedsAttention,
-	mirrorForegroundProgressToStatus,
-	publishSubagentUsage,
-	resolveChildTools,
-	resolveDispatchParentRunId,
-	resolveDispatchRootRunId,
-	resolveDispatchRootSessionId,
-	safeEmit,
-	singleResultToChildAgentResult,
-	sumUsages,
-	tokenUsageFromResult,
-	validationError,
-} from "./executor-helpers.ts";
-import { buildAsyncChildStep, runInProcessChildStep } from "./child-step-runner.ts";
-export { buildAsyncChildStep, runInProcessChildStep } from "./child-step-runner.ts";
+import { runInProcessChildStep } from "./child-step-runner.ts";
 import {
 	applyIntercomBridgeToAgent,
 	resolveIntercomBridge,
@@ -156,7 +109,7 @@ import {
 import { logger } from "../shared/logger.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "../state/lineage.ts";
-import type { SubagentToolInput, Step, Task } from "../protocol/schemas.ts";
+import type { SubagentToolInput, Task } from "../protocol/schemas.ts";
 import type { WorkflowGroupHandle } from "../workflow/workflow.ts";
 import { writeWorkflowGroupState } from "../workflow/workflow-group-state.ts";
 import { findWorktreeTaskCwdConflict, formatWorktreeTaskCwdConflict } from "./worktree.ts";
@@ -201,8 +154,6 @@ import {
 	checkSubagentDepth,
 	resolveCurrentMaxSubagentDepth,
 } from "../shared/runtime-env.ts";
-export type { SubagentToolInput, Step, Task };
-export type { SubagentToolInput as SubagentParamsLike };
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
 	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
 }

@@ -9,9 +9,9 @@ import {
 import { resolveSubagentIntercomTarget } from "../dispatch/intercom-bridge.ts";
 import type { ControlEvent } from "../protocol/types.ts";
 
-export const SUBAGENT_CONTROL_MESSAGE_TYPE = "subagent_control_notice";
+const SUBAGENT_CONTROL_MESSAGE_TYPE = "subagent_control_notice";
 
-export interface SubagentControlMessageDetails {
+interface SubagentControlMessageDetails {
 	event: ControlEvent;
 	source?: "foreground" | "async";
 	asyncDir?: string;
@@ -19,7 +19,7 @@ export interface SubagentControlMessageDetails {
 	noticeText?: string;
 }
 
-export function controlNoticeTarget(details: SubagentControlMessageDetails): string | undefined {
+function controlNoticeTarget(details: SubagentControlMessageDetails): string | undefined {
 	return details.childIntercomTarget;
 }
 
@@ -84,11 +84,11 @@ export function registerControlNotices(params: {
 	return { controlEventHandler, controlRunTerminalHandler };
 }
 
-export function formatSubagentControlNotice(details: SubagentControlMessageDetails, content?: string): string {
+function formatSubagentControlNotice(details: SubagentControlMessageDetails, content?: string): string {
 	return details.noticeText ?? content ?? formatControlNoticeMessage(details.event, controlNoticeTarget(details));
 }
 
-export class SubagentControlNoticeComponent implements Component {
+class SubagentControlNoticeComponent implements Component {
 	private readonly details: SubagentControlMessageDetails;
 	private readonly theme: ExtensionContext["ui"]["theme"];
 

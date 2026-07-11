@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify from "../../src/surfaces/notify.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
-import { batchToNotifyPolicy } from "../../src/dispatch/subagent-executor.ts";
+import { batchToNotifyPolicy } from "../../src/dispatch/executor-helpers.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_RUN_COMPLETE_EVENT } from "../../src/protocol/types.ts";
 
 function createBus() {

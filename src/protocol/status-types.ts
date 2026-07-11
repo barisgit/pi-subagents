@@ -62,7 +62,7 @@ export interface ChildAgentResult {
  * (currentToolArgs, recentTools, tokenSamples, lastToolEndAt, toolCount, tokens).
  * All optional, so neither writer changes the bytes it writes.
  */
-export interface LiveStepProgress {
+interface LiveStepProgress {
 	color?: string;
 	thinking?: string;
 	/** Current execution phase for this step, persisted additively by status-writer. */

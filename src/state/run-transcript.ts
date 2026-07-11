@@ -43,7 +43,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const ARGS_PREVIEW_MAX = 60;
 
-export function previewArgs(args: unknown, maxLength = ARGS_PREVIEW_MAX): string {
+function previewArgs(args: unknown, maxLength = ARGS_PREVIEW_MAX): string {
 	if (args === undefined || args === null) return "";
 	let json: string;
 	try {

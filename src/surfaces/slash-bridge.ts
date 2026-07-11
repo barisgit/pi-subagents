@@ -10,7 +10,7 @@ import {
 	type Details,
 } from "../protocol/types.ts";
 
-export interface SlashSubagentRequest {
+interface SlashSubagentRequest {
 	requestId: string;
 	params: SubagentParamsLike;
 }

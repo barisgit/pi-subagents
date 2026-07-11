@@ -16,7 +16,7 @@ import type { RunView, RunViewStep } from "./run-view.ts";
 // of the canonical RunView/RunViewStep display types. All existing importers
 // keep compiling unchanged; the two former interface bodies were unified into
 // src/state/run-view.ts.
-export type AsyncRunStepSummary = RunViewStep;
+type AsyncRunStepSummary = RunViewStep;
 export type AsyncRunSummary = RunView;
 
 export interface AsyncRunListOptions {

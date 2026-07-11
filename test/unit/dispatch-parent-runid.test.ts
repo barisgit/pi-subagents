@@ -4,7 +4,7 @@ import {
 	resolveDispatchParentRunId,
 	resolveDispatchRootRunId,
 	resolveDispatchRootSessionId,
-} from "../../src/dispatch/subagent-executor.ts";
+} from "../../src/dispatch/executor-helpers.ts";
 import type { SubagentLineage } from "../../src/state/lineage.ts";
 
 const globalStore = globalThis as Record<string, unknown>;

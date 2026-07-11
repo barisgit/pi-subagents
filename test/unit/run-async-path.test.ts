@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { childCompletionRunId, runAsyncPath } from "../../src/dispatch/run-async-path.ts";
-import type { ExecutionContextData, ExecutorDeps } from "../../src/dispatch/subagent-executor.ts";
+import type { ExecutionContextData, ExecutorDeps } from "../../src/dispatch/executor-types.ts";
 
 function makeData(overrides: Partial<ExecutionContextData>): ExecutionContextData {
 	const base = {

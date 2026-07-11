@@ -46,13 +46,7 @@ import type {
 	RunPhase,
 	StatusPatch,
 } from "../protocol/status-types.ts";
-export type {
-	ChildAgentExitState,
-	ChildAgentResult,
-	ChildUsage,
-	RunPhase,
-	StatusPatch,
-} from "../protocol/status-types.ts";
+export type { ChildAgentResult, StatusPatch } from "../protocol/status-types.ts";
 import {
 	fallbackSubmitResultEnvelope,
 	hasOutputBlock,
@@ -66,9 +60,9 @@ import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry
 import { addUsageInto, nestedSubagentUsageFromToolEvent } from "./executor-helpers.ts";
 import { acquireLeafPermit } from "./leaf-concurrency.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
-export type { ChildAgentContext, ChildAgentHandle, RunViewSeed } from "./child-agent-registry.ts";
+export type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 import type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
-export type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
+export type { ChildAgentStep } from "./executor-types.ts";
 
 type StatusPatchBody = Omit<StatusPatch, "runId" | "stepIndex">;
 
@@ -85,7 +79,7 @@ export interface PhaseEventHandler {
 	getState(): RunPhaseState;
 }
 
-export function emitPhaseChange(
+function emitPhaseChange(
 	pi: PhaseEventHandlerOptions["pi"] | undefined,
 	payload: SubagentPhaseChangePayload,
 ): void {

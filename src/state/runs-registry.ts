@@ -55,7 +55,7 @@ export function setRegistryPathForTests(p: string | null): void {
 	registryPathOverride = p;
 }
 
-export function getRegistryPath(): string {
+function getRegistryPath(): string {
 	// Test isolation: setRegistryPathForTests wins, then PI_SUBAGENTS_REGISTRY_PATH
 	// env (set by integration test scaffolding so subprocess-spawned executors
 	// can pick it up without explicit wiring), then the real registry under HOME.
@@ -166,10 +166,6 @@ export function readAllEntries(opts: ReadOptions = {}): RunsRegistryEntry[] {
 
 export function readShardEntries(sessionId: string, opts: ReadOptions = {}): RunsRegistryEntry[] {
 	return parseEntriesFromFile(getShardPath(sessionId), opts);
-}
-
-export function listRunsByRootRunId(rootRunId: string): RunsRegistryEntry[] {
-	return listRunsByRootRunIds([rootRunId]);
 }
 
 export function listRunsByRootRunIds(rootRunIds: Iterable<string>): RunsRegistryEntry[] {

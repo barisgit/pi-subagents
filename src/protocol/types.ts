@@ -6,7 +6,6 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { SubmitResultEnvelope } from "./output-contract.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RunPhase } from "./status-types.ts";
-export type { SubagentToolInput, Step, Task } from "./schemas.ts";
 
 // ============================================================================
 // Basic Types
@@ -125,7 +124,7 @@ export interface ToolCallSummary {
 	expandedText: string;
 }
 
-export interface ProgressSummary extends Partial<
+interface ProgressSummary extends Partial<
 	Pick<
 		AgentProgress,
 		| "status"
@@ -171,7 +170,7 @@ export interface SpawnResult {
 	isError?: boolean;
 }
 
-export interface PersonaInfo {
+interface PersonaInfo {
 	name: string;
 	description: string;
 	source?: string;
@@ -530,13 +529,6 @@ export interface ErrorInfo {
 	details?: string;
 }
 
-export interface IntercomEventBus {
-	on(channel: string, handler: (data: unknown) => void): () => void;
-	emit(channel: string, data: unknown): void;
-}
-
-export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
-export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
 export const SUBAGENT_REQUEST_API_EVENT = "subagent:request-api";
 export const SUBAGENT_EXPOSE_API_EVENT = "subagent:expose-api";
 /**
@@ -620,7 +612,7 @@ export interface IntercomBridgeConfig {
 	instructionFile?: string;
 }
 
-export interface TopLevelParallelConfig {
+interface TopLevelParallelConfig {
 	maxTasks?: number;
 }
 
@@ -717,7 +709,7 @@ export const DEFAULT_ARTIFACT_CONFIG: ArtifactConfig = {
 	cleanupDays: 7,
 };
 
-export const MAX_PARALLEL = 8;
+const MAX_PARALLEL = 8;
 export const WIDGET_KEY = "subagent-async";
 export const SLASH_RESULT_TYPE = "subagent-slash-result";
 export const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
@@ -834,7 +826,7 @@ export function getSubagentIdentityEnv(
 // Utility Functions
 // ============================================================================
 
-export function formatBytes(bytes: number): string {
+function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes}B`;
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
 	return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;

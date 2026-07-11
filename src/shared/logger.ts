@@ -10,9 +10,9 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevel = "debug" | "info" | "warn" | "error";
 
-export interface LogContext {
+interface LogContext {
 	runId?: string;
 	stepIndex?: number;
 	agent?: string;

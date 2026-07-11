@@ -19,7 +19,7 @@ export interface SubmitResultEnvelope {
 }
 
 export const OUTPUT_OPEN = "<output>";
-export const OUTPUT_CLOSE = "</output>";
+const OUTPUT_CLOSE = "</output>";
 
 // Global, non-greedy, dot-matches-newline (via [\s\S]) so multiple blocks and
 // multiline content are both handled. We deliberately require a closing tag: an

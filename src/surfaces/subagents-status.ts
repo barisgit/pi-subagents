@@ -54,7 +54,6 @@ import {
 import { deriveLiveRuns } from "./dashboard-run-source.ts";
 
 // Re-exported from the pure row-derivation model so existing import sites stay stable.
-export { runMatchesSession } from "./dashboard-row-model.ts";
 export type { ContainerRowInfo, DisplayRow } from "./dashboard-row-model.ts";
 
 const AUTO_REFRESH_MS = 1000;
@@ -519,7 +518,7 @@ export function runEndedStamp(run: LiveRun): string {
 
 type OverlayDisplayRow = DisplayRow | { kind: "empty"; id: "empty" };
 
-export function buildPhaseLine(
+function buildPhaseLine(
 	theme: Theme,
 	row: Extract<DisplayRow, { kind: "phase" }>,
 	selected: boolean,
@@ -533,7 +532,7 @@ export function buildPhaseLine(
 	return truncateToWidth(text, width, "");
 }
 
-export function buildPipelineItemLine(
+function buildPipelineItemLine(
 	theme: Theme,
 	row: Extract<DisplayRow, { kind: "pipelineItem" }>,
 	selected: boolean,
