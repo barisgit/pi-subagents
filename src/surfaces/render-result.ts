@@ -18,7 +18,7 @@ import {
 	themeBold,
 	tintAgentName,
 	truncLine,
-	WIDGET_ANIMATION_MS,
+	getWidgetAnimationIntervalMs,
 	formatTokenStat,
 	type Theme,
 } from "./render-shared.ts";
@@ -103,7 +103,7 @@ export function syncResultAnimation(result: AgentToolResult<Details>, context: R
 	if (context.state.subagentResultAnimationTimer) return;
 	// Repaints once per WIDGET_ANIMATION_MS (now 1s) only to advance the elapsed
 	// timer; the running glyph is static so this no longer drives spinner frames.
-	const timer = setInterval(() => context.invalidate(), WIDGET_ANIMATION_MS);
+	const timer = setInterval(() => context.invalidate(), getWidgetAnimationIntervalMs());
 	timer.unref?.();
 	context.state.subagentResultAnimationTimer = timer;
 	resultAnimationTimers.set(timer, context.state);

@@ -17,7 +17,7 @@ import {
 	themeBold,
 	tintAgentName,
 	truncLine,
-	WIDGET_ANIMATION_MS,
+	getWidgetAnimationIntervalMs,
 	formatTokenStat,
 	type Theme,
 } from "./render-shared.ts";
@@ -313,7 +313,7 @@ function ensureWidgetAnimation(): void {
 			return;
 		}
 		refreshAnimatedWidget();
-	}, WIDGET_ANIMATION_MS);
+	}, getWidgetAnimationIntervalMs());
 	widgetTimer.unref?.();
 }
 

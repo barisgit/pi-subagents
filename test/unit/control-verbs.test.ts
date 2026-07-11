@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compile } from "typebox/compile";
 import { SubagentParams } from "../../src/protocol/schemas.ts";
-import { createSubagentExecutor, validateSubagentToolInput } from "../../src/dispatch/subagent-executor.ts";
+import {
+	createSubagentExecutor,
+	__setInterruptWaitMsForTest,
+	validateSubagentToolInput,
+} from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, type ChildAgentHandle } from "../../src/dispatch/in-process-executor.ts";
 import { createTempDir, makeAgent, removeTempDir } from "../support/helpers.ts";
 import type { SubagentState } from "../../src/protocol/types.ts";
@@ -105,6 +109,7 @@ describe("control verbs", () => {
 
 	it("each control verb is recognized by the dispatch handler", async () => {
 		const tempDir = createTempDir("pi-subagent-control-verbs-");
+		__setInterruptWaitMsForTest(60);
 		try {
 			const harness = makeHarness(tempDir);
 			registerHandle(harness.childRegistry, "run-1");
@@ -125,6 +130,7 @@ describe("control verbs", () => {
 
 			for (const result of results) assert.doesNotMatch(text(result), /Unknown action/);
 		} finally {
+			__setInterruptWaitMsForTest(null);
 			removeTempDir(tempDir);
 		}
 	});

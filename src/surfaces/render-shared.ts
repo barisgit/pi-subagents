@@ -77,6 +77,18 @@ export function truncLine(text: string, maxWidth: number): string {
 // STATIC glyph and timers only need to advance elapsed at human-readable speed.
 export const WIDGET_ANIMATION_MS = 1000;
 
+let widgetAnimationIntervalMs = WIDGET_ANIMATION_MS;
+
+/** Current animation-timer cadence; equals WIDGET_ANIMATION_MS outside tests. */
+export function getWidgetAnimationIntervalMs(): number {
+	return widgetAnimationIntervalMs;
+}
+
+/** Test-only override for the animation-timer cadence. Pass null to restore. */
+export function __setWidgetAnimationMsForTest(ms: number | null): void {
+	widgetAnimationIntervalMs = ms ?? WIDGET_ANIMATION_MS;
+}
+
 // Single static "in progress" glyph. No Date.now() dependency, so rendering a
 // running row does not by itself force a repaint every frame.
 export const RUNNING_GLYPH = "\u25C8"; // ◈

@@ -4,11 +4,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { clearAgentColorByNameCache } from "../../src/shared/agents.ts";
-import { WIDGET_ANIMATION_MS } from "../../src/surfaces/render-shared.ts";
+import { __setWidgetAnimationMsForTest } from "../../src/surfaces/render-shared.ts";
 
-// Wait long enough to observe at least one live repaint at the current cadence
-// (kept relative to the constant so it tracks future cadence changes).
-const ANIM_WAIT = WIDGET_ANIMATION_MS + 200;
+// Run animation timers at a fast test-only cadence so waits stay short while
+// still observing real timer starts/repaints/stops (restored in `after`).
+const TEST_ANIMATION_MS = 25;
+__setWidgetAnimationMsForTest(TEST_ANIMATION_MS);
+
+// Wait long enough to observe at least one live repaint at the test cadence
+// (kept relative to the override so it tracks future cadence changes).
+const ANIM_WAIT = TEST_ANIMATION_MS + 75;
 
 function withProjectAgentColors<T>(run: () => T): T {
 	const previousCwd = process.cwd();
@@ -60,6 +65,7 @@ afterEach(() => {
 	testsRun++;
 });
 after(() => {
+	__setWidgetAnimationMsForTest(null);
 	process.stdout.write(`# tests ${testsRun}\n`);
 });
 
