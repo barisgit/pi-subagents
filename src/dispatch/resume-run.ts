@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { PersistedRunStatus, PersistedRunStep } from "../protocol/status-types.ts";
 import {
 	type ChildAgentHandle,
@@ -32,6 +31,7 @@ import {
 	SUBAGENT_SPAWN_STARTED_EVENT,
 	normalizeAgentIdentity,
 	resolveChildMaxSubagentDepth,
+	type SubagentToolResult,
 } from "../protocol/types.ts";
 import {
 	checkNestedDelegationGuard,
@@ -180,7 +180,7 @@ async function postResumeMessage(
 	handle: ChildAgentHandle,
 	runId: string,
 	message: string,
-): Promise<AgentToolResult<Details> | null> {
+): Promise<SubagentToolResult | null> {
 	try {
 		await handle.session.sendUserMessage(message, { deliverAs: "steer" });
 		return null;
@@ -199,7 +199,7 @@ async function resumeRun(
 	requestingRootSessionId: string | undefined,
 	data: ExecutionContextData,
 	deps: ExecutorDeps,
-): Promise<AgentToolResult<Details>> {
+): Promise<SubagentToolResult> {
 	const currentSessionId = data.ctx.sessionManager.getSessionId() ?? undefined;
 	const currentLineage = currentSessionId ? getLineageForSession(currentSessionId) : null;
 	const depthGuard = checkSubagentDepth(deps.config.maxSubagentDepth, currentLineage);
@@ -219,7 +219,7 @@ async function resumeRun(
 	if (asyncMode === true && calledFromChildSession) {
 		return validationError("Async resume is only allowed from the host session.");
 	}
-	const authorizeTarget = (agentName: string | undefined): AgentToolResult<Details> | null => {
+	const authorizeTarget = (agentName: string | undefined): SubagentToolResult | null => {
 		const targetGuard = checkNestedDelegationGuard(
 			agentName ? [agentName] : ["__unresolved_resume_target__"],
 			currentLineage,
@@ -453,7 +453,7 @@ async function resumeRun(
 			forkReuse: undefined,
 		};
 		const onControlEvent = createForegroundControlNotifier(resumeData, deps);
-		const forwardUpdate = (update: AgentToolResult<Details>) => {
+		const forwardUpdate = (update: SubagentToolResult) => {
 			const firstProgress = update.details?.progress?.[0];
 			fg.applyProgress(
 				target.agentName,

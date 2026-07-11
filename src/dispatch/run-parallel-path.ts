@@ -1,5 +1,4 @@
 import * as path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import { normalizeAvailableModels, resolveModelCandidate } from "./model-fallback.ts";
@@ -23,6 +22,7 @@ import {
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
 	wrapForkTask,
+	type SubagentToolResult,
 } from "../protocol/types.ts";
 import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
 import {
@@ -63,7 +63,7 @@ interface ForegroundParallelRunInput {
 	liveResults: (SingleResult | undefined)[];
 	liveProgress: (AgentProgress | undefined)[];
 	children: NonNullable<Details["children"]>;
-	onUpdate?: (r: AgentToolResult<Details>) => void;
+	onUpdate?: (r: SubagentToolResult) => void;
 	worktreeSetup?: WorktreeSetup;
 }
 
@@ -74,7 +74,7 @@ export function createParallelWorktreeSetup(
 	tasks: TaskParam[],
 	setupHook: ExtensionConfig["worktreeSetupHook"],
 	setupHookTimeoutMs: ExtensionConfig["worktreeSetupHookTimeoutMs"],
-): { setup?: WorktreeSetup; errorResult?: AgentToolResult<Details> } {
+): { setup?: WorktreeSetup; errorResult?: SubagentToolResult } {
 	if (!enabled) return {};
 	try {
 		return {
@@ -266,10 +266,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 	});
 }
 
-export async function runParallelPath(
-	data: ExecutionContextData,
-	deps: ExecutorDeps,
-): Promise<AgentToolResult<Details>> {
+export async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<SubagentToolResult> {
 	const { params, effectiveCwd, agents, ctx, runId, artifactsDir, backgroundRequestedWhileClarifying, onUpdate } =
 		data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);

@@ -2,6 +2,7 @@
  * Type definitions for the subagent extension
  */
 
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import type { SubmitResultEnvelope } from "./output-contract.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -300,6 +301,21 @@ export interface SingleResult {
 	savedOutputPath?: string;
 	outputSaveError?: string;
 	shareUrl?: string;
+}
+
+/**
+ * Extension-owned tool result. Extends the SDK's `AgentToolResult` with the
+ * `isError` flag that the SDK dropped from its result shape: the SDK signals
+ * tool failure by throwing from `execute`, but throwing would discard our
+ * `Details` payload (the loop replaces content and details with a synthetic
+ * error result), so validation/dispatch failures are returned as normal
+ * results instead. The extra field is ignored by the host loop and consumed
+ * only by our own surfaces (slash/prompt-template bridges, spawnRaw API,
+ * tests). Values are structurally assignable to `AgentToolResult` at the
+ * registered-tool boundary.
+ */
+export interface SubagentToolResult<T = Details> extends AgentToolResult<T> {
+	isError?: boolean;
 }
 
 export interface Details {

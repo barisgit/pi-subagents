@@ -1,14 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import vm from "node:vm";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
+import type { AgentToolUpdateCallback, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type, type Static, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import { writeWorkflowScript } from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
 import { processGlobal } from "../shared/process-global.ts";
-import type { AgentProgress, Details, PipelineMetadata, SingleResult } from "../protocol/types.ts";
+import type { AgentProgress, Details, PipelineMetadata, SingleResult, SubagentToolResult } from "../protocol/types.ts";
 
 export const WorkflowParams = Type.Object(
 	{
@@ -541,7 +540,7 @@ function stringifyWorkflowValue(value: unknown): string {
 export interface WorkflowToolDispatchContext {
 	toolCallId: string;
 	signal: AbortSignal;
-	onUpdate?: (partialResult: AgentToolResult<Details>) => void;
+	onUpdate?: (partialResult: SubagentToolResult) => void;
 	ctx: ExtensionContext;
 	requestedAsync?: boolean;
 }
@@ -596,7 +595,7 @@ function makeProgress(role: string, task: string, index: number, status: AgentPr
 
 export function createWorkflowPhaseEmitter(
 	toolCallId: string,
-	onUpdate?: (partialResult: AgentToolResult<Details>) => void,
+	onUpdate?: (partialResult: SubagentToolResult) => void,
 ): WorkflowPhaseEmitter {
 	void toolCallId;
 	// Canonical parallel shape (mirrors runForegroundParallelTasks' mergedResults):
@@ -747,7 +746,22 @@ export function createWorkflowPhaseEmitter(
 	return phase;
 }
 
-export function createWorkflowTool(options: CreateWorkflowToolOptions): ToolDefinition<typeof WorkflowParams, unknown> {
+/**
+ * Workflow tool definition with the extension-owned result shape: `execute`
+ * returns a `SubagentToolResult` so callers (and tests) can read the
+ * `isError` flag the SDK's `AgentToolResult` no longer carries.
+ */
+export interface WorkflowToolDefinition extends ToolDefinition<typeof WorkflowParams, unknown> {
+	execute(
+		toolCallId: string,
+		params: Static<typeof WorkflowParams>,
+		signal: AbortSignal | undefined,
+		onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+		ctx: ExtensionContext,
+	): Promise<SubagentToolResult<unknown>>;
+}
+
+export function createWorkflowTool(options: CreateWorkflowToolOptions): WorkflowToolDefinition {
 	return {
 		name: "workflow",
 		label: "Workflow",
@@ -789,7 +803,7 @@ Rules: always await every agent()/parallel()/pipeline() call — a failed agent 
 			let group: WorkflowGroupHandle | undefined;
 			let emitter: WorkflowPhaseEmitter | undefined;
 			try {
-				const workflowOnUpdate = onUpdate as ((partialResult: AgentToolResult<Details>) => void) | undefined;
+				const workflowOnUpdate = onUpdate as ((partialResult: SubagentToolResult) => void) | undefined;
 				const workflowContext = {
 					toolCallId: id,
 					signal: signal as AbortSignal,

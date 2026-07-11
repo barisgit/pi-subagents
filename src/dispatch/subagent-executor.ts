@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message, Model } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
@@ -148,6 +147,7 @@ import {
 	resolveChildMaxSubagentDepth,
 	truncateOutput,
 	wrapForkTask,
+	type SubagentToolResult,
 } from "../protocol/types.ts";
 import {
 	checkNestedDelegationGuard,
@@ -191,7 +191,7 @@ const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
-function validateSlimTask(task: unknown, pathLabel: string): AgentToolResult<Details> | null {
+function validateSlimTask(task: unknown, pathLabel: string): SubagentToolResult | null {
 	if (!isRecord(task)) return validationError(`${pathLabel} must be a task with agent and task.`);
 	const unknownKey = Object.keys(task).find((key) => !SLIM_TASK_KEYS.has(key));
 	if (unknownKey) return validationError(`Unknown task key '${unknownKey}' at ${pathLabel}.`);
@@ -214,7 +214,7 @@ function applySharedMessage(message: string, task: string): string {
 }
 function normalizeRunDispatchParams(params: InternalSubagentParams): {
 	params?: InternalSubagentParams;
-	error?: AgentToolResult<Details>;
+	error?: SubagentToolResult;
 } {
 	const slimValidationError = validateSubagentToolInput(params);
 	if (slimValidationError) return { error: slimValidationError };
@@ -277,7 +277,7 @@ function normalizeRunDispatchParams(params: InternalSubagentParams): {
 		},
 	};
 }
-export function validateSubagentToolInput(input: unknown): AgentToolResult<Details> | null {
+export function validateSubagentToolInput(input: unknown): SubagentToolResult | null {
 	if (!isRecord(input)) return null;
 	const action = typeof input.action === "string" ? input.action : undefined;
 	if (action && REMOVED_CRUD_ACTIONS.has(action)) {
@@ -323,7 +323,7 @@ export function validateSubagentToolInput(input: unknown): AgentToolResult<Detai
 }
 function foregroundStatusResult(
 	control: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never,
-): AgentToolResult<Details> {
+): SubagentToolResult {
 	const lines = [
 		`Run: ${control.runId}`,
 		"State: running",
@@ -425,7 +425,7 @@ async function interruptAllAsyncRuns(
 	state: SubagentState,
 	childRegistry: ChildAgentRegistry,
 	waitMs: number,
-): Promise<AgentToolResult<Details>> {
+): Promise<SubagentToolResult> {
 	// Sweep state.asyncJobs (rehydrated from disk after a reload), not just the
 	// per-activation childRegistry: a run spawned before a reload has no handle in
 	// the fresh registry but its AbortController survives in the shared layer0
@@ -482,7 +482,7 @@ async function interruptAsyncRun(
 	childRegistry: ChildAgentRegistry,
 	runId: string | undefined,
 	waitMs: number,
-): Promise<AgentToolResult<Details> | null> {
+): Promise<SubagentToolResult | null> {
 	const target = getAsyncInterruptTarget(state, runId);
 	if (!target) return null;
 	const handle = childRegistry.get(target.asyncId);
@@ -556,7 +556,7 @@ function validateExecutionInput(
 	agents: AgentConfig[],
 	hasTasks: boolean,
 	hasSingle: boolean,
-): AgentToolResult<Details> | null {
+): SubagentToolResult | null {
 	if (Number(hasTasks) + Number(hasSingle) !== 1) {
 		return {
 			content: [
@@ -571,7 +571,7 @@ function validateExecutionInput(
 	}
 	return null;
 }
-function buildRequestedModeError(params: InternalSubagentParams, message: string): AgentToolResult<Details> {
+function buildRequestedModeError(params: InternalSubagentParams, message: string): SubagentToolResult {
 	return withForkContext(
 		{
 			content: [{ type: "text", text: message }],
@@ -670,7 +670,7 @@ function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskParam[]; er
 }
 function normalizeRepeatedParallelCounts(params: InternalSubagentParams): {
 	params?: InternalSubagentParams;
-	error?: AgentToolResult<Details>;
+	error?: SubagentToolResult;
 } {
 	if (params.tasks) {
 		const expandedTasks = expandTopLevelTaskCounts(params.tasks);
@@ -681,10 +681,7 @@ function normalizeRepeatedParallelCounts(params: InternalSubagentParams): {
 	}
 	return { params };
 }
-function withForkContext(
-	result: AgentToolResult<Details>,
-	context: InternalSubagentParams["context"],
-): AgentToolResult<Details> {
+function withForkContext(result: SubagentToolResult, context: InternalSubagentParams["context"]): SubagentToolResult {
 	if (context !== "fork" || !result.details) return result;
 	return {
 		...result,
@@ -694,7 +691,7 @@ function withForkContext(
 		},
 	};
 }
-function toExecutionErrorResult(params: InternalSubagentParams, error: unknown): AgentToolResult<Details> {
+function toExecutionErrorResult(params: InternalSubagentParams, error: unknown): SubagentToolResult {
 	const message = error instanceof Error ? error.message : String(error);
 	return withForkContext(
 		{
@@ -705,7 +702,7 @@ function toExecutionErrorResult(params: InternalSubagentParams, error: unknown):
 		params.context,
 	);
 }
-async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
+async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Promise<SubagentToolResult> {
 	const {
 		params,
 		effectiveCwd,
@@ -804,7 +801,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 	const forwardSingleUpdate =
 		onUpdate || foregroundControl
-			? (update: AgentToolResult<Details>) => {
+			? (update: SubagentToolResult) => {
 					const firstProgress = update.details?.progress?.[0];
 					fg.applyProgress(
 						params.agent!,
@@ -883,20 +880,20 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		id: string,
 		params: SubagentToolInput,
 		signal: AbortSignal,
-		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
+		onUpdate: ((r: SubagentToolResult) => void) | undefined,
 		ctx: ExtensionContext,
-	) => Promise<AgentToolResult<Details>>;
+	) => Promise<SubagentToolResult>;
 	executeInternal: (
 		id: string,
 		params: InternalSubagentParams,
 		signal: AbortSignal,
-		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
+		onUpdate: ((r: SubagentToolResult) => void) | undefined,
 		ctx: ExtensionContext,
-	) => Promise<AgentToolResult<Details>>;
+	) => Promise<SubagentToolResult>;
 	openWorkflowGroup: (args: {
 		toolCallId: string;
 		signal: AbortSignal;
-		onUpdate?: (r: AgentToolResult<Details>) => void;
+		onUpdate?: (r: SubagentToolResult) => void;
 		ctx: ExtensionContext;
 		requestedAsync?: boolean;
 	}) => WorkflowGroupHandle;
@@ -905,10 +902,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		_id: string,
 		params: InternalSubagentParams,
 		signal: AbortSignal,
-		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
+		onUpdate: ((r: SubagentToolResult) => void) | undefined,
 		ctx: ExtensionContext,
 		internal: boolean,
-	): Promise<AgentToolResult<Details>> => {
+	): Promise<SubagentToolResult> => {
 		deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
@@ -1288,7 +1285,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			sessionFileForIndex(idx) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
 
 		const onUpdateWithContext = onUpdate
-			? (r: AgentToolResult<Details>) => onUpdate(withForkContext(r, effectiveParams.context))
+			? (r: SubagentToolResult) => onUpdate(withForkContext(r, effectiveParams.context))
 			: undefined;
 
 		const execData: ExecutionContextData = {
@@ -1404,7 +1401,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 		}
 
-		let executionResult: AgentToolResult<Details> | undefined;
+		let executionResult: SubagentToolResult | undefined;
 		try {
 			const asyncResult = runAsyncPath(execData, deps);
 			if (asyncResult) return withForkContext(asyncResult, effectiveParams.context);
@@ -1700,7 +1697,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 												// Sync workflow live update: surface the running child's per-event
 												// progress so the workflow widget repaints mid-run instead of
 												// freezing between childStarted and childSettled.
-												onUpdate: (update: AgentToolResult<Details>) => {
+												onUpdate: (update: SubagentToolResult) => {
 													const live = update.details?.progress?.[0];
 													if (live) onChildProgress(live);
 												},

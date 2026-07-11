@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../shared/agents.ts";
 import {
@@ -18,6 +17,7 @@ import {
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 	SUBAGENT_NEEDS_ATTENTION_EVENT,
 	SUBAGENT_USAGE_EVENT,
+	type SubagentToolResult,
 } from "../protocol/types.ts";
 import type {
 	ExecutionContextData,
@@ -222,7 +222,7 @@ export function mirrorForegroundProgressToStatus(
 	});
 }
 
-export function validationError(message: string): AgentToolResult<Details> {
+export function validationError(message: string): SubagentToolResult {
 	return {
 		content: [{ type: "text", text: message }],
 		isError: true,
@@ -310,7 +310,7 @@ export function asyncStartedResult(input: {
 	asyncDir: string;
 	text: string;
 	children?: Array<{ runId: string; agent: string; label?: string; stepIndex: number }>;
-}): AgentToolResult<Details> {
+}): SubagentToolResult {
 	return {
 		content: [
 			{
@@ -329,7 +329,7 @@ export function asyncStartedResult(input: {
 	};
 }
 
-export function buildParallelModeError(message: string): AgentToolResult<Details> {
+export function buildParallelModeError(message: string): SubagentToolResult {
 	return {
 		content: [{ type: "text", text: message }],
 		isError: true,
@@ -616,7 +616,7 @@ export function shapeSingleForegroundResult(args: {
 	outputPath?: string;
 	progress?: AgentProgress[];
 	artifacts?: { dir: string; files: ArtifactPaths[] };
-}): AgentToolResult<Details> {
+}): SubagentToolResult {
 	const { r, runId, agent } = args;
 	const fullOutput = getSingleResultOutput(r);
 	const finalizedOutput = finalizeSingleOutput({

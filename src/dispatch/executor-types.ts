@@ -1,4 +1,4 @@
-import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -13,6 +13,7 @@ import type {
 	ResolvedControlConfig,
 	SubagentMetadata,
 	SubagentState,
+	SubagentToolResult,
 } from "../protocol/types.ts";
 import type { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { IntercomBridgeState } from "./intercom-bridge.ts";
@@ -152,7 +153,7 @@ export interface ExecutionContextData {
 	effectiveCwd: string;
 	ctx: ExtensionContext;
 	signal: AbortSignal;
-	onUpdate?: (r: AgentToolResult<Details>) => void;
+	onUpdate?: (r: SubagentToolResult) => void;
 	agents: AgentConfig[];
 	runId: string;
 	rootRunId: string;

@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SubagentToolInput as SubagentParamsLike } from "../protocol/schemas.ts";
 import {
@@ -8,6 +7,7 @@ import {
 	SLASH_SUBAGENT_STARTED_EVENT,
 	SLASH_SUBAGENT_UPDATE_EVENT,
 	type Details,
+	type SubagentToolResult,
 } from "../protocol/types.ts";
 
 interface SlashSubagentRequest {
@@ -17,7 +17,7 @@ interface SlashSubagentRequest {
 
 export interface SlashSubagentResponse {
 	requestId: string;
-	result: AgentToolResult<Details>;
+	result: SubagentToolResult;
 	isError: boolean;
 	errorText?: string;
 }
@@ -41,9 +41,9 @@ interface SlashBridgeOptions {
 		id: string,
 		params: SubagentParamsLike,
 		signal: AbortSignal,
-		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
+		onUpdate: ((r: SubagentToolResult) => void) | undefined,
 		ctx: ExtensionContext,
-	) => Promise<AgentToolResult<Details>>;
+	) => Promise<SubagentToolResult>;
 }
 
 export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
@@ -135,10 +135,8 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 			const response: SlashSubagentResponse = {
 				requestId,
 				result,
-				isError: (result as { isError?: boolean }).isError === true,
-				errorText: (result as { isError?: boolean }).isError
-					? result.content.find((c) => c.type === "text")?.text
-					: undefined,
+				isError: result.isError === true,
+				errorText: result.isError ? result.content.find((c) => c.type === "text")?.text : undefined,
 			};
 			options.events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, response);
 		} catch (error) {

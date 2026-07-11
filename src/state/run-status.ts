@@ -1,10 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ASYNC_NO_POLL_GUIDANCE } from "../shared/formatting.ts";
 import { formatAsyncRunList, listRunsFromRegistry, readRunViewForEntry } from "./async-status.ts";
 import { readAllEntries, type RunsRegistryEntry } from "./runs-registry.ts";
-import type { Details } from "../protocol/types.ts";
+import type { Details, SubagentToolResult } from "../protocol/types.ts";
 import { readStatus } from "../shared/utils.ts";
 
 export interface RunStatusParams {
@@ -53,7 +52,7 @@ function scopeRunsForSession<T extends { rootSessionId?: string; parentSessionId
 	return runs;
 }
 
-export function inspectSubagentStatus(params: RunStatusParams): AgentToolResult<Details> {
+export function inspectSubagentStatus(params: RunStatusParams): SubagentToolResult {
 	if (!params.id && !params.runId && !params.dir) {
 		try {
 			const states =

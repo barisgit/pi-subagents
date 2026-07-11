@@ -1,7 +1,6 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { Details } from "../protocol/types.ts";
+import type { Details, SubagentToolResult } from "../protocol/types.ts";
 import { SubagentParams } from "../protocol/schemas.ts";
 import { createWorkflowTool } from "../workflow/workflow.ts";
 import { renderSubagentResult, syncResultAnimation } from "../surfaces/render-result.ts";
@@ -86,7 +85,7 @@ Author agents as files under \`agents/<name>.md\`. For advanced patterns see ski
 		openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
 	});
 	workflowTool.renderResult = (result, options, theme, context) => {
-		const subagentResult = result as AgentToolResult<Details>;
+		const subagentResult = result as SubagentToolResult;
 		syncResultAnimation(subagentResult, context);
 		return renderSubagentResult(subagentResult, options, theme);
 	};

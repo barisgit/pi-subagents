@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
@@ -14,6 +13,7 @@ import {
 	type Usage,
 	DEFAULT_MAX_OUTPUT,
 	truncateOutput,
+	type SubagentToolResult,
 } from "../protocol/types.ts";
 import type { ChildAgentResult, StatusPatch } from "../protocol/status-types.ts";
 import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps } from "./executor-types.ts";
@@ -51,7 +51,7 @@ export function buildAsyncChildStep(input: {
 	skills?: string[] | false;
 	output?: string | false;
 	maxSubagentDepth: number;
-}): AsyncDispatchStep | { error: AgentToolResult<Details> } {
+}): AsyncDispatchStep | { error: SubagentToolResult } {
 	const { data, deps, agentConfig, stepIndex } = input;
 	const rawSkills =
 		input.skills !== undefined ? input.skills : resolveStepBehavior(agentConfig, { skills: undefined }).skills;
@@ -150,11 +150,11 @@ export async function runInProcessChildStep(input: {
 	outputPath?: string;
 	maxSubagentDepth: number;
 	interruptSignal?: AbortSignal;
-	onUpdate?: (r: AgentToolResult<Details>) => void;
+	onUpdate?: (r: SubagentToolResult) => void;
 	onControlEvent?: (event: ControlEvent) => void;
 	intercomSessionName?: string;
 	mode?: Details["mode"];
-	wrapUpdateDetails?: (update: AgentToolResult<Details>) => AgentToolResult<Details>;
+	wrapUpdateDetails?: (update: SubagentToolResult) => SubagentToolResult;
 	layer0?: { runId: string; runRecordDir: string; sessionFile: string; rootRunId: string };
 	onLayer0StatusUpdate?: (patch: StatusPatch) => void;
 	/** Workflow-authored result schema enforced via the child's trailing <output> block (workflow path only). */
@@ -251,7 +251,7 @@ export async function runInProcessChildStep(input: {
 		progress.activityState = activityTicker.tick();
 		progress.durationMs = Date.now() - startedAt;
 		const progressSnapshot = snapshotProgress(progress);
-		const update: AgentToolResult<Details> = {
+		const update: SubagentToolResult = {
 			content: [{ type: "text", text: getFinalOutput(messages) || resultShell.finalOutput || "(running...)" }],
 			details: {
 				mode: input.mode ?? "single",

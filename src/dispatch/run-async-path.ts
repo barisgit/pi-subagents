@@ -1,5 +1,4 @@
 import * as path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type AgentConfig, resolveAgentColor } from "../shared/agents.ts";
 import { normalizeAvailableModels, resolveModelCandidate } from "./model-fallback.ts";
 import { normalizeSkillInput } from "../shared/skills.ts";
@@ -31,6 +30,7 @@ import {
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
 	wrapForkTask,
+	type SubagentToolResult,
 } from "../protocol/types.ts";
 import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
 import type { AsyncDispatchStep, ExecutionContextData, ExecutorDeps, TaskParam } from "./executor-types.ts";
@@ -56,7 +56,7 @@ export function childCompletionRunId(dispatchRunId: string, stepIndex: number, t
 	return total > 1 ? `${dispatchRunId}:${stepIndex}` : dispatchRunId;
 }
 
-export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
+export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): SubagentToolResult | null {
 	const { params, effectiveCwd, agents, ctx, effectiveAsync, controlConfig } = data;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
 	const hasSingle = !hasTasks && Boolean(params.agent);

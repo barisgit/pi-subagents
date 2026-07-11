@@ -1,6 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type AgentScope, discoverAgents } from "../shared/agents.ts";
-import type { Details } from "../protocol/types.ts";
+import type { Details, SubagentToolResult } from "../protocol/types.ts";
 
 type ManagementAction = "list";
 type ManagementContext = { cwd: string; modelRegistry: { getAvailable(): Array<{ provider?: string; id?: string }> } };
@@ -14,7 +13,7 @@ interface ManagementParams {
 	preset?: string;
 }
 
-function result(text: string, isError = false): AgentToolResult<Details> {
+function result(text: string, isError = false): SubagentToolResult {
 	return { content: [{ type: "text", text }], isError, details: { mode: "management", results: [] } };
 }
 
@@ -24,7 +23,7 @@ function normalizeListScope(scope: unknown): AgentScope | undefined {
 	return undefined;
 }
 
-export function handleList(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
+export function handleList(params: ManagementParams, ctx: ManagementContext): SubagentToolResult {
 	const scope = normalizeListScope(params.agentScope) ?? "both";
 	const agentDiscovery = discoverAgents(ctx.cwd, "both", {
 		preset: params.preset,
@@ -46,7 +45,7 @@ export function handleManagementAction(
 	action: string,
 	params: ManagementParams,
 	ctx: ManagementContext,
-): AgentToolResult<Details> {
+): SubagentToolResult {
 	switch (action as ManagementAction) {
 		case "list":
 			return handleList(params, ctx);
