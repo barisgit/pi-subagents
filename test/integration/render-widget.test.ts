@@ -108,6 +108,17 @@ describe("subagent async widget rendering", () => {
 		assert.deepEqual(buildWidgetLines([], theme, 120), []);
 	});
 
+	it("aligns the widget with the shared one-column left inset", () => {
+		const lines = buildWidgetLines(
+			[{ asyncId: "aligned", asyncDir: "/tmp/aligned", status: "running", agents: ["worker"] }],
+			theme,
+			120,
+		);
+
+		assert.match(lines[0] ?? "", /^ /);
+		assert.match(lines[1] ?? "", /^ /);
+	});
+
 	it("renders one row per job under the header", () => {
 		const lines = buildWidgetLines(
 			[

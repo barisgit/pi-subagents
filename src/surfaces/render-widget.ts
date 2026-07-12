@@ -253,7 +253,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 	const hasActive = running > 0 || queued > 0;
 	const headerGlyph = theme.fg(hasActive ? "accent" : "dim", hasActive ? "●" : "○");
 	const headerText = `${headerGlyph} ${theme.fg(hasActive ? "accent" : "dim", "Agents")} ${theme.fg("dim", "· /subagents-status")}`;
-	const lines: string[] = [truncLine(headerText, width)];
+	const lines: string[] = [truncLine(` ${headerText}`, width)];
 
 	for (let i = 0; i < visible.length; i++) {
 		const job = visible[i]!;
@@ -266,7 +266,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 		const name = widgetJobName(job, theme);
 		const stats = widgetJobStats(job, theme);
 		const statsPart = stats ? ` ${theme.fg("dim", "·")} ${stats}` : "";
-		lines.push(truncLine(`${branch} ${glyph} ${name}${statsPart}`, width));
+		lines.push(truncLine(` ${branch} ${glyph} ${name}${statsPart}`, width));
 	}
 
 	if (overflow > 0) {
@@ -275,7 +275,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 		const hidden = sorted.slice(visible.length);
 		const allQueued = hidden.every((job) => job.status === "queued");
 		const overflowLabel = allQueued ? `+${overflow} queued` : `+${overflow} more`;
-		lines.push(truncLine(`${theme.fg("dim", "└─")} ${theme.fg("dim", overflowLabel)}`, width));
+		lines.push(truncLine(` ${theme.fg("dim", "└─")} ${theme.fg("dim", overflowLabel)}`, width));
 	}
 	// Trailing blank line for vertical breathing room between widget and prompt.
 	lines.push("");
