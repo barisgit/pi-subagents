@@ -14,7 +14,7 @@ Unhandled rejection containment is process-wide and reload-safe: a singleton reg
 Progress is represented by `WorkflowPhaseEmitter`, a callable phase function augmented with state methods. It keeps canonical `results`, `childPhases`, and `pendingByGroup` maps, then builds a single `Details` snapshot for both streaming `onUpdate` frames and final tool result details. `workflow-group-state.ts` deliberately writes separate JSON marker files instead of `status.json` so workflow groups remain containers whose display status is synthesized from children plus lifecycle markers.
 
 ## Flow
-1. `createWorkflowTool()` registers tool name `workflow`, parameters `{ script, async? }`, and tool instructions that describe the sandbox contract.
+1. `createWorkflowTool()` registers tool name `workflow`, parameters `{ script, async? }`, and instructions covering the sandbox contract, request-scaled leaf fan-out, pipeline-versus-barrier selection, and bounded quality patterns.
 2. On execute, the tool opens an optional `WorkflowGroupHandle`, persists the script to `asyncDir` with `writeWorkflowScript()`, creates a `WorkflowPhaseEmitter`, and builds a dispatch bridge.
 3. `runWorkflowScript()` creates a VM context containing `agent`, `parallel`, `pipeline`, and `phase`; each `agent()` call dispatches either through the workflow group (`group.dispatchChild`) or an injected dispatch callback.
 4. Child start increments `childIndex`, records phase/parallel metadata, emits a running placeholder, and dispatches the child. Child settlement replaces the placeholder with the final `SingleResult` and emits an updated details snapshot.

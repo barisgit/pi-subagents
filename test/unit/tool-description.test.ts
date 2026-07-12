@@ -68,4 +68,17 @@ describe("registered workflow tool description", () => {
 		assert.match(description, /<implementation-role>/);
 		assert.match(description, /process-wide leaf-concurrency pool/i);
 	});
+
+	it("teaches request-scaled fan-out and streaming quality patterns concisely", () => {
+		const description = readRegisteredWorkflowDescription();
+
+		assert.match(description, /do not apply the manual subagent child count to workflow leaves/i);
+		assert.match(description, /do not silently cap/i);
+		assert.match(description, /default to pipeline/i);
+		assert.match(description, /barrier only when.*all prior-stage results/i);
+		assert.match(description, /scope.*work-list.*pipeline/i);
+		assert.match(description, /adversarial verify.*refute/i);
+		assert.match(description, /loop-until-dry.*consecutive rounds/i);
+		assert.ok(description.length <= 6_000, `workflow description has ${description.length} characters`);
+	});
 });

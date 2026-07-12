@@ -21,13 +21,13 @@ Delegate only when a bounded child provides at least one concrete advantage:
 - **Background time** — choose `async:true` whenever no remaining work, synthesis, or response in the current turn requires the child result. After dispatching, end the turn or continue only independent work without polling so the caller—or, at the root, the user—can keep working; the host notifies you on completion or when attention is needed. Use synchronous dispatch whenever any later work, synthesis, or response in the same turn must consume the result.
 - **Independent review** — risk justifies a separate judgment and existing verification is insufficient.
 
-Do not delegate merely because work is non-trivial or a matching role exists. Prefer one child. Use 2–3 for genuinely independent branches; use 4 only with explicit decomposition, non-overlapping ownership, and acceptance criteria.
+Do not delegate merely because work is non-trivial or a matching role exists. For plain `subagent` dispatch, prefer one child; use 2–3 for independent branches and 4 only with explicit decomposition, non-overlapping ownership, and acceptance criteria. These counts do not cap `workflow` leaves; scale runtime-discovered independent work to the request and configured limits.
 
 ## Pick the shape
 
 - Use no child when inline work is sufficient; otherwise use one `run` task for a bounded handoff by default.
 - Put 2–3 top-level `run` tasks in parallel only when they are genuinely independent. Use 4 only with explicit decomposition and non-overlapping ownership.
-- Use the `workflow` tool for sequential or dependent orchestration: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps.
+- Use the `workflow` tool for sequential or dependent orchestration: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps. For per-item multi-stage work, default to `pipeline`; use a `parallel` barrier only when the next stage needs all prior results together.
 - Set `batch:true` when several children should return one rollup notification.
 - Use `action:"list"` if agent names are uncertain; use status/interrupt/resume only for live run management.
 - A child's findings return **in JS** (shaped by `opts.schema`), not through files: never route fan-out reports through the filesystem for a synthesis child to re-read. For a report you need **verbatim**, use `workflow` + `schema` — a plain `subagent` `finalOutput` is a summary, not a transcript. See `references/dispatch-patterns.md`.

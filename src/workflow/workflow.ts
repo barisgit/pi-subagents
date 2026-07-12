@@ -785,6 +785,16 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): Workflow
 		promptSnippet: "Orchestrate subagents with JS control flow: branch on results, retry, loop, fan out",
 		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Use whenever the NEXT step depends on a previous step's result: branch on a child's structured output, retry/fallback on failure, loop until a condition holds (e.g. review until approved), decide fan-out width at runtime, or pass data between steps. Prefer this over multiple subagent calls when any decision sits between dispatches; use plain subagent for a single task or a fixed independent batch.
 
+Scaling and flow:
+- Scale fan-out to the request and the independent work discovered at runtime. Do not apply the manual subagent child count to Workflow leaves, and do not silently cap fan-out to 2–4. A brief check may need a few leaves; a comprehensive audit may warrant tens, bounded by the configured concurrency pool and a useful finite work-list.
+- Default to pipeline() when each item can advance through stages independently. Use parallel() as a barrier only when the next step genuinely needs all prior-stage results together, such as cross-item deduplication or synthesis. Needing to flatten, map, filter, or label results does not by itself justify a barrier.
+- A strong hybrid is scope-then-orchestrate: inspect inline or use one scope agent to discover the work-list, then pipeline over it.
+
+Quality patterns:
+- Adversarial verify: send candidate findings to independent skeptics instructed to refute them; retain only findings that survive the chosen vote/evidence threshold.
+- Loop-until-dry: for unknown-size discovery, run bounded finder rounds until a chosen number of consecutive rounds yields no new unique items.
+- Perspective-diverse sweep: give independent leaves distinct search lenses when one angle is unlikely to cover the space.
+
 The script runs in a sandbox with four globals:
 - agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
 - parallel(thunks) -> Promise<results[]> — run agent calls concurrently, bounded by the process-wide leaf-concurrency pool (config maxConcurrentAgents), so it scales to many children: parallel(items.map((item) => () => agent("<configured-role>", "Handle " + item))). It is a FAIL-FAST barrier (awaits Promise.all): the first child that rejects rejects the whole call and the other results are lost. When partial results are acceptable, catch inside each thunk (.then(...).catch(...)) so every branch resolves.
