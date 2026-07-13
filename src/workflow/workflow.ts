@@ -803,24 +803,7 @@ The script runs in a sandbox with four globals:
 
 Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll.
 
-Example (two layers of runtime-decided fan-out, then synthesize — each layer's width comes from the previous layer's structured output):
-phase("scope");
-const { modules } = await agent("<investigation-role>", "List up to 8 modules worth auditing.", { schema: { type: "object", required: ["modules"], properties: { modules: { type: "array", items: { type: "string" }, maxItems: 8 } }, additionalProperties: false } });
-phase("survey");
-// Layer 1: fan out over discovered modules; each returns structured hotspots.
-const surveys = await parallel(modules.map((mod) => () =>
-  agent("<investigation-role>", "Audit '" + mod + "'. Return riskiest files with a reason each.", { schema: { type: "object", required: ["hotspots"], properties: { hotspots: { type: "array", items: { type: "object", required: ["file"], properties: { file: { type: "string" } }, additionalProperties: true } } }, additionalProperties: false } })
-    .then((r) => r.hotspots.map((h) => ({ mod, ...h })))
-    .catch(() => [])  // best-effort: one dead branch must not sink the layer
-));
-phase("deep-dive");
-// Layer 2: width comes entirely from layer 1's output (bounded).
-const files = surveys.flat().slice(0, 24);
-const findings = await parallel(files.map((h) => () =>
-  agent("<investigation-role>", "Deep-dive " + h.file + " in " + h.mod + ". Return finding + fix.").catch(() => null)
-));
-phase("synthesize");
-return await agent("<synthesis-role>", "Prioritize these findings:\n" + findings.filter(Boolean).join("\n"));
+Example shape: scope the work-list, pipeline independent items through inspection and review, then synthesize only when a cross-item decision requires all results.
 
 Rules: always await every agent()/parallel()/pipeline() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel() or pipeline(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.`,
 		parameters: WorkflowParams,
