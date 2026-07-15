@@ -219,6 +219,8 @@ export interface SubagentUsageSnapshot {
 
 export interface SubagentExposedAPI {
 	spawnRaw(input: SpawnRawInput): Promise<SpawnResult>;
+	/** True while one or more detached async runs are in flight for this session. */
+	hasActiveAsyncRuns(): boolean;
 	list(options?: { includeInternal?: boolean }): PersonaInfo[];
 	/** Current-session subagent usage, sourced from stable subagent_usage records. */
 	usageSnapshot(): SubagentUsageSnapshot;

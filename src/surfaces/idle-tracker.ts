@@ -21,6 +21,7 @@ import { SUBAGENT_ALL_IDLE_EVENT } from "../protocol/types.ts";
 export interface IdleTracker {
 	onAsyncStarted(id: string): void;
 	onAsyncFinished(id: string): void;
+	hasActiveAsyncRuns(): boolean;
 	isIdle(): boolean;
 }
 
@@ -60,6 +61,7 @@ export function createIdleTracker(pi: ExtensionAPI): IdleTracker {
 			liveAsyncIds.delete(id);
 			emitIfIdle();
 		},
+		hasActiveAsyncRuns: () => liveAsyncIds.size > 0,
 		isIdle,
 	};
 }

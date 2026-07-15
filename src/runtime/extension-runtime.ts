@@ -109,10 +109,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// action calls across activate boundaries) and the singleton runtime
 	// cleanup hook. Per-session globalStore keys are scoped by piId so the
 	// child's listeners don't tear down the host's.
+	const idleTracker = createIdleTracker(pi);
 	const isChildSession = isInsideChildSession();
 	if (isChildSession) {
 		logger.info("activate: child session - registering scoped subagent runtime");
-		registerChildSessionApi(pi);
+		registerChildSessionApi(pi, idleTracker.hasActiveAsyncRuns);
 	} else {
 		logger.info("activate: host session - registering subagent runtime");
 	}
@@ -194,7 +195,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// their session and their state goes with them.
 	if (!isChildSession) globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
-	const idleTracker = createIdleTracker(pi);
 	let widgetClient: UtilsClient | undefined;
 	const getWidgetClient = (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return undefined;
@@ -235,7 +235,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	});
 	const hostApi = isChildSession
 		? undefined
-		: createHostSubagentApi({ pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents });
+		: createHostSubagentApi({
+				pi,
+				executor,
+				config,
+				state,
+				getRegisteredPersonaDirs,
+				discoverAgents,
+				hasActiveAsyncRuns: idleTracker.hasActiveAsyncRuns,
+			});
 	const roleManager = createRootRoleManager({
 		pi,
 		config,

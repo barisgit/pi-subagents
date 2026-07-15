@@ -133,7 +133,7 @@ function usageSnapshotForState(state: SubagentState): SubagentUsageSnapshot {
  * Children deliberately get a STUB spawnRaw/list: spawning nested subagents
  * from inside a child session is not supported on the in-process executor.
  */
-export function registerChildSessionApi(pi: ExtensionAPI): void {
+export function registerChildSessionApi(pi: ExtensionAPI, hasActiveAsyncRuns = () => false): void {
 	let lineage: SubagentLineage | null = null;
 	const publish = () => {
 		const api: SubagentExposedAPI = {
@@ -142,6 +142,7 @@ export function registerChildSessionApi(pi: ExtensionAPI): void {
 				details: { mode: "single", results: [] },
 				isError: true,
 			}),
+			hasActiveAsyncRuns,
 			list: () => [],
 			usageSnapshot: () => usageSnapshotFromRecords([]),
 			lineage: () => lineage,
@@ -193,13 +194,14 @@ interface CreateHostSubagentApiParams {
 	state: SubagentState;
 	getRegisteredPersonaDirs: () => RegisteredPersonaDir[];
 	discoverAgents: typeof discoverAgents;
+	hasActiveAsyncRuns: () => boolean;
 }
 
 export function createHostSubagentApi(params: CreateHostSubagentApiParams): {
 	setCurrentAgent: (name: string) => void;
 	republish: () => void;
 } {
-	const { pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents } = params;
+	const { pi, executor, config, state, getRegisteredPersonaDirs, discoverAgents, hasActiveAsyncRuns } = params;
 	const spawnRaw = async (input: SpawnRawInput): Promise<SpawnResult> => {
 		const ctx = state.lastUiContext;
 		if (!ctx) {
@@ -254,6 +256,7 @@ export function createHostSubagentApi(params: CreateHostSubagentApiParams): {
 	};
 	const subagentApi: SubagentExposedAPI = {
 		spawnRaw,
+		hasActiveAsyncRuns,
 		list: (options) =>
 			discoverAgents(state.lastUiContext?.cwd ?? state.baseCwd, "both", {
 				config,

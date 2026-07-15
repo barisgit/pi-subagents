@@ -189,6 +189,35 @@ describe("spawnRaw API exposure", () => {
 		}
 	});
 
+	it("exposes whether async runs are active", () => {
+		let hasActiveAsyncRuns = false;
+		const { pi, getExposed } = createPiHarness();
+		createHostSubagentApi({
+			pi: pi as never,
+			executor: { executeInternal: async () => ({}) } as never,
+			config: {} as never,
+			state: {
+				baseCwd: tempDir,
+				currentSessionId: null,
+				asyncJobs: new Map(),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				cleanupTimers: new Map(),
+				lastUiContext: null,
+				poller: null,
+			} as never,
+			getRegisteredPersonaDirs: () => [],
+			discoverAgents: () => ({ agents: [] }) as never,
+			hasActiveAsyncRuns: () => hasActiveAsyncRuns,
+		});
+		const api = getExposed();
+		assert.ok(api, "expected exposed subagent API");
+		assert.equal(api.hasActiveAsyncRuns(), false);
+
+		hasActiveAsyncRuns = true;
+		assert.equal(api.hasActiveAsyncRuns(), true);
+	});
+
 	it("fails closed when spawnRaw has no authoritative session context", async () => {
 		let executionCount = 0;
 		const { pi, getExposed } = createPiHarness();
@@ -213,6 +242,7 @@ describe("spawnRaw API exposure", () => {
 			} as never,
 			getRegisteredPersonaDirs: () => [],
 			discoverAgents: () => ({ agents: [] }) as never,
+			hasActiveAsyncRuns: () => false,
 		});
 		const api = getExposed();
 		assert.ok(api?.spawnRaw, "expected exposed spawnRaw API");
@@ -355,6 +385,7 @@ describe("spawnRaw API exposure", () => {
 			} as never,
 			getRegisteredPersonaDirs: () => [],
 			discoverAgents: () => ({ agents: [] }) as never,
+			hasActiveAsyncRuns: () => false,
 		});
 		events.emit(SUBAGENT_REQUEST_API_EVENT);
 
