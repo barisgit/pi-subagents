@@ -243,6 +243,10 @@ export function createAsyncJobTracker(
 							job.status = lifecycle;
 							job.displayState = undefined;
 							job.updatedAt = Date.now();
+							// Poll-detected terminal transitions (interrupted runs, crashed
+							// runners, reclaimed runs) never emit async-complete on the bus,
+							// so release the idle tracker here or all-idle never fires.
+							idleTracker?.onAsyncFinished(job.asyncId);
 							// A workflow notifies once on finish; keep the row until the
 							// delivered event confirms that notification reached the host.
 							if (!deliveredRunIds.has(job.asyncId)) {
@@ -370,6 +374,11 @@ export function createAsyncJobTracker(
 						}
 						if (isTerminalAsyncStatus(job.status)) {
 							if (previousStatus !== job.status) {
+								// Poll-detected terminal transitions never emit async-complete
+								// on the bus (interrupted/skipped runs, crashed runners,
+								// reclaimed runs); release the idle tracker here or all-idle
+								// never fires. Idempotent with handleComplete's release.
+								idleTracker?.onAsyncFinished(job.asyncId);
 								// complete/failed runs notify the host; keep the row (pending
 								// delivery) until notify confirms the notification landed. An
 								// interrupted/skipped run never notifies - retire it as before.
@@ -406,6 +415,7 @@ export function createAsyncJobTracker(
 					job.status = "failed";
 					job.displayState = undefined;
 					job.updatedAt = Date.now();
+					idleTracker?.onAsyncFinished(job.asyncId);
 				}
 			}
 
