@@ -56,6 +56,12 @@ describe("SubagentParams schema", () => {
 		assert.deepEqual(runSchema.items, StepSchema);
 	});
 
+	it("describes resume as direct live-run steering", () => {
+		const properties = SubagentParams.properties as unknown as Record<string, JsonSchemaNode>;
+		assert.match(String(properties.action?.description ?? ""), /resume[\s\S]*steer/i);
+		assert.match(String(properties.message?.description ?? ""), /steer[\s\S]*without interrupting/i);
+	});
+
 	it("does not emit description-only schema nodes", () => {
 		const descriptionOnlyPaths: string[] = [];
 		for (const [name, schema] of Object.entries({ SubagentParams, TaskSchema, StepSchema })) {

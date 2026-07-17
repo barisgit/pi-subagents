@@ -56,6 +56,7 @@ describe("registered subagent tool description", () => {
 		assert.doesNotMatch(description, /before executing, use \{ action: "list" \}/i);
 		assert.match(description, /use \{ action: "list" \} when available agents are unknown or may have changed/i);
 		assert.match(description, /executable\/non-disabled/i);
+		assert.match(description, /resume steers a live run[\s\S]*without interrupting first/i);
 	});
 });
 

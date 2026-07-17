@@ -47,7 +47,7 @@ afterEach(() => {
 	for (const root of tmpRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("async list parallel rows", () => {
+describe("async job tracker rows", () => {
 	it("parallel dispatch yields N async rows", () => {
 		const state = createState();
 		const tracker = createAsyncJobTracker(createPi() as never, state as never, { pollIntervalMs: 60_000 });
@@ -78,6 +78,52 @@ describe("async list parallel rows", () => {
 			assert.equal(lines.length, runDirs.length + 2);
 			assert.equal(lines.slice(1, -1).filter((line) => line.includes("parallel(1)")).length, runDirs.length);
 		} finally {
+			if (state.poller) clearInterval(state.poller);
+			state.poller = null;
+		}
+	});
+
+	it("keeps a quickly resumed run visible when the prior completion retires late", async () => {
+		const state = createState();
+		const tracker = createAsyncJobTracker(createPi() as never, state as never, {
+			completionRetentionMs: 10,
+			pollIntervalMs: 60_000,
+		});
+		const [runDir] = createTempRunDirs(1);
+		const runId = "resumed-run";
+
+		try {
+			tracker.handleStarted({ id: runId, asyncDir: runDir, agent: "worker" });
+			tracker.handleDelivered({ runIds: [runId] });
+			tracker.handleComplete({ id: runId, success: false, asyncDir: runDir });
+
+			const resumedAt = Date.now();
+			fs.writeFileSync(
+				path.join(runDir, "status.json"),
+				JSON.stringify({
+					version: 1,
+					runId,
+					mode: "single",
+					state: "running",
+					startedAt: resumedAt - 100,
+					lastUpdate: resumedAt,
+					resumedAt,
+					resumeCount: 1,
+					steps: [],
+				}),
+			);
+			tracker.handleStarted({ id: runId, asyncDir: runDir, agent: "worker" });
+			// The interrupted generation can finish emitting after resume has already
+			// announced the new generation.
+			tracker.handleComplete({ id: runId, success: false, asyncDir: runDir });
+
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			const job = state.asyncJobs.get(runId);
+			assert.ok(job, "the prior generation's cleanup must not remove the resumed run");
+			assert.equal(job.status, "queued");
+			assert.ok(buildWidgetLines([job], theme, 200).some((line) => line.includes("worker")));
+		} finally {
+			tracker.resetJobs();
 			if (state.poller) clearInterval(state.poller);
 			state.poller = null;
 		}

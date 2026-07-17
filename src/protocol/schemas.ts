@@ -32,12 +32,17 @@ export const SubagentParams = Type.Object(
 		async: Type.Optional(Type.Boolean({ description: "Run detached (returns immediately)." })),
 		batch: Type.Optional(Type.Boolean({ description: "Collapse completion notifications into one rollup." })),
 		worktree: Type.Optional(Type.Boolean({ description: "Top-level worktree mode for parallel runs." })),
-		message: Type.Optional(Type.String({ description: "Shared dispatch framing or resume follow-up message." })),
+		message: Type.Optional(
+			Type.String({
+				description:
+					"Shared dispatch framing, or instructions to steer/resume a run without interrupting first.",
+			}),
+		),
 		action: Type.Optional(
 			Type.Union(
 				[Type.Literal("list"), Type.Literal("status"), Type.Literal("interrupt"), Type.Literal("resume")],
 				{
-					description: "Control action; omit for dispatch.",
+					description: "Control action; omit for dispatch. Resume can steer a live run directly.",
 				},
 			),
 		),

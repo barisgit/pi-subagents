@@ -435,6 +435,13 @@ export function createAsyncJobTracker(
 		};
 		logger.info("handleStarted: FIRED", { id: info.id, agent: info.agent, hasUi: !!state.lastUiContext });
 		if (!info.id) return;
+		const staleCleanup = state.cleanupTimers.get(info.id);
+		if (staleCleanup) {
+			clearTimeout(staleCleanup);
+			state.cleanupTimers.delete(info.id);
+		}
+		deliveredRunIds.delete(info.id);
+		lastActivityStateByRunId.delete(info.id);
 		const now = Date.now();
 		const asyncDir =
 			info.asyncDir ?? readAllEntries({ limit: 1 }).find((entry) => entry.runId === info.id)?.runRecordDir;
@@ -480,6 +487,14 @@ export function createAsyncJobTracker(
 		});
 		if (!asyncId) return;
 		const job = state.asyncJobs.get(asyncId);
+		const persisted = job ? readStatus(job.asyncDir) : null;
+		if (job && (persisted?.state === "running" || persisted?.state === "queued")) {
+			// Interrupt waits for the child handle, while terminal persistence and the
+			// completion event finish asynchronously. A resume can therefore announce a
+			// new generation before the prior generation emits completion. The current
+			// on-disk running state is authoritative; do not retire the resumed row.
+			return;
+		}
 		if (job) {
 			job.status = result.success ? "complete" : "failed";
 			job.displayState = undefined;

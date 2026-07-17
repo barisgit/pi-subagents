@@ -65,4 +65,11 @@ describe("skill progressive", () => {
 		assert.ok(skill.includes("run:"), "missing run: example");
 		assert.ok(skill.includes("parallel"), "missing parallel example");
 	});
+
+	it("teaches direct steering through resume", () => {
+		const resume = readReference("resume.md");
+
+		assert.match(resume, /steer a live async run/i);
+		assert.match(resume, /do not interrupt[^.]*first/i);
+	});
 });

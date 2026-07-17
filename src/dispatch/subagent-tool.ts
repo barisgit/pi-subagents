@@ -39,7 +39,7 @@ export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeo
 
 \`context\` defaults to \`"fresh"\`. \`"fork"\` is same-role self-branching only, never a role switch; cross-agent delegation uses \`"fresh"\`.
 
-Use \`action\` to list, inspect, interrupt, or resume runs; resume requires \`id\` and \`message\`. Use { action: "list" } when available agents are unknown or may have changed, and select only executable/non-disabled agents.
+Use \`action\` to list, inspect, interrupt, or resume runs; resume requires \`id\` and \`message\`. Resume steers a live run with new instructions without interrupting first; use interrupt only when the current work must stop. A terminal run with a saved session can also be resumed. Use { action: "list" } when available agents are unknown or may have changed, and select only executable/non-disabled agents.
 
 After an async dispatch, continue independent work or stop if blocked. Do not poll; Pi sends a new turn when a run completes or needs attention. Agents are files under \`agents/<name>.md\`.`,
 		parameters: SubagentParams,
