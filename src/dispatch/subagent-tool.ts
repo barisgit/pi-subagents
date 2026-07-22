@@ -41,7 +41,7 @@ export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeo
 
 Use \`action\` to list, inspect, interrupt, or resume runs; resume requires \`id\` and \`message\`. Resume steers a live run with new instructions without interrupting first; use interrupt only when the current work must stop. A terminal run with a saved session can also be resumed. Use { action: "list" } when available agents are unknown or may have changed, and select only executable/non-disabled agents.
 
-After an async dispatch, continue independent work or stop if blocked. Do not poll; Pi sends a new turn when a run completes or needs attention. Agents are files under \`agents/<name>.md\`.`,
+After an async dispatch, either stop or continue only work that neither overlaps nor duplicates a child's scope. Do not poll or redo the child's investigation, implementation, or verification; Pi sends a new turn when the run completes or needs attention. If a delayed check is truly necessary and a background scheduler is available, schedule it for 10–15 minutes or longer. Agents are files under \`agents/<name>.md\`.`,
 		parameters: SubagentParams,
 
 		async execute(id, params, signal, onUpdate, ctx) {

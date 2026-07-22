@@ -57,6 +57,9 @@ describe("registered subagent tool description", () => {
 		assert.match(description, /use \{ action: "list" \} when available agents are unknown or may have changed/i);
 		assert.match(description, /executable\/non-disabled/i);
 		assert.match(description, /resume steers a live run[\s\S]*without interrupting first/i);
+		assert.match(description, /either stop or continue only work that neither overlaps nor duplicates/i);
+		assert.match(description, /do not poll or redo the child's investigation, implementation, or verification/i);
+		assert.match(description, /10–15 minutes or longer/i);
 	});
 });
 
