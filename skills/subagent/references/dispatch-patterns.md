@@ -2,7 +2,7 @@
 
 Start with the narrowest effective path. Keep focused, tightly coupled, sequential work inline when current context is sufficient. A same-role fork is almost the inline agent in another branch—same role/model and inherited context—so use it only when isolation or concurrency provides concrete value. Delegate for substantial context isolation, specialist capability, independent parallel progress, background work the parent can overlap, or justified independent review; not merely because work is non-trivial.
 
-Use the `run` shape for direct subagent dispatch. Prefer one child. Use 2–3 top-level `run` items when genuinely independent; use 4 only with explicit decomposition and non-overlapping ownership. Use the `workflow` tool when justified delegated work depends on earlier output.
+Use the `run` shape for direct subagent dispatch. A run may contain any useful fixed set of branches, subject to runtime limits, and multiple entries execute in parallel. Plain subagents may also form agent-directed delegation trees. Workflow overlaps with these capabilities and provides explicit JavaScript orchestration when that representation helps the task.
 
 ## Single
 
@@ -14,7 +14,7 @@ subagent({
 
 ## Parallel
 
-Use multiple top-level tasks only for independent branches. Prefer 2–3; use 4 only with explicit decomposition, non-overlapping ownership, and acceptance criteria. Add `batch:true` when you want one completion rollup instead of one notification per child.
+Use multiple top-level tasks for independent branches with clear ownership and acceptance criteria. Add `batch:true` when you want one completion rollup instead of one notification per child.
 
 ```ts
 subagent({
@@ -26,9 +26,9 @@ subagent({
 })
 ```
 
-## Dependent orchestration
+## Programmable orchestration
 
-Use `workflow` for sequential or dependent phases. It can pass summaries/results between steps, branch, retry, loop, and decide runtime fan-out. In `agent(role, task, opts?)`, `role` is one of the caller's configured agent roles; replace placeholders with real roles from the active config. `parallel()` can fan out over a dynamic list and scales to many concurrent children, bounded by the process-wide leaf-concurrency pool. `pipeline(items, ...stages)` streams each item through async stages without waiting for a whole-stage barrier.
+Workflow is valid for simple parallel work and becomes especially useful when results shape later work. It can pass summaries/results between steps, branch, retry, loop, decide runtime fan-out, and compose these patterns across levels. In `agent(role, task, opts?)`, `role` is one of the caller's configured agent roles; replace placeholders with real roles from the active config. `parallel()` can fan out over a dynamic list and scales to many concurrent children, bounded by the process-wide leaf-concurrency pool. `pipeline(items, ...stages)` streams each item through async stages without waiting for a whole-stage barrier. Choose either primitive from the data dependencies rather than treating one topology as the default.
 
 `parallel()` is a **fail-fast barrier** (it awaits `Promise.all`): the first child that rejects rejects the whole call and the other results are discarded. That is the right default when every branch is required. When partial results are acceptable (survey/recon/fan-out where one dead branch should not sink the batch), catch inside each thunk so every branch resolves to a value.
 

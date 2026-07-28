@@ -33,9 +33,9 @@ export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeo
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage runs",
-		description: `Delegate a bounded task to a configured agent or inspect/resume background runs. Use \`workflow\` when later steps depend on earlier results or require branching, retries, loops, or runtime fan-out.
+		description: `Delegate a bounded task to a configured agent or inspect/resume background runs. Plain subagents may form agent-directed delegation trees; \`workflow\` provides a programmable JavaScript orchestration runtime when explicit orchestration is useful. Their capabilities intentionally overlap.
 
-\`run\` dispatches work; multiple entries run in parallel. \`async\` returns immediately, \`batch\` groups completion notices, and \`worktree\` isolates parallel edits. Shared \`message\` text supports \`{task}\` and at most one \`{in}\` substitution.
+\`run\` dispatches any fixed set of branches; multiple entries run in parallel. Shared \`message\` text applies one template across the entries—swarm-style dispatch—and supports \`{task}\` and at most one \`{in}\` substitution. \`async\` returns immediately, \`batch\` groups completion notices, and \`worktree\` isolates parallel edits.
 
 \`context\` defaults to \`"fresh"\`. \`"fork"\` is same-role self-branching only, never a role switch; cross-agent delegation uses \`"fresh"\`.
 

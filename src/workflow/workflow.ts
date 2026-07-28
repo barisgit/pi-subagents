@@ -783,17 +783,20 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): Workflow
 		name: "workflow",
 		label: "Workflow",
 		promptSnippet: "Orchestrate subagents with JS control flow: branch on results, retry, loop, fan out",
-		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Use whenever the NEXT step depends on a previous step's result: branch on a child's structured output, retry/fallback on failure, loop until a condition holds (e.g. review until approved), decide fan-out width at runtime, or pass data between steps. Prefer this over multiple subagent calls when any decision sits between dispatches; use plain subagent for a single task or a fixed independent batch.
+		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Workflow is the harness's programmable control plane: agent calls, ordinary JavaScript state, and control flow can be nested and composed freely. It is valid for simple parallel work and becomes especially powerful when runtime results shape later topology—dynamic fan-out, fan-in, branching, retries, feedback, convergence, or synthesis. Plain subagents and Workflow intentionally overlap; choose whichever representation helps the task.
 
-Scaling and flow:
-- Scale fan-out to the request and the independent work discovered at runtime. Do not apply the manual subagent child count to Workflow leaves, and do not silently cap fan-out to 2–4. A brief check may need a few leaves; a comprehensive audit may warrant tens, bounded by the configured concurrency pool and a useful finite work-list.
-- Default to pipeline() when each item can advance through stages independently. Use parallel() as a barrier only when the next step genuinely needs all prior-stage results together, such as cross-item deduplication or synthesis. Needing to flatten, map, filter, or label results does not by itself justify a barrier.
-- A strong hybrid is scope-then-orchestrate: inspect inline or use one scope agent to discover the work-list, then pipeline over it.
+Scaling and composition:
+- Workflow has no prompt-imposed child count. Scale fan-out to the request, the useful work discovered at runtime, and the process-wide concurrency pool.
+- pipeline() streams each item through stages independently; parallel() forms a barrier that gathers its thunks. Either primitive may be nested inside the other or reused within loops and branches according to the data dependencies.
+- Scripts can keep in-memory state, generate new work-lists from child results, aggregate across levels, selectively requeue gaps or failures, and repeat only the parts that have not passed a chosen gate.
 
-Quality patterns:
-- Adversarial verify: send candidate findings to independent skeptics instructed to refute them; retain only findings that survive the chosen vote/evidence threshold.
-- Loop-until-dry: for unknown-size discovery, run bounded finder rounds until a chosen number of consecutive rounds yields no new unique items.
-- Perspective-diverse sweep: give independent leaves distinct search lenses when one angle is unlikely to cover the space.
+Illustrative compositions—not templates or limits:
+- Discover scope → fan out by area → pipeline each area → fan out again over findings → fan in verifier panels → requeue gaps until a completeness gate passes.
+- Generate distinct candidates → score them with independent judges → improve or combine survivors → repeat until a quality threshold, budget, or attempt bound.
+- Sweep through different search modalities → deduplicate accumulated evidence → adversarially challenge claims → send missing coverage into another round.
+- Build queues, tournaments, self-repair loops, staged escalation, quorum systems, or other harnesses invented for the task.
+
+These are ingredients, not canonical recipes. Ordinary JavaScript can compose the primitives into orchestration structures not named here.
 
 The script runs in a sandbox with four globals:
 - agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
@@ -802,8 +805,6 @@ The script runs in a sandbox with four globals:
 - phase(title) — label the current stage for live status displays.
 
 Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll.
-
-Example shape: scope the work-list, pipeline independent items through inspection and review, then synthesize only when a cross-item decision requires all results.
 
 Rules: always await every agent()/parallel()/pipeline() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel() or pipeline(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.`,
 		parameters: WorkflowParams,

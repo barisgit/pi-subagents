@@ -5,71 +5,34 @@ description: Use for delegating bounded repo work to configured subagents, paral
 
 # Subagent
 
-Delegate to control context, latency, and perspective. The tool schema is already in the live tool definition; this skill only decides **when** to delegate and which deeper reference to open.
+Subagents and Workflow are complementary ways to create useful execution boundaries. The live tool definitions own their exact schemas and runtime contracts.
 
-## Inline or delegate
+## Subagents
 
-Start with the narrowest effective path. Stay inline for focused, tightly coupled, sequential work when current context is sufficient—including a few related files, local repository lookups, and an inspect/edit/test loop.
+A plain subagent delegates a bounded outcome and may itself delegate further, so model-directed trees do not require a Workflow script. There is no preferred child count: a `run` may contain any useful fixed set of branches, subject to runtime limits. Clear boundaries improve handoffs, but the model chooses the topology.
 
-A same-role `context:"fork"` is almost the inline agent in another branch: it keeps the same role/model and inherits the parent context. It provides isolation or concurrency, not specialist capability or an independent perspective, and it still adds a handoff. Use it only when that boundary has concrete value; use `fresh` for role changes or deliberately clean context.
+Multiple `run` entries execute in parallel. Adding a shared `message` applies one template through `{task}` or `{in}` across those entries—swarm-style dispatch for perspectives, targets, or variants. `batch:true` combines completion notices; `worktree:true` isolates parallel edits.
 
-Delegate only when a bounded child provides at least one concrete advantage:
+`context:"fresh"` gives a clean child context. Same-role `context:"fork"` inherits the parent context and provides isolation or concurrency rather than a different perspective. After an async dispatch, either stop or continue only work that neither overlaps nor duplicates the child's scope; do not poll or redo its work because the host sends a new turn when it finishes. If a delayed check is truly necessary and a background scheduler is available, schedule it for 10–15 minutes or longer.
 
-- **Substantial context isolation** — noisy read-heavy recon, logs, broad cross-file tracing, or an isolated implementation branch would materially pollute the parent.
-- **Specialist capability** — a configured role is materially better suited to the outcome.
-- **Independent parallel progress** — branches do not depend on each other and the parent can continue useful work.
-- **Background time** — choose `async:true` whenever no remaining work, synthesis, or response in the current turn requires the child result. After dispatching, end the turn or continue only work that neither overlaps nor duplicates the child's scope. Do not poll or redo its investigation, implementation, or verification; the host notifies you on completion or when attention is needed. If a delayed check is truly necessary and a background scheduler is available, schedule it for 10–15 minutes or longer. Use synchronous dispatch whenever later work in the same turn must consume the result.
-- **Independent review** — risk justifies a separate judgment and existing verification is insufficient.
+## Workflow
 
-Do not delegate merely because work is non-trivial or a matching role exists. For plain `subagent` dispatch, prefer one child; use 2–3 for independent branches and 4 only with explicit decomposition, non-overlapping ownership, and acceptance criteria. These counts do not cap `workflow` leaves; scale runtime-discovered independent work to the request and configured limits.
+Workflow is the highest-power orchestration surface in this harness: a programmable JavaScript control plane, not a preset parallel or pipeline mode. Its primitives are:
 
-## Pick the shape
+- `agent(role, task, opts?)` for child work and optional workflow-authored structured results.
+- `parallel(thunks)` for a barrier over concurrently started branches.
+- `pipeline(items, ...stages)` for independently streaming each item through stages.
+- `phase(title)` for visible progress grouping.
 
-- Use no child when inline work is sufficient; otherwise use one `run` task for a bounded handoff by default.
-- Put 2–3 top-level `run` tasks in parallel only when they are genuinely independent. Use 4 only with explicit decomposition and non-overlapping ownership.
-- Use the `workflow` tool for sequential or dependent orchestration: branch on a child's structured result, retry/fallback on failure, loop until a condition holds, runtime-decided fan-out, or data transforms between steps. For per-item multi-stage work, default to `pipeline`; use a `parallel` barrier only when the next stage needs all prior results together.
-- Set `batch:true` when several children should return one rollup notification.
-- Use `action:"list"` if agent names are uncertain; use status/interrupt/resume only for live run management.
-- A child's findings return **in JS** (shaped by `opts.schema`), not through files: never route fan-out reports through the filesystem for a synthesis child to re-read. For a report you need **verbatim**, use `workflow` + `schema` — a plain `subagent` `finalOutput` is a summary, not a transcript. See `references/dispatch-patterns.md`.
+Ordinary JavaScript supplies the larger grammar: functions, arrays, objects, conditions, loops, try/catch, and in-memory state. The primitives can be nested and composed to create runtime-discovered and multi-level fan-out, pipelines inside branches, fan-in across levels, queues, voting panels, selective retries, feedback and repair cycles, convergence gates, repeat-until-pass or loop-until-dry behavior, staged escalation, tournaments, and structures invented for the task.
 
-## Workflow: orchestration with control flow
+Pure parallel work is valid in either a subagent batch/swarm or Workflow. Workflow's distinctive power appears when outputs shape later work, but that is not an artificial minimum-complexity requirement. The named patterns are a floor, not a ceiling; compose novel harnesses whenever richer coordination improves the result.
 
-`workflow({ script })` runs JavaScript in a sandbox with `agent(role, task, opts?)`, `parallel(thunks)`, `pipeline(items, ...stages)`, and `phase(title)`. `role` is one of the caller's configured agent roles; replace placeholders like `"<implementation-role>"` with real roles from the active config. `agent()` returns the child's result directly — a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object the workflow author owns; the child never decides its own shape). It rejects on child failure. Top-level await works; the script's return value is the workflow result. `async:true` backgrounds the whole workflow. Await every `agent()`/`parallel()`/`pipeline()` call; use `parallel()` for an independent fail-fast barrier, and `pipeline()` to stream items through async stages without waiting for a whole-stage barrier. Use these helpers instead of raw `Promise.all` so failures are attributed. Both are fail-fast overall; when partial results are acceptable, catch inside each thunk/stage so every branch resolves. Concurrency is bounded process-wide by `maxConcurrentAgents` (config), not per call. The sandbox has no I/O — subagents do the real work.
-
-```ts
-workflow({ script: `
-phase("inspect");
-const finding = await agent("<investigation-role>", "Inspect the bounded area and return only decision-relevant evidence.");
-phase("implement");
-const change = await agent("<implementation-role>", "Implement the smallest safe change using: " + finding);
-phase("verify once");
-const verdict = await agent("<verification-role>", "Independently verify this medium/high-risk change and return approved/blockers: " + change, {
-  schema: { type: "object", required: ["approved", "blockers"], properties: { approved: { type: "boolean" }, blockers: { type: "array", items: { type: "string" } } }, additionalProperties: false },
-});
-if (verdict.approved) return { change, finding, verdict };
-return { status: "needs-attention", change, finding, blockers: verdict.blockers };
-` })
-```
-
-## Canonical examples
-
-```ts
-subagent({
-  run: [{ agent: "<configured-agent>", task: "Read-only: locate the payment tests and summarize coverage gaps." }]
-})
-
-subagent({
-  run: [
-    { agent: "<configured-agent>", task: "Find relevant tests." },
-    { agent: "<configured-agent>", task: "Run the relevant checks and report evidence." }
-  ],
-  batch: true
-})
-```
+Mechanical boundaries remain small: every orchestration call is awaited; partial-failure handling lives inside the relevant thunk or stage; configured role names replace placeholders; the workflow author owns result schemas; and the sandbox itself has no I/O—the children do the real work.
 
 ## Load on demand
 
-Open exactly the reference that matches the decision you are making:
+Open a reference when its detail is relevant:
 
 - `references/dispatch-patterns.md` — choosing single, parallel, async, worktree, or background dispatch.
 - `references/context-fork.md` — before setting `context:"fork"`; confirms same-agent-only branching.

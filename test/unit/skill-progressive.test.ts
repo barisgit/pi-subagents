@@ -59,11 +59,13 @@ describe("skill progressive", () => {
 		}
 	});
 
-	it("skill-shows-canonical-example", () => {
+	it("does not prescribe numeric child counts", () => {
 		const skill = readSkill();
 
-		assert.ok(skill.includes("run:"), "missing run: example");
-		assert.ok(skill.includes("parallel"), "missing parallel example");
+		assert.doesNotMatch(
+			skill,
+			/\b(?:prefer|use)\s+(?:one|\d+(?:\s*[–-]\s*\d+)?)\b|\b\d+(?:\s*[–-]\s*\d+)?\s+(?:children?|top-level\s+(?:tasks?|runs?))\b/i,
+		);
 	});
 
 	it("teaches direct steering through resume", () => {
