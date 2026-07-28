@@ -4,6 +4,7 @@
 
 ### Changed
 - Raised the default `needs_attention` inactivity threshold to 15 minutes to avoid interrupting long silent reasoning.
+- Group-container status inspection now shows each child's full run ID instead of an eight-character prefix.
 
 ### Fixed
 - Foreground/sync subagents now auto-interrupt on `needs_attention` instead of emitting an unrouteable parent notice that could only surface after the tool call ended.

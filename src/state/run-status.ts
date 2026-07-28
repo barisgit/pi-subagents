@@ -220,7 +220,7 @@ export function inspectSubagentStatus(params: RunStatusParams): SubagentToolResu
 				const childSummary = readRunViewForEntry(child, registryEntries);
 				const agent = child.agentName ?? child.agentNames?.join("+") ?? "(group)";
 				lines.push(
-					`Child: ${child.runId.slice(0, 8)} | ${agent} | ${childSummary?.state ?? "unknown"}${child.label ? ` | ${child.label}` : ""}`,
+					`Child: ${child.runId} | ${agent} | ${childSummary?.state ?? "unknown"}${child.label ? ` | ${child.label}` : ""}`,
 				);
 			}
 			if (summary.state === "running" || summary.state === "queued" || summary.state === "lost")

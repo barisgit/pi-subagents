@@ -78,17 +78,19 @@ describe("group container status inspect", () => {
 			kind: "workflow",
 			rootRunId: "wf-group",
 		});
-		seedChild(root, "wf-child-a", "wf-group", "explorer", "complete");
-		seedChild(root, "wf-child-b", "wf-group", "qa", "complete");
+		const firstChildRunId = "wf-child-a-full-run-id";
+		const secondChildRunId = "wf-child-b-full-run-id";
+		seedChild(root, firstChildRunId, "wf-group", "explorer", "complete");
+		seedChild(root, secondChildRunId, "wf-group", "qa", "complete");
 
 		const result = inspectSubagentStatus({ id: "wf-group" });
 		assert.equal(result.isError ?? false, false, "group inspect must not error");
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 		assert.match(text, /Run: wf-group/);
 		assert.match(text, /Mode: parallel \(workflow\)/);
-		assert.match(text, /Child: wf-child/);
-		assert.match(text, /explorer \| complete/);
-		assert.match(text, /qa \| complete/);
+		assert.ok(text.includes(`Child: ${firstChildRunId} | explorer | complete`));
+		assert.ok(text.includes(`Child: ${secondChildRunId} | qa | complete`));
+		assert.doesNotMatch(text, /^Child: wf-child \|/m);
 		assert.doesNotMatch(text, /Status file not found/);
 	});
 
