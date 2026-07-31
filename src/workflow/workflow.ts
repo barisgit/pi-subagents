@@ -788,15 +788,24 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): Workflow
 Scaling and composition:
 - Workflow has no prompt-imposed child count. Scale fan-out to the request, the useful work discovered at runtime, and the process-wide concurrency pool.
 - pipeline() streams each item through stages independently; parallel() forms a barrier that gathers its thunks. Either primitive may be nested inside the other or reused within loops and branches according to the data dependencies.
-- Scripts can keep in-memory state, generate new work-lists from child results, aggregate across levels, selectively requeue gaps or failures, and repeat only the parts that have not passed a chosen gate.
 
-Illustrative compositions—not templates or limits:
-- Discover scope → fan out by area → pipeline each area → fan out again over findings → fan in verifier panels → requeue gaps until a completeness gate passes.
-- Generate distinct candidates → score them with independent judges → improve or combine survivors → repeat until a quality threshold, budget, or attempt bound.
-- Sweep through different search modalities → deduplicate accumulated evidence → adversarially challenge claims → send missing coverage into another round.
-- Build queues, tournaments, self-repair loops, staged escalation, quorum systems, or other harnesses invented for the task.
-
-These are ingredients, not canonical recipes. Ordinary JavaScript can compose the primitives into orchestration structures not named here.
+Worked examples—not templates or limits (replace role placeholders with configured roles):
+- Discovery-driven fan-out: a child's structured result sets the topology. Do not pre-author a work-list a child could discover at runtime. Build one self-contained brief; each branch gets a distinct focus.
+    const areas = await agent("<investigation-role>", "List the distinct areas this audit must cover. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
+    const brief = "Read-only audit of <repo and key paths>. Cite file and line evidence for every claim. Expected output: a findings list. Area: ";
+    const reports = await parallel(areas.map((a) => () => agent("<investigation-role>", brief + a)));
+- Explore → verify → synthesize: per-item pipeline stages keep every child's context bounded instead of pasting all reports into one prompt.
+    const verified = await pipeline(areas,
+      (a) => agent("<investigation-role>", "Audit area: " + a),
+      (report) => agent("<review-role>", "Re-check each claim against the actual files and commands it cites; drop claims you cannot reproduce, keep the rest verbatim:\\n" + report));
+    return await agent("<review-role>", "Synthesize a decision-ready report from these verified area reports:\\n" + verified.join("\\n---\\n"));
+- Gate loop: requeue only what has not passed, under an attempt bound.
+    let gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
+    for (let round = 0; round < 3 && gaps.length > 0; round++) {
+      await parallel(gaps.map((gap) => () => agent("<investigation-role>", "Close this gap: " + gap)));
+      gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
+    }
+These are ingredients, not canonical recipes; larger structures—queues, tournaments, judge panels, staged escalation, self-repair, convergence gates—are ordinary JavaScript over the same primitives. Do not settle for a flat one-barrier fan-out out of caution: the sandbox is full JavaScript, so any coordination strategy you can state you can implement. Design the harness the task deserves.
 
 The script runs in a sandbox with four globals:
 - agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
@@ -806,7 +815,9 @@ The script runs in a sandbox with four globals:
 
 Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll.
 
-Rules: always await every agent()/parallel()/pipeline() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel() or pipeline(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.`,
+Rules: always await every agent()/parallel()/pipeline() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel() or pipeline(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.
+
+Task strings: each child starts with no conversation context — the script sees the whole picture, the child sees only its task string. Make every task self-contained (relevant paths, constraints, observed behavior, exact expected output) and state whether it is read-only research or includes implementation. Have verification stages check actual files and command results, not an earlier child's summary of its own work.`,
 		parameters: WorkflowParams,
 		async execute(id, params, signal, onUpdate, ctx) {
 			// Declared outside the try so the catch can record a synthetic failed child
