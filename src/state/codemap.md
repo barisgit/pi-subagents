@@ -8,7 +8,7 @@ Run-state and persistence layer for pi-subagents: canonical in-memory run displa
 - Two `RunView` producers feed the same shape: live-from-memory registry mirrors owned by the in-process `ChildAgentRegistry`, and foreign-from-disk hydration through `async-status.ts` (`statusToRunView`, `readRunViewForEntry`, `readLeafRunViewCached`).
 - `status-writer.ts` is the ONE `StatusWriter` implementation for writing `status.json`; it owns `FlushPolicy = "terminal" | "eager"`, `statusFromMeta`, terminal scalar conventions, atomic JSON writes, and the former foreground/sync deep-merge path. The former `sync-run-persistence.ts` file is deleted; only an `ex-sync-run-persistence` comment remains in `mergeValue`.
 - `status-patch.ts` is pure shared mutation logic: `applyPatchToStatus` applies structured `StatusPatch` in place, `stepFor` grows persisted steps, and `StatusWriter` plus live mirrors share it to avoid disk/in-memory divergence.
-- `run-phase.ts`, `run-liveness.ts`, and `run-shape.ts` are pure display kernels: phase state transitions/labels, heartbeat/activity-derived display state + ordering, and single/parallel handle/label/badge formatting.
+- `run-phase.ts`, `run-liveness.ts`, `run-shape.ts`, and `workflow-display.ts` are pure display kernels: phase state transitions/labels, heartbeat/activity-derived display state + ordering, single/parallel handle/label/badge formatting, and declarative workflow name/progress/phase-plan shaping.
 - `runs-registry.ts` is append-only discovery state: global `runs-index.jsonl` plus per-session shards, guarded by `parseRunsRegistryEntryLine`; readers tolerate malformed lines and missing files.
 - Caches are bounded or stat-keyed where display is hot: `async-status.ts` caches terminal leaf summaries by `status.json` mtime/size, `run-transcript.ts` caches parsed transcript lines by status/session-file stats, and `completion-dedupe.ts` uses global TTL maps.
 
@@ -44,3 +44,4 @@ Run-state and persistence layer for pi-subagents: canonical in-memory run displa
 - `status-patch.ts` — pure shared `StatusPatch` applier for status/run-step state, live text/tool counters, phase, heartbeat, and live token persistence.
 - `status-writer.ts` — single `StatusWriter` for `status.json`, `statusFromMeta`, eager debounce, terminal throttle/merge/finalize, terminal scalar normalization, and atomic JSON writes.
 - `usage-totals.ts` — pure token-usage normalization helpers from aggregate usage or rolled-up totals into persisted/display `TokenUsage`.
+- `workflow-display.ts` — shared workflow display name, canonical declared/ad-hoc phase progress, and completed/current/upcoming/unreached phase-plan shaping from durable reached history plus current-phase authority.

@@ -11,6 +11,7 @@ Shared is the low-level utility/persona/config layer for `pi-subagents`: filesys
 - `control-policy.ts` — pure foreground-control constants and `deriveActivityState` needs-attention timeout logic.
 - `runtime-paths.ts` — canonical runtime temp path home: `BASE_TEMP_DIR`, `RUNS_DIR`, `TEMP_ARTIFACTS_DIR`; moved here so protocol stays path-free.
 - `formatting.ts` — canonical pure formatting home: `formatDuration`, `formatTokens`, `formatToolCall`, `shortenPath`, and `ASYNC_NO_POLL_GUIDANCE`; `surfaces/formatters.ts` should re-export instead of owning these.
+- `workflow-phase-title.ts` — low-level canonical workflow phase-title normalization plus C0/C1 display-control detection, shared by protocol codecs, state shaping, persistence, and dashboard rendering.
 - `persona-registry.ts` — maintains extension-registered internal persona directories, validates absolute internal registrations, detects cross-extension persona name conflicts, and emits protocol error events.
 - `root-role-selection.ts` — picks the root role from role flag, env, restored state, default, then first available role.
 - `settings.ts` — resolves per-step behavior by overlaying step overrides on `AgentConfig` defaults for output, reads, progress, skills, and model.

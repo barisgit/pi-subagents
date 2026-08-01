@@ -8,10 +8,11 @@
 // disk IO. The component owns fetching the raw LiveRun[] (reading the registry /
 // async-status from disk, foreground sync runs, sync-vs-disk dedupe) and then
 // delegates the filter/sort/display-row derivation here.
-import { dedupePhaseTitle } from "../state/async-status.ts";
 import { compareRunsForDisplay } from "../state/run-liveness.ts";
+import { formatWorkflowPhase, shapeWorkflowPhasePlan, type WorkflowPhasePlanState } from "../state/workflow-display.ts";
 import type { AsyncRunSummary } from "../state/async-status.ts";
 import type { LiveRun } from "../state/run-view.ts";
+import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
 import type { ForegroundRunSummary } from "./subagents-status.ts";
 
 /** Extra rendering context for a group-container row (parallel group, workflow
@@ -51,6 +52,8 @@ export type DisplayRow =
 			total: number;
 			running: boolean;
 			collapsed: boolean;
+			expandable: boolean;
+			planState?: WorkflowPhasePlanState;
 	  };
 
 export function parentRunIdOf(run: LiveRun): string | undefined {
@@ -267,22 +270,28 @@ export function containerRowInfo(
 		const s = child.run.state;
 		return s === "complete" || s === "failed" || s === "interrupted" || s === "skipped";
 	}).length;
-	// Current phase = the highest phase any child has reached (workflow only).
+	// Current phase comes from the durable group marker, with latest child as a
+	// compatibility fallback for records written before phase persistence.
 	let phaseChip: string | undefined;
 	if (run.run.workflow === true) {
-		let best: { index: number; title?: string } | undefined;
-		for (const child of children) {
-			if (child.run.phaseIndex === undefined) continue;
-			if (!best || child.run.phaseIndex > best.index) {
-				best = {
-					index: child.run.phaseIndex,
-					...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}),
-				};
+		let phaseIndex = run.run.phaseIndex;
+		let phaseTitle = run.run.phaseTitle ? canonicalWorkflowPhaseTitle(run.run.phaseTitle) : undefined;
+		if (phaseIndex === undefined) {
+			let best: { index: number; title?: string } | undefined;
+			for (const child of children) {
+				if (child.run.phaseIndex === undefined) continue;
+				if (!best || child.run.phaseIndex > best.index) {
+					best = {
+						index: child.run.phaseIndex,
+						...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}),
+					};
+				}
 			}
+			phaseIndex = best?.index;
+			phaseTitle = best?.title ? canonicalWorkflowPhaseTitle(best.title) : undefined;
 		}
-		if (best && run.run.state === "running") {
-			const title = dedupePhaseTitle(best.title);
-			phaseChip = title ? `Phase ${best.index}: ${title}` : `Phase ${best.index}`;
+		if (phaseIndex !== undefined && run.run.state === "running") {
+			phaseChip = formatWorkflowPhase(run.run.workflowMeta, phaseIndex, phaseTitle) ?? `Phase ${phaseIndex}`;
 		}
 	}
 	const collapsed = collapsedIds.has(run.run.id);
@@ -360,13 +369,23 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 				children.filter((child) => child.run.phaseIndex !== undefined).map((child) => child.run.phaseIndex!),
 			),
 		).sort((a, b) => a - b);
-		for (const phaseIndex of phaseIndexes) {
+		const runtimePhases = phaseIndexes.map((phaseIndex) => {
 			const phaseChildren = children.filter((child) => child.run.phaseIndex === phaseIndex);
-			const phaseId = `phase:${workflow.run.id}:${phaseIndex}`;
-			const title = dedupePhaseTitle(phaseChildren.find((child) => child.run.phaseTitle)?.run.phaseTitle);
+			const rawTitle = phaseChildren.find((child) => child.run.phaseTitle)?.run.phaseTitle;
+			const title = rawTitle ? canonicalWorkflowPhaseTitle(rawTitle) : undefined;
+			return { phaseIndex, phaseChildren, title };
+		});
+		const emitPhase = (
+			phaseIndex: number,
+			title: string | undefined,
+			phaseChildren: LiveRun[],
+			phaseId: string,
+			planState?: WorkflowPhasePlanState,
+		) => {
 			const parallelGroups = new Set(
 				phaseChildren.map((child) => child.run.parallelGroupId).filter((id): id is string => Boolean(id)),
 			);
+			const expandable = phaseChildren.length > 0;
 			rows.push({
 				kind: "phase",
 				id: phaseId,
@@ -376,10 +395,14 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 				depth: depth + 1,
 				done: phaseChildren.filter(phaseRowDone).length,
 				total: phaseChildren.length,
-				running: phaseChildren.some((child) => child.run.state === "running" || child.run.state === "queued"),
-				collapsed: collapsedIds.has(phaseId),
+				running:
+					planState === "current" ||
+					phaseChildren.some((child) => child.run.state === "running" || child.run.state === "queued"),
+				collapsed: expandable && collapsedIds.has(phaseId),
+				expandable,
+				...(planState ? { planState } : {}),
 			});
-			if (collapsedIds.has(phaseId)) continue;
+			if (!expandable || collapsedIds.has(phaseId)) return;
 			const pipelineChildren = phaseChildren.filter((child) => child.run.pipeline);
 			const pipelineKeys = Array.from(
 				new Set(pipelineChildren.map((child) => `${child.run.pipeline!.id}:${child.run.pipeline!.itemIndex}`)),
@@ -424,6 +447,50 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 						child.run.parallelGroupId !== undefined && parallelGroups.has(child.run.parallelGroupId),
 				});
 			}
+		};
+		const workflowMeta = workflow.run.workflowMeta;
+		if (!workflowMeta) {
+			for (const runtime of runtimePhases) {
+				emitPhase(
+					runtime.phaseIndex,
+					runtime.title,
+					runtime.phaseChildren,
+					`phase:${workflow.run.id}:${runtime.phaseIndex}`,
+				);
+			}
+			return;
+		}
+
+		const reachedTitles = [
+			...(workflow.run.reachedPhaseTitles ?? []),
+			...runtimePhases.map((runtime) => runtime.title).filter((title): title is string => title !== undefined),
+		];
+		const plan = shapeWorkflowPhasePlan(
+			workflowMeta,
+			reachedTitles,
+			workflow.run.state === "running" || workflow.run.state === "queued",
+			workflow.run.phaseTitle ? canonicalWorkflowPhaseTitle(workflow.run.phaseTitle) : undefined,
+		);
+		const matchedRuntimeIndexes = new Set<number>();
+		for (const [declaredIndex, phase] of plan.entries()) {
+			const matches = runtimePhases.filter((runtime) => runtime.title === phase.title);
+			for (const match of matches) matchedRuntimeIndexes.add(match.phaseIndex);
+			emitPhase(
+				declaredIndex + 1,
+				phase.title,
+				matches.flatMap((match) => match.phaseChildren),
+				`phase-plan:${workflow.run.id}:${declaredIndex}`,
+				phase.state,
+			);
+		}
+		for (const runtime of runtimePhases) {
+			if (matchedRuntimeIndexes.has(runtime.phaseIndex)) continue;
+			emitPhase(
+				runtime.phaseIndex,
+				runtime.title,
+				runtime.phaseChildren,
+				`phase:${workflow.run.id}:${runtime.phaseIndex}`,
+			);
 		}
 	};
 	const emitTree = (

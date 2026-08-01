@@ -14,11 +14,33 @@ import {
 	SUBAGENT_ASYNC_STARTED_EVENT,
 } from "../../src/protocol/types.ts";
 import { createWorkflowTool } from "../../src/workflow/workflow.ts";
+import type { SubagentLineage } from "../../src/state/lineage.ts";
 import { makeAgent } from "../support/helpers.ts";
 
 const roots: string[] = [];
 let restoreRuntime: (() => void) | undefined;
 let previousHome: string | undefined;
+const globalStore = globalThis as Record<string, unknown>;
+const LINEAGE_STORE_KEY = "__piSubagentLineageBySession";
+
+function setLineageForSession(sessionId: string, lineage: SubagentLineage): void {
+	let store = globalStore[LINEAGE_STORE_KEY] as Map<string, SubagentLineage> | undefined;
+	if (!store) {
+		store = new Map();
+		globalStore[LINEAGE_STORE_KEY] = store;
+	}
+	store.set(sessionId, lineage);
+}
+
+function clearLineage(sessionId: string): void {
+	const store = globalStore[LINEAGE_STORE_KEY] as Map<string, SubagentLineage> | undefined;
+	store?.delete(sessionId);
+}
+
+function resultCount(details: unknown): number | undefined {
+	if (typeof details !== "object" || details === null || !("results" in details)) return undefined;
+	return Array.isArray(details.results) ? details.results.length : undefined;
+}
 
 class FakeResourceLoader {
 	async reload(): Promise<void> {}
@@ -140,7 +162,7 @@ function setup(
 	const tool = createWorkflowTool({
 		openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
 	});
-	return { events, tool, ctx, promptGate, promptStarted };
+	return { events, executor, tool, ctx, promptGate, promptStarted };
 }
 
 afterEach(() => {
@@ -154,6 +176,121 @@ afterEach(() => {
 });
 
 describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
+	it("runs all requested subagent async modes synchronously from child lineage", async () => {
+		const sessionId = "workflow-parent";
+		const { executor, ctx } = setup("nested-subagent-async-modes-", { asyncByDefault: true });
+		setLineageForSession(sessionId, {
+			role: "child",
+			currentAgent: "A",
+			parentAgent: "host-role",
+			parentSessionId: "host-session",
+			rootSessionId: "host-session",
+			depth: 1,
+			runId: "parent-run",
+			canDelegate: true,
+			allowedDelegateAgents: ["A"],
+			maxSubagentDepth: 2,
+		});
+
+		try {
+			for (const [name, asyncMode] of [
+				["explicit true", true],
+				["omitted default", undefined],
+				["explicit false", false],
+			] as const) {
+				const result = await executor.execute(
+					`nested-${name}`,
+					{
+						run: [{ agent: "A", task: name }],
+						...(asyncMode === undefined ? {} : { async: asyncMode }),
+					},
+					new AbortController().signal,
+					undefined,
+					ctx as never,
+				);
+
+				assert.equal(result.isError, undefined, name);
+				assert.equal(result.details?.results.length, 1, name);
+				assert.equal("asyncId" in (result.details ?? {}), false, name);
+			}
+		} finally {
+			clearLineage(sessionId);
+		}
+	});
+
+	it("preserves host subagent async defaults and explicit overrides", async () => {
+		const { executor, ctx } = setup("host-subagent-async-modes-", { asyncByDefault: true });
+
+		for (const [name, asyncMode] of [
+			["explicit true", true],
+			["omitted default", undefined],
+		] as const) {
+			const result = await executor.execute(
+				`host-${name}`,
+				{
+					run: [{ agent: "A", task: name }],
+					...(asyncMode === undefined ? {} : { async: asyncMode }),
+				},
+				new AbortController().signal,
+				undefined,
+				ctx as never,
+			);
+			assert.equal(typeof result.details?.asyncId, "string", name);
+			assert.equal(result.details?.results.length, 0, name);
+		}
+
+		const foreground = await executor.execute(
+			"host-explicit-false",
+			{ run: [{ agent: "A", task: "explicit false" }], async: false },
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+		assert.equal(foreground.details?.results.length, 1);
+		assert.equal("asyncId" in (foreground.details ?? {}), false);
+	});
+
+	it("runs explicit and default async workflows synchronously from child lineage", async () => {
+		const sessionId = "workflow-parent";
+		const { tool, ctx } = setup("nested-workflow-async-modes-", { asyncByDefault: true });
+		setLineageForSession(sessionId, {
+			role: "child",
+			currentAgent: "A",
+			parentAgent: "host-role",
+			parentSessionId: "host-session",
+			rootSessionId: "host-session",
+			depth: 1,
+			runId: "parent-run",
+			canDelegate: true,
+			allowedDelegateAgents: ["A"],
+			maxSubagentDepth: 2,
+		});
+
+		try {
+			for (const [name, asyncMode] of [
+				["explicit true", true],
+				["omitted default", undefined],
+			] as const) {
+				const result = await tool.execute?.(
+					`wf-${name}`,
+					{
+						script: `await agent('A', '${name}');`,
+						...(asyncMode === undefined ? {} : { async: asyncMode }),
+					},
+					new AbortController().signal,
+					undefined,
+					ctx as never,
+				);
+
+				assert.equal(result?.isError, undefined, name);
+				assert.equal(resultCount(result?.details), 1, name);
+				assert.equal("asyncId" in ((result?.details as object | undefined) ?? {}), false, name);
+			}
+		} finally {
+			clearLineage(sessionId);
+		}
+	});
+
 	it("params.async:true returns a running stub before the script finishes", async () => {
 		const { tool, ctx, promptGate, promptStarted } = setup("workflow-async-stub-", { blockPrompt: true });
 
@@ -175,6 +312,21 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		assert.equal((result?.details as any).asyncId, (result?.details as any).runId);
 		assert.equal(typeof (result?.details as any).asyncDir, "string");
 		promptGate.resolve();
+	});
+
+	it("params.async:false remains synchronous when asyncByDefault is true", async () => {
+		const { tool, ctx } = setup("workflow-sync-override-", { asyncByDefault: true });
+
+		const result = await tool.execute?.(
+			"wf",
+			{ script: "await agent('A', 'explicit sync');", async: false },
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+
+		assert.equal(resultCount(result?.details), 1);
+		assert.equal("asyncId" in ((result?.details as object | undefined) ?? {}), false);
 	});
 
 	it("asyncByDefault:true backgrounds without params.async", async () => {

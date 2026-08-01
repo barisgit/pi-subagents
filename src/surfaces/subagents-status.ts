@@ -21,7 +21,6 @@ import {
 	type AsyncRunSummary,
 	buildGroupSummary,
 	isQueuedStubRecent,
-	dedupePhaseTitle,
 	listRunsFromRegistryForOverlay,
 	readLeafRunViewCached,
 	sortRuns,
@@ -32,6 +31,7 @@ import { buildRightLines, statusGlyph } from "./dashboard-detail-renderer.ts";
 import { readRunTranscript } from "../state/run-transcript.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
+import { workflowDisplayName } from "../state/workflow-display.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
 import type { SubagentState } from "../protocol/types.ts";
 import type { LiveRun, RunView } from "../state/run-view.ts";
@@ -52,6 +52,7 @@ import {
 	type DisplayRow,
 } from "./dashboard-row-model.ts";
 import { deriveLiveRuns } from "./dashboard-run-source.ts";
+import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
 
 // Re-exported from the pure row-derivation model so existing import sites stay stable.
 export type { ContainerRowInfo, DisplayRow } from "./dashboard-row-model.ts";
@@ -320,7 +321,7 @@ function runAgentLabel(run: LiveRun, theme: Theme): string {
 		const name = run.run.currentAgent;
 		return tintAgentName(name, run.run.currentAgentColor ?? colorForAgentName(name));
 	}
-	if (run.run.workflow) return tintAgentName("workflow", colorForAgentName("workflow"));
+	if (run.run.workflow) return theme.fg("toolTitle", workflowDisplayName(run.run.workflowMeta));
 	const mode = run.run.mode ?? "single";
 	const steps = (mode === "parallel" ? run.run.steps.filter((s) => s.agent) : run.run.steps).filter((s) => s.agent);
 	const running = run.run.steps.find((step) => step.status === "running");
@@ -350,7 +351,7 @@ function workflowPhaseChip(run: LiveRun): string {
 	// sequential shape is readable in the left list, not just the right pane.
 	const marker = run.run.parallelGroupId ? "∥ " : "";
 	const label = `${marker}P${run.run.phaseIndex}`;
-	const title = dedupePhaseTitle(run.run.phaseTitle);
+	const title = run.run.phaseTitle ? canonicalWorkflowPhaseTitle(run.run.phaseTitle) : undefined;
 	return title ? `${label} ${title}` : label;
 }
 
@@ -526,8 +527,13 @@ function buildPhaseLine(
 ): string {
 	const cursor = selected ? theme.fg("accent", "> ") : "  ";
 	const indent = row.depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, row.depth - 1))}└─`) : "";
-	const glyph = theme.fg(row.running ? "accent" : "dim", row.collapsed ? "▸" : "▾");
 	const label = row.title ? `Phase ${row.phaseIndex}: ${row.title}` : `Phase ${row.phaseIndex}`;
+	if (!row.expandable && row.planState) {
+		const glyph = theme.fg("dim", "·");
+		const status = theme.fg(row.planState === "current" ? "accent" : "dim", row.planState);
+		return truncateToWidth(`${cursor}${indent}${glyph} ${theme.fg("dim", label)} · ${status}`, width, "");
+	}
+	const glyph = theme.fg(row.running ? "accent" : "dim", row.collapsed ? "▸" : "▾");
 	const text = `${cursor}${indent}${glyph} ${theme.fg("dim", label)} · ${theme.fg("dim", `${row.done}/${row.total}`)}`;
 	return truncateToWidth(text, width, "");
 }
@@ -1019,7 +1025,10 @@ export class SubagentsStatusComponent implements Component {
 	private toggleCollapseRow(row: DisplayRow | undefined): void {
 		if (!row) return;
 		let id: string | undefined;
-		if (row.kind === "phase" || row.kind === "pipelineItem") id = row.id;
+		if (row.kind === "phase") {
+			if (!row.expandable) return;
+			id = row.id;
+		} else if (row.kind === "pipelineItem") id = row.id;
 		else if (row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) id = row.run.run.id;
 		if (!id) return;
 		if (this.collapsedIds.has(id)) this.collapsedIds.delete(id);
@@ -1231,7 +1240,7 @@ function selectedRunTitle(run: LiveRun): string {
 	if (run.run.currentAgent) {
 		return run.run.currentAgent;
 	}
-	if (run.run.workflow) return "workflow";
+	if (run.run.workflow) return workflowDisplayName(run.run.workflowMeta);
 	const running = run.run.steps?.find((s) => s.status === "running");
 	const step = running ?? run.run.steps?.[0];
 	return step?.agent ?? run.run.mode ?? "(run)";

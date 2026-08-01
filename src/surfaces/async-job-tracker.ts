@@ -26,8 +26,14 @@ import type { IdleTracker } from "./idle-tracker.ts";
 import { readStatus } from "../shared/utils.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
 import { readLeafRunViewCached } from "../state/async-status.ts";
-import { readWorkflowGroupState, writeWorkflowGroupState } from "../workflow/workflow-group-state.ts";
+import {
+	readWorkflowGroupPhase,
+	readWorkflowGroupState,
+	readWorkflowMeta,
+	writeWorkflowGroupState,
+} from "../workflow/workflow-group-state.ts";
 import { computeGroupStatus } from "../state/group-status.ts";
+import { formatWorkflowPhase } from "../state/workflow-display.ts";
 import { logger } from "../shared/logger.ts";
 import type { UtilsClient } from "pi-extension-utils";
 
@@ -234,6 +240,8 @@ export function createAsyncJobTracker(
 					// heartbeat and mark the group 'lost' while its children run fine.
 					// Synthesize the row from the lifecycle marker + child jobs instead.
 					if (job.kind === "workflow") {
+						const workflowMeta = readWorkflowMeta(job.asyncDir);
+						if (workflowMeta) job.workflowMeta = workflowMeta;
 						if (previousStatusWasTerminal) continue;
 						const lifecycle = readWorkflowGroupState(job.asyncDir);
 						const children = [...state.asyncJobs.values()].filter(
@@ -274,7 +282,20 @@ export function createAsyncJobTracker(
 							(best, child) => ((child.startedAt ?? 0) >= (best?.startedAt ?? 0) ? child : best),
 							undefined,
 						);
-						if (latest?.label) job.label = latest.label;
+						const durablePhase = readWorkflowGroupPhase(job.asyncDir);
+						if (durablePhase) job.reachedPhaseTitles = durablePhase.reachedPhaseTitles;
+						const latestEntry = durablePhase
+							? undefined
+							: readAllEntries()
+									.filter((entry) => entry.parentRunId === job.asyncId && entry.phaseTitle)
+									.sort((left, right) => right.startedAt - left.startedAt)[0];
+						const phaseLabel = formatWorkflowPhase(
+							job.workflowMeta,
+							durablePhase?.phaseIndex ?? latestEntry?.phaseIndex,
+							durablePhase?.phaseTitle ?? latestEntry?.phaseTitle,
+						);
+						if (phaseLabel) job.label = phaseLabel;
+						else if (latest?.label) job.label = latest.label;
 						for (const child of children) {
 							job.updatedAt = Math.max(job.updatedAt ?? 0, child.updatedAt ?? 0);
 							job.runnerHeartbeatAt = Math.max(job.runnerHeartbeatAt ?? 0, child.runnerHeartbeatAt ?? 0);
@@ -452,6 +473,8 @@ export function createAsyncJobTracker(
 		const agents = info.agent ? [info.agent] : undefined;
 		const mode = info.parentRunId ? "parallel" : "single";
 		const status = readStatus(asyncDir);
+		const workflowMeta = info.kind === "workflow" ? readWorkflowMeta(asyncDir) : undefined;
+		const workflowPhase = info.kind === "workflow" ? readWorkflowGroupPhase(asyncDir) : undefined;
 		idleTracker?.onAsyncStarted(info.id);
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
@@ -460,6 +483,8 @@ export function createAsyncJobTracker(
 			displayState: "quiet",
 			mode,
 			kind: info.kind === "workflow" ? "workflow" : undefined,
+			...(workflowMeta ? { workflowMeta } : {}),
+			...(workflowPhase ? { reachedPhaseTitles: workflowPhase.reachedPhaseTitles } : {}),
 			parentRunId: info.parentRunId,
 			agents,
 			stepsTotal: agents?.length,
@@ -615,11 +640,45 @@ export function createAsyncJobTracker(
 			// terminal marker so it stops re-deriving as a zombie on every reload —
 			// the symmetric counterpart to the hard-dead leaf finalize below.
 			if (entry.kind === "workflow") {
-				if (readWorkflowGroupState(entry.runRecordDir) !== "running") continue;
-				const childStates = readAllEntries()
-					.filter((child) => child.parentRunId === entry.runId)
-					.map((child) => readLeafRunViewCached(child.runRecordDir)?.state ?? "complete");
-				writeWorkflowGroupState(entry.runRecordDir, computeGroupStatus(childStates));
+				let lifecycle = readWorkflowGroupState(entry.runRecordDir);
+				const childEntries = readAllEntries().filter((child) => child.parentRunId === entry.runId);
+				if (lifecycle === "running") {
+					const childStates = childEntries.map(
+						(child) => readLeafRunViewCached(child.runRecordDir)?.state ?? "complete",
+					);
+					lifecycle = computeGroupStatus(childStates);
+					writeWorkflowGroupState(entry.runRecordDir, lifecycle);
+				}
+				const workflowMeta = readWorkflowMeta(entry.runRecordDir);
+				if (!workflowMeta || (lifecycle !== "complete" && lifecycle !== "failed")) continue;
+				const childCounts = countWorkflowChildren(entry.runId, []);
+				const latestPhase = childEntries
+					.filter((child) => child.phaseTitle)
+					.sort((left, right) => right.startedAt - left.startedAt)[0];
+				const durablePhase = readWorkflowGroupPhase(entry.runRecordDir);
+				const label = formatWorkflowPhase(
+					workflowMeta,
+					durablePhase?.phaseIndex ?? latestPhase?.phaseIndex,
+					durablePhase?.phaseTitle ?? latestPhase?.phaseTitle,
+				);
+				state.asyncJobs.set(entry.runId, {
+					asyncId: entry.runId,
+					asyncDir: entry.runRecordDir,
+					status: lifecycle,
+					mode: entry.mode,
+					kind: "workflow",
+					workflowMeta,
+					...(durablePhase ? { reachedPhaseTitles: durablePhase.reachedPhaseTitles } : {}),
+					agents: ["workflow"],
+					startedAt: entry.startedAt,
+					updatedAt: Date.now(),
+					childCounts,
+					currentStep: childCounts.done,
+					pendingDelivery: false,
+					...(label ? { label } : {}),
+				});
+				added += 1;
+				scheduleCleanup(entry.runId);
 				continue;
 			}
 			const status = readStatus(entry.runRecordDir);

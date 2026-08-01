@@ -7,6 +7,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import type { SubmitResultEnvelope } from "./output-contract.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RunPhase } from "./status-types.ts";
+import type { WorkflowMeta } from "./workflow-meta.ts";
 
 // ============================================================================
 // Basic Types
@@ -326,6 +327,8 @@ export interface Details {
 	label?: string;
 	/** Workflow Details keep mode:"parallel" for canonical rendering shape but relabel as workflow in UI. */
 	workflow?: boolean;
+	workflowMeta?: WorkflowMeta;
+	reachedPhaseTitles?: string[];
 	/** Workflow step labels retained for workflow rendering. */
 	agentGroups?: string[];
 	totalSteps?: number;
@@ -408,6 +411,8 @@ export interface AsyncJobState {
 	// Workflow groups render as ONE widget row; their children are tracked for
 	// aggregation (progress, liveness) but hidden from the widget list.
 	kind?: "workflow";
+	workflowMeta?: WorkflowMeta;
+	reachedPhaseTitles?: string[];
 	// Durable child tally for workflow groups: counted from the runs registry
 	// (children by parentRunId, resolved via status.json) so the widget shows
 	// "X done · Y running · Z queued" instead of a "done/total" fraction that

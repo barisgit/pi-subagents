@@ -173,7 +173,9 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 
 		await tool.execute?.(
 			"wf",
-			{ script: "phase('inventory');\nawait agent('A', 'alpha');\nawait agent('B', 'bravo');" },
+			{
+				script: "meta({ name: 'Parity audit', description: 'Compare behavior', phases: [{ title: 'inventory' }, { title: 'verify' }] });\nphase('inventory');\nawait agent('A', 'alpha');\nawait agent('B', 'bravo');",
+			},
 			new AbortController().signal,
 			(update) => updates.push(update as AgentToolResult<Details>),
 			{} as never,
@@ -181,7 +183,8 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 
 		const phaseUpdate = updates.find((update) => update.details?.label);
 		assert.equal(phaseUpdate?.details?.mode, "parallel");
-		assert.match(String(phaseUpdate?.details?.label), /^Phase \d+: inventory/);
+		assert.equal(phaseUpdate?.details?.label, "Phase 1/2: inventory");
+		assert.equal(phaseUpdate?.details?.workflowMeta?.name, "Parity audit");
 		const runningA = updates.find((update) =>
 			update.details?.progress?.some((progress) => progress.agent === "A" && progress.status === "running"),
 		);
@@ -196,6 +199,7 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 		const final = updates.at(-1)?.details;
 		assert.equal(final?.mode, "parallel");
 		assert.equal(final?.workflow, true);
+		assert.match(renderText(final!, false), /Parity audit/);
 		assert.equal(final?.progress?.length, 2);
 		assert.deepEqual(
 			final?.progress?.map((progress) => [progress.agent, progress.status]),

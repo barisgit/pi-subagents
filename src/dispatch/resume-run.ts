@@ -216,9 +216,8 @@ async function resumeRun(
 	const calledFromChildSession = currentLineage
 		? currentLineage.role === "child"
 		: normalizeAgentIdentity(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
-	if (asyncMode === true && calledFromChildSession) {
-		return validationError("Async resume is only allowed from the host session.");
-	}
+	const effectiveAsyncMode = calledFromChildSession ? false : asyncMode;
+	const effectiveData: ExecutionContextData = { ...data, effectiveAsync: effectiveAsyncMode !== false };
 	const authorizeTarget = (agentName: string | undefined): SubagentToolResult | null => {
 		const targetGuard = checkNestedDelegationGuard(
 			agentName ? [agentName] : ["__unresolved_resume_target__"],
@@ -290,8 +289,8 @@ async function resumeRun(
 	if (configAuthorizationError) return configAuthorizationError;
 	const built = buildAsyncChildStep({
 		data: {
-			...data,
-			params: { ...data.params, sessionDir: undefined },
+			...effectiveData,
+			params: { ...effectiveData.params, sessionDir: undefined },
 			effectiveCwd: target.cwd,
 			runId: target.runId,
 			rootRunId: target.rootRunId,
@@ -320,7 +319,7 @@ async function resumeRun(
 	const statusWriter = new StatusWriter({
 		runRecordDir: target.runRecordDir,
 		runId: target.runId,
-		flushPolicy: asyncMode === false ? "terminal" : "eager",
+		flushPolicy: effectiveAsyncMode === false ? "terminal" : "eager",
 	});
 	// Resume reseeds the activity/heartbeat clocks to now so the inactivity
 	// watchdog measures from the resume moment, not the original run's last
@@ -367,7 +366,7 @@ async function resumeRun(
 	});
 	resumeInFlight.add(resumeKey);
 	evictCompletionDedupeForRunId(target.runId);
-	if (asyncMode === false) {
+	if (effectiveAsyncMode === false) {
 		const interruptController = new AbortController();
 		const foregroundControl: ForegroundControlRef = {
 			runId: target.runId,
@@ -445,8 +444,8 @@ async function resumeRun(
 			return true;
 		});
 		const resumeData: ExecutionContextData = {
-			...data,
-			params: { ...data.params, sessionDir: undefined },
+			...effectiveData,
+			params: { ...effectiveData.params, sessionDir: undefined },
 			effectiveCwd: target.cwd,
 			runId: target.runId,
 			rootRunId: target.rootRunId,
@@ -461,14 +460,14 @@ async function resumeRun(
 				firstProgress,
 				update.details?.results?.[0]?.finalOutput,
 			);
-			data.onUpdate?.(update);
+			effectiveData.onUpdate?.(update);
 		};
 		const eventPayload = {
 			runId: target.runId,
 			agent: target.agentName,
 			task: message,
 			cwd: target.cwd,
-			metadata: data.params.metadata,
+			metadata: effectiveData.params.metadata,
 		};
 		let result: SingleResult | undefined;
 		let failureMessage: string | undefined;
@@ -588,7 +587,7 @@ async function resumeRun(
 	// layer0 map or the resumed run is uninterruptible after a reload.
 	registerRunController(target.runId, detachedAbort);
 	const asyncCtx = {
-		extensionCtx: data.ctx,
+		extensionCtx: effectiveData.ctx,
 		abortSignal: detachedAbort.signal,
 		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => {
 			const resumedStepTokens =

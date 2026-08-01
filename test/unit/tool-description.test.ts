@@ -71,6 +71,9 @@ describe("registered workflow tool description", () => {
 		assert.match(description, /role is a string chosen from the caller's configured agent roles/i);
 		assert.match(description, /<implementation-role>/);
 		assert.match(description, /process-wide leaf-concurrency pool/i);
+		assert.match(description, /meta\(\{ name, description, phases \}\)/i);
+		assert.match(description, /call once before other globals/i);
+		assert.match(description, /child-session Workflow calls always run synchronously despite async\/default/i);
 	});
 
 	it("presents uncapped programmable orchestration without prescribing one topology", () => {

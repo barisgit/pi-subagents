@@ -4,9 +4,12 @@ import vm from "node:vm";
 import type { AgentToolUpdateCallback, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
-import { writeWorkflowScript } from "./workflow-group-state.ts";
+import { writeWorkflowGroupPhase, writeWorkflowMeta, writeWorkflowScript } from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
+import { parseWorkflowMeta, type WorkflowMeta } from "../protocol/workflow-meta.ts";
 import { processGlobal } from "../shared/process-global.ts";
+import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
+import { formatWorkflowPhase } from "../state/workflow-display.ts";
 import type { AgentProgress, Details, PipelineMetadata, SingleResult, SubagentToolResult } from "../protocol/types.ts";
 
 export const WorkflowParams = Type.Object(
@@ -73,6 +76,7 @@ export interface WorkflowGroupHandle {
 
 export interface WorkflowRuntimeOptions {
 	dispatch: WorkflowDispatch;
+	onMeta?: (meta: WorkflowMeta) => void;
 	onPhase?: WorkflowPhaseEmit;
 	// Announced synchronously when parallel(thunks) starts, BEFORE any child
 	// dispatches, carrying the group id + size so the live header denominator can
@@ -293,6 +297,8 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	const settled: Array<Promise<void>> = [];
 	const owned = new Set<Promise<unknown>>();
 	const runState: WorkflowRunState = { token: {}, owned, floats: new Map<Promise<unknown>, unknown>() };
+	let metadataDeclared = false;
+	let orchestrationStarted = false;
 	registry.issuedTokens.add(runState.token);
 	class TrackingPromise<T> extends Promise<T> {
 		static get [Symbol.species]() {
@@ -328,6 +334,16 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 			stamped.then(resolve, reject);
 		});
 	};
+	const meta = (value: unknown) => {
+		if (metadataDeclared) throw new Error("meta() may only be called once");
+		if (orchestrationStarted) {
+			throw new Error("meta() must be called before phase(), agent(), parallel(), or pipeline()");
+		}
+		metadataDeclared = true;
+		const parsed = parseWorkflowMeta(value);
+		if (!parsed.ok) throw new TypeError(parsed.reason);
+		options.onMeta?.(parsed.value);
+	};
 
 	const parallelGroupStore = new AsyncLocalStorage<{
 		pendingGroupId: string;
@@ -347,6 +363,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		return Type.Unsafe(schema as Record<string, unknown>);
 	};
 	const agent = (role: string, task: string, opts?: { schema?: unknown }) => {
+		orchestrationStarted = true;
 		const group = parallelGroupStore.getStore();
 		const resultSchema = opts?.schema !== undefined ? toResultSchema(opts.schema) : undefined;
 		return track(
@@ -359,6 +376,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		);
 	};
 	const parallel = <T>(thunks: Array<() => Promise<T>>) => {
+		orchestrationStarted = true;
 		if (!Array.isArray(thunks)) return track(parallelGlobal(thunks));
 		const groupId = randomUUID();
 		const size = thunks.length;
@@ -419,6 +437,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		return track(work);
 	};
 	const pipeline = (items: unknown[], ...stages: WorkflowPipelineStage[]) => {
+		orchestrationStarted = true;
 		if (!Array.isArray(items)) {
 			return track(Promise.reject(new TypeError("pipeline(items, ...stages) expects an array")));
 		}
@@ -491,6 +510,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		return track(Promise.all(itemPromises));
 	};
 	const phase = (title: string) => {
+		orchestrationStarted = true;
 		try {
 			options.onPhase?.(title);
 		} catch {
@@ -502,16 +522,17 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	// `this.constructor.constructor`. Disabling string code generation also blocks
 	// the context's own Function/eval constructors. node:vm is still an isolation
 	// aid rather than a security boundary, but these options close the direct host
-	// process escape while preserving the four callable workflow globals.
+	// process escape while preserving the callable workflow globals.
 	const sandbox = Object.assign(Object.create(null) as Record<string, unknown>, {
 		agent,
 		parallel,
 		pipeline,
 		phase,
+		meta,
 	});
 	// Host callables otherwise retain Function.prototype, which exposes the host
 	// Function constructor even when the global object itself has no prototype.
-	for (const callable of [agent, parallel, pipeline, phase]) Object.setPrototypeOf(callable, null);
+	for (const callable of [agent, parallel, pipeline, phase, meta]) Object.setPrototypeOf(callable, null);
 	const ctx = vm.createContext(sandbox, {
 		codeGeneration: { strings: false, wasm: false },
 	});
@@ -589,6 +610,7 @@ type WorkflowPhaseEmitter = WorkflowPhaseEmit & {
 	// Drops any remaining pending slots for `groupId` once its parallel group has
 	// fully settled, reaping phantom thunks that never dispatched an agent.
 	parallelGroupSettled(groupId: string): void;
+	setMeta(meta: WorkflowMeta): void;
 	// Canonical Details snapshot of the run so far. The success path returns this
 	// as the tool result's `details` so the final widget frame is a real Details
 	// (never the script's arbitrary return value — that flows through content text).
@@ -629,6 +651,8 @@ export function createWorkflowPhaseEmitter(
 	>();
 	let phaseIndex = 0;
 	let phaseTitle = "";
+	const reachedPhaseTitles: string[] = [];
+	let workflowMeta: WorkflowMeta | undefined;
 	// Per-group count of agents declared via parallel() that have not yet
 	// registered into results[] (each suspends at its own dispatch before
 	// childStarted fires). A fan-out of N records N up front, then decrements as
@@ -667,6 +691,8 @@ export function createWorkflowPhaseEmitter(
 		return {
 			mode: "parallel",
 			workflow: true,
+			...(workflowMeta ? { workflowMeta } : {}),
+			...(reachedPhaseTitles.length > 0 ? { reachedPhaseTitles: [...reachedPhaseTitles] } : {}),
 			results: ordered,
 			progress: ordered.map((result) => result.progress).filter((p): p is AgentProgress => p !== undefined),
 			agentGroups,
@@ -679,7 +705,7 @@ export function createWorkflowPhaseEmitter(
 			// Surface the live phase title through the typed run-level label, which the
 			// parallel header renders via uniformLabel. No fake "k/N" denominator: the
 			// total phase count is unknowable until the script finishes.
-			...(phaseTitle ? { label: `Phase ${phaseIndex}: ${phaseTitle}` } : {}),
+			...(phaseTitle ? { label: formatWorkflowPhase(workflowMeta, phaseIndex, phaseTitle) } : {}),
 		};
 	};
 	const emit = (content: string) => {
@@ -687,11 +713,16 @@ export function createWorkflowPhaseEmitter(
 	};
 	const phase = ((title: string) => {
 		phaseIndex++;
-		phaseTitle = title;
-		emit(title);
+		phaseTitle = canonicalWorkflowPhaseTitle(title);
+		if (!reachedPhaseTitles.includes(phaseTitle)) reachedPhaseTitles.push(phaseTitle);
+		emit(phaseTitle);
 	}) as WorkflowPhaseEmitter;
 	phase.phaseIndex = () => phaseIndex;
 	phase.phaseTitle = () => phaseTitle || undefined;
+	phase.setMeta = (meta) => {
+		workflowMeta = meta;
+		emit(phaseTitle);
+	};
 	phase.expectParallel = (groupId: string, size: number) => {
 		if (size > 1) pendingByGroup.set(groupId, size);
 	};
@@ -783,10 +814,10 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): Workflow
 		name: "workflow",
 		label: "Workflow",
 		promptSnippet: "Orchestrate subagents with JS control flow: branch on results, retry, loop, fan out",
-		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Workflow is the harness's programmable control plane: agent calls, ordinary JavaScript state, and control flow can be nested and composed freely. It is valid for simple parallel work and becomes especially powerful when runtime results shape later topology—dynamic fan-out, fan-in, branching, retries, feedback, convergence, or synthesis. Plain subagents and Workflow intentionally overlap; choose whichever representation helps the task.
+		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Workflow is the harness's programmable control plane: agent calls, ordinary JavaScript state, and control flow can be nested and composed freely. Use it when runtime results shape later topology—dynamic fan-out, fan-in, branching, retries, feedback, convergence, or synthesis. Plain subagents and Workflow intentionally overlap; choose whichever representation helps the task.
 
 Scaling and composition:
-- Workflow has no prompt-imposed child count. Scale fan-out to the request, the useful work discovered at runtime, and the process-wide concurrency pool.
+- Workflow has no prompt-imposed child count; fan-out shares the process-wide concurrency pool.
 - pipeline() streams each item through stages independently; parallel() forms a barrier that gathers its thunks. Either primitive may be nested inside the other or reused within loops and branches according to the data dependencies.
 
 Worked examples—not templates or limits (replace role placeholders with configured roles):
@@ -807,13 +838,14 @@ Worked examples—not templates or limits (replace role placeholders with config
     }
 These are ingredients, not canonical recipes; larger structures—queues, tournaments, judge panels, staged escalation, self-repair, convergence gates—are ordinary JavaScript over the same primitives. Do not settle for a flat one-barrier fan-out out of caution: the sandbox is full JavaScript, so any coordination strategy you can state you can implement. Design the harness the task deserves.
 
-The script runs in a sandbox with four globals:
+The script runs in a sandbox with five globals:
+- meta({ name, description, phases }) — call once before other globals. Strings are non-empty and phase titles unique. Ad-hoc phase() titles remain valid.
 - agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
 - parallel(thunks) -> Promise<results[]> — run agent calls concurrently, bounded by the process-wide leaf-concurrency pool (config maxConcurrentAgents), so it scales to many children: parallel(items.map((item) => () => agent("<configured-role>", "Handle " + item))). It is a FAIL-FAST barrier (awaits Promise.all): the first child that rejects rejects the whole call and the other results are lost. When partial results are acceptable, catch inside each thunk (.then(...).catch(...)) so every branch resolves.
 - pipeline(items, ...stages) -> Promise<results[]> — stream each item through async stages without waiting for a whole-stage barrier: pipeline(files, (file) => agent("<configured-role>", "Inspect " + file), (finding) => agent("<configured-role>", "Review " + finding)). The overall call is fail-fast like Promise.all, so catch inside a stage when partial results are acceptable.
 - phase(title) — label the current stage for live status displays.
 
-Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll.
+Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll. Child-session Workflow calls always run synchronously despite async/default, so the caller awaits them.
 
 Rules: always await every agent()/parallel()/pipeline() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel() or pipeline(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.
 
@@ -845,6 +877,10 @@ Task strings: each child starts with no conversation context — the script sees
 				});
 				const run = () =>
 					runWorkflowScript({
+						onMeta: (meta) => {
+							if (group?.asyncDir) writeWorkflowMeta(group.asyncDir, meta);
+							emitter!.setMeta(meta);
+						},
 						dispatch: async (role, task, tags) => {
 							if (group) {
 								const index = childIndex++;
@@ -878,7 +914,12 @@ Task strings: each child starts with no conversation context — the script sees
 							if (!options.dispatch) throw new Error("workflow dispatch is not configured");
 							return options.dispatch(role, task, workflowContext);
 						},
-						onPhase: emitter,
+						onPhase: (title) => {
+							emitter!(title);
+							if (group?.asyncDir) {
+								writeWorkflowGroupPhase(group.asyncDir, emitter!.phaseIndex(), title);
+							}
+						},
 						onParallelGroup: (groupId, size) => emitter!.expectParallel(groupId, size),
 						onParallelGroupSettled: (groupId) => emitter!.parallelGroupSettled(groupId),
 						script: params.script,
@@ -903,9 +944,9 @@ Task strings: each child starts with no conversation context — the script sees
 							},
 						],
 						details: {
-							mode: "parallel",
-							workflow: true,
+							...emitter.snapshot(),
 							results: [],
+							progress: [],
 							runId: asyncGroup.groupRunId,
 							asyncId: asyncGroup.groupRunId,
 							asyncDir,

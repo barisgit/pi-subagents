@@ -56,7 +56,7 @@ describe("isInsideChildSession", () => {
 	});
 });
 
-describe("subagent executor child-session async guard", () => {
+describe("subagent executor child-session async coercion", () => {
 	function makeExecutor(cwd: string) {
 		return (
 			createSubagentExecutor as unknown as (deps: Record<string, unknown>) => {
@@ -92,7 +92,7 @@ describe("subagent executor child-session async guard", () => {
 		});
 	}
 
-	it("rejects async:true when the CURRENT session has child lineage (mid-prompt-loop)", async () => {
+	it("routes async:true through the synchronous path when the current session has child lineage", async () => {
 		const sid = "session-child-lineage";
 		setLineageForSession(sid, {
 			role: "child",
@@ -125,7 +125,8 @@ describe("subagent executor child-session async guard", () => {
 				},
 			);
 			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /only allowed from the host session/i);
+			assert.match(result.content[0]?.text ?? "", /No model available/i);
+			assert.equal(/only allowed from the host session/i.test(result.content[0]?.text ?? ""), false);
 		} finally {
 			clearLineage(sid);
 		}

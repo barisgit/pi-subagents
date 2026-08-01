@@ -4,7 +4,13 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { readWorkflowGroupState, writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
+import {
+	readWorkflowGroupState,
+	writeWorkflowGroupPhase,
+	writeWorkflowGroupState,
+	writeWorkflowMeta,
+	writeWorkflowScript,
+} from "../../src/workflow/workflow-group-state.ts";
 
 interface AsyncJobTrackerModule {
 	createAsyncJobTracker(
@@ -249,6 +255,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			// as a live 'running' row that clocks up indefinitely.
 			const groupDir = path.join(asyncRoot, "wf-group");
 			writeWorkflowGroupState(groupDir, "running");
+			writeWorkflowGroupPhase(groupDir, 2, "Review");
 			appendRunEntry({
 				runId: "wf-group",
 				runRecordDir: groupDir,
@@ -287,6 +294,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 					parentSessionId: hostSessionId,
 					cwd: "/repo",
 					startedAt: now - 5_000_000,
+					...(runId === "wf-child-failed" ? { phaseIndex: 1, phaseTitle: "Verify" } : {}),
 				});
 			}
 
@@ -308,10 +316,19 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 				"marker is finalized from the children (one failed child => failed)",
 			);
 
-			// A second sweep is now a no-op: the marker is terminal, so the group is skipped.
+			// Metadata-backed workflows restore a terminal widget row with their persisted identity.
+			writeWorkflowScript(groupDir, "phase('Verify');");
+			writeWorkflowMeta(groupDir, {
+				name: "Parity audit",
+				description: "Compare behavior",
+				phases: [{ title: "Verify" }, { title: "Review" }],
+			});
 			const secondCount = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
-			assert.equal(secondCount, 0);
-			assert.equal(state.asyncJobs.has("wf-group"), false);
+			assert.equal(secondCount, 1);
+			const restored = state.asyncJobs.get("wf-group");
+			assert.equal(restored?.status, "failed");
+			assert.equal(restored?.workflowMeta?.name, "Parity audit");
+			assert.equal(restored?.label, "Phase 2/2: Review");
 		} finally {
 			setRegistryPathForTests(null);
 			removeTempDir(asyncRoot);
@@ -491,6 +508,19 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(group?.childCounts?.running, 1, "one child running");
 			assert.equal(group?.childCounts?.queued, 0);
 			assert.equal(group?.label, "Phase 1: recon", "group label mirrors the active child's phase label");
+
+			writeWorkflowMeta(groupDir, {
+				name: "Workflow",
+				description: "Polling phase",
+				phases: [{ title: "Recon" }, { title: "Review" }],
+			});
+			writeWorkflowGroupPhase(groupDir, 2, "Review");
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			assert.equal(
+				(state.asyncJobs.get("wf-group") as { label?: string } | undefined)?.label,
+				"Phase 2: Review",
+				"durable phase takes the polling path without requiring a registry phase fallback",
+			);
 
 			// Workflow finishes: lifecycle flips, group goes pending-delivery.
 			writeStatus(childDir, {

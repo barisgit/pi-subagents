@@ -18,6 +18,7 @@ import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
 import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
 import { parentRunIdOf } from "./dashboard-row-model.ts";
 import type { LiveRun } from "../state/run-view.ts";
+import { shapeWorkflowPhasePlan } from "../state/workflow-display.ts";
 
 // Single ellipsis glyph for every dashboard truncation. pi-tui's
 // truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
@@ -229,6 +230,31 @@ function childTokenTotal(child: AsyncRunSummary): number {
 // useless for groups (the container has no session of its own).
 export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, width: number, runs: LiveRun[]): string[] {
 	const out: string[] = [];
+	if (run.workflowMeta) {
+		out.push(theme.fg("accent", clip(run.workflowMeta.name, width)));
+		for (const line of wrapTextWithAnsi(run.workflowMeta.description, width)) out.push(theme.fg("muted", line));
+		if (run.workflowMeta.phases.length > 0) {
+			out.push("");
+			out.push(theme.fg("accent", clip("─── Phase plan ───", width)));
+			const children = sortedWorkflowChildren(
+				runs.filter((candidate) => candidate.run.parentRunId === run.id).map((candidate) => candidate.run),
+			);
+			const reachedTitles = [
+				...(run.reachedPhaseTitles ?? []),
+				...children.map((child) => child.phaseTitle).filter((title): title is string => title !== undefined),
+			];
+			for (const [index, phase] of shapeWorkflowPhasePlan(
+				run.workflowMeta,
+				reachedTitles,
+				run.state === "running" || run.state === "queued",
+				run.phaseTitle,
+			).entries()) {
+				const detail = phase.detail ? ` — ${phase.detail}` : "";
+				out.push(clip(`${index + 1}. ${phase.title} · ${phase.state}${detail}`, width));
+			}
+		}
+		out.push("");
+	}
 	const script = run.asyncDir ? readWorkflowScript(run.asyncDir) : undefined;
 	if (script) {
 		out.push(theme.fg("accent", clip("─── Script ───", width)));

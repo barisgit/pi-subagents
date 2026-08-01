@@ -8,6 +8,7 @@
 // former AsyncRunSummary exactly; the trailing block holds foreground-only
 // optionals (absent on disk-derived views).
 import type { ActivityState, PipelineMetadata, RunDisplayState, TokenUsage } from "../protocol/types.ts";
+import type { WorkflowMeta } from "../protocol/workflow-meta.ts";
 import type { RunPhase } from "./run-phase.ts";
 
 export interface RunViewStep {
@@ -48,8 +49,10 @@ export interface RunView {
 	rootSessionId?: string;
 	label?: string;
 	workflow?: boolean;
+	workflowMeta?: WorkflowMeta;
 	phaseIndex?: number;
 	phaseTitle?: string;
+	reachedPhaseTitles?: string[];
 	parallelGroupId?: string;
 	pipeline?: PipelineMetadata;
 	state: "queued" | "running" | "complete" | "failed" | "paused" | "lost" | "interrupted" | "skipped";

@@ -1,15 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ASYNC_NO_POLL_GUIDANCE, formatDuration, formatTokens, shortenPath } from "../shared/formatting.ts";
+import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
 import type { ActivityState, RunDisplayState, TokenUsage } from "../protocol/types.ts";
 import type { PersistedRunStatus } from "../protocol/status-types.ts";
 import type { RunPhase } from "./run-phase.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "../shared/control-policy.ts";
 import { deriveRunDisplayState } from "./run-liveness.ts";
+import { workflowDisplayName } from "./workflow-display.ts";
 import { readStatus } from "../shared/utils.ts";
 import { readAllEntries, readShardEntries, type RunsRegistryEntry } from "./runs-registry.ts";
 import { computeGroupStatus, type Layer0ChildStatus } from "./group-status.ts";
-import { readWorkflowGroupState } from "../workflow/workflow-group-state.ts";
+import { readWorkflowGroupPhase, readWorkflowGroupState, readWorkflowMeta } from "../workflow/workflow-group-state.ts";
 import type { RunView, RunViewStep } from "./run-view.ts";
 
 // charter VAL-RUNVIEW-TYPE: AsyncRunSummary/AsyncRunStepSummary are now aliases
@@ -450,6 +452,8 @@ export function buildGroupSummary(
 		...(entry.parentSessionId ? { parentSessionId: entry.parentSessionId } : {}),
 		...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
 	};
+	const workflowMeta = entry.kind === "workflow" ? readWorkflowMeta(entry.runRecordDir) : undefined;
+	const workflowPhase = entry.kind === "workflow" ? readWorkflowGroupPhase(entry.runRecordDir) : undefined;
 	return {
 		id: entry.runId,
 		asyncDir: entry.runRecordDir,
@@ -463,6 +467,8 @@ export function buildGroupSummary(
 		...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
 		...sessionLineage,
 		...registryWorkflowFields(entry),
+		...(workflowPhase ?? {}),
+		...(workflowMeta ? { workflowMeta } : {}),
 		steps: [],
 	};
 }
@@ -553,7 +559,7 @@ function isTerminalState(state: string): boolean {
 
 function formatRunHeader(run: AsyncRunSummary, children: AsyncRunSummary[] = []): string {
 	const isParallelGroup = run.mode === "parallel" && children.length > 0;
-	const modeLabel = run.workflow ? "workflow" : run.mode;
+	const modeLabel = run.workflow ? workflowDisplayName(run.workflowMeta) : run.mode;
 	const stepCount = isParallelGroup ? children.length : run.steps.length || 1;
 	const completedParallelSteps = isParallelGroup
 		? children.filter((child) => isTerminalState(child.state)).length
@@ -605,9 +611,7 @@ export function workflowPhaseLabel(run: Pick<AsyncRunSummary, "phaseIndex" | "ph
 // Scripts often name phases "Phase 1: recon"; phase labels already render the
 // index, so strip a leading "Phase N" from the title to avoid "Phase 1: Phase 1: recon".
 export function dedupePhaseTitle(title: string | undefined): string | undefined {
-	if (!title) return title;
-	const stripped = title.replace(/^phase\s*\d+\s*[:·-]?\s*/i, "");
-	return stripped.length > 0 ? stripped : title;
+	return title ? canonicalWorkflowPhaseTitle(title) : title;
 }
 
 export function sortedWorkflowChildren(children: AsyncRunSummary[]): AsyncRunSummary[] {

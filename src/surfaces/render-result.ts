@@ -11,6 +11,7 @@ import type { AgentProgress, Details } from "../protocol/types.ts";
 import { logger } from "../shared/logger.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.ts";
 import { formatPhase } from "../state/run-phase.ts";
+import { workflowDisplayName } from "../state/workflow-display.ts";
 import { getDisplayItems, getSingleResultDisplayOutput } from "../shared/utils.ts";
 import {
 	getTermWidth,
@@ -896,7 +897,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			? d.currentStepIndex + 1
 			: Math.min(totalCount, headerOk + (hasRunning ? 1 : 0));
 	const itemLabel = d.mode === "parallel" ? "agent" : "step";
-	const modeLabel = d.workflow ? "workflow" : d.mode;
+	const modeLabel = d.workflow ? workflowDisplayName(d.workflowMeta) : d.mode;
 	const stepInfo = hasRunning
 		? `${itemLabel} ${currentStep}/${totalCount}`
 		: `${itemLabel} ${headerOk}/${totalCount}`;
@@ -1311,7 +1312,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			? ` | ${totalSummary.toolCount} tools, ${formatTokens(totalSummary.tokens)} tok, ${formatDuration(totalSummary.durationMs)}`
 			: "";
 
-	const modeLabel = d.workflow ? "workflow" : d.mode;
+	const modeLabel = d.workflow ? workflowDisplayName(d.workflowMeta) : d.mode;
 	const labelTail =
 		d.workflow && d.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(d.label, 30))}` : "";
 	const contextBadge = forkContextBadge(theme, d.context);

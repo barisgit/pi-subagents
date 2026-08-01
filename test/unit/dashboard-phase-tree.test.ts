@@ -3,8 +3,20 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
-import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
+import { runViewFromRegistryEntry, SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
+import { deriveDisplayRows } from "../../src/surfaces/dashboard-row-model.ts";
+import {
+	appendRunEntry,
+	readAllEntries,
+	setRegistryPathForTests,
+	type RunsRegistryEntry,
+} from "../../src/state/runs-registry.ts";
+import {
+	writeWorkflowGroupPhase,
+	writeWorkflowGroupState,
+	writeWorkflowMeta,
+	writeWorkflowScript,
+} from "../../src/workflow/workflow-group-state.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
@@ -16,6 +28,24 @@ function tmpRegistry(): string {
 	tmpRoots.push(root);
 	setRegistryPathForTests(path.join(root, "registry", "runs-index.jsonl"));
 	return root;
+}
+
+function seedWorkflowPlan(
+	root: string,
+	phases: string[],
+	state: "running" | "complete",
+	current?: { index: number; title: string },
+): void {
+	const runRecordDir = path.join(root, "runs", "wf");
+	writeWorkflowScript(runRecordDir, "return 'done';");
+	writeWorkflowMeta(runRecordDir, {
+		name: "Parity audit",
+		description: "Compare behavior",
+		phases: phases.map((title) => ({ title })),
+	});
+
+	writeWorkflowGroupState(runRecordDir, state);
+	if (current) writeWorkflowGroupPhase(runRecordDir, current.index, current.title);
 }
 
 function createTestTui(): StatusTui {
@@ -112,6 +142,152 @@ afterEach(() => {
 });
 
 describe("dashboard workflow phase tree", () => {
+	it("renders upcoming declared phases without fake children or counts", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "scope-child",
+			agentName: "explorer",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Scope",
+			startedAt: 1100,
+		});
+		seedWorkflowPlan(root, ["Scope", "Review", "Report"], "running", { index: 1, title: "Scope" });
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = leftRows(component).join("\n");
+			assert.match(body, /Phase 1: Scope · 1\/1/);
+			assert.match(body, /· Phase 2: Review · upcoming/);
+			assert.match(body, /· Phase 3: Report · upcoming/);
+			assert.doesNotMatch(body, /Review · 0\/0|Report · 0\/0/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("uses a durable childless current phase in the tree and parent chip", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "scope-child",
+			agentName: "explorer",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Scope",
+			startedAt: 1100,
+		});
+		seedWorkflowPlan(root, ["Scope", "Review", "Report"], "running", { index: 2, title: "Review" });
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = leftRows(component).join("\n");
+			assert.match(body, /Parity audit .*Phase 2\/3: Review/);
+			assert.match(body, /· Phase 2: Review · current/);
+			assert.match(body, /· Phase 3: Report · upcoming/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("renders terminal declared phases that never ran as unreached", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "scope-child",
+			agentName: "explorer",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Scope",
+			startedAt: 1100,
+		});
+		seedWorkflowPlan(root, ["Scope", "Review", "Report"], "complete");
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = leftRows(component).join("\n");
+			assert.match(body, /· Phase 2: Review · unreached/);
+			assert.match(body, /· Phase 3: Report · unreached/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("preserves ad-hoc runtime phase rows alongside declared phases", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "scope-child",
+			agentName: "explorer",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Scope",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "adhoc-child",
+			agentName: "review",
+			state: "running",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 2,
+			phaseTitle: "Ad hoc",
+			startedAt: 1200,
+		});
+		seedWorkflowPlan(root, ["Scope", "Verify"], "running", { index: 2, title: "Ad hoc" });
+		const entries = readAllEntries();
+		const displayRows = deriveDisplayRows(
+			entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) })),
+			new Set(),
+		);
+		const phaseRows = displayRows.filter((row) => row.kind === "phase");
+		assert.equal(new Set(phaseRows.map((row) => row.id)).size, phaseRows.length);
+		assert.equal(phaseRows.find((row) => row.title === "Scope")?.planState, "completed");
+		assert.equal(phaseRows.find((row) => row.title === "Verify")?.planState, "upcoming");
+		assert.equal(phaseRows.find((row) => row.title === "Ad hoc")?.running, true);
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = leftRows(component).join("\n");
+			assert.match(body, /Phase 1: Scope · 1\/1/);
+			assert.match(body, /· Phase 2: Verify · upcoming/);
+			assert.match(body, /Phase 2: Ad hoc · 0\/1/);
+			assert.match(body, /review/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("keeps no-metadata workflows on latest-child phase behavior", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "legacy-child",
+			agentName: "explorer",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 4,
+			phaseTitle: "Legacy",
+			startedAt: 1100,
+		});
+		writeWorkflowGroupState(path.join(root, "runs", "wf"), "running");
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = leftRows(component).join("\n");
+			assert.match(body, /workflow · Phase 4: Legacy/);
+			assert.match(body, /Phase 4: Legacy · 1\/1/);
+			assert.doesNotMatch(body, /upcoming|unreached/);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("renders phases as selectable tree rows with child runs nested below", () => {
 		const root = tmpRegistry();
 		seedRun(root, {
@@ -213,6 +389,81 @@ describe("dashboard workflow phase tree", () => {
 			const phase = rows.findIndex((line) => /Phase 1: verify/.test(line));
 			assert.ok(plain !== -1 && phase !== -1);
 			assert.ok(plain < phase, "phaseless child renders before phase groups");
+		} finally {
+			component.dispose();
+		}
+	});
+	it("merges prefixed declared and runtime titles into exactly one phase row", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "recon-child",
+			agentName: "explorer",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Phase 1: Recon",
+			startedAt: 1100,
+		});
+		seedWorkflowPlan(root, ["Phase 1: Recon", "Phase 2: Report"], "running", {
+			index: 1,
+			title: "Phase 1: Recon",
+		});
+
+		const entries = readAllEntries();
+		const phaseRows = deriveDisplayRows(
+			entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) })),
+			new Set(),
+		).filter((row) => row.kind === "phase");
+		assert.equal(phaseRows.filter((row) => row.title === "Recon").length, 1);
+		assert.equal(phaseRows.length, 2);
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = leftRows(component).join("\n");
+			assert.doesNotMatch(body, /Phase 1(?:\/2)?: Phase 1:/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("restores childless reached phases from durable history", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedWorkflowPlan(root, ["Scope", "Review", "Report"], "running");
+		const runRecordDir = path.join(root, "runs", "wf");
+		writeWorkflowGroupPhase(runRecordDir, 1, "Scope");
+		writeWorkflowGroupPhase(runRecordDir, 2, "Review");
+		writeWorkflowGroupPhase(runRecordDir, 3, "Report");
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = leftRows(component).join("\n");
+			assert.match(body, /Phase 1: Scope · completed/);
+			assert.match(body, /Phase 2: Review · completed/);
+			assert.match(body, /Phase 3: Report · current/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("fails closed before unsafe metadata can inject a dashboard frame", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		const runRecordDir = path.join(root, "runs", "wf");
+		writeWorkflowScript(runRecordDir, "return 'done';");
+		writeWorkflowMeta(runRecordDir, {
+			name: "Safe\nforged row",
+			description: "Compare behavior",
+			phases: [],
+		});
+		writeWorkflowGroupState(runRecordDir, "running");
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const body = renderRows(component).join("\n");
+			assert.doesNotMatch(body, /forged row/);
+			assert.match(body, /workflow/);
 		} finally {
 			component.dispose();
 		}

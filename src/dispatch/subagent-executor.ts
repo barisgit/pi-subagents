@@ -227,7 +227,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					}),
 				};
 				// Bare resume (async omitted) follows the host's asyncByDefault, exactly
-				// like normal dispatch (see requestedAsync below) — so the two surfaces
+				// like normal dispatch's async resolution — so the two surfaces
 				// share one mode default instead of resume hard-defaulting to async.
 				// A nested foreground resume blocks the calling agent (which holds a leaf
 				// permit) while it awaits the resumed child, so park that permit for the
@@ -375,32 +375,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
 		}
-		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
-		// Async dispatch is only allowed from the host session. A child session (in-process
-		// subagent) has no UI to surface its async runs, no notify wake target separate
-		// from the host, and no lifecycle owner to await descendants. Reject early.
-		//
 		const calledFromChildSession = currentLineage
 			? currentLineage.role === "child"
 			: normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
-		if (requestedAsync && calledFromChildSession) {
-			const mode: "single" | "parallel" = hasTasks ? "parallel" : "single";
-			return {
-				content: [
-					{
-						type: "text",
-						text: "Async dispatch is only allowed from the host session. Sub-subagents must be synchronous; retry without async:true.",
-					},
-				],
-				isError: true,
-				details: { mode, results: [] },
-			};
-		}
-		const backgroundRequestedWhileClarifying = hasTasks && requestedAsync && effectiveParams.clarify === true;
+		const resolvedAsync = effectiveParams.async ?? deps.asyncByDefault;
+		const backgroundRequestedWhileClarifying =
+			!calledFromChildSession && hasTasks && resolvedAsync && effectiveParams.clarify === true;
 		// async:true only downgrades to sync when clarify is explicitly true (interactive
 		// preview gates the run). Undefined clarify means "no clarify", so it must not
 		// suppress async — single/parallel all share this rule.
-		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
+		const effectiveAsync = calledFromChildSession ? false : resolvedAsync && effectiveParams.clarify !== true;
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 
 		const artifactConfig: ArtifactConfig = {
@@ -725,13 +709,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const provisionalRunId = randomUUID();
 			const parentRunId = resolveDispatchParentRunId(ctx);
 			const rootRunId = resolveDispatchRootRunId(ctx, provisionalRunId);
-			const effectiveAsync = requestedAsync ?? deps.asyncByDefault;
 			const calledFromChildSession = currentLineage
 				? currentLineage.role === "child"
 				: normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
-			if (effectiveAsync && calledFromChildSession) {
-				throw new Error("Async workflow dispatch is only allowed from the host session.");
-			}
+			const resolvedAsync = requestedAsync ?? deps.asyncByDefault;
+			const effectiveAsync = calledFromChildSession ? false : resolvedAsync;
 			const workflowDetachedAbort = new AbortController();
 			const controlConfig = resolveControlConfig(deps.config.control, undefined);
 			const group = openGroup({

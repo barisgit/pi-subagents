@@ -9,6 +9,7 @@ import { type AsyncJobState, MAX_WIDGET_JOBS, WIDGET_KEY } from "../protocol/typ
 import { formatDuration } from "./formatters.ts";
 import { compareRunsForDisplay } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
+import { workflowDisplayName } from "../state/workflow-display.ts";
 import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
 import { colorForAgentName } from "../shared/agents.ts";
 import {
@@ -61,7 +62,7 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 	if (job.kind === "workflow") {
 		// The workflow is ONE entity: one tinted name, with the current phase
 		// (mirrored into job.label by the tracker) as its label.
-		let base = tintAgentName(themeBold(theme, "workflow"), colorForAgentName("workflow"));
+		let base = theme.fg("toolTitle", themeBold(theme, workflowDisplayName(job.workflowMeta)));
 		if (job.label) {
 			base += ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(job.label, 30))}`;
 		}

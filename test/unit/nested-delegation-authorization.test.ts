@@ -120,6 +120,28 @@ beforeEach(() => {
 	}
 });
 
+it("blocks resume dispatch at maximum depth before resolving async mode", async () => {
+	const cwd = "/tmp/pi-subagent-nested-delegation-authorization";
+	const sessionId = "session-child-resume-max-depth";
+	setLineageForSession(sessionId, makeChildLineage({ depth: 2, runId: "run-child-resume-max-depth" }));
+
+	try {
+		const result = await makeExecutor(cwd).execute(
+			"call-resume-max-depth",
+			{ action: "resume", id: "run-not-opened", message: "continue", async: true },
+			new AbortController().signal,
+			undefined,
+			makeCtx(cwd, sessionId),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /depth=2, max=2/i);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /unknown run|async resume/i);
+	} finally {
+		clearLineage(sessionId);
+	}
+});
+
 it("removes the exact prebound pending lineage when run ids are duplicate nulls", () => {
 	const preboundSessionId = "session-prebound-null-run-id";
 	const unrelatedSessionId = "session-unrelated-null-run-id";
@@ -652,7 +674,7 @@ describe("nested delegation authorization", () => {
 		try {
 			const result = await makeExecutor(cwd).execute(
 				"call-resume-disabled",
-				{ action: "resume", id: "run-not-opened", message: "continue" },
+				{ action: "resume", id: "run-not-opened", message: "continue", async: true },
 				new AbortController().signal,
 				undefined,
 				makeCtx(cwd, sessionId),
@@ -667,7 +689,7 @@ describe("nested delegation authorization", () => {
 		}
 	});
 
-	it("rejects explicit and default background workflows from a child session", () => {
+	it("coerces explicit and default background workflows to synchronous in a child session", () => {
 		const cwd = "/tmp/pi-subagent-nested-delegation-authorization";
 		const sessionId = "session-child-workflow-async";
 		setLineageForSession(sessionId, makeChildLineage({ runId: "run-child-workflow-async" }));
@@ -676,17 +698,15 @@ describe("nested delegation authorization", () => {
 			for (const [executor, requestedAsync] of [
 				[makeExecutor(cwd), true],
 				[makeExecutor(cwd, true), undefined],
+				[makeExecutor(cwd, true), false],
 			] as const) {
-				assert.throws(
-					() =>
-						executor.openWorkflowGroup({
-							toolCallId: "call-workflow-async",
-							signal: new AbortController().signal,
-							ctx: makeCtx(cwd, sessionId),
-							...(requestedAsync === undefined ? {} : { requestedAsync }),
-						}),
-					/only allowed from the host session/i,
-				);
+				const group = executor.openWorkflowGroup({
+					toolCallId: "call-workflow-async",
+					signal: new AbortController().signal,
+					ctx: makeCtx(cwd, sessionId),
+					...(requestedAsync === undefined ? {} : { requestedAsync }),
+				});
+				assert.equal(group.async, false);
 			}
 		} finally {
 			clearLineage(sessionId);
@@ -703,7 +723,7 @@ describe("nested delegation authorization", () => {
 		try {
 			const result = await makeExecutor(cwd).execute(
 				"call-direct",
-				{ run: [{ agent: "target-agent", task: "do work" }] },
+				{ run: [{ agent: "target-agent", task: "do work" }], async: true },
 				new AbortController().signal,
 				undefined,
 				makeCtx(cwd, sessionId),
@@ -729,7 +749,7 @@ describe("nested delegation authorization", () => {
 		try {
 			const result = await makeExecutor(cwd).execute(
 				"call-disallowed-target",
-				{ run: [{ agent: "target-agent", task: "do work" }] },
+				{ run: [{ agent: "target-agent", task: "do work" }], async: true },
 				new AbortController().signal,
 				undefined,
 				makeCtx(cwd, sessionId),
@@ -805,7 +825,7 @@ describe("nested delegation authorization", () => {
 		try {
 			const result = await makeExecutor(cwd).execute(
 				"call-at-max-depth",
-				{ run: [{ agent: "target-agent", task: "do work" }] },
+				{ run: [{ agent: "target-agent", task: "do work" }], async: true },
 				new AbortController().signal,
 				undefined,
 				makeCtx(cwd, sessionId),
@@ -837,6 +857,7 @@ describe("nested delegation authorization", () => {
 						toolCallId: "call-workflow",
 						signal: new AbortController().signal,
 						ctx: makeCtx(cwd, sessionId),
+						requestedAsync: true,
 					}),
 				/not allowed to delegate/i,
 			);

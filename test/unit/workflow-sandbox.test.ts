@@ -89,4 +89,61 @@ describe("workflow vm sandbox hardening (VAL-WORKFLOW-SANDBOX)", () => {
 		});
 		assert.deepEqual(phases, ["scope", "fan-out"]);
 	});
+
+	it("accepts declarative workflow metadata before orchestration starts", async () => {
+		const metadata: unknown[] = [];
+		await runWorkflowScript({
+			dispatch,
+			onMeta: (value) => metadata.push(value),
+			script: [
+				"meta({",
+				"  name: 'Parity audit',",
+				"  description: 'Compare legacy and current behavior',",
+				"  phases: [{ title: 'Scope', detail: 'Discover areas' }, { title: 'Verify' }],",
+				"});",
+				"phase('Scope');",
+				"return 'done';",
+			].join("\n"),
+		});
+
+		assert.deepEqual(metadata, [
+			{
+				name: "Parity audit",
+				description: "Compare legacy and current behavior",
+				phases: [{ title: "Scope", detail: "Discover areas" }, { title: "Verify" }],
+			},
+		]);
+	});
+
+	it("rejects duplicate and late metadata declarations", async () => {
+		const declaration = "meta({ name: 'Audit', description: 'Compare behavior', phases: [] });";
+		await assert.rejects(
+			runWorkflowScript({ dispatch, script: `${declaration}\n${declaration}` }),
+			/meta\(\) may only be called once/,
+		);
+		for (const operation of ["phase('Scope');", "agent('role', 'task');", "parallel([]);", "pipeline([]);"]) {
+			await assert.rejects(
+				runWorkflowScript({ dispatch, script: `${operation}\n${declaration}` }),
+				/meta\(\) must be called before/,
+			);
+		}
+	});
+
+	it("rejects malformed workflow metadata at the VM boundary", async () => {
+		const invalid = [
+			["null", /expects an object/],
+			["{ name: '', description: 'x', phases: [] }", /meta\.name/],
+			["{ name: 'x', description: '', phases: [] }", /meta\.description/],
+			["{ name: 'x', description: 'y', phases: {} }", /meta\.phases must be an array/],
+			["{ name: 'x', description: 'y', phases: [{}] }", /title must be a non-empty string/],
+			[
+				"{ name: 'x', description: 'y', phases: [{ title: 'a', detail: '' }] }",
+				/detail must be a non-empty string/,
+			],
+			["{ name: 'x', description: 'y', phases: [{ title: 'a' }, { title: 'a' }] }", /must be unique/],
+		] as const;
+		for (const [value, pattern] of invalid) {
+			await assert.rejects(runWorkflowScript({ dispatch, script: `meta(${value});` }), pattern);
+		}
+	});
 });

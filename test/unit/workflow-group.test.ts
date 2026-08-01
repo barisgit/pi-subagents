@@ -8,7 +8,12 @@ import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../sr
 import { readRunViewForEntry } from "../../src/state/async-status.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
-import { readWorkflowScript, writeWorkflowGroupState } from "../../src/workflow/workflow-group-state.ts";
+import {
+	readWorkflowGroupPhase,
+	readWorkflowMeta,
+	readWorkflowScript,
+	writeWorkflowGroupState,
+} from "../../src/workflow/workflow-group-state.ts";
 import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
 
@@ -103,6 +108,37 @@ afterEach(() => {
 });
 
 describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
+	it("returns declarative metadata and phase progress in immediate async details", async () => {
+		const { executor, ctx } = setup("workflow-group-async-details-");
+		const tool = createWorkflowTool({
+			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
+		});
+
+		const result = await tool.execute?.(
+			"wf",
+			{
+				async: true,
+				script: [
+					"meta({ name: 'Parity audit', description: 'Compare behavior', phases: [{ title: 'Scope' }, { title: 'Verify' }] });",
+					"phase('Verify');",
+					"await agent('A', 'alpha');",
+				].join("\n"),
+			},
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+		const details = result?.details;
+		assert.ok(details !== null && typeof details === "object");
+		assert.equal(Reflect.get(details, "label"), "Phase 2/2: Verify");
+		assert.equal(Reflect.get(Reflect.get(details, "workflowMeta"), "name"), "Parity audit");
+		assert.deepEqual(Reflect.get(details, "reachedPhaseTitles"), ["Verify"]);
+		assert.deepEqual(Reflect.get(details, "results"), []);
+		assert.deepEqual(Reflect.get(details, "progress"), []);
+		assert.equal(Reflect.get(details, "runId"), Reflect.get(details, "asyncId"));
+		assert.equal(typeof Reflect.get(details, "asyncDir"), "string");
+	});
+
 	it("keeps an empty async workflow group running via its statusless lifecycle marker", () => {
 		const { root } = setup("workflow-group-marker-");
 		const runRecordDir = path.join(root, "group-run");
@@ -203,13 +239,12 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
 		});
 
-		await tool.execute?.(
-			"wf",
-			{ script: "await parallel([() => agent('A', 'alpha'), () => agent('B', 'bravo')]);" },
-			new AbortController().signal,
-			undefined,
-			ctx as never,
-		);
+		const script = [
+			"meta({ name: 'Parity audit', description: 'Compare behavior', phases: [{ title: 'Verify' }] });",
+			"phase('Verify');",
+			"await parallel([() => agent('A', 'alpha'), () => agent('B', 'bravo')]);",
+		].join("\n");
+		await tool.execute?.("wf", { script }, new AbortController().signal, undefined, ctx as never);
 
 		const entries = readAllEntries();
 		const groups = entries.filter(
@@ -225,9 +260,19 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		);
 		assert.equal(
 			readWorkflowScript(group.runRecordDir),
-			"await parallel([() => agent('A', 'alpha'), () => agent('B', 'bravo')]);",
+			script,
 			"the producing script must be persisted on the group record",
 		);
+		assert.deepEqual(readWorkflowMeta(group.runRecordDir), {
+			name: "Parity audit",
+			description: "Compare behavior",
+			phases: [{ title: "Verify" }],
+		});
+		assert.deepEqual(readWorkflowGroupPhase(group.runRecordDir), {
+			phaseIndex: 1,
+			phaseTitle: "Verify",
+			reachedPhaseTitles: ["Verify"],
+		});
 		const children = entries.filter((entry) => entry.parentRunId === group.runId);
 		assert.equal(children.length, 2);
 		assert.deepEqual(children.map((entry) => entry.agentName).sort(), ["A", "B"]);
@@ -246,7 +291,10 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 		const summary = runViewFromRegistryEntry(group, entries);
 		assert.equal(summary.mode, "parallel");
 		assert.equal(summary.state, "complete");
+		assert.equal(summary.phaseTitle, "Verify");
+		assert.equal(summary.phaseIndex, 1);
 		assert.equal(readRunViewForEntry(group, entries)?.state, "complete");
+		assert.equal(readRunViewForEntry(group, entries)?.phaseTitle, "Verify");
 		fs.writeFileSync(
 			path.join(group.runRecordDir, "status.json"),
 			JSON.stringify({

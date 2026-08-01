@@ -11,7 +11,11 @@ import {
 	runViewFromRegistryEntry,
 	type LiveRun,
 } from "../../src/surfaces/subagents-status.ts";
-import { writeWorkflowScript } from "../../src/workflow/workflow-group-state.ts";
+import {
+	writeWorkflowGroupPhase,
+	writeWorkflowMeta,
+	writeWorkflowScript,
+} from "../../src/workflow/workflow-group-state.ts";
 import {
 	appendRunEntry,
 	readAllEntries,
@@ -26,6 +30,15 @@ const tmpRoots: string[] = [];
 
 function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function persistWorkflowMeta(group: RunsRegistryEntry): void {
+	writeWorkflowScript(group.runRecordDir, "phase('inspect');");
+	writeWorkflowMeta(group.runRecordDir, {
+		name: "Parity audit",
+		description: "Compare behavior",
+		phases: [{ title: "inspect" }, { title: "patch" }, { title: "report" }],
+	});
 }
 
 function tmpRegistry(): string {
@@ -208,9 +221,11 @@ afterEach(() => {
 describe("workflow dashboard reader overlays", () => {
 	it("subagents-status marks workflow groups and copies registry phase tags onto child summaries", () => {
 		const { group, children, entries } = setupWorkflowRegistry();
+		persistWorkflowMeta(group);
 
 		const groupSummary = runViewFromRegistryEntry(group, entries);
 		assert.equal(groupSummary.workflow, true);
+		assert.equal(groupSummary.workflowMeta?.name, "Parity audit");
 
 		const childSummaries = children.map((child) => runViewFromRegistryEntry(child, entries));
 		assertWorkflowChildren(childSummaries);
@@ -218,9 +233,11 @@ describe("workflow dashboard reader overlays", () => {
 
 	it("async-status marks workflow groups and copies registry phase tags onto child summaries", () => {
 		const { group, children, entries } = setupWorkflowRegistry();
+		persistWorkflowMeta(group);
 
 		const groupSummary = readRunViewForEntry(group, entries);
 		assert.equal(groupSummary?.workflow, true);
+		assert.equal(groupSummary?.workflowMeta?.name, "Parity audit");
 
 		const childSummaries = children
 			.map((child) => readRunViewForEntry(child, entries))
@@ -251,7 +268,8 @@ describe("workflow dashboard reader overlays", () => {
 	});
 
 	it("subagents-status renders workflow groups with phase rows without relabeling them parallel", () => {
-		const { entries } = setupWorkflowRegistry();
+		const { group, entries } = setupWorkflowRegistry();
+		persistWorkflowMeta(group);
 		const component = new SubagentsStatusComponent(
 			createTestTui(() => {}),
 			createTestTheme(),
@@ -260,17 +278,19 @@ describe("workflow dashboard reader overlays", () => {
 		);
 
 		try {
-			const text = component.render(180).map(stripBorders).map(stripAnsi).join("\n");
-			assert.match(text, /┬─ workflow /);
+			const rendered = component.render(180).map(stripBorders).map(stripAnsi);
+			const text = rendered.join("\n");
+			const leftText = rendered.map((line) => line.split("│")[0]).join("\n");
+			assert.match(text, /┬─ Parity audit /);
 			// Container row: collapse marker + done/total child progress.
-			assert.match(text, /▾ workflow · complete · 3\/3/);
+			assert.match(text, /▾ Parity audit · complete · 3\/3/);
 			assert.doesNotMatch(text, /┬─ parallel /);
 			assert.doesNotMatch(text, /▾ parallel · complete/);
 			// Phase labels are tree rows; children no longer carry P1/P2 chips.
-			const phase1RowIndex = text.indexOf("Phase 1: inspect · 2/2");
-			const phase2RowIndex = text.indexOf("Phase 2: patch · 1/1");
-			const phase1Index = text.indexOf("explorer · complete");
-			const phase2Index = text.indexOf("fixer · complete");
+			const phase1RowIndex = leftText.indexOf("Phase 1: inspect · 2/2");
+			const phase2RowIndex = leftText.indexOf("Phase 2: patch · 1/1");
+			const phase1Index = leftText.indexOf("explorer");
+			const phase2Index = leftText.indexOf("fixer");
 			assert.ok(phase1RowIndex !== -1, "expected phase-1 row in status output");
 			assert.ok(phase2RowIndex !== -1, "expected phase-2 row in status output");
 			assert.ok(phase1Index !== -1, "expected phase-1 child in status output");
@@ -278,9 +298,9 @@ describe("workflow dashboard reader overlays", () => {
 			assert.ok(phase1RowIndex < phase1Index, "phase-1 children render below phase row");
 			assert.ok(phase1Index < phase2RowIndex, "phase 2 renders after phase 1 children");
 			assert.ok(phase2RowIndex < phase2Index, "phase-2 child renders below phase row");
-			assert.match(text, /explorer · complete/);
-			assert.match(text, /review · complete/);
-			assert.match(text, /fixer · complete/);
+			assert.match(leftText, /explorer/);
+			assert.match(leftText, /review/);
+			assert.match(leftText, /fixer/);
 			assert.doesNotMatch(text, /P1 inspect/);
 			assert.doesNotMatch(text, /P2 patch/);
 		} finally {
@@ -332,6 +352,12 @@ describe("workflow dashboard reader overlays", () => {
 	it("workflow right pane shows the script and a phase-grouped step outline", () => {
 		const { group, entries } = setupWorkflowRegistry();
 		writeWorkflowScript(group.runRecordDir, 'const a = await agent("explorer", "inspect");\nreturn a.summary;');
+		writeWorkflowMeta(group.runRecordDir, {
+			name: "Parity audit",
+			description: "Compare behavior",
+			phases: [{ title: "inspect", detail: "Discover areas" }, { title: "patch" }, { title: "report" }],
+		});
+		writeWorkflowGroupPhase(group.runRecordDir, 3, "report");
 
 		const groupSummary = runViewFromRegistryEntry(group, entries);
 		const runs: LiveRun[] = entries.map((entry) => ({
@@ -341,6 +367,11 @@ describe("workflow dashboard reader overlays", () => {
 		const theme = createTestTheme();
 		const lines = buildWorkflowRightLines(theme, groupSummary, 120, runs).join("\n");
 
+		assert.match(lines, /Parity audit/);
+		assert.match(lines, /Compare behavior/);
+		assert.match(lines, /1\. inspect · completed — Discover areas/);
+		assert.match(lines, /2\. patch · completed/);
+		assert.match(lines, /3\. report · completed/);
 		assert.match(lines, /─ Script ─/);
 		assert.match(lines, /const a = await agent\("explorer", "inspect"\);/);
 		assert.match(lines, /return a\.summary;/);

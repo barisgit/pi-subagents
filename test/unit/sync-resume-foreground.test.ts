@@ -9,6 +9,7 @@ import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-re
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { createTempDir, events, makeAgent, removeTempDir } from "../support/helpers.ts";
 import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../src/protocol/types.ts";
+import { removeChildLineageBindings, setChildLineage, type SubagentLineage } from "../../src/state/lineage.ts";
 
 let tempDir: string | undefined;
 let restoreDeps: (() => void) | undefined;
@@ -19,6 +20,7 @@ let restoreDeps: (() => void) | undefined;
 // child prompts, which makes this pre-existing race deterministic.)
 let activeSession: { resolvePrompt?: () => void } | undefined;
 let activeRegistry: ChildAgentRegistry | undefined;
+let activeLineage: SubagentLineage | undefined;
 
 afterEach(async () => {
 	activeSession?.resolvePrompt?.();
@@ -26,6 +28,8 @@ afterEach(async () => {
 	if (inFlight) await inFlight.completed.catch(() => {});
 	activeSession = undefined;
 	activeRegistry = undefined;
+	if (activeLineage) removeChildLineageBindings(activeLineage);
+	activeLineage = undefined;
 	restoreDeps?.();
 	restoreDeps = undefined;
 	setRegistryPathForTests(null);
@@ -45,6 +49,22 @@ function makeState(cwd: string): SubagentState {
 		lastUiContext: null,
 		poller: null,
 	};
+}
+
+function markParentSessionAsChild(): void {
+	activeLineage = {
+		role: "child",
+		currentAgent: "fixer",
+		parentAgent: "host-role",
+		parentSessionId: "host-session",
+		rootSessionId: "parent-session",
+		depth: 1,
+		runId: "parent-run",
+		canDelegate: true,
+		allowedDelegateAgents: ["fixer"],
+		maxSubagentDepth: 2,
+	};
+	setChildLineage("parent-session", activeLineage);
 }
 
 class FakeSession {
@@ -320,6 +340,36 @@ describe("sync resume foreground", () => {
 		assert.match(result.content[0]?.text ?? "", /Async resume/);
 		assert.equal(h.state.asyncJobs.has("resume-run"), true);
 		h.session.resolvePrompt?.();
+	});
+
+	it("coerces explicit async:true resume to foreground in a child session", async () => {
+		const h = setup({ pending: true });
+		markParentSessionAsChild();
+		writeCompleteRun(tempDir!);
+		const pending = h.execute({ action: "resume", id: "resume-run", message: "continue", async: true });
+		await waitFor(() => h.session.prompts.length === 1);
+		assert.equal(h.state.foregroundControls.has("resume-run"), true);
+		assert.equal(h.state.asyncJobs.size, 0);
+		h.session.resolvePrompt?.();
+		const result = await pending;
+		assert.match(result.content[0]?.text ?? "", /resumed output/);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /Async resume/);
+		assert.equal(result.details?.results.length, 1);
+	});
+
+	it("coerces asyncByDefault:true resume to foreground in a child session", async () => {
+		const h = setup({ pending: true, asyncByDefault: true });
+		markParentSessionAsChild();
+		writeCompleteRun(tempDir!);
+		const pending = h.execute({ action: "resume", id: "resume-run", message: "continue" });
+		await waitFor(() => h.session.prompts.length === 1);
+		assert.equal(h.state.foregroundControls.has("resume-run"), true);
+		assert.equal(h.state.asyncJobs.size, 0);
+		h.session.resolvePrompt?.();
+		const result = await pending;
+		assert.match(result.content[0]?.text ?? "", /resumed output/);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /Async resume/);
+		assert.equal(result.details?.results.length, 1);
 	});
 
 	it("bare resume (async omitted) follows asyncByDefault=false as foreground", async () => {
