@@ -20,9 +20,11 @@ subagent({
 })
 ```
 
-Multiple top-level `run` tasks execute independently. Use `async:true` for background work, `batch:true` for one rollup notification, and `worktree:true` to isolate parallel edits in git worktrees. How many agents run at once is bounded process-wide by `maxConcurrentAgents` (config, default 4), not per call.
+Multiple top-level `run` tasks execute independently. Use `async:true` for background work and `batch:true` for one rollup notification. How many agents run at once is bounded process-wide by `maxConcurrentAgents` (config, default 4), not per call.
 
-Task fields include `agent`, `task`, optional `label`, optional `context:"fresh"|"fork"`, and optional `output`. `context:"fork"` is same-agent self-branching only; use fresh context for role changes.
+Optional top-level `cwd` defaults all run entries. When omitted, it defaults to the caller/session cwd; a relative top-level path resolves from that caller/session cwd. Optional per-run `cwd` overrides the default; a relative per-run path resolves from the resolved top-level cwd. Runs may share a cwd.
+
+Task fields include `agent`, `task`, optional `label`, optional `context:"fresh"|"fork"`, optional `cwd`, and optional `output`. `context:"fork"` is same-agent self-branching only; use fresh context for role changes.
 
 Run management uses `{ action:"list" }`, `{ action:"status" }`, `{ action:"interrupt" }`, and `{ action:"resume", id, message }`.
 
@@ -90,10 +92,6 @@ The `subagent` tool can list agents and manage runs:
 ```
 
 Agent definitions are created and edited as markdown files under `agents/`.
-
-## Worktree isolation
-
-For independent parallel implementation branches, set `worktree:true` on `subagent`. Each child receives its own temporary git worktree; summary output includes relevant diff information. Keep parent working tree state clean enough for worktree creation.
 
 ## Skills
 

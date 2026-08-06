@@ -42,7 +42,6 @@ import type { StatusWriter } from "../state/status-writer.ts";
 import { getLineageForSession, resolveRootSessionIdForSession } from "../state/lineage.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { logger } from "../shared/logger.ts";
-import { findWorktreeTaskCwdConflict, formatWorktreeTaskCwdConflict } from "./worktree.ts";
 
 /**
  * Resolve the parent runId for a dispatch happening NOW. The dispatching
@@ -487,15 +486,6 @@ export function resolveChildTools(agentConfig: AgentConfig): { activeToolNames: 
 	// would clobber the child's real registered tool if passed as customTools.
 	const activeToolNames = baseAllow === undefined ? undefined : [...new Set([...baseAllow, ...mcpDirect])];
 	return { activeToolNames };
-}
-
-export function buildParallelWorktreeTaskCwdError(
-	tasks: ReadonlyArray<{ agent: string; cwd?: string }>,
-	sharedCwd: string,
-): string | undefined {
-	const conflict = findWorktreeTaskCwdConflict(tasks, sharedCwd);
-	if (!conflict) return undefined;
-	return formatWorktreeTaskCwdConflict(conflict, sharedCwd);
 }
 
 export function buildAsyncAggregateCompletePayload(params: {

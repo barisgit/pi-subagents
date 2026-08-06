@@ -26,6 +26,10 @@ subagent({
 })
 ```
 
+## Working directories
+
+Optional top-level `cwd` defaults all run entries. When omitted, it defaults to the caller/session cwd; a relative top-level path resolves from that caller/session cwd. Optional per-run `cwd` overrides the default; a relative per-run path resolves from the resolved top-level cwd. Runs may share a cwd.
+
 ## Programmable orchestration
 
 Workflow is valid for simple parallel work and becomes especially useful when results shape later work. It can pass summaries/results between steps, branch, retry, loop, decide runtime fan-out, and compose these patterns across levels. In `agent(role, task, opts?)`, `role` is one of the caller's configured agent roles; replace placeholders with real roles from the active config. `parallel()` can fan out over a dynamic list and scales to many concurrent children, bounded by the process-wide leaf-concurrency pool. `pipeline(items, ...stages)` streams each item through async stages without waiting for a whole-stage barrier. Choose either primitive from the data dependencies rather than treating one topology as the default.

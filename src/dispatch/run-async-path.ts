@@ -40,7 +40,6 @@ import {
 	batchToNotifyPolicy,
 	buildAsyncAggregateCompletePayload,
 	buildParallelModeError,
-	buildParallelWorktreeTaskCwdError,
 	emitRunAnchor,
 	emptyUsage,
 	publishSubagentUsage,
@@ -66,10 +65,6 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 		const tasks = params.tasks as TaskParam[];
 		const maxParallelTasks = resolveTopLevelParallelMaxTasks(deps.config.parallel?.maxTasks);
 		if (tasks.length > maxParallelTasks) return buildParallelModeError(`Max ${maxParallelTasks} tasks`);
-		if (params.worktree) {
-			const worktreeTaskCwdError = buildParallelWorktreeTaskCwdError(tasks, effectiveCwd);
-			if (worktreeTaskCwdError) return buildParallelModeError(worktreeTaskCwdError);
-		}
 	}
 
 	const runId = data.runId;

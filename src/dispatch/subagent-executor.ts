@@ -126,8 +126,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (slimValidationError) return slimValidationError;
 		}
 
-		const requestCwd = internal ? resolveRequestedCwd(ctx.cwd, params.cwd) : ctx.cwd;
-		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
+		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
+		const paramsWithResolvedCwd = { ...params, cwd: requestCwd };
 		if (params.action) {
 			if (params.action === "status") {
 				const foreground = getForegroundControl(
@@ -310,7 +310,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId =
 			ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? `session-${randomUUID()}`;
-		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope, {
+		const discoveredAgents = deps.discoverAgents(requestCwd, scope, {
 			preset: normalizedParams.preset,
 			includeInternal: true,
 		}).agents;

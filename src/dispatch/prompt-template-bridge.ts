@@ -26,7 +26,6 @@ interface PromptTemplateDelegationRequest {
 	context: "fresh" | "fork";
 	model: string;
 	cwd: string;
-	worktree?: boolean;
 }
 
 interface PromptTemplateDelegationResponse extends PromptTemplateDelegationRequest {
@@ -138,7 +137,6 @@ function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegationRequ
 	if (typeof value.cwd !== "string" || !value.cwd) return undefined;
 	if (value.context !== "fresh" && value.context !== "fork") return undefined;
 	const tasks = parseDelegationTasks(value.tasks);
-	const worktree = value.worktree === true ? true : undefined;
 	const hasSingle =
 		typeof value.agent === "string" &&
 		value.agent.length > 0 &&
@@ -155,7 +153,6 @@ function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegationRequ
 		context: value.context,
 		model: value.model,
 		cwd: value.cwd,
-		...(worktree ? { worktree } : {}),
 	};
 }
 

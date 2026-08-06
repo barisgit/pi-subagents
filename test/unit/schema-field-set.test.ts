@@ -23,7 +23,7 @@ describe("schema field set", () => {
 	it("top-level keys are exactly the slim set", () => {
 		assert.deepEqual(
 			sortedKeys(SubagentParams),
-			["action", "async", "batch", "id", "message", "run", "worktree"].sort(),
+			["action", "async", "batch", "cwd", "id", "message", "run"].sort(),
 		);
 	});
 
@@ -36,7 +36,7 @@ describe("schema field set", () => {
 	});
 
 	it("task keys are exactly the slim set", () => {
-		assert.deepEqual(sortedKeys(TaskSchema), ["agent", "context", "label", "output", "task"].sort());
+		assert.deepEqual(sortedKeys(TaskSchema), ["agent", "context", "cwd", "label", "output", "task"].sort());
 	});
 
 	it("rejects unknown task keys with structured key detail", () => {
@@ -47,14 +47,23 @@ describe("schema field set", () => {
 		assert.equal(additionalProperty(validator.Errors(input)), "foo");
 	});
 
-	it("rejects Task.worktree as an unknown task key", () => {
+	it("rejects worktree as an unknown field", () => {
 		const validator = Compile(SubagentParams);
-		const input = { run: [{ agent: "x", task: "y", worktree: true }] };
+		const topLevelInput = { run: [{ agent: "x", task: "y" }], worktree: true };
 
-		assert.equal(validator.Check(input), false);
-		assert.equal(additionalProperty(validator.Errors(input)), "worktree");
+		assert.equal(validator.Check(topLevelInput), false);
+		assert.equal(additionalProperty(validator.Errors(topLevelInput)), "worktree");
 
-		const error = validateSubagentToolInput(input);
+		const topLevelError = validateSubagentToolInput(topLevelInput);
+		const topLevelText = topLevelError?.content[0];
+		assert.match(topLevelText?.type === "text" ? topLevelText.text : "", /Unknown top-level key 'worktree'/);
+
+		const taskInput = { run: [{ agent: "x", task: "y", worktree: true }] };
+
+		assert.equal(validator.Check(taskInput), false);
+		assert.equal(additionalProperty(validator.Errors(taskInput)), "worktree");
+
+		const error = validateSubagentToolInput(taskInput);
 		const first = error?.content[0];
 		const text = first?.type === "text" ? first.text : "";
 		assert.match(text, /Unknown task key 'worktree' at run\[0\]/);

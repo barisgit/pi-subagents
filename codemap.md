@@ -2,7 +2,7 @@
 
 ## Project Responsibility
 
-A pi-coding-agent extension that adds subagent dispatch to Pi: a `subagent` tool for delegating bounded work to named specialist agents, plus parallel/async execution, same-role forks, JavaScript workflow orchestration, a fullscreen status dashboard, an above-editor async widget, and completion notifications. Child agents run **in-process** through the host `AgentSession` (the only `child_process` spawn is git for worktrees); `status.json` + an append-only run registry are the durable post-reload recovery path.
+A pi-coding-agent extension that adds subagent dispatch to Pi: a `subagent` tool for delegating bounded work to named specialist agents, plus parallel/async execution, same-role forks, JavaScript workflow orchestration, a fullscreen status dashboard, an above-editor async widget, and completion notifications. Child agents run **in-process** through the host `AgentSession`; `status.json` + an append-only run registry are the durable post-reload recovery path.
 
 This codebase is the product of two completed refactoring charters:
 - `subagents-deepening` (committed `2730d31`): made the four oversized modules deep at the right seam (index 1181→20, executor 3538→2207, render split, status 1544→949).
@@ -27,7 +27,7 @@ This codebase is the product of two completed refactoring charters:
 
 | Directory | Responsibility Summary | Detailed Map |
 |-----------|------------------------|--------------|
-| `src/dispatch/` | Subagent dispatch + child-agent execution: tool entry, run-record funnel (`openRunRecord`), sync/async/parallel paths, in-process session bridge, one per-process leaf-concurrency pool, per-activation registry, worktrees, resume, intercom. (27 files) | [View Map](src/dispatch/codemap.md) |
+| `src/dispatch/` | Subagent dispatch + child-agent execution: tool entry, run-record funnel (`openRunRecord`), sync/async/parallel paths, in-process session bridge, one per-process leaf-concurrency pool, per-activation registry, cwd routing, resume, intercom. (29 files) | [View Map](src/dispatch/codemap.md) |
 | `src/surfaces/` | Presentation/UI layer: split renderers (result/inline/shared/widget), fullscreen dashboard + pure row-model, slash commands, notifications, async job widget, agent CRUD. (20 files) | [View Map](src/surfaces/codemap.md) |
 | `src/state/` | Run-state + persistence: canonical in-memory `RunView` (two producers), one `StatusWriter`, status-patch applier, disk hydration, append-only registry, pure phase/liveness/shape kernels. (18 files) | [View Map](src/state/codemap.md) |
 | `src/shared/` | Low-level leaf utilities (imported downward, no upward imports): agent/skill discovery, fs codecs, runtime-env policy, path constants, formatting, settings, logging. (16 files) | [View Map](src/shared/codemap.md) |

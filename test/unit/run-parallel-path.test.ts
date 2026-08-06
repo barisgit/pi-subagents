@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import {
-	buildParallelWorktreeSuffix,
-	createParallelWorktreeSetup,
-	resolveParallelTaskCwd,
-	runParallelPath,
-} from "../../src/dispatch/run-parallel-path.ts";
-import type { WorktreeSetup } from "../../src/dispatch/worktree.ts";
+import { resolveParallelTaskCwd, runParallelPath } from "../../src/dispatch/run-parallel-path.ts";
 import type { ExecutionContextData, ExecutorDeps, TaskParam } from "../../src/dispatch/executor-types.ts";
 
 function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -39,40 +33,16 @@ function makeDeps(): ExecutorDeps {
 describe("resolveParallelTaskCwd precedence", () => {
 	const task: TaskParam = { agent: "fixer", task: "x", cwd: "task-sub" };
 
-	it("prefers the worktree agentCwd above all else", () => {
-		const setup = { worktrees: [{ agentCwd: "/wt/agent-0" }] } as unknown as WorktreeSetup;
-		assert.equal(resolveParallelTaskCwd(task, "/base", setup, 0), "/wt/agent-0");
+	it("joins the task cwd to the top-level cwd", () => {
+		assert.equal(resolveParallelTaskCwd(task, "/base"), path.resolve("/base", "task-sub"));
 	});
 
-	it("falls back to params cwd joined with task cwd when no worktree", () => {
-		assert.equal(resolveParallelTaskCwd(task, "/base", undefined, 0), path.resolve("/base", "task-sub"));
+	it("uses an absolute task cwd as an override", () => {
+		assert.equal(resolveParallelTaskCwd({ ...task, cwd: "/other" }, "/base"), "/other");
 	});
 
 	it("uses task cwd alone when there is no params cwd", () => {
-		assert.equal(resolveParallelTaskCwd(task, undefined, undefined, 0), "task-sub");
-	});
-});
-
-describe("createParallelWorktreeSetup", () => {
-	const tasks: TaskParam[] = [{ agent: "fixer", task: "x" }];
-
-	it("returns {} when worktrees are disabled", () => {
-		const result = createParallelWorktreeSetup(false, "/base", "run-1", tasks, undefined, undefined);
-		assert.deepEqual(result, {});
-	});
-
-	it("returns an errorResult when worktree creation throws", () => {
-		// /nonexistent-base is not a git repo, so createWorktrees throws and is caught.
-		const result = createParallelWorktreeSetup(true, "/nonexistent-base-xyz", "run-1", tasks, undefined, undefined);
-		assert.ok(result.errorResult);
-		assert.equal(result.errorResult!.isError, true);
-		assert.equal(result.setup, undefined);
-	});
-});
-
-describe("buildParallelWorktreeSuffix", () => {
-	it("returns an empty string when there is no worktree setup", () => {
-		assert.equal(buildParallelWorktreeSuffix(undefined, "/tmp/work/.artifacts", []), "");
+		assert.equal(resolveParallelTaskCwd(task, undefined), "task-sub");
 	});
 });
 

@@ -68,7 +68,7 @@ describe("doctrine doc", () => {
 			"agentScope",
 			"includeInternal",
 			"metadata",
-			"cwd",
+			"worktree",
 			"reads",
 		];
 

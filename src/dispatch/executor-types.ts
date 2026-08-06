@@ -111,7 +111,6 @@ export interface InternalSubagentParams {
 	tasks?: TaskParam[];
 	prompt?: string;
 	message?: string;
-	worktree?: boolean;
 	batch?: boolean;
 	context?: "fresh" | "fork";
 	async?: boolean;

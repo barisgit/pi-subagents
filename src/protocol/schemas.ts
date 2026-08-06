@@ -19,6 +19,9 @@ export const TaskSchema = Type.Object(
 				description: "fresh is default; fork is same-agent self-branching only.",
 			}),
 		),
+		cwd: Type.Optional(
+			Type.String({ description: "Run working directory; relative paths resolve from the top-level cwd." }),
+		),
 		output: Type.Optional(OutputOverride),
 	},
 	{ additionalProperties: false },
@@ -31,7 +34,9 @@ export const SubagentParams = Type.Object(
 		run: Type.Optional(Type.Array(StepSchema, { minItems: 1, description: "Work to dispatch." })),
 		async: Type.Optional(Type.Boolean({ description: "Run detached (returns immediately)." })),
 		batch: Type.Optional(Type.Boolean({ description: "Collapse completion notifications into one rollup." })),
-		worktree: Type.Optional(Type.Boolean({ description: "Top-level worktree mode for parallel runs." })),
+		cwd: Type.Optional(
+			Type.String({ description: "Default run cwd; relative paths resolve from the caller/session cwd." }),
+		),
 		message: Type.Optional(
 			Type.String({
 				description:
@@ -56,7 +61,7 @@ export type SubagentToolInput = {
 	run?: Task[];
 	async?: boolean;
 	batch?: boolean;
-	worktree?: boolean;
+	cwd?: string;
 	message?: string;
 	action?: "list" | "status" | "interrupt" | "resume";
 	id?: string;

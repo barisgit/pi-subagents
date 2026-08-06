@@ -11,7 +11,9 @@ Subagents and Workflow are complementary ways to create useful execution boundar
 
 A plain subagent delegates a bounded outcome and may itself delegate further, so model-directed trees do not require a Workflow script. There is no preferred child count: a `run` may contain any useful fixed set of branches, subject to runtime limits. Clear boundaries improve handoffs, but the model chooses the topology.
 
-Multiple `run` entries execute in parallel. Adding a shared `message` applies one template through `{task}` or `{in}` across those entries—swarm-style dispatch for perspectives, targets, or variants. `batch:true` combines completion notices; `worktree:true` isolates parallel edits.
+Multiple `run` entries execute in parallel. Adding a shared `message` applies one template through `{task}` or `{in}` across those entries—swarm-style dispatch for perspectives, targets, or variants. `batch:true` combines completion notices.
+
+Optional top-level `cwd` defaults all run entries. When omitted, it defaults to the caller/session cwd; a relative top-level path resolves from that caller/session cwd. Optional per-run `cwd` overrides the default; a relative per-run path resolves from the resolved top-level cwd. Runs may share a cwd.
 
 Delegation invoked from a child session always runs synchronously, even when `async:true` is explicit or async is enabled by default. This applies to plain subagent and Workflow calls because the child caller owns and awaits the result.
 
@@ -66,7 +68,7 @@ Each child starts with no conversation context: the script sees the whole pictur
 
 Open a reference when its detail is relevant:
 
-- `references/dispatch-patterns.md` — choosing single, parallel, async, worktree, or background dispatch.
+- `references/dispatch-patterns.md` — choosing single, parallel, async, or background dispatch.
 - `references/context-fork.md` — before setting `context:"fork"`; confirms same-agent-only branching.
 - `references/resume.md` — resuming or messaging a live async run.
 - `references/batch-notifications.md` — setting `batch:true` and interpreting rollup payloads.

@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { readAllEntries } from "../../src/state/runs-registry.ts";
@@ -88,12 +89,13 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function installFakeRuntime(sessions: FakeAgentSession[]): () => void {
+function installFakeRuntime(sessions: FakeAgentSession[], seenCwds?: string[]): () => void {
 	return __setChildAgentExecutorDepsForTest({
 		DefaultResourceLoader: FakeResourceLoader as never,
 		getAgentDir: () => "/tmp/pi-agent",
 		SessionManager: { open: (file: string) => ({ getSessionId: () => `session-${file}` }) as never },
-		createAgentSession: async () => {
+		createAgentSession: async (options) => {
+			if (options?.cwd) seenCwds?.push(options.cwd);
 			const session = sessions.shift();
 			if (!session) throw new Error("No fake session queued");
 			return { session: session as never, extensionsResult: { extensions: [], diagnostics: [] } } as never;
@@ -128,7 +130,7 @@ function makeCtx(cwd: string, sessionId: string | null = "session-123") {
 	};
 }
 
-function makeExecutor(cwd: string, state = makeState(cwd)) {
+function makeExecutor(cwd: string, state = makeState(cwd), seenDiscoveryCwds?: string[]) {
 	return createSubagentExecutor({
 		pi: {
 			events: { emit: () => {} },
@@ -142,14 +144,21 @@ function makeExecutor(cwd: string, state = makeState(cwd)) {
 		tempArtifactsDir: cwd,
 		childRegistry: new ChildAgentRegistry(),
 		expandTilde: (value: string) => value,
-		discoverAgents: () => ({
-			agents: ["explorer", "A", "B", "C"].map((name) => makeAgent(name, { model: "mock/test-model" })),
-		}),
+		discoverAgents: (discoveryCwd: string) => {
+			seenDiscoveryCwds?.push(discoveryCwd);
+			return {
+				agents: ["explorer", "A", "B", "C"].map((name) => makeAgent(name, { model: "mock/test-model" })),
+			};
+		},
 	} as never);
 }
 
-async function execute(cwd: string, params: Record<string, unknown>): Promise<ExecutorResult> {
-	return makeExecutor(cwd).execute(
+async function execute(
+	cwd: string,
+	params: Record<string, unknown>,
+	seenDiscoveryCwds?: string[],
+): Promise<ExecutorResult> {
+	return makeExecutor(cwd, makeState(cwd), seenDiscoveryCwds).execute(
 		"id",
 		params as never,
 		new AbortController().signal,
@@ -192,6 +201,61 @@ describe("dispatch shapes", () => {
 		assert.equal(result.details?.results?.length, 1);
 		assert.equal(result.details?.results?.[0]?.agent, "explorer");
 		assert.deepEqual(seenTasks, ["x"]);
+	});
+
+	it("resolves top-level and single-run cwd from the caller cwd", async () => {
+		const seenCwds: string[] = [];
+		restoreRuntime = installFakeRuntime(
+			[
+				new FakeAgentSession(async (_task, session) => {
+					session.emit(assistantMessage("done"));
+				}),
+			],
+			seenCwds,
+		);
+
+		const result = await execute(tempDir, {
+			cwd: "workspace",
+			run: [{ agent: "explorer", task: "x", cwd: "package" }],
+		});
+
+		assert.equal(result.isError, undefined, resultText(result));
+		assert.deepEqual(seenCwds, [path.join(tempDir, "workspace", "package")]);
+	});
+
+	it("uses the top-level cwd for agent discovery regardless of run count", async () => {
+		const seenDiscoveryCwds: string[] = [];
+		restoreRuntime = installFakeRuntime(
+			Array.from(
+				{ length: 3 },
+				() =>
+					new FakeAgentSession(async (_task, session) => {
+						session.emit(assistantMessage("done"));
+					}),
+			),
+		);
+
+		const topLevelCwd = path.join(tempDir, "workspace");
+		const single = await execute(
+			tempDir,
+			{ cwd: "workspace", run: [{ agent: "explorer", task: "x", cwd: "package" }] },
+			seenDiscoveryCwds,
+		);
+		const parallel = await execute(
+			tempDir,
+			{
+				cwd: "workspace",
+				run: [
+					{ agent: "A", task: "one", cwd: "package" },
+					{ agent: "B", task: "two", cwd: "package" },
+				],
+			},
+			seenDiscoveryCwds,
+		);
+
+		assert.equal(single.isError, undefined, resultText(single));
+		assert.equal(parallel.isError, undefined, resultText(parallel));
+		assert.deepEqual(seenDiscoveryCwds, [topLevelCwd, topLevelCwd]);
 	});
 
 	it("stamps the synthesized session fallback on new run records", async () => {
@@ -352,6 +416,7 @@ describe("dispatch shapes", () => {
 
 	it("parallel-default dispatches run length concurrently by default", async () => {
 		const starts: number[] = [];
+		const seenCwds: string[] = [];
 		restoreRuntime = installFakeRuntime(
 			[0, 1, 2].map(
 				() =>
@@ -361,13 +426,15 @@ describe("dispatch shapes", () => {
 						session.emit(assistantMessage("parallel done"));
 					}),
 			),
+			seenCwds,
 		);
 
 		const started = Date.now();
 		const result = await execute(tempDir, {
+			cwd: "workspace",
 			run: [
-				{ agent: "A", task: "one" },
-				{ agent: "B", task: "two" },
+				{ agent: "A", task: "one", cwd: "." },
+				{ agent: "B", task: "two", cwd: "." },
 				{ agent: "C", task: "three" },
 			],
 		});
@@ -377,6 +444,7 @@ describe("dispatch shapes", () => {
 		assert.equal(result.details?.mode, "parallel");
 		assert.equal(result.details?.results?.length, 3);
 		assert.equal(starts.length, 3);
+		assert.deepEqual(seenCwds, Array(3).fill(path.join(tempDir, "workspace")));
 		assert.ok(Math.max(...starts) - Math.min(...starts) < 50, `expected concurrent starts: ${starts.join(",")}`);
 		assert.ok(elapsed < 180, `expected default concurrency to use run.length, elapsed ${elapsed}ms`);
 	});

@@ -96,7 +96,7 @@ describe("SubagentParams schema", () => {
 	it("validates representative slim values with TypeBox compiler", () => {
 		const validator = Compile(SubagentParams);
 		const validValues = [
-			{ run: [{ agent: "main", task: "check this" }] },
+			{ cwd: "workspace", run: [{ agent: "main", task: "check this", cwd: "package" }] },
 			{
 				run: [
 					{ agent: "main", task: "a" },
@@ -120,7 +120,7 @@ describe("SubagentParams schema", () => {
 
 	it("rejects representative removed fields", () => {
 		const validator = Compile(SubagentParams);
-		for (const field of ["tasks", "prompt", "model", "skill", "agentScope", "cwd", "chain"]) {
+		for (const field of ["tasks", "prompt", "model", "skill", "agentScope", "chain"]) {
 			assert.equal(validator.Check({ [field]: "removed" }), false, `${field} should be rejected`);
 		}
 	});

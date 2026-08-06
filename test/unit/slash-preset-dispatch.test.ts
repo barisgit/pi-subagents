@@ -135,6 +135,18 @@ describe("preset survives the dispatch validation seam", () => {
 		assert.equal(normalized.error, undefined);
 		assert.equal(normalized.params?.preset, "B");
 	});
+
+	it("resolves a single run cwd from the top-level cwd", () => {
+		const normalized = normalizeRunDispatchParams({
+			cwd: "/workspace",
+			run: [{ agent: "a", task: "t", cwd: "package" }],
+		} as Parameters<typeof normalizeRunDispatchParams>[0] & {
+			run: Array<{ agent: string; task: string; cwd: string }>;
+		});
+
+		assert.equal(normalized.error, undefined);
+		assert.equal(normalized.params?.cwd, "/workspace/package");
+	});
 });
 
 describe("slash preset dispatch", () => {

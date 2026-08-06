@@ -1,13 +1,14 @@
 import type { InternalSubagentParams, TaskParam } from "./executor-types.ts";
 import { validationError } from "./executor-helpers.ts";
 import type { SubagentToolResult } from "../protocol/types.ts";
+import { resolveChildCwd } from "../shared/utils.ts";
 import { buildRequestedModeError } from "./execution-input.ts";
 
 // "preset" is not part of the model-facing tool schema (additionalProperties:
 // false blocks it there); it is accepted here so internal surfaces such as the
 // slash commands can thread a resolved preset into dispatch.
-const SLIM_TOP_LEVEL_KEYS = new Set(["run", "async", "batch", "worktree", "message", "action", "id", "preset"]);
-const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "output"]);
+const SLIM_TOP_LEVEL_KEYS = new Set(["run", "async", "batch", "cwd", "message", "action", "id", "preset"]);
+const SLIM_TASK_KEYS = new Set(["agent", "task", "label", "context", "cwd", "output"]);
 export const ALLOWED_CONTROL_ACTIONS = ["list", "status", "interrupt", "resume"] as const;
 const REMOVED_CRUD_ACTIONS = new Set(["create", "update", "delete", "get"]);
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -78,6 +79,7 @@ export function normalizeRunDispatchParams(params: InternalSubagentParams): {
 				task: taskText,
 				...(singleTask.label ? { label: singleTask.label } : { label: undefined }),
 				...(singleTask.context ? { context: singleTask.context } : { context: undefined }),
+				cwd: params.cwd ? resolveChildCwd(params.cwd, singleTask.cwd) : singleTask.cwd,
 				...(singleTask.output !== undefined ? { output: singleTask.output } : {}),
 				tasks: undefined,
 				message: undefined,

@@ -704,8 +704,6 @@ export interface ExtensionConfig {
 	maxConcurrentAgents?: number;
 	control?: ControlConfig;
 	parallel?: TopLevelParallelConfig;
-	worktreeSetupHook?: string;
-	worktreeSetupHookTimeoutMs?: number;
 	intercomBridge?: IntercomBridgeConfig;
 	defaultPreset?: string;
 	presets?: Record<string, PresetConfig>;

@@ -16,7 +16,6 @@ import {
 	type ArtifactPaths,
 	type ControlEvent,
 	type Details,
-	type ExtensionConfig,
 	type SingleResult,
 	type SubagentState,
 	resolveTopLevelParallelMaxTasks,
@@ -25,17 +24,8 @@ import {
 	type SubagentToolResult,
 } from "../protocol/types.ts";
 import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
-import {
-	cleanupWorktrees,
-	createWorktrees,
-	diffWorktrees,
-	formatWorktreeDiffSummary,
-	type WorktreeSetup,
-} from "./worktree.ts";
 import type { ExecutionContextData, ExecutorDeps, TaskParam } from "./executor-types.ts";
 import {
-	buildParallelModeError,
-	buildParallelWorktreeTaskCwdError,
 	createForegroundControlNotifier,
 	resolveDispatchRootSessionId,
 	singleResultToChildAgentResult,
@@ -64,55 +54,11 @@ interface ForegroundParallelRunInput {
 	liveProgress: (AgentProgress | undefined)[];
 	children: NonNullable<Details["children"]>;
 	onUpdate?: (r: SubagentToolResult) => void;
-	worktreeSetup?: WorktreeSetup;
 }
 
-export function createParallelWorktreeSetup(
-	enabled: boolean | undefined,
-	cwd: string,
-	runId: string,
-	tasks: TaskParam[],
-	setupHook: ExtensionConfig["worktreeSetupHook"],
-	setupHookTimeoutMs: ExtensionConfig["worktreeSetupHookTimeoutMs"],
-): { setup?: WorktreeSetup; errorResult?: SubagentToolResult } {
-	if (!enabled) return {};
-	try {
-		return {
-			setup: createWorktrees(cwd, runId, tasks.length, {
-				agents: tasks.map((task) => task.agent),
-				setupHook: setupHook ? { hookPath: setupHook, timeoutMs: setupHookTimeoutMs } : undefined,
-			}),
-		};
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return { errorResult: buildParallelModeError(message) };
-	}
-}
-
-export function resolveParallelTaskCwd(
-	task: TaskParam,
-	paramsCwd: string | undefined,
-	worktreeSetup: WorktreeSetup | undefined,
-	index: number,
-): string | undefined {
-	if (worktreeSetup) return worktreeSetup.worktrees[index]!.agentCwd;
+export function resolveParallelTaskCwd(task: TaskParam, paramsCwd: string | undefined): string | undefined {
 	if (!paramsCwd) return task.cwd;
 	return resolveChildCwd(paramsCwd, task.cwd);
-}
-
-export function buildParallelWorktreeSuffix(
-	worktreeSetup: WorktreeSetup | undefined,
-	artifactsDir: string,
-	tasks: TaskParam[],
-): string {
-	if (!worktreeSetup) return "";
-	const diffsDir = path.join(artifactsDir, "worktree-diffs");
-	const diffs = diffWorktrees(
-		worktreeSetup,
-		tasks.map((task) => task.agent),
-		diffsDir,
-	);
-	return formatWorktreeDiffSummary(diffs);
 }
 
 async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Promise<SingleResult[]> {
@@ -122,7 +68,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 		try {
 			const overrideSkills = input.skillOverrides[index];
 			const effectiveSkills = overrideSkills === undefined ? input.behaviors[index]?.skills : overrideSkills;
-			const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd, input.worktreeSetup, index);
+			const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd);
 			fg.beginStep(task.agent, index, () => {
 				const interrupted = interruptRun(childRunId, { cascade: true }).interruptedRunIds.length > 0;
 				if (!interrupted) return false;
@@ -305,11 +251,6 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 		resolveChildMaxSubagentDepth(currentMaxSubagentDepth, config.maxSubagentDepth),
 	);
 
-	if (params.worktree) {
-		const worktreeTaskCwdError = buildParallelWorktreeTaskCwdError(tasks, effectiveCwd);
-		if (worktreeTaskCwdError) return buildParallelModeError(worktreeTaskCwdError);
-	}
-
 	const currentProvider = ctx.model?.provider;
 	const availableModels = normalizeAvailableModels(ctx.modelRegistry.getAvailable());
 	const taskTexts = tasks.map((t) => t.task);
@@ -323,118 +264,62 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 	const liveProgress: (AgentProgress | undefined)[] = new Array(tasks.length).fill(undefined);
 	const children: NonNullable<Details["children"]> = [];
 	const foregroundControl = deps.state.foregroundControls.get(runId);
-	const { setup: worktreeSetup, errorResult } = createParallelWorktreeSetup(
-		params.worktree,
-		effectiveCwd,
-		runId,
+	if (params.context === "fork") {
+		for (let i = 0; i < taskTexts.length; i++) {
+			taskTexts[i] = wrapForkTask(taskTexts[i]!);
+		}
+	}
+
+	const results = await runForegroundParallelTasks({
+		data,
+		deps,
 		tasks,
-		deps.config.worktreeSetupHook,
-		deps.config.worktreeSetupHookTimeoutMs,
-	);
-	if (errorResult) return errorResult;
+		taskTexts,
+		agents,
+		ctx,
+		runId,
+		rootRunId: data.rootRunId,
+		paramsCwd: effectiveCwd,
+		modelOverrides,
+		skillOverrides,
+		behaviors,
+		onControlEvent,
+		childIntercomTarget: childIntercomTarget
+			? (agent, index) => childIntercomTarget(runId, agent, index)
+			: undefined,
+		foregroundControl,
+		concurrencyLimit: tasks.length,
+		maxSubagentDepths,
+		liveResults,
+		liveProgress,
+		children,
+		onUpdate,
+	});
+	for (let i = 0; i < results.length; i++) {
+		const run = results[i]!;
+		recordRun(run.agent, taskTexts[i]!, run.exitCode, run.progressSummary?.durationMs ?? 0);
+	}
 
-	try {
-		if (params.context === "fork") {
-			for (let i = 0; i < taskTexts.length; i++) {
-				taskTexts[i] = wrapForkTask(taskTexts[i]!);
-			}
-		}
+	for (const result of results) {
+		if (result.progress) allProgress.push(result.progress);
+		if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);
+	}
 
-		const results = await runForegroundParallelTasks({
-			data,
-			deps,
-			tasks,
-			taskTexts,
-			agents,
-			ctx,
-			runId,
-			rootRunId: data.rootRunId,
-			paramsCwd: effectiveCwd,
-			modelOverrides,
-			skillOverrides,
-			behaviors,
-			onControlEvent,
-			childIntercomTarget: childIntercomTarget
-				? (agent, index) => childIntercomTarget(runId, agent, index)
-				: undefined,
-			foregroundControl,
-			concurrencyLimit: tasks.length,
-			maxSubagentDepths,
-			liveResults,
-			liveProgress,
-			children,
-			onUpdate,
-			worktreeSetup,
-		});
-		for (let i = 0; i < results.length; i++) {
-			const run = results[i]!;
-			recordRun(run.agent, taskTexts[i]!, run.exitCode, run.progressSummary?.durationMs ?? 0);
-		}
-
-		for (const result of results) {
-			if (result.progress) allProgress.push(result.progress);
-			if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);
-		}
-
-		const interruptedChildren = children.filter((child) => results[child.stepIndex]?.interrupted);
-		if (interruptedChildren.length > 0) {
-			const resumeActions = interruptedChildren
-				.map(
-					(child) =>
-						`- ${child.runId}: subagent({ action: "resume", id: "${child.runId}", message: "Continue the interrupted work." })`,
-				)
-				.join("\n");
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Parallel run paused after interrupt. Resume interrupted children individually:\n${resumeActions}`,
-					},
-				],
-				details: compactForegroundDetails({
-					mode: "parallel",
-					runId,
-					results,
-					children,
-					progress: params.includeProgress ? allProgress : undefined,
-					artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				}),
-			};
-		}
-
-		const worktreeSuffix = buildParallelWorktreeSuffix(worktreeSetup, artifactsDir, tasks);
-		// A run "succeeded" only if the executor reported exitCode 0 AND it produced
-		// something usable (any text output, regardless of byte count). exitCode 0 +
-		// empty output gets reported as "empty" so the parent doesn't read 5/5 success
-		// when half the agents returned nothing. After in-process-executor's
-		// detectProviderFailure landed, provider-error runs already exit non-zero;
-		// this catches any other empty-completion edge case (refusals, legit-empty
-		// model output, etc.).
-		const hasOutput = (result: SingleResult): boolean =>
-			Boolean((result.truncation?.text || getSingleResultOutput(result)).trim());
-		const ok = results.filter((result) => result.exitCode === 0 && hasOutput(result)).length;
-		const emptyCount = results.filter((result) => result.exitCode === 0 && !hasOutput(result)).length;
-		const downgradeNote = backgroundRequestedWhileClarifying
-			? " (background requested, but clarify kept this run foreground)"
-			: "";
-		const aggregatedOutput = aggregateParallelOutputs(
-			results.map((result) => ({
-				agent: result.agent,
-				output: result.truncation?.text || getSingleResultOutput(result),
-				exitCode: result.exitCode,
-				error: result.error,
-			})),
-			(i, agent) => `=== Task ${i + 1}: ${agent} ===`,
-		);
-
-		const emptyNote = emptyCount > 0 ? `, ${emptyCount} empty` : "";
-		const summary = `${ok}/${results.length} succeeded${emptyNote}${downgradeNote}`;
-		const fullContent = worktreeSuffix
-			? `${summary}\n\n${aggregatedOutput}\n\n${worktreeSuffix}`
-			: `${summary}\n\n${aggregatedOutput}`;
-
+	const interruptedChildren = children.filter((child) => results[child.stepIndex]?.interrupted);
+	if (interruptedChildren.length > 0) {
+		const resumeActions = interruptedChildren
+			.map(
+				(child) =>
+					`- ${child.runId}: subagent({ action: "resume", id: "${child.runId}", message: "Continue the interrupted work." })`,
+			)
+			.join("\n");
 		return {
-			content: [{ type: "text", text: fullContent }],
+			content: [
+				{
+					type: "text",
+					text: `Parallel run paused after interrupt. Resume interrupted children individually:\n${resumeActions}`,
+				},
+			],
 			details: compactForegroundDetails({
 				mode: "parallel",
 				runId,
@@ -444,7 +329,45 @@ export async function runParallelPath(data: ExecutionContextData, deps: Executor
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 			}),
 		};
-	} finally {
-		if (worktreeSetup) cleanupWorktrees(worktreeSetup);
 	}
+
+	// A run "succeeded" only if the executor reported exitCode 0 AND it produced
+	// something usable (any text output, regardless of byte count). exitCode 0 +
+	// empty output gets reported as "empty" so the parent doesn't read 5/5 success
+	// when half the agents returned nothing. After in-process-executor's
+	// detectProviderFailure landed, provider-error runs already exit non-zero;
+	// this catches any other empty-completion edge case (refusals, legit-empty
+	// model output, etc.).
+	const hasOutput = (result: SingleResult): boolean =>
+		Boolean((result.truncation?.text || getSingleResultOutput(result)).trim());
+	const ok = results.filter((result) => result.exitCode === 0 && hasOutput(result)).length;
+	const emptyCount = results.filter((result) => result.exitCode === 0 && !hasOutput(result)).length;
+	const downgradeNote = backgroundRequestedWhileClarifying
+		? " (background requested, but clarify kept this run foreground)"
+		: "";
+	const aggregatedOutput = aggregateParallelOutputs(
+		results.map((result) => ({
+			agent: result.agent,
+			output: result.truncation?.text || getSingleResultOutput(result),
+			exitCode: result.exitCode,
+			error: result.error,
+		})),
+		(i, agent) => `=== Task ${i + 1}: ${agent} ===`,
+	);
+
+	const emptyNote = emptyCount > 0 ? `, ${emptyCount} empty` : "";
+	const summary = `${ok}/${results.length} succeeded${emptyNote}${downgradeNote}`;
+	const fullContent = `${summary}\n\n${aggregatedOutput}`;
+
+	return {
+		content: [{ type: "text", text: fullContent }],
+		details: compactForegroundDetails({
+			mode: "parallel",
+			runId,
+			results,
+			children,
+			progress: params.includeProgress ? allProgress : undefined,
+			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+		}),
+	};
 }

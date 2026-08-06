@@ -14,13 +14,15 @@ See `skills/subagent/references/migration.md` for caller migration notes.
 
 ## Kept fields
 
-Kept top-level fields: `run`, `async`, `batch`, `concurrency`, `worktree`, `message`, `action`, and `id`.
+Kept top-level fields: `run`, `async`, `batch`, `cwd`, `message`, `action`, and `id`.
 
-Kept task fields: `agent`, `task`, `label`, `context`, and `output`.
+Kept task fields: `agent`, `task`, `label`, `context`, `cwd`, and `output`.
+
+Top-level `cwd` defaults all run entries. When omitted, it defaults to the caller/session cwd; relative top-level paths resolve from that caller/session cwd. A per-run `cwd` overrides the default; relative per-run paths resolve from the resolved top-level cwd. Runs may share a cwd.
 
 ## Dropped fields
 
-Dropped top-level and legacy fields remain rejected by schema validation: `model`, `tasks`, `prompt`, `clarify`, `share`, `preset`, `sessionDir`, `control`, `skill`, `artifacts`, `progress`, `agentScope`, `includeInternal`, `metadata`, `cwd`, and `reads`.
+Dropped top-level and legacy fields remain rejected by schema validation: `model`, `tasks`, `prompt`, `clarify`, `share`, `preset`, `sessionDir`, `control`, `skill`, `artifacts`, `progress`, `agentScope`, `includeInternal`, `metadata`, `worktree`, and `reads`.
 
 ## Renames
 

@@ -73,8 +73,7 @@ codec at the disk boundary (a guard, not an adapter).
 - **All** children (sync, async, parallel) run **in-process** via the host
   `AgentSession` — they share identical execution machinery; the only difference is
   lifecycle ownership (sync = the dispatching turn awaits; async = detached, same
-  process). The only `child_process` spawn in the codebase is git, in
-  `src/dispatch/worktree.ts`. Don't shell out for anything else.
+  process). Do not add out-of-process child execution.
 - `ChildAgentRegistry` is **per-activation, not a singleton**; it does not survive
   reload/fork/new-session. Therefore `status.json` + the append-only run registry are
   the sole post-reload recovery path. Never make live runs render only from memory,

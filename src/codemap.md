@@ -9,7 +9,7 @@ Implementation root for the pi-subagents extension. All logic imported by the th
 ```
 runtime/   → activation, wiring, role lifecycle (top)
 surfaces/  → presentation: dashboard, renderers, slash, notifications
-dispatch/  → subagent execution: paths, registry, worktrees, resume
+dispatch/  → subagent execution: paths, registry, cwd routing, resume
 workflow/  → JS workflow orchestration over dispatch
 state/     → run-state + persistence (RunView, StatusWriter, registry)
 api/       → frozen cross-extension public boundary
@@ -23,7 +23,7 @@ shared/    → low-level utilities, agent/skill discovery, env policy (leaf)
 
 | Directory | Responsibility | Map |
 |-----------|----------------|-----|
-| `dispatch/` | Subagent dispatch + child-agent execution (26 files) | [Map](dispatch/codemap.md) |
+| `dispatch/` | Subagent dispatch + child-agent execution (29 files) | [Map](dispatch/codemap.md) |
 | `surfaces/` | Presentation/UI: renderers, dashboard, slash, notify (20 files) | [Map](surfaces/codemap.md) |
 | `state/` | Run-state + persistence: RunView, StatusWriter, registry (18 files) | [Map](state/codemap.md) |
 | `shared/` | Low-level leaf utilities + agent/skill discovery (16 files) | [Map](shared/codemap.md) |

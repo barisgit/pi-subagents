@@ -19,7 +19,7 @@ const droppedFields = [
 	"agentScope",
 	"includeInternal",
 	"metadata",
-	"cwd",
+	"worktree",
 	"reads",
 	"includeProgress",
 ] as const;
