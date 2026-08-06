@@ -133,6 +133,16 @@ describe("workflow metadata display shaping", () => {
 });
 
 describe("workflow metadata validation", () => {
+	it("accepts string phases and normalizes their titles", () => {
+		const parsed = parseWorkflowMeta({
+			name: "Audit",
+			description: "Compare",
+			phases: ["Scope", "Phase 1: Recon"],
+		});
+		if (!parsed.ok) assert.fail(parsed.reason);
+		assert.deepEqual(parsed.value.phases, [{ title: "Scope" }, { title: "Recon" }]);
+	});
+
 	it("trims safe Unicode metadata and canonicalizes declared titles", () => {
 		const parsed = parseWorkflowMeta({
 			name: "  安全 audit  ",

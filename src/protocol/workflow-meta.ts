@@ -47,7 +47,8 @@ export function parseWorkflowMeta(value: unknown): WorkflowMetaParseResult {
 		const phases: WorkflowPhaseMeta[] = [];
 		const titles = new Set<string>();
 		for (let index = 0; index < rawPhases.length; index += 1) {
-			const rawPhase = rawPhases[index];
+			const rawPhaseValue = rawPhases[index];
+			const rawPhase = typeof rawPhaseValue === "string" ? { title: rawPhaseValue } : rawPhaseValue;
 			if (rawPhase === null || typeof rawPhase !== "object" || Array.isArray(rawPhase)) {
 				return { ok: false, reason: `meta.phases[${index}] must be an object` };
 			}
