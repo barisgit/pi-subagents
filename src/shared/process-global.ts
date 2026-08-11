@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /**
  * Process-wide state shared across extension module instances.
  *
@@ -22,6 +24,11 @@ export function processGlobal<T>(key: string, create: () => T): T {
 		globals[slot] = value;
 	}
 	return value;
+}
+
+/** Per-process identity that survives extension reloads but not process restarts. */
+export function currentRunnerToken(): string {
+	return processGlobal("pi.subagents.runnerToken", () => randomUUID());
 }
 
 /**

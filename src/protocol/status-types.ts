@@ -5,6 +5,7 @@ import type { ActivityState, ModelAttempt, RunDisplayState, TokenUsage, Usage } 
 export type RunPhase =
 	| "idle"
 	| "waiting_model"
+	| "waiting_network"
 	| "thinking"
 	| "streaming_text"
 	| "finishing"
@@ -38,6 +39,8 @@ export interface ChildAgentResult {
 	startedAt: number;
 	endedAt: number;
 	sessionFile: string;
+	model?: string;
+	attemptedModels?: string[];
 	shareUrl?: string;
 	error?: { message: string; reason?: string };
 	/**

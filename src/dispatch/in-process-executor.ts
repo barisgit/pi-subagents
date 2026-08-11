@@ -1,7 +1,6 @@
 import { constants as fsConstants, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
 import {
 	type AgentSession,
 	createAgentSession,
@@ -29,7 +28,7 @@ import {
 	removePendingChildLineage,
 	setChildLineage,
 } from "../state/lineage.ts";
-import { advanceRunPhase, initialRunPhaseState, type RunPhaseState } from "../state/run-phase.ts";
+import { advanceRunPhase, initialRunPhaseState, setWaitingNetwork, type RunPhaseState } from "../state/run-phase.ts";
 import {
 	SUBAGENT_PHASE_CHANGE_EVENT,
 	SUBAGENT_STUCK_EVENT,
@@ -59,12 +58,14 @@ import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 import { addUsageInto, nestedSubagentUsageFromToolEvent } from "./executor-helpers.ts";
 import { acquireLeafPermit } from "./leaf-concurrency.ts";
+import { isFallbackModelFailure, isTransportModelFailure } from "./model-fallback.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
 export type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 import type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
 export type { ChildAgentStep } from "./executor-types.ts";
 
 type StatusPatchBody = Omit<StatusPatch, "runId" | "stepIndex">;
+type ChildModel = ChildAgentStep["model"];
 
 export interface PhaseEventHandlerOptions {
 	runId: string;
@@ -76,6 +77,7 @@ export interface PhaseEventHandlerOptions {
 
 export interface PhaseEventHandler {
 	handle(event: AgentSessionEvent, now?: number, patch?: StatusPatchBody): StatusPatch | undefined;
+	waitingNetwork(now?: number): StatusPatch;
 	getState(): RunPhaseState;
 }
 
@@ -133,6 +135,24 @@ export function createPhaseEventHandler(options: PhaseEventHandlerOptions): Phas
 			};
 			options.onStatusUpdate?.(patch);
 			return patch;
+		},
+		waitingNetwork(now = Date.now()): StatusPatch {
+			const previousPhase = phaseState.phase;
+			phaseState = setWaitingNetwork(phaseState, now);
+			emitPhaseChange(options.pi, {
+				runId: options.runId,
+				stepIndex: options.stepIndex,
+				phase: phaseState.phase,
+				previousPhase,
+				ts: now,
+			});
+			return {
+				runId: options.runId,
+				stepIndex: options.stepIndex,
+				phase: phaseState.phase,
+				phaseStartedAt: phaseState.phaseStartedAt,
+				runnerHeartbeatAt: now,
+			};
 		},
 		getState(): RunPhaseState {
 			return phaseState;
@@ -249,6 +269,25 @@ interface ExecutorRuntimeDeps {
 	DefaultResourceLoader: typeof DefaultResourceLoader;
 	getAgentDir: typeof getAgentDir;
 	SessionManager: Pick<typeof SessionManager, "open">;
+	waitForNetworkRetry(signal: AbortSignal, delayMs: number): Promise<boolean>;
+}
+
+const NETWORK_RETRY_INITIAL_MS = 5_000;
+const NETWORK_RETRY_MAX_MS = 3 * 60_000;
+
+async function waitForNetworkRetry(signal: AbortSignal, delayMs: number): Promise<boolean> {
+	return await new Promise<boolean>((resolve) => {
+		if (signal.aborted) return resolve(true);
+		const onAbort = () => {
+			clearTimeout(timer);
+			resolve(true);
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve(false);
+		}, delayMs);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
 }
 
 let runtimeDeps: ExecutorRuntimeDeps = {
@@ -256,6 +295,7 @@ let runtimeDeps: ExecutorRuntimeDeps = {
 	DefaultResourceLoader,
 	getAgentDir,
 	SessionManager,
+	waitForNetworkRetry,
 };
 
 export function __setChildAgentExecutorDepsForTest(deps: Partial<ExecutorRuntimeDeps>): () => void {
@@ -355,6 +395,10 @@ async function executeChildAgent(
 	let toolErrorCount = 0;
 	let unsubscribe: (() => void) | undefined;
 	let session: AgentSession | undefined;
+	const models = uniqueModels([step.model, ...step.modelCandidates]);
+	let currentModel = step.model;
+	const attemptedModels: string[] = [];
+	let modelIndex = 0;
 	let structuredResult: SubmitResultEnvelope | undefined;
 	let ticker: PhaseTickerHandle | undefined;
 	const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
@@ -380,10 +424,41 @@ async function executeChildAgent(
 			startedAt,
 			endedAt,
 			sessionFile: step.sessionFile,
+			model: `${currentModel.provider}/${currentModel.id}`,
+			attemptedModels: [...attemptedModels],
 			usage: { ...usage },
 			...(structuredResult ? { structuredResult } : {}),
 			...(error ? { error } : {}),
 		};
+	};
+
+	const recordAttemptedModels = (attempts: ChildModel[]): void => {
+		for (const model of attempts) {
+			const ref = `${model.provider}/${model.id}`;
+			if (!attemptedModels.includes(ref)) attemptedModels.push(ref);
+		}
+	};
+	const attachSession = (nextSession: AgentSession): void => {
+		session = nextSession;
+		onSession(nextSession);
+		if (step.activeToolNames !== undefined) nextSession.setActiveToolsByName(step.activeToolNames);
+		unsubscribe = nextSession.subscribe((event) => {
+			const patch = handleSessionEvent(step, ctx, event, phaseEvents, {
+				appendOutput: (delta) => {
+					outputText += delta;
+					return outputText;
+				},
+				incrementToolCall: () => ++toolCallCount,
+				incrementToolResult: () => ++toolResultCount,
+				incrementToolError: () => ++toolErrorCount,
+				accumulateUsage: usage,
+			});
+			if (patch) ctx.onStatusUpdate?.(patch);
+		});
+	};
+	const activeSession = (): AgentSession => {
+		if (!session) throw new Error(`Child agent session for ${step.runId} is not ready yet`);
+		return session;
 	};
 
 	try {
@@ -416,26 +491,19 @@ async function executeChildAgent(
 				childCwd: step.cwd,
 			});
 		}
-		session = await runInChildSessionContext(() => createSessionWithFallback(step, ctx));
-		onSession(session);
-		// Only narrow the active tool set when the agent declared an explicit list.
-		// If activeToolNames is undefined, the session keeps the default (all tools).
-		if (step.activeToolNames !== undefined) {
-			session.setActiveToolsByName(step.activeToolNames);
-		}
-		unsubscribe = session.subscribe((event) => {
-			const patch = handleSessionEvent(step, ctx, event, phaseEvents, {
-				appendOutput: (delta) => {
-					outputText += delta;
-					return outputText;
+		const created = await runInChildSessionContext(() =>
+			createSessionWithFallback(step, ctx, {
+				models,
+				onAttempt: (model) => {
+					currentModel = model;
+					recordAttemptedModels([model]);
 				},
-				incrementToolCall: () => ++toolCallCount,
-				incrementToolResult: () => ++toolResultCount,
-				incrementToolError: () => ++toolErrorCount,
-				accumulateUsage: usage,
-			});
-			if (patch) ctx.onStatusUpdate?.(patch);
-		});
+			}),
+		);
+		currentModel = created.model;
+		modelIndex = created.modelIndex;
+		recordAttemptedModels(created.attemptedModels);
+		attachSession(created.session);
 		ticker = createPhaseTicker({
 			runId: step.runId,
 			stepIndex: step.stepIndex,
@@ -456,10 +524,67 @@ async function executeChildAgent(
 			},
 		});
 
-		const promptPromise = session.prompt(step.task, { expandPromptTemplates: false, source: "extension" });
-		const aborted = await promptOrAbort(promptPromise, signal);
+		let networkRetryAttempt = 0;
+		const promptWithModelFallback = async (text: string): Promise<{ aborted: boolean; failure?: string }> => {
+			let promptText = text;
+			while (true) {
+				const promptSession = session;
+				if (!promptSession) throw new Error(`Child agent session for ${step.runId} is not ready yet`);
+				const promptPromise = promptSession.prompt(promptText, {
+					expandPromptTemplates: false,
+					source: "extension",
+				});
+				const aborted = await promptOrAbort(promptPromise, signal);
+				if (aborted) return { aborted: true };
+				await promptPromise;
+				const providerFailure = detectProviderFailure(promptSession);
+				if (!providerFailure) {
+					networkRetryAttempt = 0;
+					return { aborted: false };
+				}
+				if (isTransportModelFailure(providerFailure)) {
+					ctx.onStatusUpdate?.(phaseEvents.waitingNetwork());
+					const delayMs = Math.min(NETWORK_RETRY_INITIAL_MS * 2 ** networkRetryAttempt, NETWORK_RETRY_MAX_MS);
+					networkRetryAttempt++;
+					if (await runtimeDeps.waitForNetworkRetry(signal, delayMs)) return { aborted: true };
+					// AgentSession has no public continuation operation that can resume
+					// from an assistant error tail, so each bounded-cadence retry appends
+					// one explicit continuation prompt to the same persisted history.
+					promptText =
+						"Continue from the existing session history after the transport failure. Do not repeat completed tool actions.";
+					continue;
+				}
+				if (!isFallbackModelFailure(providerFailure) || modelIndex === models.length - 1) {
+					return { aborted: false, failure: providerFailure };
+				}
+				unsubscribe?.();
+				unsubscribe = undefined;
+				promptSession.dispose();
+				const reopened = await runInChildSessionContext(() =>
+					createSessionWithFallback(step, ctx, {
+						models,
+						startIndex: modelIndex + 1,
+						bindLineage: false,
+						onAttempt: (model) => {
+							currentModel = model;
+							recordAttemptedModels([model]);
+						},
+					}),
+				);
+				currentModel = reopened.model;
+				modelIndex = reopened.modelIndex;
+				networkRetryAttempt = 0;
+				recordAttemptedModels(reopened.attemptedModels);
+				attachSession(reopened.session);
+				promptText =
+					"Continue from the existing session history after the previous provider failure. Do not repeat completed tool actions.";
+			}
+		};
+
+		const promptOutcome = await promptWithModelFallback(step.task);
+		const aborted = promptOutcome.aborted;
 		if (aborted) {
-			await session.abort();
+			await activeSession().abort();
 			const result = baseResult("interrupted", {
 				message: `Child agent interrupted: ${abortReason(signal)}`,
 				reason: abortReason(signal),
@@ -473,10 +598,20 @@ async function executeChildAgent(
 			});
 			return result;
 		}
-		await promptPromise;
+		if (promptOutcome.failure) {
+			const result = baseResult("failed", { message: promptOutcome.failure, reason: "provider_error" });
+			ctx.onStatusUpdate?.({
+				runId: step.runId,
+				stepIndex: step.stepIndex,
+				state: result.state,
+				endedAt: result.endedAt,
+				outputText: result.outputText,
+			});
+			return result;
+		}
 
 		if (!outputText.trim()) {
-			outputText = session.getLastAssistantText?.() ?? "";
+			outputText = activeSession().getLastAssistantText?.() ?? "";
 		}
 
 		// The output contract is unconditional for every child: the final assistant
@@ -484,8 +619,7 @@ async function executeChildAgent(
 		// result. The former submit_result tool is gone, so the source is the final
 		// assistant TEXT (getLastAssistantText), not a toolResult. The accumulated
 		// outputText is the streamed-delta fallback when no last-assistant text exists.
-		const activeSession = session;
-		const finalAssistantText = (): string => activeSession.getLastAssistantText?.() || outputText;
+		const finalAssistantText = (): string => activeSession().getLastAssistantText?.() || outputText;
 		for (
 			let reprompt = 0;
 			reprompt < 2 && !parseOutputEnvelope(finalAssistantText(), step.resultSchema).ok;
@@ -494,13 +628,10 @@ async function executeChildAgent(
 			const text = finalAssistantText();
 			const repromptMessage =
 				step.resultSchema && hasOutputBlock(text) ? schemaReprompt(step.resultSchema) : OUTPUT_REPROMPT;
-			const repromptPromise = session.prompt(repromptMessage, {
-				expandPromptTemplates: false,
-				source: "extension",
-			});
-			const repromptAborted = await promptOrAbort(repromptPromise, signal);
+			const repromptOutcome = await promptWithModelFallback(repromptMessage);
+			const repromptAborted = repromptOutcome.aborted;
 			if (repromptAborted) {
-				await session.abort();
+				await activeSession().abort();
 				const result = baseResult("interrupted", {
 					message: `Child agent interrupted: ${abortReason(signal)}`,
 					reason: abortReason(signal),
@@ -514,7 +645,20 @@ async function executeChildAgent(
 				});
 				return result;
 			}
-			await repromptPromise;
+			if (repromptOutcome.failure) {
+				const result = baseResult("failed", {
+					message: repromptOutcome.failure,
+					reason: "provider_error",
+				});
+				ctx.onStatusUpdate?.({
+					runId: step.runId,
+					stepIndex: step.stepIndex,
+					state: result.state,
+					endedAt: result.endedAt,
+					outputText: result.outputText,
+				});
+				return result;
+			}
 		}
 		{
 			// Codec at the finish boundary: extract the LAST <output> block and resolve it.
@@ -563,7 +707,7 @@ async function executeChildAgent(
 		// nothing usable." We downgrade those runs to `failed` with the actual
 		// provider errorMessage so the parent agent sees a real exit code instead
 		// of a misleading 5/5-succeeded summary.
-		const providerFailure = detectProviderFailure(session, outputText, toolCallCount);
+		const providerFailure = detectProviderFailure(activeSession());
 		if (providerFailure) {
 			const result = baseResult("failed", {
 				message: providerFailure,
@@ -583,7 +727,7 @@ async function executeChildAgent(
 		let shareError: { message: string } | undefined;
 		if (step.shareEnabled) {
 			try {
-				shareUrl = await session.exportToHtml();
+				shareUrl = await activeSession().exportToHtml();
 			} catch (error) {
 				shareError = { message: formatError(error) };
 			}
@@ -594,7 +738,7 @@ async function executeChildAgent(
 		// the signal here before committing to "complete". A child that genuinely
 		// finished before the abort was signaled has already passed this point.
 		if (signal.aborted) {
-			await session.abort();
+			await activeSession().abort();
 			const result = baseResult("interrupted", {
 				message: `Child agent interrupted: ${abortReason(signal)}`,
 				reason: abortReason(signal),
@@ -667,35 +811,26 @@ async function executeChildAgent(
  * Inspect a session's recorded messages after `prompt()` resolves and return a
  * provider-error description when the SDK swallowed an upstream failure.
  *
- * Triggers when EVERY assistant message in the session has `stopReason === "error"`
- * AND the agent produced no usable output (no text, no tool calls). That pattern
- * indicates the SDK exhausted its internal retries on a provider error and
- * resolved the prompt with empty content rather than throwing — e.g. the cursor
- * proxy returning "500 Not logged in" during a token-bootstrap race.
+ * Only the last assistant outcome is relevant. Earlier successful turns and tool
+ * calls remain valid history and must not hide a provider error that ended the
+ * latest prompt after the SDK exhausted its built-in same-model retries.
  *
- * Returns the first non-empty `errorMessage` from the session's assistant
- * messages, or a generic fallback. Returns undefined when the run looks healthy
- * (at least one assistant message succeeded, or the agent did real work).
+ * Returns that outcome's non-empty `errorMessage`, or a generic fallback.
  */
-function detectProviderFailure(session: AgentSession, outputText: string, toolCallCount: number): string | undefined {
-	if (outputText.trim().length > 0) return undefined;
-	if (toolCallCount > 0) return undefined;
+function detectProviderFailure(session: AgentSession): string | undefined {
 	const messages = session.messages;
 	if (!messages || messages.length === 0) return undefined;
-	let sawAssistant = false;
-	let firstErrorMessage: string | undefined;
-	for (const msg of messages) {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const msg = messages[index]!;
 		if (msg.role !== "assistant") continue;
-		sawAssistant = true;
 		const stopReason = (msg as { stopReason?: string }).stopReason;
 		if (stopReason !== "error") return undefined;
-		if (!firstErrorMessage) {
-			const em = (msg as { errorMessage?: string }).errorMessage;
-			if (typeof em === "string" && em.trim()) firstErrorMessage = em.trim();
-		}
+		const errorMessage = (msg as { errorMessage?: string }).errorMessage;
+		return typeof errorMessage === "string" && errorMessage.trim()
+			? errorMessage.trim()
+			: "Provider returned no usable response";
 	}
-	if (!sawAssistant) return undefined;
-	return firstErrorMessage ?? "Provider returned no usable response (all assistant messages errored)";
+	return undefined;
 }
 
 function seedForkSessionFile(input: { sourcePath: string; targetPath: string; childCwd: string }): void {
@@ -711,7 +846,23 @@ function seedForkSessionFile(input: { sourcePath: string; targetPath: string; ch
 	}
 }
 
-async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentContext): Promise<AgentSession> {
+interface CreatedSession {
+	session: AgentSession;
+	model: ChildModel;
+	modelIndex: number;
+	attemptedModels: ChildModel[];
+}
+
+async function createSessionWithFallback(
+	step: ChildAgentStep,
+	ctx: ChildAgentContext,
+	options: {
+		models?: ChildModel[];
+		startIndex?: number;
+		bindLineage?: boolean;
+		onAttempt?: (model: ChildModel) => void;
+	} = {},
+): Promise<CreatedSession> {
 	const parentLineage = step.parentSessionId ? getLineageForSession(step.parentSessionId) : null;
 	const depth = parentLineage
 		? parentLineage.depth + 1
@@ -745,7 +896,8 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 		...(allowedDelegateAgents ? { allowedDelegateAgents } : {}),
 		maxSubagentDepth: step.maxSubagentDepth,
 	};
-	pushPendingChildLineage(lineage, step.sessionFile);
+	const bindLineage = options.bindLineage ?? true;
+	if (bindLineage) pushPendingChildLineage(lineage, step.sessionFile);
 	try {
 		const loader = new runtimeDeps.DefaultResourceLoader({
 			cwd: step.cwd,
@@ -757,10 +909,13 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 		});
 		await loader.reload();
 
-		const models = uniqueModels([step.model, ...step.modelCandidates]);
+		const models = options.models ?? uniqueModels([step.model, ...step.modelCandidates]);
+		const attemptedModels: ChildModel[] = [];
 		let lastError: unknown;
-		for (let index = 0; index < models.length; index++) {
+		for (let index = options.startIndex ?? 0; index < models.length; index++) {
 			const model = models[index]!;
+			attemptedModels.push(model);
+			options.onAttempt?.(model);
 			try {
 				// Open the session manager up front so we can resolve the child's
 				// session id and register lineage by sid synchronously, before any
@@ -777,7 +932,7 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 				} catch {
 					// fall back to the pending-queue + activate-claim path
 				}
-				if (childSid) {
+				if (bindLineage && childSid) {
 					setChildLineage(childSid, lineage, step.sessionFile);
 					removePendingChildLineage(lineage);
 				}
@@ -795,18 +950,22 @@ async function createSessionWithFallback(step: ChildAgentStep, ctx: ChildAgentCo
 					resourceLoader: loader,
 					sessionManager,
 				});
-				return created.session;
+				return { session: created.session, model, modelIndex: index, attemptedModels };
 			} catch (error) {
 				lastError = error;
 				if (!isAuthFailure(error) || index === models.length - 1) throw error;
-				removeChildLineageBindings(lineage);
-				pushPendingChildLineage(lineage, step.sessionFile);
+				if (bindLineage) {
+					removeChildLineageBindings(lineage);
+					pushPendingChildLineage(lineage, step.sessionFile);
+				}
 			}
 		}
 		throw lastError ?? new Error("No model candidates available for child agent");
 	} catch (error) {
-		removePendingChildLineage(lineage);
-		removeChildLineageBindings(lineage);
+		if (bindLineage) {
+			removePendingChildLineage(lineage);
+			removeChildLineageBindings(lineage);
+		}
 		throw error;
 	}
 }
@@ -938,9 +1097,9 @@ async function promptOrAbort(promptPromise: Promise<void>, signal: AbortSignal):
 	});
 }
 
-function uniqueModels(models: Model<any>[]): Model<any>[] {
+function uniqueModels(models: ChildModel[]): ChildModel[] {
 	const seen = new Set<string>();
-	const unique: Model<any>[] = [];
+	const unique: ChildModel[] = [];
 	for (const model of models) {
 		const key = `${model.provider}/${model.id}`;
 		if (seen.has(key)) continue;

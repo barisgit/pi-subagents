@@ -404,6 +404,8 @@ export function childResultToSingleResult(
 	result.error = childResult.error?.message;
 	result.interrupted = childResult.state === "interrupted" ? true : undefined;
 	result.sessionFile = childResult.sessionFile;
+	result.model = childResult.model ?? result.model;
+	result.attemptedModels = childResult.attemptedModels ?? result.attemptedModels;
 	result.shareUrl = childResult.shareUrl;
 	result.structuredResult = childResult.structuredResult;
 	// The in-process executor is the SINGLE owner of a child's finish value: across every

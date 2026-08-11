@@ -19,7 +19,7 @@ Subagent dispatch and child-agent execution layer for the pi-subagents extension
 ## Flow
 
 1. Entry: `subagent-tool.ts` (`createSubagentToolDefinitions`) and `subagent-control.ts` register the `subagent` tool/control verbs against `subagent-executor`.
-2. `executeInternal` resolves scope (`agent-scope`), prepares the child step (`prepare-child-step` → model via `model-fallback`, tools via `resolve-tool-patterns`, prompt via `subagent-prompt-runtime`/`fork-context`/`prompt-template-bridge`).
+2. `executeInternal` resolves scope (`agent-scope`), prepares the child step (`prepare-child-step` → model via `model-fallback`, tools via `resolve-tool-patterns`, prompt via `subagent-prompt-runtime`/`fork-context`/`prompt-template-bridge`). `in-process-executor` lets Pi exhaust same-model retries, reopens the same persisted child history on ordered fallback models for provider failures, and keeps transport failures on the current model in an interruptible `waiting_network` loop with capped exponential backoff.
 3. Run record opened through `layer0-runs.openRunRecord` (one `StatusWriter` + registry append).
 4. Routed to a path: sync single → `child-step-runner`/`in-process-executor`; async → `run-async-path` (detached); foreground parallel → `run-parallel-path` (with per-run cwd resolution + `foreground-run-controller`); resume → `resume-run`. Every path's leaf execution is gated by `leaf-concurrency.ts` inside `startChildAgent`.
 5. Child runs in-process via `in-process-executor` (host `AgentSession`); results recorded in `child-agent-registry` (live RunView mirror) and persisted via the StatusWriter; `intercom-bridge` wires parent/child messaging.
@@ -44,7 +44,7 @@ Subagent dispatch and child-agent execution layer for the pi-subagents extension
 - `in-process-executor.ts` — runs child agents through the host `AgentSession` (async children run in-process).
 - `intercom-bridge.ts` — injects inter-agent communication instructions and orchestrator targeting.
 - `layer0-runs.ts` — single run-record dispatch funnel (`openRunRecord`, `spawnRun`, `openGroup`, `finalizeRun`).
-- `model-fallback.ts` — `normalizeAvailableModels` + fallback model selection for children.
+- `model-fallback.ts` — available-model normalization, ordered candidate selection, and separate provider-fallback versus no-response transport error classification.
 - `parallel-utils.ts` — normalizes and summarizes parallel dispatch inputs.
 - `prepare-child-step.ts` — assembles child config/model/tools/prompt before dispatch.
 - `prompt-template-bridge.ts` — registers prompt-template delegation hooks.

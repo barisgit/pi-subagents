@@ -4,6 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { readStatus } from "../../src/shared/utils.ts";
+import { currentRunnerToken } from "../../src/shared/process-global.ts";
+import {
+	RUNNER_STALE_GRACE_MS,
+	__resetRunnerStaleGraceForTest,
+	__setRunnerStaleGraceNowForTest,
+} from "../../src/shared/runner-stale-grace.ts";
 
 function createRunDir(status: Record<string, unknown>): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-read-status-reconcile-"));
@@ -31,6 +37,58 @@ describe("readStatus liveness reconciliation", () => {
 			const raw = JSON.parse(fs.readFileSync(path.join(dir, "status.json"), "utf-8"));
 			assert.equal(raw.state, "running");
 		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reaps a stale current-process status when its heartbeat does not refresh during grace", () => {
+		__resetRunnerStaleGraceForTest();
+		let now = Date.now();
+		const restoreNow = __setRunnerStaleGraceNowForTest(() => now);
+		const dir = createRunDir({
+			runId: "read-status-current-runner",
+			state: "running",
+			runnerPid: process.pid,
+			runnerToken: currentRunnerToken(),
+		});
+		try {
+			const stale = new Date(Date.now() - 15 * 60 * 1000);
+			fs.utimesSync(path.join(dir, "status.json"), stale, stale);
+
+			const status = readStatus(dir);
+			assert.equal(status?.state, "running");
+			now += RUNNER_STALE_GRACE_MS + 1;
+			assert.equal(readStatus(dir)?.state, "lost");
+		} finally {
+			restoreNow();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps a stale current-process status live when its heartbeat refreshes after wake", () => {
+		__resetRunnerStaleGraceForTest();
+		let now = Date.now();
+		const restoreNow = __setRunnerStaleGraceNowForTest(() => now);
+		const dir = createRunDir({
+			runId: "read-status-wake-refresh",
+			state: "running",
+			runnerPid: process.pid,
+			runnerToken: currentRunnerToken(),
+			runnerHeartbeatAt: now - 15 * 60 * 1000,
+		});
+		try {
+			const statusPath = path.join(dir, "status.json");
+			const stale = new Date(now - 15 * 60 * 1000);
+			fs.utimesSync(statusPath, stale, stale);
+			assert.equal(readStatus(dir)?.state, "running");
+
+			now += RUNNER_STALE_GRACE_MS + 1;
+			const raw = JSON.parse(fs.readFileSync(statusPath, "utf-8"));
+			raw.runnerHeartbeatAt = now;
+			fs.writeFileSync(statusPath, JSON.stringify(raw), "utf-8");
+			assert.equal(readStatus(dir)?.state, "running");
+		} finally {
+			restoreNow();
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});

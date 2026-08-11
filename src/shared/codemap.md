@@ -6,7 +6,7 @@ Shared is the low-level utility/persona/config layer for `pi-subagents`: filesys
 
 - `agents.ts` — largest leaf: discovers builtin/user/project/internal agent markdown, parses frontmatter/persona defaults, applies preset/override merging, exposes `AgentConfig`, `KNOWN_FIELDS`, `mergeAgentsForScope`, `discoverAgents`, and builtin override save/remove helpers.
 - `skills.ts` — resolves skill names from project/user dirs, settings, npm package manifests, extension/builtin roots, caches reads, normalizes skill input, and builds skill injection markdown.
-- `utils.ts` — miscellaneous filesystem/text/message helpers: `readStatus` validates `status.json` through `parsePersistedRunStatus`, tail/activity/session lookup, prompt temp files, XML metadata stripping, result compaction, usage/error/tool-call extraction.
+- `utils.ts` — miscellaneous filesystem/text/message helpers: `readStatus` validates `status.json` through `parsePersistedRunStatus` and re-evaluates cached stale records, plus tail/activity/session lookup, prompt temp files, XML metadata stripping, result compaction, usage/error/tool-call extraction.
 - `runtime-env.ts` — reads `PI_SUBAGENT_*` env, computes temp scope/depth env, and enforces nested-delegation policy from protocol vocabulary without coupling env/os reads into protocol DTOs.
 - `control-policy.ts` — pure foreground-control constants and `deriveActivityState` needs-attention timeout logic.
 - `runtime-paths.ts` — canonical runtime temp path home: `BASE_TEMP_DIR`, `RUNS_DIR`, `TEMP_ARTIFACTS_DIR`; moved here so protocol stays path-free.
@@ -19,6 +19,7 @@ Shared is the low-level utility/persona/config layer for `pi-subagents`: filesys
 - `artifacts.ts` — computes artifact directories/paths, writes input/output/json/metadata artifacts, and performs best-effort age cleanup for temp and session artifact dirs.
 - `current-pi.ts` — process-global active `ExtensionAPI` holder on `globalThis` for long-lived callbacks that need the current non-stale Pi action surface after reload/session changes.
 - `child-session-context.ts` — process-global `AsyncLocalStorage` singleton that scopes extension activation to the child construction async tree without leaking identity across concurrent children or host reloads.
+- `runner-stale-grace.ts` — bounded, fingerprinted stale-observation grace shared by disk-status and display liveness checks; it gives post-sleep heartbeats time to refresh without making same-process reload orphans immortal.
 - `file-coalescer.ts` — timer-backed per-file debounce/coalescing primitive for repeated file events.
 - `frontmatter.ts` — tiny markdown YAML-ish frontmatter parser returning string key/value metadata plus body.
 - `logger.ts` — swallowed-failure extension logger writing to `~/.pi/logs/extensions/pi-subagents.log` or `PI_SUBAGENTS_LOG_PATH`, never stdout/stderr.
@@ -33,7 +34,7 @@ Agent and skill discovery are the only broad files. `agents.ts` owns persona mar
 
 Discovery flow: callers provide `cwd`/scope/options to `discoverAgents`; `agents.ts` loads builtin, user, project, and registered internal persona dirs, parses frontmatter with `frontmatter.ts`, applies settings/presets/overrides, merges via `mergeAgentsForScope`, filters by surface/internal visibility, and returns `AgentConfig` records. Skill flow mirrors this: `resolveSkills` normalizes requested names, discovers candidate search paths by source priority, caches mtime-keyed reads, strips skill frontmatter, and returns resolved/missing lists plus injection markdown.
 
-Runtime flow: dispatch/runtime code reads `runtime-env.ts` for depth/nested-delegation guards, `runtime-paths.ts` for run/artifact temp roots, `utils.readStatus` for safe persisted status reads, `artifacts.ts` for artifact paths/writes/cleanup, `control-policy.ts` for needs-attention state, and `formatting.ts` for stable presentation strings without importing surfaces.
+Runtime flow: dispatch/runtime code reads `runtime-env.ts` for depth/nested-delegation guards, `runtime-paths.ts` for run/artifact temp roots, `utils.readStatus` for safe persisted status reads and sleep-aware stale reconciliation, `artifacts.ts` for artifact paths/writes/cleanup, `control-policy.ts` for needs-attention state (including engaged network waits), and `formatting.ts` for stable presentation strings without importing surfaces.
 
 ## Integration
 

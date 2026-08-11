@@ -33,6 +33,74 @@ afterEach(() => {
 	while (restoreFns.length > 0) restoreFns.pop()?.();
 });
 
+it("updates the registered handle to the reopened fallback session", async () => {
+	const primarySession = new FakeAgentSession(async (self) => {
+		self.messages.push({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "HTTP 429 rate limit exceeded",
+			content: [],
+		});
+	});
+	let markFallbackStarted!: () => void;
+	let releaseFallback!: () => void;
+	const fallbackStarted = new Promise<void>((resolve) => {
+		markFallbackStarted = resolve;
+	});
+	const fallbackReleased = new Promise<void>((resolve) => {
+		releaseFallback = resolve;
+	});
+	const fallbackSession = new FakeAgentSession(async (self) => {
+		markFallbackStarted();
+		await fallbackReleased;
+		self.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+		self.lastAssistantText = "<output>done</output>";
+	});
+	installFakeRuntime([primarySession, fallbackSession]);
+	const handle = dispatchAsyncChild(
+		makeStep({ modelCandidates: [{ provider: "test", id: "model-b" } as never] }),
+		makeContext(),
+	);
+
+	await fallbackStarted;
+	assert.equal(handle.session, fallbackSession as never);
+	releaseFallback();
+	assert.equal((await handle.completed).state, "complete");
+});
+
+it("continues fallback ordering after startup authentication selects a later candidate", async () => {
+	const startupFallbackSession = new FakeAgentSession(async (self) => {
+		self.messages.push({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "HTTP 429 rate limit exceeded",
+			content: [],
+		});
+	});
+	const finalSession = new FakeAgentSession(async (self) => {
+		self.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+		self.lastAssistantText = "<output>done</output>";
+	});
+	installFakeRuntime([startupFallbackSession, finalSession], undefined, undefined, [
+		new Error("authentication failed for model-a"),
+	]);
+	const result = await runChildAgent(
+		makeStep({
+			modelCandidates: [
+				{ provider: "test", id: "model-b" } as never,
+				{ provider: "test", id: "model-c" } as never,
+			],
+		}),
+		makeContext(),
+	);
+
+	assert.equal(result.state, "complete");
+	assert.equal(result.model, "test/model-c");
+	assert.deepEqual(result.attemptedModels, ["test/model-a", "test/model-b", "test/model-c"]);
+	assert.equal(startupFallbackSession.promptCalls, 1);
+	assert.equal(finalSession.promptCalls, 1);
+});
+
 after(() => {
 	for (const dir of cleanup) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -58,6 +126,7 @@ class FakeAgentSession {
 	abortCalls = 0;
 	disposeCalls = 0;
 	promptCalls = 0;
+	setModelCalls: Array<{ provider: string; id: string }> = [];
 	messages: unknown[] = [];
 	lastAssistantText = "";
 	exportImpl?: () => Promise<string>;
@@ -81,6 +150,10 @@ class FakeAgentSession {
 	async prompt(_text: string, _options: Record<string, unknown>): Promise<void> {
 		this.promptCalls++;
 		await this.promptImpl(this);
+	}
+
+	async setModel(model: { provider: string; id: string }): Promise<void> {
+		this.setModelCalls.push(model);
 	}
 
 	async abort(): Promise<void> {
@@ -198,6 +271,7 @@ describe("runChildAgent", () => {
 			}),
 		);
 
+		assert.equal(result.error, undefined);
 		assert.equal(result.state, "complete");
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.outputText, "hello world");
@@ -205,6 +279,168 @@ describe("runChildAgent", () => {
 		assert.equal(session.disposeCalls, 1);
 		assert.deepEqual(session.activeToolNames, ["read", "bash"]);
 		assert.equal(events.length, 3);
+	});
+
+	it("continues the same session on the next model when the last assistant outcome is rate-limited", async () => {
+		const primarySession = new FakeAgentSession(async (self) => {
+			for (let index = 0; index < 3; index++) {
+				self.emit({ type: "tool_execution_start", toolName: "write" });
+				self.emit({ type: "tool_execution_end", toolName: "write" });
+			}
+			self.emit({
+				type: "message_end",
+				message: { role: "assistant", usage: { input: 10, output: 2, cost: { total: 0.01 } } },
+			});
+			self.messages = [
+				{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "earlier work" }] },
+				{ role: "toolResult", content: [{ type: "text", text: "written" }] },
+				{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "more work" }] },
+				{
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "HTTP 429 rate limit exceeded",
+					content: [],
+				},
+			];
+			self.lastAssistantText = "";
+		});
+		const fallbackSession = new FakeAgentSession(async (self) => {
+			self.emit({
+				type: "message_end",
+				message: { role: "assistant", usage: { input: 5, output: 4, cost: { total: 0.02 } } },
+			});
+			self.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+			self.lastAssistantText = "<output>completed on fallback</output>";
+		});
+		installFakeRuntime([primarySession, fallbackSession]);
+		const fallback = { provider: "test", id: "model-b" } as never;
+
+		const result = await runChildAgent(makeStep({ modelCandidates: [fallback] }), makeContext());
+
+		assert.equal(result.error, undefined);
+		assert.equal(result.state, "complete");
+		assert.equal(result.outputText, "completed on fallback");
+		assert.equal(result.model, "test/model-b");
+		assert.deepEqual(result.attemptedModels, ["test/model-a", "test/model-b"]);
+		assert.equal(result.toolCallCount, 3);
+		assert.deepEqual(result.usage, {
+			input: 15,
+			output: 6,
+			cacheRead: 0,
+			cacheWrite: 0,
+			cost: 0.03,
+			turns: 2,
+		});
+		assert.equal(primarySession.promptCalls, 1);
+		assert.equal(fallbackSession.promptCalls, 1);
+		assert.deepEqual(primarySession.setModelCalls, []);
+		assert.deepEqual(fallbackSession.setModelCalls, []);
+		assert.equal(primarySession.disposeCalls, 1);
+	});
+
+	it("tries fallback models in order and fails with the final provider error when exhausted", async () => {
+		const errors = ["hard quota usage limit", "HTTP 503 provider unavailable", "billing account disabled"];
+		const sessions = errors.map(
+			(error) =>
+				new FakeAgentSession(async (self) => {
+					self.messages.push({
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: error,
+						content: [],
+					});
+					self.lastAssistantText = "";
+				}),
+		);
+		installFakeRuntime([...sessions]);
+		const modelB = { provider: "test", id: "model-b" } as never;
+		const modelC = { provider: "test", id: "model-c" } as never;
+
+		const result = await runChildAgent(makeStep({ modelCandidates: [modelB, modelC] }), makeContext());
+
+		assert.equal(result.state, "failed");
+		assert.equal(result.error?.message, "billing account disabled");
+		assert.deepEqual(
+			sessions.map((session) => session.promptCalls),
+			[1, 1, 1],
+		);
+		assert.ok(sessions.every((session) => session.setModelCalls.length === 0));
+	});
+
+	it("waits and retries the current model after a transport failure without consuming fallback", async () => {
+		const session = new FakeAgentSession(async (self) => {
+			if (self.promptCalls <= 8) {
+				self.messages.push({
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "fetch failed: ENOTFOUND api.invalid",
+					content: [],
+				});
+				self.lastAssistantText = "";
+				return;
+			}
+			self.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+			self.lastAssistantText = "<output>online again</output>";
+		});
+		installFakeRuntime([session]);
+		const waitDelays: number[] = [];
+		restoreFns.push(
+			__setChildAgentExecutorDepsForTest({
+				waitForNetworkRetry: async (_signal, delayMs) => {
+					waitDelays.push(delayMs);
+					return false;
+				},
+			}),
+		);
+		const fallback = { provider: "test", id: "model-b" } as never;
+		const patches: Array<{ phase?: string }> = [];
+
+		const result = await runChildAgent(
+			makeStep({ modelCandidates: [fallback] }),
+			makeContext({ onStatusUpdate: (patch) => patches.push(patch) }),
+		);
+
+		assert.equal(result.state, "complete");
+		assert.equal(result.outputText, "online again");
+		assert.deepEqual(waitDelays, [5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 180_000, 180_000]);
+		assert.equal(session.promptCalls, 9);
+		assert.deepEqual(session.setModelCalls, []);
+		assert.ok(patches.some((patch) => patch.phase === "waiting_network"));
+	});
+
+	it("interrupts promptly while waiting for network recovery", async () => {
+		const session = new FakeAgentSession(async (self) => {
+			self.messages.push({
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "network error: ENETUNREACH",
+				content: [],
+			});
+		});
+		installFakeRuntime([session]);
+		const controller = new AbortController();
+		let markWaiting!: () => void;
+		const waiting = new Promise<void>((resolve) => {
+			markWaiting = resolve;
+		});
+
+		const resultPromise = runChildAgent(
+			makeStep(),
+			makeContext({
+				abortSignal: controller.signal,
+				onStatusUpdate: (patch) => {
+					if (patch.phase === "waiting_network") markWaiting();
+				},
+			}),
+		);
+		await waiting;
+		controller.abort("stop-waiting");
+		const result = await resultPromise;
+
+		assert.equal(result.state, "interrupted");
+		assert.equal(result.error?.reason, "stop-waiting");
+		assert.equal(session.promptCalls, 1);
+		assert.deepEqual(session.setModelCalls, []);
 	});
 
 	it("keeps overlapping session construction in independent child contexts", async () => {
@@ -462,6 +698,8 @@ describe("runChildAgent", () => {
 			const result = await runChildAgent(step, makeContext());
 
 			assert.equal(result.state, "failed");
+			assert.equal(result.model, "test/model-b");
+			assert.deepEqual(result.attemptedModels, ["test/model-a", "test/model-b"]);
 			assert.equal(createCalls, 2);
 			assert.equal(firstClaim, terminalClaim);
 			assert.equal(getLineageForSession(firstFailedSessionId), null);
@@ -521,6 +759,8 @@ describe("runChildAgent", () => {
 			const result = await runChildAgent(step, makeContext());
 
 			assert.equal(result.state, "complete");
+			assert.equal(result.model, "test/model-b");
+			assert.deepEqual(result.attemptedModels, ["test/model-a", "test/model-b"]);
 			assert.equal(createCalls, 2);
 			assert.equal(firstClaim, successfulClaim);
 			assert.equal(getLineageForSession(failedSessionId), null);

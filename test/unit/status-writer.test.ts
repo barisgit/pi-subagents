@@ -132,7 +132,7 @@ describe("StatusWriter", () => {
 		const initialWrites = writes.count;
 
 		writer.enqueue({ runId: "run-1", stepIndex: 0, state: "running", liveText: "partial" });
-		await writer.finalize(result());
+		await writer.finalize(result({ model: "test/model-b", attemptedModels: ["test/model-a", "test/model-b"] }));
 		assert.equal(writes.count, initialWrites + 1);
 
 		await delay(140);
@@ -144,6 +144,8 @@ describe("StatusWriter", () => {
 		const step = (status.steps as Array<Record<string, unknown>>)[0]!;
 		assert.equal(step.status, "complete");
 		assert.equal(step.durationMs, 15);
+		assert.equal(step.model, "test/model-b");
+		assert.deepEqual(step.attemptedModels, ["test/model-a", "test/model-b"]);
 	});
 
 	it("records running state transitions and current tool activity", async () => {

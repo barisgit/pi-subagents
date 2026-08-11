@@ -12,7 +12,7 @@ import type { TokenUsage, Usage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 import { applyPatchToStatus } from "./status-patch.ts";
 import { STALE_MTIME_THRESHOLD_MS } from "../shared/utils.ts";
-import { currentRunnerToken } from "./run-liveness.ts";
+import { currentRunnerToken } from "../shared/process-global.ts";
 
 export type FlushPolicy = "terminal" | "eager";
 
@@ -263,6 +263,8 @@ export class StatusWriter {
 				this.status.totalUsage = { ...aggregate };
 			}
 			const step = this.stepFor(result.stepIndex);
+			if (result.model !== undefined) step.model = result.model;
+			if (result.attemptedModels !== undefined) step.attemptedModels = [...result.attemptedModels];
 			step.status = result.state;
 			step.endedAt = result.endedAt;
 			step.durationMs = result.durationMs;

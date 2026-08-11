@@ -31,7 +31,7 @@ Run-state and persistence layer for pi-subagents: canonical in-memory run displa
 - `group-status.ts` — pure reducer for Layer0 group state: pending/queued/running children => running; failed/interrupted => failed; otherwise complete.
 - `lineage.ts` — global session lineage registry for host/child identity, pending child claims, root-session resolution, depth, run id, and root run id.
 - `run-history.ts` — best-effort per-agent JSONL history recorder/loader at `~/.pi/agent/run-history.jsonl` with read-time rotation.
-- `run-liveness.ts` — pure heartbeat/activity classifier and display sort comparator for `quiet`, `working`, `tool_running`, `needs_attention`, and `lost`.
+- `run-liveness.ts` — heartbeat/activity classifier and display sort comparator for `quiet`, `working`, `tool_running`, `needs_attention`, and `lost`; matching process identities receive only a bounded fingerprinted grace after a stale observation so sleep can recover while reload orphans are still reaped.
 - `run-phase.ts` — pure session-event phase state machine and formatter for waiting/thinking/writing/tool/retry/queued/paused labels.
 - `run-shape.ts` — pure single/parallel presentation helpers for run handles, agent labels, colors, and shape badges.
 - `run-status.ts` — tool/slash inspection entry point for listing scoped runs or resolving a run/group by id/dir from registry + status files.
@@ -41,7 +41,7 @@ Run-state and persistence layer for pi-subagents: canonical in-memory run displa
 - `session-paths.ts` — resolves canonical run record dirs and per-step `session.jsonl` paths, including fork-context seeding paths without collapsing child storage into parent storage.
 - `session-tokens.ts` — scans latest session JSONL in a directory and sums input/output/cache token buckets defensively.
 - `slash-live-state.ts` — in-memory live/final slash-command result snapshots keyed by request id, with placeholder progress, updates, restoration, and clearing.
-- `status-patch.ts` — pure shared `StatusPatch` applier for status/run-step state, live text/tool counters, phase, heartbeat, and live token persistence.
+- `status-patch.ts` — pure shared `StatusPatch` applier for status/run-step state, live text/tool counters, phase (including `waiting_network`), heartbeat, and live token persistence.
 - `status-writer.ts` — single `StatusWriter` for `status.json`, `statusFromMeta`, eager debounce, terminal throttle/merge/finalize, terminal scalar normalization, and atomic JSON writes.
 - `usage-totals.ts` — pure token-usage normalization helpers from aggregate usage or rolled-up totals into persisted/display `TokenUsage`.
 - `workflow-display.ts` — shared workflow display name, canonical declared/ad-hoc phase progress, and completed/current/upcoming/unreached phase-plan shaping from durable reached history plus current-phase authority.

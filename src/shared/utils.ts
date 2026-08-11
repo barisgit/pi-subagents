@@ -17,6 +17,8 @@ import type {
 } from "../protocol/types.ts";
 import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
 import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
+import { currentRunnerToken } from "./process-global.ts";
+import { isWithinRunnerStaleGrace } from "./runner-stale-grace.ts";
 
 // ============================================================================
 // File System Utilities
@@ -67,7 +69,14 @@ function reconcileStatus(status: PersistedRunStatus, mtimeMs: number): Persisted
 	// zero progress and a dead owner. If an owner is somehow still alive and later starts
 	// it, its own status write flips it back to running (this derive never writes disk).
 	if (status.state !== "running" && status.state !== "queued") return status;
-	if (Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS) {
+	const stale = Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS;
+	const withinGrace = isWithinRunnerStaleGrace({
+		key: status.runId ? `read-status:${status.runId}` : undefined,
+		fingerprint: `${status.runnerHeartbeatAt ?? status.lastUpdate ?? "none"}:${mtimeMs}`,
+		stale,
+		currentRunner: status.runnerToken !== undefined && status.runnerToken === currentRunnerToken(),
+	});
+	if (stale && !withinGrace) {
 		return { ...status, state: "lost" };
 	}
 	return status;
@@ -91,7 +100,7 @@ export function readStatus(asyncDir: string): PersistedRunStatus | null {
 
 	const cached = statusCache.get(statusPath);
 	if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
-		return cached.status;
+		return reconcileStatus(cached.status, stat.mtimeMs);
 	}
 
 	let content: string;
@@ -109,14 +118,12 @@ export function readStatus(asyncDir: string): PersistedRunStatus | null {
 	// the bytes; the validating codec rejects bad shapes in one place.
 	const parsed = parsePersistedRunStatus(content);
 	if (!parsed.ok) return null;
-	const status = reconcileStatus(parsed.value, stat.mtimeMs);
-
-	statusCache.set(statusPath, { mtime: stat.mtimeMs, size: stat.size, status });
+	statusCache.set(statusPath, { mtime: stat.mtimeMs, size: stat.size, status: parsed.value });
 	if (statusCache.size > 50) {
 		const firstKey = statusCache.keys().next().value;
 		if (firstKey) statusCache.delete(firstKey);
 	}
-	return status;
+	return reconcileStatus(parsed.value, stat.mtimeMs);
 }
 
 const outputTailCache = new Map<string, { mtime: number; size: number; lines: string[] }>();

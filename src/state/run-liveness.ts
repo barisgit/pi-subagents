@@ -1,21 +1,17 @@
-import { randomUUID } from "node:crypto";
 import type { RunPhase } from "./run-phase.ts";
 import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
-import { processGlobal } from "../shared/process-global.ts";
+import { currentRunnerToken } from "../shared/process-global.ts";
+import { isWithinRunnerStaleGrace } from "../shared/runner-stale-grace.ts";
+
+export { currentRunnerToken } from "../shared/process-global.ts";
 
 export const RUNNER_HEARTBEAT_STALE_MS = 15_000;
 export const RUNNER_HARD_DEAD_MS = 30_000;
 const RUNNER_WORKING_RECENT_MS = 5_000;
 
-/**
- * Per-PROCESS runner identity token. Lives on globalThis (processGlobal) so it
- * survives an extension reload (same process, re-imported modules) but NOT a
- * process restart. Stamped into status.json next to runnerPid so liveness
- * checks can tell "reloaded but alive" apart from "killed and restarted"
- * without waiting out the heartbeat ceiling.
- */
-export function currentRunnerToken(): string {
-	return processGlobal("pi.subagents.runnerToken", () => randomUUID());
+/** Match the process identity used to grant a bounded post-sleep heartbeat grace. */
+function isCurrentRunner(input: { runnerToken?: string }): boolean {
+	return input.runnerToken !== undefined && input.runnerToken === currentRunnerToken();
 }
 
 /**
@@ -47,6 +43,7 @@ export function isRunnerIdentityDead(input: { runnerPid?: number; runnerToken?: 
 }
 
 export interface RunDisplayStateInput {
+	runId?: string;
 	state: "queued" | "running" | "complete" | "failed" | "paused" | string;
 	activityState?: ActivityState;
 	currentTool?: string;
@@ -70,18 +67,25 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
 	// Identity check first: a provably dead runner is lost IMMEDIATELY, no
 	// heartbeat-age wait (kill + quick restart leaves a fresh heartbeat behind).
 	if (isRunnerIdentityDead(input)) return "lost";
+	const currentRunner = isCurrentRunner(input);
 
 	const now = input.now ?? Date.now();
 	const heartbeatAt = input.runnerHeartbeatAt ?? input.lastUpdate;
 	const heartbeatAge = heartbeatAt !== undefined ? now - heartbeatAt : undefined;
 	const heartbeatStaleMs = input.heartbeatStaleMs ?? RUNNER_HEARTBEAT_STALE_MS;
 	const hardDeadMs = input.hardDeadMs ?? RUNNER_HARD_DEAD_MS;
-	if (heartbeatAge !== undefined && heartbeatAge > hardDeadMs) {
-		return "lost";
-	}
 	const phaseCanBeLost = input.phase === undefined || input.phase === "idle";
-	if (phaseCanBeLost && heartbeatAge !== undefined && heartbeatAge > heartbeatStaleMs) {
-		return "lost";
+	const staleThresholdMs = phaseCanBeLost ? heartbeatStaleMs : hardDeadMs;
+	const stale = heartbeatAge !== undefined && heartbeatAge > staleThresholdMs;
+	if (stale) {
+		const withinGrace = isWithinRunnerStaleGrace({
+			key: input.runId ? `display:${input.runId}` : undefined,
+			fingerprint: String(heartbeatAt),
+			stale,
+			currentRunner,
+			now,
+		});
+		if (!withinGrace) return "lost";
 	}
 
 	if (input.currentTool) return "tool_running";
@@ -102,10 +106,11 @@ export function deriveRunDisplayState(input: RunDisplayStateInput): RunDisplaySt
  * heartbeat wait — or its newest liveness timestamp (runnerHeartbeatAt,
  * falling back to lastUpdate) is older than the hard-dead ceiling. The
  * heartbeat path remains for records written by older versions (no identity
- * fields) and for a same-process wedged executor. Reuses the same
- * heartbeat-vs-hardDead read as deriveRunDisplayState.
+ * fields) and foreign runners. Matching-process records receive one bounded
+ * grace observation so a post-sleep heartbeat can refresh before reaping.
  */
 export function isRunnerHardDead(input: {
+	runId?: string;
 	state: string;
 	runnerHeartbeatAt?: number;
 	lastUpdate?: number;
@@ -120,7 +125,15 @@ export function isRunnerHardDead(input: {
 	const last = input.runnerHeartbeatAt ?? input.lastUpdate;
 	if (last === undefined) return false;
 	const hardDeadMs = input.hardDeadMs ?? RUNNER_HARD_DEAD_MS;
-	return now - last > hardDeadMs;
+	const stale = now - last > hardDeadMs;
+	if (!stale) return false;
+	return !isWithinRunnerStaleGrace({
+		key: input.runId ? `hard-dead:${input.runId}` : undefined,
+		fingerprint: String(last),
+		stale,
+		currentRunner: isCurrentRunner(input),
+		now,
+	});
 }
 
 export function displayStatePriority(state: RunDisplayState | undefined): number {

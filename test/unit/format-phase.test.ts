@@ -18,6 +18,10 @@ describe("formatPhase", () => {
 		assert.match(label, /12\.0s/);
 	});
 
+	it("formats network waiting", () => {
+		assert.equal(formatPhase("waiting_network", 88_000, 100_000), "waiting for network 12.0s");
+	});
+
 	it("formats streaming text as writing", () => {
 		const label = formatPhase("streaming_text", 88_000, 100_000);
 

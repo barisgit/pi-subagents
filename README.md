@@ -80,6 +80,22 @@ Trace code paths, identify tests, and report exact evidence.
 
 Project agents override user agents of the same name; user/project agents override bundled examples.
 
+An agent can define ordered fallback models in markdown frontmatter or in a
+`subagent.json` preset overlay:
+
+```json
+{
+  "model": "provider/primary-model",
+  "fallbackModels": ["provider/fallback-model", "another-provider/final-model"]
+}
+```
+
+Pi first applies its configured same-model retry policy. If the request still
+ends in a rate-limit, quota, authentication, or provider failure, the child
+continues from the same persisted session history on the next fallback model.
+Transport failures instead keep the current model and wait with capped
+exponential backoff until connectivity returns or the run is interrupted.
+
 ## Management actions
 
 The `subagent` tool can list agents and manage runs:

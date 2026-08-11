@@ -10,6 +10,7 @@ export const CONTROL_NOTIFICATION_CHANNELS: ControlNotificationChannel[] = ["eve
 const DEFAULT_NOTIFY_ON: ControlEventType[] = ["needs_attention"];
 const ENGAGED_PHASES = new Set<string>([
 	"waiting_model",
+	"waiting_network",
 	"thinking",
 	"streaming_text",
 	"tool_running",

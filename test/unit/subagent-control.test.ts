@@ -60,7 +60,7 @@ describe("subagent control attention state", () => {
 	});
 
 	it("suppresses needs-attention while the model is in an engaged phase", () => {
-		for (const phase of ["waiting_model", "thinking", "streaming_text", "retrying"]) {
+		for (const phase of ["waiting_model", "waiting_network", "thinking", "streaming_text", "retrying"]) {
 			assert.equal(
 				deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, phase, now: 1_000 }),
 				undefined,

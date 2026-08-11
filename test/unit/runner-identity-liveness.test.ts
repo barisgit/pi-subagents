@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
-import {
-	currentRunnerToken,
-	deriveRunDisplayState,
-	isRunnerHardDead,
-	isRunnerIdentityDead,
-} from "../../src/state/run-liveness.ts";
+import { deriveRunDisplayState, isRunnerHardDead, isRunnerIdentityDead } from "../../src/state/run-liveness.ts";
+import { currentRunnerToken } from "../../src/shared/process-global.ts";
+import { RUNNER_STALE_GRACE_MS, __resetRunnerStaleGraceForTest } from "../../src/shared/runner-stale-grace.ts";
 
 /** Pid of a process that has provably exited (spawnSync waits for exit). */
 function deadPid(): number {
@@ -67,6 +64,58 @@ describe("runner identity liveness", () => {
 		assert.equal(result, "tool_running");
 	});
 
+	it("deriveRunDisplayState: matching token remains live across a stale heartbeat after sleep", () => {
+		__resetRunnerStaleGraceForTest();
+		const result = deriveRunDisplayState({
+			runId: "sleep-refresh",
+			state: "running",
+			phase: "waiting_model",
+			runnerHeartbeatAt: NOW - 60_000,
+			runnerPid: process.pid,
+			runnerToken: currentRunnerToken(),
+			now: NOW,
+		});
+		assert.notEqual(result, "lost");
+		assert.notEqual(
+			deriveRunDisplayState({
+				runId: "sleep-refresh",
+				state: "running",
+				phase: "waiting_model",
+				runnerHeartbeatAt: NOW + 1_000,
+				runnerPid: process.pid,
+				runnerToken: currentRunnerToken(),
+				now: NOW + RUNNER_STALE_GRACE_MS + 1,
+			}),
+			"lost",
+		);
+	});
+
+	it("deriveRunDisplayState: matching token with an idle phase is not display-lost after sleep", () => {
+		__resetRunnerStaleGraceForTest();
+		const result = deriveRunDisplayState({
+			runId: "sleep-no-refresh",
+			state: "running",
+			phase: "idle",
+			runnerHeartbeatAt: NOW - 60_000,
+			runnerPid: process.pid,
+			runnerToken: currentRunnerToken(),
+			now: NOW,
+		});
+		assert.notEqual(result, "lost");
+		assert.equal(
+			deriveRunDisplayState({
+				runId: "sleep-no-refresh",
+				state: "running",
+				phase: "idle",
+				runnerHeartbeatAt: NOW - 60_000,
+				runnerPid: process.pid,
+				runnerToken: currentRunnerToken(),
+				now: NOW + RUNNER_STALE_GRACE_MS + 1,
+			}),
+			"lost",
+		);
+	});
+
 	it("deriveRunDisplayState: old record without identity keeps existing heartbeat-ceiling behavior", () => {
 		const fresh = deriveRunDisplayState({
 			state: "running",
@@ -122,5 +171,31 @@ describe("runner identity liveness", () => {
 		// Old-shape record (no identity fields): unchanged ceiling behavior.
 		assert.equal(isRunnerHardDead({ state: "running", runnerHeartbeatAt: NOW - 31_000, now: NOW }), true);
 		assert.equal(isRunnerHardDead({ state: "running", runnerHeartbeatAt: NOW - 1_000, now: NOW }), false);
+	});
+
+	it("isRunnerHardDead: matching token survives a stale heartbeat after sleep", () => {
+		__resetRunnerStaleGraceForTest();
+		assert.equal(
+			isRunnerHardDead({
+				runId: "hard-dead-grace",
+				state: "running",
+				runnerHeartbeatAt: NOW - 60_000,
+				runnerPid: process.pid,
+				runnerToken: currentRunnerToken(),
+				now: NOW,
+			}),
+			false,
+		);
+		assert.equal(
+			isRunnerHardDead({
+				runId: "hard-dead-grace",
+				state: "running",
+				runnerHeartbeatAt: NOW - 60_000,
+				runnerPid: process.pid,
+				runnerToken: currentRunnerToken(),
+				now: NOW + RUNNER_STALE_GRACE_MS + 1,
+			}),
+			true,
+		);
 	});
 });

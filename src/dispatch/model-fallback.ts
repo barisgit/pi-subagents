@@ -77,7 +77,7 @@ export function resolveModelRef<T extends ModelRefInfo>(
 	return models.find((model) => model.id === ref) ?? fallback ?? models[0];
 }
 
-const RETRYABLE_MODEL_FAILURE_PATTERNS = [
+const FALLBACK_MODEL_FAILURE_PATTERNS = [
 	/rate\s*limit/i,
 	/too many requests/i,
 	/\b429\b/,
@@ -98,19 +98,35 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/overloaded/i,
 	/service unavailable/i,
 	/temporar(?:ily)? unavailable/i,
-	/connection refused/i,
-	/fetch failed/i,
-	/network error/i,
-	/socket hang up/i,
 	/upstream/i,
-	/timed? out/i,
-	/timeout/i,
-	/\b502\b/,
-	/\b503\b/,
-	/\b504\b/,
+	/usage/i,
+	/\b5\d\d\b/,
 ];
 
-export function isRetryableModelFailure(error: string | undefined): boolean {
+const TRANSPORT_MODEL_FAILURE_PATTERNS = [
+	/fetch failed/i,
+	/network error/i,
+	/no response/i,
+	/ENETUNREACH/i,
+	/ENOTFOUND/i,
+	/EAI_AGAIN/i,
+	/connection refused/i,
+	/socket/i,
+	/websocket/i,
+	/timed? out/i,
+	/timeout/i,
+];
+
+export function isFallbackModelFailure(error: string | undefined): boolean {
 	if (!error) return false;
-	return RETRYABLE_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+	return FALLBACK_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+}
+
+export function isTransportModelFailure(error: string | undefined): boolean {
+	if (!error || /\b[45]\d\d\b/.test(error)) return false;
+	return TRANSPORT_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+}
+
+export function isRetryableModelFailure(error: string | undefined): boolean {
+	return isFallbackModelFailure(error) || isTransportModelFailure(error);
 }

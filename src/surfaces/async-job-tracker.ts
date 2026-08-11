@@ -343,6 +343,7 @@ export function createAsyncJobTracker(
 						if (status.phaseStartedAt !== undefined) job.phaseStartedAt = status.phaseStartedAt;
 						const activityState = updateActivityState(job);
 						job.displayState = deriveRunDisplayState({
+							runId: job.asyncId,
 							state: job.status,
 							activityState,
 							currentTool: job.currentTool,

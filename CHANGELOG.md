@@ -5,9 +5,14 @@
 ### Changed
 - Raised the default `needs_attention` inactivity threshold to 15 minutes to avoid interrupting long silent reasoning.
 - Group-container status inspection now shows each child's full run ID instead of an eight-character prefix.
+- Child transport failures now wait on the current model with capped exponential backoff until connectivity returns or the run is interrupted.
+
+### Added
+- Added runtime `fallbackModels` failover after exhausted rate-limit, quota, authentication, and provider failures while preserving the child session history.
 
 ### Fixed
 - Foreground/sync subagents now auto-interrupt on `needs_attention` instead of emitting an unrouteable parent notice that could only surface after the tool call ended.
+- Prevented laptop sleep from permanently marking a still-live in-process child as lost while retaining bounded orphan recovery after extension reloads.
 
 ## [1.0.0] - 2026-05-23
 

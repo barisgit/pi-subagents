@@ -132,6 +132,10 @@ export function setPaused(prev: RunPhaseState, now: number): RunPhaseState {
 	return nextState(prev, "paused", now, { afterTurnEnd: false });
 }
 
+export function setWaitingNetwork(prev: RunPhaseState, now: number): RunPhaseState {
+	return nextState(prev, "waiting_network", now, { afterTurnEnd: false });
+}
+
 function nextState(
 	prev: RunPhaseState,
 	phase: RunPhase,
@@ -212,6 +216,8 @@ export function formatPhase(
 	switch (phase) {
 		case "waiting_model":
 			return `waiting${dur}`;
+		case "waiting_network":
+			return `waiting for network${dur}`;
 		case "thinking":
 			return `thinking${dur}`;
 		case "streaming_text":

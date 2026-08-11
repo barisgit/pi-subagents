@@ -100,6 +100,7 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 	const { activityState, lastActivityAt } = deriveAsyncActivityState(asyncDir, status);
 	const id = status.runId || path.basename(asyncDir);
 	const displayState = deriveRunDisplayState({
+		runId: id,
 		state: status.state,
 		activityState,
 		currentTool: status.currentTool,
@@ -145,6 +146,7 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 				displayState === "lost" && step.status === "running"
 					? "lost"
 					: deriveRunDisplayState({
+							runId: `${id}:${index}`,
 							state: step.status,
 							activityState: stepActivityState,
 							currentTool: step.currentTool,
