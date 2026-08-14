@@ -33,7 +33,7 @@ Subagent dispatch and child-agent execution layer for the pi-subagents extension
 ### File index
 
 - `agent-scope.ts` — resolves requested agent scope (user/project/both) for dispatch.
-- `child-agent-registry.ts` — per-activation in-memory `ChildAgentRegistry` holding the live `RunView` mirror + abort handles (not a singleton; does not survive reload).
+- `child-agent-registry.ts` — per-activation in-memory `ChildAgentRegistry` holding the live `RunView` mirror + abort handles and exposing retained step sessions in order for live dashboard rendering (not a singleton; does not survive reload).
 - `child-step-runner.ts` — builds and runs a single child step (`buildAsyncChildStep`, `runInProcessChildStep`, result conversion).
 - `concurrency-semaphore.ts` — FIFO async semaphore primitive (`acquire`→permit `release`/`runWhileParked`); used by `leaf-concurrency.ts`.
 - `leaf-concurrency.ts` — the one per-process leaf-agent concurrency pool (`globalThis`+`Symbol.for` singleton; `maxConcurrentAgents`, default 4); `acquireLeafPermit`/`parkLeafPermit` gate all dispatch paths at `startChildAgent`.

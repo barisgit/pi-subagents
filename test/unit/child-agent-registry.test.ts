@@ -203,6 +203,22 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		assert.equal(view.id, RUN_ID);
 	});
 
+	it("returns retained sessions in step order", () => {
+		const registry = new ChildAgentRegistry();
+		const sessions = [{ messages: [] }, { messages: [] }];
+		for (const stepIndex of [1, 0]) {
+			registry.register({
+				runId: RUN_ID,
+				stepIndex,
+				session: sessions[stepIndex] as never,
+				completed: Promise.resolve({} as ChildAgentResult),
+				abort: async () => {},
+			});
+		}
+
+		assert.deepEqual(registry.sessionsForRun(RUN_ID), sessions);
+	});
+
 	it("aborts each handle once when a run has multiple steps", async () => {
 		const registry = new ChildAgentRegistry();
 		const calls: string[] = [];

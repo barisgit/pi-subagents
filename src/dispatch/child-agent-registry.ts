@@ -86,6 +86,12 @@ export class ChildAgentRegistry {
 		return this.handles.get(runId)?.values().next().value;
 	}
 
+	sessionsForRun(runId: string): AgentSession[] {
+		return [...(this.handles.get(runId)?.values() ?? [])]
+			.sort((a, b) => a.stepIndex - b.stepIndex)
+			.map((handle) => handle.session);
+	}
+
 	delete(runId: string, stepIndex?: number): void {
 		if (stepIndex === undefined) {
 			this.handles.delete(runId);

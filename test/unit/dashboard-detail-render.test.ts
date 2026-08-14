@@ -4,10 +4,19 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AsyncRunSummary } from "../../src/state/async-status.ts";
-import { buildRightLines, selectToolArg } from "../../src/surfaces/dashboard-detail-renderer.ts";
-import { buildSelectedRunStatusBox, type LiveRun } from "../../src/surfaces/subagents-status.ts";
+import {
+	buildRightLines,
+	type LiveDashboardSession,
+	LiveSessionRenderCache,
+	selectToolArg,
+} from "../../src/surfaces/dashboard-detail-renderer.ts";
+import {
+	buildSelectedRunStatusBox,
+	type LiveRun,
+	SubagentsStatusComponent,
+} from "../../src/surfaces/subagents-status.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
@@ -94,6 +103,190 @@ function user(iso: string, content: unknown[]): Record<string, unknown> {
 }
 
 describe("dashboard detail pane redesign", () => {
+	it("falls back to the persisted transcript when retained live sessions render no lines", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-empty-live-${randomUUID()}-`));
+		try {
+			writeStatus(dir, "run-empty-live");
+			writeSession(dir, [user("2026-05-20T00:00:00.000Z", [{ type: "text", text: "Persisted fallback text" }])]);
+			const run: LiveRun = { ownership: "live", run: makeRun("run-empty-live", dir) };
+			const output = stripAnsi(
+				buildRightLines(theme, run, 80, [], {
+					sessions: [{ messages: [], subscribe: () => () => {} }],
+					tui: { requestRender: () => {} } as never,
+				}).join("\n"),
+			);
+
+			assert.match(output, /Persisted fallback text/);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("renders retained live sessions and refreshes when the selected session updates", () => {
+		const run = makeRun("run-live", "/missing/run-live");
+		let stableContentReads = 0;
+		const stableMessage: LiveDashboardSession["messages"][number] = {
+			role: "user",
+			get content() {
+				stableContentReads++;
+				return "Live prompt text";
+			},
+			timestamp: 1,
+		};
+		const messages: LiveDashboardSession["messages"] = [stableMessage];
+		let listener: ((event?: AgentSessionEvent) => void) | undefined;
+		let transcriptReads = 0;
+		const session: LiveDashboardSession = {
+			get messages() {
+				transcriptReads++;
+				return messages;
+			},
+			subscribe(next) {
+				listener = next;
+				return () => {
+					listener = undefined;
+				};
+			},
+		};
+		let renders = 0;
+		const tui = { requestRender: () => renders++, terminal: { rows: 32 } } as never;
+		const component = new SubagentsStatusComponent(tui, theme, () => {}, {
+			listRunsForOverlay: () => ({ active: [run], recent: [] }),
+			getOwnedRunViews: () => new Map([[run.id, run]]),
+			getLiveSessions: () => [session],
+			refreshMs: 60000,
+		});
+
+		try {
+			assert.match(stripAnsi(component.render(120).join("\n")), /Live prompt text/);
+			component.render(120);
+			assert.equal(transcriptReads, 1, "an unchanged repaint reuses the rendered transcript");
+			const stableReadsAfterInitialRender = stableContentReads;
+			messages.push({ role: "user", content: "Streamed update text", timestamp: 2 });
+			listener?.({ type: "message_start", message: messages[1]! });
+			assert.equal(renders, 1);
+			assert.match(stripAnsi(component.render(120).join("\n")), /Streamed update text/);
+			assert.equal(
+				stableContentReads,
+				stableReadsAfterInitialRender,
+				"a tail update reuses previously rendered history",
+			);
+		} finally {
+			component.dispose();
+		}
+		assert.equal(listener, undefined);
+	});
+
+	it("reflows cached live messages when the detail width changes", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-width", "/missing/run-width") };
+		const session: LiveDashboardSession = {
+			messages: [
+				{
+					role: "user",
+					content:
+						"A long live message that must wrap differently when the dashboard detail pane becomes narrow.",
+					timestamp: 1,
+				},
+			],
+			subscribe: () => () => {},
+		};
+		const cache = new LiveSessionRenderCache();
+		const renderAt = (width: number) =>
+			buildRightLines(theme, run, width, [], {
+				sessions: [session],
+				tui: { requestRender: () => {} } as never,
+				cache,
+			});
+
+		const wide = renderAt(80);
+		const narrow = renderAt(30);
+
+		assert.ok(narrow.length > wide.length, "a width change rebuilds and reflows cached message components");
+	});
+
+	it("renders every retained step session in order", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-parallel", "/missing/run-parallel") };
+		const session = (text: string): LiveDashboardSession => ({
+			messages: [{ role: "user", content: text, timestamp: 1 }],
+			subscribe: () => () => {},
+		});
+		const output = stripAnsi(
+			buildRightLines(theme, run, 80, [], {
+				sessions: [session("First live step"), session("Second live step")],
+				tui: { requestRender: () => {} } as never,
+			}).join("\n"),
+		);
+
+		assert.match(output, /Step 1[\s\S]*First live step[\s\S]*Step 2[\s\S]*Second live step/);
+	});
+
+	it("renders live tool results and bash messages with Pi components", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-tools", "/missing/run-tools") };
+		const messages: LiveDashboardSession["messages"] = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-1", name: "custom_tool", arguments: { path: "notes.txt" } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		];
+		const cache = new LiveSessionRenderCache();
+		let renderRequests = 0;
+		const session: LiveDashboardSession = { messages, subscribe: () => () => {} };
+		const render = () =>
+			stripAnsi(
+				buildRightLines(theme, run, 100, [], {
+					sessions: [session],
+					tui: { requestRender: () => renderRequests++ } as never,
+					cache,
+				}).join("\n"),
+			);
+		render();
+		messages.push(
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "custom_tool",
+				content: [{ type: "text", text: "tool result body" }],
+				isError: false,
+				timestamp: 2,
+			},
+			{
+				role: "bashExecution",
+				command: "printf hello",
+				output: "bash output body",
+				exitCode: 0,
+				cancelled: false,
+				truncated: false,
+				timestamp: 3,
+			},
+		);
+		cache.invalidate(session, {
+			type: "tool_execution_end",
+			toolCallId: "call-1",
+			toolName: "custom_tool",
+			result: messages[1],
+			isError: false,
+		});
+		const output = render();
+
+		assert.equal(renderRequests, 0, "rendering a completed transcript must not schedule another render");
+		assert.match(output, /tool result body/);
+		assert.match(output, /printf hello/);
+		assert.match(output, /bash output body/);
+	});
+
 	it("renders the full prompt, every tool call on its own card, and keeps the final block", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {

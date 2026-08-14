@@ -7,8 +7,18 @@
  */
 
 import { colorForAgentName } from "../shared/agents.ts";
-import { getMarkdownTheme, highlightCode, type Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	AssistantMessageComponent,
+	BashExecutionComponent,
+	getMarkdownTheme,
+	highlightCode,
+	ToolExecutionComponent,
+	type AgentSessionEvent,
+	type Theme,
+	UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { Markdown, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
 import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
@@ -414,8 +424,200 @@ export function selectToolArg(toolName: string, args: Record<string, unknown> | 
 	return genericHint(args);
 }
 
-export function buildRightLines(theme: Theme, run: LiveRun | undefined, width: number, runs: LiveRun[] = []): string[] {
+function userMessageText(message: Extract<AgentMessage, { role: "user" }>): string {
+	if (typeof message.content === "string") return message.content;
+	return message.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("");
+}
+
+export interface LiveDashboardSession {
+	readonly messages: AgentMessage[];
+	subscribe(listener: (event?: AgentSessionEvent) => void): () => void;
+}
+
+interface RenderedMessageGroup {
+	messages: AgentMessage[];
+	lines: string[];
+}
+
+interface LiveSessionCacheEntry {
+	width: number;
+	groups: RenderedMessageGroup[];
+	lines: string[];
+	dirtyFrom?: number;
+}
+
+function messageGroups(messages: AgentMessage[]): AgentMessage[][] {
+	const groups: AgentMessage[][] = [];
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index]!;
+		const group = [message];
+		if (message.role === "assistant") {
+			const toolCallIds = new Set(
+				message.content.filter((content) => content.type === "toolCall").map((content) => content.id),
+			);
+			while (toolCallIds.size > 0 && index + 1 < messages.length) {
+				const result = messages[index + 1]!;
+				if (result.role !== "toolResult" || !toolCallIds.has(result.toolCallId)) break;
+				group.push(result);
+				toolCallIds.delete(result.toolCallId);
+				index++;
+			}
+		}
+		groups.push(group);
+	}
+	return groups;
+}
+
+function sameMessageGroup(left: AgentMessage[], right: AgentMessage[]): boolean {
+	return left.length === right.length && left.every((message, index) => message === right[index]);
+}
+
+export class LiveSessionRenderCache {
+	private readonly entries = new WeakMap<LiveDashboardSession, LiveSessionCacheEntry>();
+
+	invalidate(session: LiveDashboardSession, event?: AgentSessionEvent): void {
+		const entry = this.entries.get(session);
+		if (!entry) return;
+		if (event?.type === "compaction_end") {
+			entry.dirtyFrom = 0;
+			return;
+		}
+		if (event?.type === "message_start") {
+			entry.dirtyFrom = Math.min(entry.dirtyFrom ?? entry.groups.length, entry.groups.length);
+			return;
+		}
+		if (
+			event === undefined ||
+			event.type === "message_update" ||
+			event.type === "message_end" ||
+			event.type === "tool_execution_end" ||
+			event.type === "agent_end"
+		) {
+			entry.dirtyFrom = Math.min(entry.dirtyFrom ?? entry.groups.length, Math.max(0, entry.groups.length - 1));
+		}
+	}
+
+	render(
+		session: LiveDashboardSession,
+		width: number,
+		renderGroup: (messages: AgentMessage[]) => string[],
+	): string[] {
+		const entry = this.entries.get(session);
+		if (entry && entry.width === width && entry.dirtyFrom === undefined) return entry.lines;
+
+		const groups = messageGroups(session.messages);
+		let rebuildFrom = entry?.width === width ? (entry.dirtyFrom ?? 0) : 0;
+		if (entry?.width === width) {
+			const shared = Math.min(entry.groups.length, groups.length);
+			for (let index = 0; index < shared; index++) {
+				if (!sameMessageGroup(entry.groups[index]!.messages, groups[index]!)) {
+					rebuildFrom = Math.min(rebuildFrom, index);
+					break;
+				}
+			}
+			if (groups.length < entry.groups.length) rebuildFrom = Math.min(rebuildFrom, groups.length);
+		}
+
+		const renderedGroups = entry?.width === width ? entry.groups.slice(0, rebuildFrom) : [];
+		for (let index = rebuildFrom; index < groups.length; index++) {
+			const messages = groups[index]!;
+			renderedGroups.push({ messages, lines: renderGroup(messages) });
+		}
+		const lines = renderedGroups.flatMap((group) => group.lines);
+		this.entries.set(session, { width, groups: renderedGroups, lines });
+		return lines;
+	}
+}
+
+function renderLiveMessages(messages: AgentMessage[], tui: TUI, width: number, cwd: string): string[] {
+	const lines: string[] = [];
+	const tools = new Map<string, ToolExecutionComponent>();
+	const markdownTheme = getMarkdownTheme();
+	const renderTui = new Proxy(tui, {
+		get(target, property, receiver) {
+			if (property === "requestRender") return () => {};
+			return Reflect.get(target, property, receiver);
+		},
+	});
+	for (const message of messages) {
+		let component: { render(renderWidth: number): string[] } | undefined;
+		if (message.role === "user") {
+			const text = userMessageText(message);
+			if (text) component = new UserMessageComponent(text, markdownTheme, 0);
+		} else if (message.role === "assistant") {
+			component = new AssistantMessageComponent(message, false, markdownTheme, undefined, 0);
+			for (const content of message.content) {
+				if (content.type !== "toolCall") continue;
+				const tool = new ToolExecutionComponent(
+					content.name,
+					content.id,
+					content.arguments,
+					{ showImages: false },
+					undefined,
+					renderTui,
+					cwd,
+				);
+				tools.set(content.id, tool);
+			}
+		} else if (message.role === "toolResult") {
+			const tool = tools.get(message.toolCallId);
+			if (tool) {
+				tool.updateResult({
+					...message,
+					content: message.content.filter((content) => content.type !== "image"),
+				});
+				lines.push(...tool.render(width));
+				tools.delete(message.toolCallId);
+			}
+		} else if (message.role === "bashExecution") {
+			const bash = new BashExecutionComponent(message.command, renderTui, message.excludeFromContext);
+			if (message.output) bash.appendOutput(message.output);
+			bash.setComplete(message.exitCode, message.cancelled, undefined, message.fullOutputPath);
+			component = bash;
+		}
+		if (component) lines.push(...component.render(width));
+	}
+	for (const tool of tools.values()) lines.push(...tool.render(width));
+	return lines;
+}
+
+function buildLiveRightLines(
+	sessions: LiveDashboardSession[],
+	tui: TUI,
+	width: number,
+	cwd: string,
+	cache?: LiveSessionRenderCache,
+): string[] {
+	const lines: string[] = [];
+	for (const [index, session] of sessions.entries()) {
+		const render = (messages: AgentMessage[]) => renderLiveMessages(messages, tui, width, cwd);
+		const sessionLines = cache ? cache.render(session, width, render) : render(session.messages);
+		if (sessionLines.length === 0) continue;
+		if (sessions.length > 1) lines.push(`Step ${index + 1}`);
+		lines.push(...sessionLines);
+	}
+	return lines;
+}
+
+export function buildRightLines(
+	theme: Theme,
+	run: LiveRun | undefined,
+	width: number,
+	runs: LiveRun[] = [],
+	live?: { sessions: LiveDashboardSession[]; tui: TUI; cache?: LiveSessionRenderCache },
+): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
+	if (live?.sessions.length) {
+		try {
+			const lines = buildLiveRightLines(live.sessions, live.tui, width, run.run.cwd ?? process.cwd(), live.cache);
+			if (lines.length > 0) return lines;
+		} catch {
+			// A stale or unusable handle falls through to the persisted transcript.
+		}
+	}
 	if (run.run.workflow) {
 		const workflowLines = buildWorkflowRightLines(theme, run.run, width, runs);
 		if (workflowLines.length > 0) return workflowLines;

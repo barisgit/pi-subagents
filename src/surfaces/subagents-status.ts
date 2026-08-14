@@ -27,7 +27,12 @@ import {
 } from "../state/async-status.ts";
 import { formatDuration, formatTokenCounter } from "./formatters.ts";
 import { tintAgentName } from "./render-shared.ts";
-import { buildRightLines, statusGlyph } from "./dashboard-detail-renderer.ts";
+import {
+	buildRightLines,
+	type LiveDashboardSession,
+	LiveSessionRenderCache,
+	statusGlyph,
+} from "./dashboard-detail-renderer.ts";
 import { readRunTranscript } from "../state/run-transcript.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
@@ -116,6 +121,7 @@ interface StatusOverlayDeps {
 	// others (post-reload, external) hydrate foreign-from-disk. Absent in tests
 	// that only exercise the disk path.
 	getOwnedRunViews?: () => Map<string, AsyncRunSummary>;
+	getLiveSessions?: (runId: string) => LiveDashboardSession[];
 }
 
 function entryMatchesOverlayScope(
@@ -712,6 +718,10 @@ export class SubagentsStatusComponent implements Component {
 	private sessionId: string | undefined;
 	private readonly getBranchAnchorRunIds: (() => Set<string>) | undefined;
 	private readonly getOwnedRunViews: (() => Map<string, AsyncRunSummary>) | undefined;
+	private readonly getLiveSessions: ((runId: string) => LiveDashboardSession[]) | undefined;
+	private liveUnsubscribes: (() => void)[] = [];
+	private subscribedSessions: LiveDashboardSession[] = [];
+	private readonly liveRenderCache = new LiveSessionRenderCache();
 	// The owned-run mirror snapshot for the CURRENT reload pass. Captured once at
 	// the top of reload() so the overlay producer and the ownership assignment in
 	// deriveLiveRuns agree on the exact same owned set within a pass.
@@ -746,6 +756,7 @@ export class SubagentsStatusComponent implements Component {
 		this.sessionId = deps.sessionId;
 		this.getBranchAnchorRunIds = deps.getBranchAnchorRunIds;
 		this.getOwnedRunViews = deps.getOwnedRunViews;
+		this.getLiveSessions = deps.getLiveSessions;
 		this.refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.overlay = this.createPaneOverlay();
 		this.reload();
@@ -764,6 +775,7 @@ export class SubagentsStatusComponent implements Component {
 				selectionKey: (row) => this.overlayRowKey(row),
 				onSelectionChange: (row) => {
 					this.selectedId = row && row.kind !== "empty" ? this.rowKey(row) : undefined;
+					this.subscribeToSelectedRun();
 				},
 				renderRow: (row, ctx) => this.renderOverlayPrimaryRow(row, ctx),
 				title: () => this.overlayPrimaryTitle(),
@@ -799,7 +811,14 @@ export class SubagentsStatusComponent implements Component {
 					// reactive to [ / ] resizes; this.lastRightWidth was computed from
 					// the constant DEFAULT_LEFT_FRACTION and went stale after a resize.
 					const detailWidth = Math.max(20, ctx.detail.width || this.lastRightWidth || 80);
-					return run ? buildRightLines(this.theme, run, detailWidth, this.runs) : [];
+					const sessions = run ? this.liveSessions(run) : [];
+					return run
+						? buildRightLines(this.theme, run, detailWidth, this.runs, {
+								sessions,
+								tui: this.tui,
+								cache: this.liveRenderCache,
+							})
+						: [];
 				},
 				title: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);
@@ -987,6 +1006,7 @@ export class SubagentsStatusComponent implements Component {
 			this.errorMessage = error instanceof Error ? error.message : String(error);
 		}
 		this.reconcileSelection();
+		this.subscribeToSelectedRun();
 	}
 
 	// Visible only to tests; mirrors the `a` keybinding for direct invocation.
@@ -1218,7 +1238,41 @@ export class SubagentsStatusComponent implements Component {
 		return this.overlay.render(width);
 	}
 
+	private liveSessions(run: LiveRun): LiveDashboardSession[] {
+		if (run.ownership !== "live") return [];
+		try {
+			return this.getLiveSessions?.(run.run.id) ?? [];
+		} catch {
+			return [];
+		}
+	}
+
+	private unsubscribeFromLiveSessions(): void {
+		for (const unsubscribe of this.liveUnsubscribes) unsubscribe();
+		this.liveUnsubscribes = [];
+		this.subscribedSessions = [];
+	}
+
+	private subscribeToSelectedRun(): void {
+		const run = this.selectedRun();
+		const sessions = run ? this.liveSessions(run) : [];
+		if (
+			sessions.length === this.subscribedSessions.length &&
+			sessions.every((session, index) => session === this.subscribedSessions[index])
+		)
+			return;
+		this.unsubscribeFromLiveSessions();
+		this.subscribedSessions = sessions;
+		this.liveUnsubscribes = sessions.map((session) =>
+			session.subscribe((event) => {
+				this.liveRenderCache.invalidate(session, event);
+				this.tui.requestRender();
+			}),
+		);
+	}
+
 	dispose(): void {
+		this.unsubscribeFromLiveSessions();
 		if (this.refreshTimer) clearTimeout(this.refreshTimer);
 		this.refreshTimer = undefined;
 		if (this.actionNoticeTimer) clearTimeout(this.actionNoticeTimer);
