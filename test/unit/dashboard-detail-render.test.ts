@@ -4,20 +4,27 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { initTheme, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { initTheme, type AgentSessionEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { AsyncRunSummary } from "../../src/state/async-status.ts";
 import {
 	buildRightLines,
 	type LiveDashboardSession,
 	LiveSessionRenderCache,
+	LiveToolComponentStore,
 	selectToolArg,
 } from "../../src/surfaces/dashboard-detail-renderer.ts";
+import {
+	type LiveToolProgress,
+	LiveSessionDirectory,
+	publishLiveSession,
+} from "../../src/shared/live-session-relay.ts";
 import {
 	buildSelectedRunStatusBox,
 	type LiveRun,
 	SubagentsStatusComponent,
 } from "../../src/surfaces/subagents-status.ts";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 
 // The final-text and narration blocks render through pi-tui Markdown, whose
@@ -177,6 +184,373 @@ describe("dashboard detail pane redesign", () => {
 		assert.equal(listener, undefined);
 	});
 
+	it("keeps direct-parent partial tool progress live across selection and display rebuilds", () => {
+		const run = makeRun("run-live-tool-progress", "/missing/run-live-tool-progress");
+		const otherRun = makeRun("run-other-live", "/missing/run-other-live");
+		// Pi completes the assistant tool-call message before emitting execution events,
+		// so start/update state always has a pending tool card to attach to here.
+		const messages: LiveDashboardSession["messages"] = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-progress", name: "progress_tool", arguments: {} }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		];
+		let resultRenders = 0;
+		const rendererStates: object[] = [];
+		const toolDefinition: ToolDefinition = {
+			name: "progress_tool",
+			label: "Progress tool",
+			description: "Test partial rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderShell: "self",
+			renderCall: (_args, _theme, context) => {
+				rendererStates.push(context.state);
+				return new Text(context.executionStarted ? "running progress call" : "pending progress call", 0, 0);
+			},
+			renderResult: (result, options, _theme, context) => {
+				resultRenders++;
+				rendererStates.push(context.state);
+				const details = typeof result.details === "object" && result.details !== null ? result.details : {};
+				const marker = "marker" in details && typeof details.marker === "string" ? details.marker : "missing";
+				const text = result.content.find((content) => content.type === "text")?.text ?? "";
+				return new Text(`${options.isPartial ? "partial" : "final"} ${marker} ${text}`, 0, 0);
+			},
+		};
+		const listeners = new Set<(event: AgentSessionEvent) => void>();
+		const session: LiveDashboardSession = {
+			messages,
+			getToolDefinition: () => toolDefinition,
+			subscribe(next) {
+				listeners.add(next);
+				return () => listeners.delete(next);
+			},
+		};
+		const emit = (event: AgentSessionEvent) => {
+			for (const listener of listeners) listener(event);
+		};
+		const otherSession: LiveDashboardSession = {
+			messages: [{ role: "user", content: "Other live run", timestamp: 1 }],
+			subscribe: () => () => {},
+		};
+		const liveToolComponents = new LiveToolComponentStore();
+		const directory = new LiveSessionDirectory(liveToolComponents);
+		const unpublish = publishLiveSession({ runId: run.id, stepIndex: 0, session: session as never });
+		let renderRequests = 0;
+		let component = new SubagentsStatusComponent(
+			{ requestRender: () => renderRequests++, terminal: { rows: 32 } } as never,
+			theme,
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [run, otherRun], recent: [] }),
+				getOwnedRunViews: () => new Map(),
+				getLiveSessions: (runId) => (runId === run.id ? [session] : [otherSession]),
+				getLiveToolProgress: (liveSession) => directory.toolProgress(liveSession as never),
+				liveToolComponents,
+				refreshMs: 60000,
+			},
+		);
+		const render = () => stripAnsi(component.render(120).join("\n"));
+
+		try {
+			assert.match(render(), /pending progress call/);
+			const rendersBeforeClosedFinal = resultRenders;
+			emit({
+				type: "tool_execution_start",
+				toolCallId: "call-progress",
+				toolName: "progress_tool",
+				args: {},
+			});
+			assert.match(render(), /running progress call/);
+			emit({
+				type: "tool_execution_update",
+				toolCallId: "call-progress",
+				toolName: "progress_tool",
+				args: {},
+				partialResult: {
+					content: [
+						{ type: "text", text: "first text" },
+						{ type: "image", data: "not-an-image", mimeType: "image/png" },
+					],
+					details: { marker: "first" },
+				},
+			});
+			const firstPartial = render();
+			assert.match(firstPartial, /partial first first text/);
+			assert.doesNotMatch(firstPartial, /not-an-image/);
+			emit({
+				type: "tool_execution_update",
+				toolCallId: "call-progress",
+				toolName: "progress_tool",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "second text" }], details: { marker: "second" } },
+			});
+			assert.match(render(), /partial second second text/);
+			const rendersAfterUpdate = resultRenders;
+			render();
+			assert.equal(resultRenders, rendersAfterUpdate, "an ordinary repaint reuses the partial tail");
+			assert.equal(renderRequests, 3);
+
+			component.handleInput("j");
+			assert.match(render(), /Other live run/);
+			const requestsWhileBSelected = renderRequests;
+			emit({
+				type: "tool_execution_update",
+				toolCallId: "call-progress",
+				toolName: "progress_tool",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "late text" }], details: { marker: "late" } },
+			});
+			assert.equal(renderRequests, requestsWhileBSelected, "unselected updates are retained without repainting");
+			component.handleInput("k");
+			const reselected = render();
+			assert.match(reselected, /partial late late text/);
+			assert.doesNotMatch(reselected, /pending progress call/);
+			component.handleInput("\x0f");
+			assert.match(render(), /partial late late text/);
+			assert.match(stripAnsi(component.render(100).join("\n")), /partial late late text/);
+
+			component.dispose();
+			const rendersBeforeClosedUpdate = resultRenders;
+			emit({
+				type: "tool_execution_update",
+				toolCallId: "call-progress",
+				toolName: "progress_tool",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "closed text" }], details: { marker: "closed" } },
+			});
+			assert.deepEqual(directory.toolProgress(session as never).get("call-progress")?.partialResult?.details, {
+				marker: "closed",
+			});
+			assert.ok(resultRenders > rendersBeforeClosedUpdate, "closed updates reach the retained component");
+			assert.ok(rendererStates.length > 1);
+			assert.ok(
+				rendererStates.every((state) => state === rendererStates[0]),
+				"closed updates keep renderer state",
+			);
+
+			messages.push({
+				role: "toolResult",
+				toolCallId: "call-progress",
+				toolName: "progress_tool",
+				content: [{ type: "text", text: "final text" }],
+				details: { marker: "persisted" },
+				isError: false,
+				timestamp: 2,
+			});
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "call-progress",
+				toolName: "progress_tool",
+				result: { content: [{ type: "text", text: "final text" }], details: { marker: "persisted" } },
+				isError: false,
+			});
+			assert.ok(resultRenders > rendersBeforeClosedFinal, "closed completion finalizes the component");
+			assert.ok(
+				rendererStates.every((state) => state === rendererStates[0]),
+				"closed finalization uses renderer state",
+			);
+			component = new SubagentsStatusComponent(
+				{ requestRender: () => renderRequests++, terminal: { rows: 32 } } as never,
+				theme,
+				() => {},
+				{
+					listRunsForOverlay: () => ({ active: [run, otherRun], recent: [] }),
+					getOwnedRunViews: () => new Map(),
+					getLiveSessions: (runId) => (runId === run.id ? [session] : [otherSession]),
+					getLiveToolProgress: (liveSession) => directory.toolProgress(liveSession as never),
+					liveToolComponents,
+					refreshMs: 60000,
+				},
+			);
+			const finalOutput = render();
+			assert.match(finalOutput, /final persisted final text/);
+			assert.doesNotMatch(finalOutput, /partial second/);
+		} finally {
+			component.dispose();
+			unpublish();
+			directory.dispose();
+			liveToolComponents.dispose();
+		}
+	});
+
+	it("reconciles listed live-session subscriptions without listener churn", () => {
+		const runA = makeRun("run-subscription-a", "/missing/run-subscription-a");
+		const runB = makeRun("run-subscription-b", "/missing/run-subscription-b");
+		const toolDefinition: ToolDefinition = {
+			name: "delegation",
+			label: "Delegation",
+			description: "Test open delegation rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderCall: (_args, _theme, context) =>
+				new Text(context.executionStarted ? "delegation running" : "delegation pending", 0, 0),
+			renderResult: (result) =>
+				new Text(result.content.find((content) => content.type === "text")?.text ?? "", 0, 0),
+		};
+		const listeners = new Map<string, ((event?: AgentSessionEvent) => void) | undefined>();
+		const subscribeCounts = new Map<string, number>();
+		const unsubscribeCounts = new Map<string, number>();
+		const session = (name: string, messages: LiveDashboardSession["messages"]): LiveDashboardSession => ({
+			messages,
+			getToolDefinition: () => toolDefinition,
+			subscribe(listener) {
+				subscribeCounts.set(name, (subscribeCounts.get(name) ?? 0) + 1);
+				listeners.set(name, listener);
+				return () => {
+					unsubscribeCounts.set(name, (unsubscribeCounts.get(name) ?? 0) + 1);
+				};
+			},
+		});
+		const sessionA = session("a", [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "same-call", name: "delegation", arguments: {} }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		]);
+		const sessionB = session("b", [{ role: "user", content: "Run B transcript", timestamp: 1 }]);
+		const progressA = new Map<string, LiveToolProgress>();
+		let runs = [runA, runB];
+		let throwForA = false;
+		let renders = 0;
+		const component = new SubagentsStatusComponent(
+			{ requestRender: () => renders++, terminal: { rows: 32 } } as never,
+			theme,
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: runs, recent: [] }),
+				getOwnedRunViews: () => new Map(),
+				getLiveSessions: (runId) => {
+					if (runId === runA.id && throwForA) throw new Error("transient lookup miss");
+					return runId === runA.id ? [sessionA] : [sessionB];
+				},
+				getLiveToolProgress: (liveSession) => (liveSession === sessionA ? progressA : new Map()),
+				refreshMs: 60000,
+			},
+		);
+		const render = () => stripAnsi(component.render(120).join("\n"));
+
+		try {
+			progressA.set("same-call", { startedAt: Date.now() });
+			progressA.set("same-call", {
+				startedAt: Date.now(),
+				partialResult: {
+					content: [{ type: "text", text: "nested child still running" }],
+					details: undefined,
+					isError: false,
+				},
+			});
+			listeners.get("a")?.({
+				type: "tool_execution_start",
+				toolCallId: "same-call",
+				toolName: "delegation",
+				args: {},
+			});
+			listeners.get("a")?.({
+				type: "tool_execution_update",
+				toolCallId: "same-call",
+				toolName: "delegation",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "nested child still running" }] },
+			});
+			assert.match(render(), /nested child still running/);
+			component.handleInput("j");
+			component.setShowAllSessions(true);
+			throwForA = true;
+			component.setShowAllSessions(false);
+			assert.deepEqual(
+				[...subscribeCounts.entries()],
+				[
+					["a", 1],
+					["b", 1],
+				],
+			);
+			assert.equal(unsubscribeCounts.size, 0);
+			component.handleInput("k");
+			assert.match(render(), /nested child still running/);
+
+			const staleAListener = listeners.get("a");
+			runs = [runB];
+			component.setShowAllSessions(true);
+			assert.equal(unsubscribeCounts.get("a"), 1);
+			assert.equal(unsubscribeCounts.get("b"), undefined);
+			const rendersAfterRemoval = renders;
+			staleAListener?.({
+				type: "tool_execution_update",
+				toolCallId: "same-call",
+				toolName: "delegation",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "ignored late update" }] },
+			});
+			assert.equal(renders, rendersAfterRemoval);
+		} finally {
+			component.dispose();
+		}
+		assert.equal(unsubscribeCounts.get("b"), 1);
+	});
+
+	it("returns a foreign run to historical native rendering after its relayed session disappears", () => {
+		const run = makeRun("run-relay-fallback", "/missing/run-relay-fallback");
+		const liveSession: LiveDashboardSession = {
+			messages: [{ role: "user", content: "live relayed transcript", timestamp: 1 }],
+			subscribe: () => () => {},
+		};
+		const historicalSession = {
+			messages: [{ role: "user", content: "historical disk transcript", timestamp: 1 }],
+		};
+		let published = true;
+		const component = new SubagentsStatusComponent(
+			{ requestRender: () => {}, terminal: { rows: 32 } } as never,
+			theme,
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [run], recent: [] }),
+				getOwnedRunViews: () => new Map(),
+				getLiveSessions: () => (published ? [liveSession] : []),
+				rendererCatalog: { getToolDefinition: () => undefined },
+				runMessageReader: { read: () => [historicalSession] } as never,
+				refreshMs: 60000,
+			},
+		);
+
+		try {
+			assert.match(stripAnsi(component.render(120).join("\n")), /live relayed transcript/);
+			published = false;
+			component.setShowAllSessions(true);
+			const historical = stripAnsi(component.render(120).join("\n"));
+			assert.match(historical, /historical disk transcript/);
+			assert.doesNotMatch(historical, /live relayed transcript/);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("reflows cached live messages when the detail width changes", () => {
 		const run: LiveRun = { ownership: "live", run: makeRun("run-width", "/missing/run-width") };
 		const session: LiveDashboardSession = {
@@ -202,6 +576,263 @@ describe("dashboard detail pane redesign", () => {
 		const narrow = renderAt(30);
 
 		assert.ok(narrow.length > wide.length, "a width change rebuilds and reflows cached message components");
+	});
+
+	it("preserves builtin bash elapsed time and clears its interval on completion", () => {
+		const originalDateNow = Date.now;
+		const originalSetInterval = globalThis.setInterval;
+		const originalClearInterval = globalThis.clearInterval;
+		let now = 1000;
+		let nextTimerId = 1;
+		const activeTimers = new Set<number>();
+		Date.now = () => now;
+		Object.defineProperty(globalThis, "setInterval", {
+			configurable: true,
+			value: () => {
+				const id = nextTimerId++;
+				activeTimers.add(id);
+				return id;
+			},
+		});
+		Object.defineProperty(globalThis, "clearInterval", {
+			configurable: true,
+			value: (timer: number) => activeTimers.delete(timer),
+		});
+
+		try {
+			const run: LiveRun = { ownership: "live", run: makeRun("run-bash-elapsed", "/missing/run-bash-elapsed") };
+			const messages: LiveDashboardSession["messages"] = [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "sleep 5" } }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
+			];
+			const session: LiveDashboardSession = { messages, subscribe: () => () => {} };
+			const liveToolComponents = new LiveToolComponentStore();
+			let cache = new LiveSessionRenderCache(liveToolComponents);
+			const progress = new Map<string, LiveToolProgress>([
+				[
+					"bash-call",
+					{
+						partialResult: {
+							content: [{ type: "text", text: "working" }],
+							details: undefined,
+							isError: false,
+						},
+					},
+				],
+			]);
+			const render = () =>
+				stripAnsi(
+					buildRightLines(theme, run, 100, [], {
+						sessions: [session],
+						tui: { requestRender: () => {} } as never,
+						cache,
+						toolProgress: new Map([[session, progress]]),
+					}).join("\n"),
+				);
+
+			assert.match(render(), /Elapsed 0\.0s/);
+			assert.equal(activeTimers.size, 1);
+			cache.dispose();
+			cache = new LiveSessionRenderCache(liveToolComponents);
+			now = 6000;
+			progress.set("bash-call", {
+				partialResult: {
+					content: [{ type: "text", text: "still working" }],
+					details: undefined,
+					isError: false,
+				},
+			});
+			cache.invalidate(session, {
+				type: "tool_execution_update",
+				toolCallId: "bash-call",
+				toolName: "bash",
+				args: { command: "sleep 5" },
+				partialResult: progress.get("bash-call")!.partialResult!,
+			});
+			assert.match(render(), /Elapsed 5\.0s/);
+			assert.equal(activeTimers.size, 1);
+
+			progress.delete("bash-call");
+			messages.push({
+				role: "toolResult",
+				toolCallId: "bash-call",
+				toolName: "bash",
+				content: [{ type: "text", text: "done" }],
+				isError: false,
+				timestamp: 2,
+			});
+			cache.invalidate(session, {
+				type: "tool_execution_end",
+				toolCallId: "bash-call",
+				toolName: "bash",
+				result: messages[1],
+				isError: false,
+			});
+			assert.match(render(), /Took 5\.0s/);
+			assert.equal(activeTimers.size, 0);
+			const firstAssistant = messages[0];
+			assert.equal(firstAssistant?.role, "assistant");
+			if (firstAssistant?.role === "assistant") {
+				messages.push({
+					...firstAssistant,
+					content: [
+						{ type: "toolCall", id: "bash-call-cleanup", name: "bash", arguments: { command: "sleep 5" } },
+					],
+					timestamp: 3,
+				});
+			}
+			progress.set("bash-call-cleanup", {
+				partialResult: { content: [{ type: "text", text: "working" }], details: undefined, isError: false },
+			});
+			cache.invalidate(session);
+			assert.match(render(), /Elapsed 0\.0s/);
+			assert.equal(activeTimers.size, 1);
+			liveToolComponents.handleSessionEvent(session as never, { type: "compaction_end" } as AgentSessionEvent);
+			assert.equal(activeTimers.size, 0, "compaction finalizes pending native tools while closed");
+			messages.pop();
+			messages.push({
+				...firstAssistant!,
+				content: [
+					{ type: "toolCall", id: "bash-call-dispose", name: "bash", arguments: { command: "sleep 5" } },
+				],
+				timestamp: 4,
+			});
+			progress.delete("bash-call-cleanup");
+			progress.set("bash-call-dispose", {
+				partialResult: { content: [{ type: "text", text: "working" }], details: undefined, isError: false },
+			});
+			cache.invalidate(session);
+			assert.match(render(), /Elapsed 0\.0s/);
+			assert.equal(activeTimers.size, 1);
+			liveToolComponents.dispose();
+			assert.equal(activeTimers.size, 0, "activation cleanup finalizes pending native tools");
+		} finally {
+			Date.now = originalDateNow;
+			Object.defineProperty(globalThis, "setInterval", { configurable: true, value: originalSetInterval });
+			Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: originalClearInterval });
+		}
+	});
+
+	it("preserves custom renderer state per session across partial cache rebuilds", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-renderer-state", "/missing/run-renderer-state") };
+		const seenStates: object[] = [];
+		const seenComponents: object[] = [];
+		const toolDefinition: ToolDefinition = {
+			name: "stateful_tool",
+			label: "Stateful tool",
+			description: "Test renderer identity",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderCall: (_args, _theme, context) => {
+				seenStates.push(context.state);
+				const component = context.lastComponent ?? new Text("", 0, 0);
+				seenComponents.push(component);
+				if (component instanceof Text) component.setText("stateful call");
+				return component;
+			},
+			renderResult: (result, options, _theme, context) => {
+				seenStates.push(context.state);
+				const component = context.lastComponent ?? new Text("", 0, 0);
+				seenComponents.push(component);
+				const text = result.content.find((content) => content.type === "text")?.text ?? "";
+				if (component instanceof Text) component.setText(`${options.isPartial ? "partial" : "final"} ${text}`);
+				return component;
+			},
+		};
+		const messages: LiveDashboardSession["messages"] = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "shared-id", name: "stateful_tool", arguments: {} }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		];
+		const sessionA: LiveDashboardSession = {
+			messages,
+			getToolDefinition: () => toolDefinition,
+			subscribe: () => () => {},
+		};
+		const sessionB: LiveDashboardSession = {
+			messages,
+			getToolDefinition: () => toolDefinition,
+			subscribe: () => () => {},
+		};
+		const cache = new LiveSessionRenderCache();
+		const progressA = new Map<string, LiveToolProgress>([
+			[
+				"shared-id",
+				{ partialResult: { content: [{ type: "text", text: "first" }], details: undefined, isError: false } },
+			],
+		]);
+		const render = (session: LiveDashboardSession, progress: Map<string, LiveToolProgress>, revision: number) =>
+			stripAnsi(
+				buildRightLines(theme, run, 100, [], {
+					sessions: [session],
+					tui: { requestRender: () => {} } as never,
+					cache,
+					toolProgress: new Map([[session, progress]]),
+					display: { revision, toolsExpanded: false, hideThinking: false },
+				}).join("\n"),
+			);
+
+		assert.match(render(sessionA, progressA, 0), /partial first/);
+		progressA.set("shared-id", {
+			partialResult: { content: [{ type: "text", text: "second" }], details: undefined, isError: false },
+		});
+		cache.invalidate(sessionA);
+		assert.match(render(sessionA, progressA, 1), /partial second/);
+		assert.ok(seenStates.length > 2);
+		assert.equal(new Set(seenStates).size, 1, "one renderer state object survives the rebuild");
+		assert.equal(new Set(seenComponents).size, 2, "call and result components are each reused");
+
+		const progressB = new Map<string, LiveToolProgress>([
+			[
+				"shared-id",
+				{
+					partialResult: {
+						content: [{ type: "text", text: "other session" }],
+						details: undefined,
+						isError: false,
+					},
+				},
+			],
+		]);
+		assert.match(render(sessionB, progressB, 0), /partial other session/);
+		assert.equal(new Set(seenStates).size, 2, "the same tool call id does not collide across sessions");
+		cache.clear(sessionA);
+		cache.invalidate(sessionA);
+		assert.match(render(sessionA, progressA, 0), /partial second/);
+		assert.equal(new Set(seenStates).size, 3, "clearing one session drops only its pending component map");
+		cache.dispose();
+		cache.invalidate(sessionB);
+		assert.match(render(sessionB, progressB, 0), /partial other session/);
+		assert.equal(new Set(seenStates).size, 4, "disposing the cache drops remaining pending component maps");
 	});
 
 	it("renders every retained step session in order", () => {
@@ -285,6 +916,372 @@ describe("dashboard detail pane redesign", () => {
 		assert.match(output, /tool result body/);
 		assert.match(output, /printf hello/);
 		assert.match(output, /bash output body/);
+	});
+
+	it("uses extension tool renderers for retained live sessions", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-extension-tool", "/missing/run-extension-tool") };
+		const toolDefinition: ToolDefinition = {
+			name: "custom_tool",
+			label: "Custom tool",
+			description: "Test custom rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderShell: "self",
+			renderCall: () => new Text("compact custom call", 0, 0),
+			renderResult: () => new Text("compact custom result", 0, 0),
+		};
+		const session: LiveDashboardSession = {
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-custom",
+							name: "custom_tool",
+							arguments: { rawMarker: "RAW_ARGS" },
+						},
+					],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-custom",
+					toolName: "custom_tool",
+					content: [{ type: "text", text: "FULL_RESULT_MARKER" }],
+					isError: false,
+					timestamp: 2,
+				},
+			],
+			subscribe: () => () => {},
+			getToolDefinition: (name) => (name === "custom_tool" ? toolDefinition : undefined),
+		};
+
+		const output = stripAnsi(
+			buildRightLines(theme, run, 100, [], {
+				sessions: [session],
+				tui: { requestRender: () => {} } as never,
+			}).join("\n"),
+		);
+
+		assert.match(output, /compact custom call/);
+		assert.match(output, /compact custom result/);
+		assert.doesNotMatch(output, /RAW_ARGS|FULL_RESULT_MARKER/);
+	});
+
+	it("rebuilds native transcript rows when dashboard display modes change", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-display-modes", "/missing/display-modes") };
+		const expandedValues: boolean[] = [];
+		const toolDefinition: ToolDefinition = {
+			name: "custom_tool",
+			label: "Custom tool",
+			description: "Test display modes",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderResult: (_result, options) => {
+				expandedValues.push(options.expanded);
+				return new Text(options.expanded ? "EXPANDED_RESULT" : "COLLAPSED_RESULT", 0, 0);
+			},
+		};
+		const session: LiveDashboardSession = {
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "THINKING_MARKER" },
+						{ type: "toolCall", id: "call-display", name: "custom_tool", arguments: {} },
+					],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-display",
+					toolName: "custom_tool",
+					content: [{ type: "text", text: "result" }],
+					isError: false,
+					timestamp: 2,
+				},
+			],
+			subscribe: () => () => {},
+			getToolDefinition: () => toolDefinition,
+		};
+		const cache = new LiveSessionRenderCache();
+		const render = (revision: number, toolsExpanded: boolean, hideThinking: boolean) =>
+			stripAnsi(
+				buildRightLines(theme, run, 100, [], {
+					sessions: [session],
+					tui: { requestRender: () => {} } as never,
+					cache,
+					display: { revision, toolsExpanded, hideThinking },
+				}).join("\n"),
+			);
+
+		const initial = render(0, false, false);
+		assert.match(initial, /COLLAPSED_RESULT/);
+		assert.match(initial, /THINKING_MARKER/);
+		assert.deepEqual(expandedValues, [false]);
+
+		render(0, true, true);
+		assert.deepEqual(expandedValues, [false], "ordinary repaint at the same revision stays cached");
+
+		const expanded = render(1, true, true);
+		assert.match(expanded, /EXPANDED_RESULT/);
+		assert.doesNotMatch(expanded, /THINKING_MARKER/);
+		assert.deepEqual(expandedValues, [false, true]);
+
+		const restored = render(2, false, false);
+		assert.match(restored, /COLLAPSED_RESULT/);
+		assert.match(restored, /THINKING_MARKER/);
+		assert.deepEqual(expandedValues, [false, true, false]);
+	});
+
+	it("renders ordered persisted messages with native components and the shared tool catalog", () => {
+		const run: LiveRun = { ownership: "foreign", run: makeRun("run-persisted-native", "/missing/native") };
+		const toolDefinition: ToolDefinition = {
+			name: "custom_tool",
+			label: "Custom tool",
+			description: "Test persisted custom rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderShell: "self",
+			renderCall: () => new Text("persisted custom call\x1b]0;unsafe\x07", 0, 0),
+			renderResult: () => new Text("persisted custom result", 0, 0),
+		};
+		const assistantMessage: LiveDashboardSession["messages"][number] = {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "Native assistant text" },
+				{ type: "toolCall", id: "call-persisted", name: "custom_tool", arguments: { rawMarker: "RAW_ARGS" } },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: 2,
+		};
+		const output = stripAnsi(
+			buildRightLines(theme, run, 100, [], undefined, {
+				sessions: [
+					{
+						stepIndex: 0,
+						messages: [
+							{ role: "user", content: "Persisted user text", timestamp: 1 },
+							assistantMessage,
+							{
+								role: "toolResult",
+								toolCallId: "call-persisted",
+								toolName: "custom_tool",
+								content: [{ type: "text", text: "FULL_RESULT_MARKER" }],
+								isError: false,
+								timestamp: 3,
+							},
+						],
+					},
+					{
+						stepIndex: 1,
+						messages: [
+							{
+								role: "bashExecution",
+								command: "printf nested",
+								output: "nested output",
+								exitCode: 0,
+								cancelled: false,
+								truncated: false,
+								timestamp: 4,
+							},
+						],
+					},
+				],
+				tui: { requestRender: () => {} } as never,
+				getToolDefinition: (name) => (name === "custom_tool" ? toolDefinition : undefined),
+			}).join("\n"),
+		);
+
+		assert.match(
+			output,
+			/Step 1[\s\S]*Persisted user text[\s\S]*Native assistant text[\s\S]*persisted custom call[\s\S]*persisted custom result[\s\S]*Step 2[\s\S]*printf nested[\s\S]*nested output/,
+		);
+		assert.doesNotMatch(output, /RAW_ARGS|FULL_RESULT_MARKER|unsafe/);
+	});
+
+	it("applies dashboard display modes to persisted native sessions", () => {
+		const run: LiveRun = { ownership: "foreign", run: makeRun("run-persisted-display", "/missing/persisted") };
+		const expandedValues: boolean[] = [];
+		const toolDefinition: ToolDefinition = {
+			name: "custom_tool",
+			label: "Custom tool",
+			description: "Test persisted display modes",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderResult: (_result, options) => {
+				expandedValues.push(options.expanded);
+				return new Text(options.expanded ? "PERSISTED_EXPANDED" : "PERSISTED_COLLAPSED", 0, 0);
+			},
+		};
+		const messages: LiveDashboardSession["messages"] = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "PERSISTED_THINKING" },
+					{ type: "toolCall", id: "call-persisted-display", name: "custom_tool", arguments: {} },
+				],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-persisted-display",
+				toolName: "custom_tool",
+				content: [{ type: "text", text: "result" }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+		const render = (revision: number, toolsExpanded: boolean, hideThinking: boolean) =>
+			stripAnsi(
+				buildRightLines(theme, run, 100, [], undefined, {
+					sessions: [{ stepIndex: 0, messages }],
+					tui: { requestRender: () => {} } as never,
+					cache: new LiveSessionRenderCache(),
+					getToolDefinition: () => toolDefinition,
+					display: { revision, toolsExpanded, hideThinking },
+				}).join("\n"),
+			);
+
+		const initial = render(0, false, false);
+		assert.match(initial, /PERSISTED_COLLAPSED/);
+		assert.match(initial, /PERSISTED_THINKING/);
+		const toggled = render(1, true, true);
+		assert.match(toggled, /PERSISTED_EXPANDED/);
+		assert.doesNotMatch(toggled, /PERSISTED_THINKING/);
+		assert.deepEqual(expandedValues, [false, true]);
+	});
+
+	it("removes terminal-executable controls from retained live rows", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-terminal-safe", "/missing/run-terminal-safe") };
+		let componentRenders = 0;
+		const toolDefinition: ToolDefinition = {
+			name: "unsafe_tool",
+			label: "Unsafe tool",
+			description: "Test terminal-safe rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderShell: "self",
+			renderCall: () => {
+				componentRenders++;
+				return new Text("styled \x1b[31mΩ call\x1b[0m\x1b]133;A\x07\x1b[2B", 0, 0);
+			},
+			renderResult: () => {
+				componentRenders++;
+				return new Text(
+					"progress 10%\rprogress 20%\b\v\f done\x1b[H\x1b[2J\x1b]0;title\x07\x1bPpayload\x1b\\\x1b_hidden\x1b\\",
+					0,
+					0,
+				);
+			},
+		};
+		const session: LiveDashboardSession = {
+			messages: [
+				{ role: "user", content: "first CRLF\r\nsecond Unicode λ", timestamp: 1 },
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call-unsafe", name: "unsafe_tool", arguments: {} }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-unsafe",
+					toolName: "unsafe_tool",
+					content: [{ type: "text", text: "raw result" }],
+					isError: false,
+					timestamp: 3,
+				},
+			],
+			subscribe: () => () => {},
+			getToolDefinition: () => toolDefinition,
+		};
+
+		const cache = new LiveSessionRenderCache();
+		const render = () =>
+			buildRightLines(theme, run, 100, [], {
+				sessions: [session],
+				tui: { requestRender: () => {} } as never,
+				cache,
+			});
+		const lines = render();
+		const rendersAfterFirstPass = componentRenders;
+		const cachedLines = render();
+
+		for (const line of [...lines, ...cachedLines]) {
+			for (const character of stripAnsi(line)) {
+				const code = character.charCodeAt(0);
+				assert.ok(code > 0x1f && (code < 0x7f || code > 0x9f));
+			}
+		}
+		assert.equal(
+			componentRenders,
+			rendersAfterFirstPass,
+			"cached rows do not rerun native or custom component renderers",
+		);
+		const output = lines.join("\n");
+		assert.ok(output.includes("\x1b[31mΩ call\x1b[0m"));
+		assert.match(stripAnsi(output), /first CRLF[\s\S]*second Unicode λ/);
+		assert.match(stripAnsi(output), /progress 10%progress 20% done/);
 	});
 
 	it("renders the full prompt, every tool call on its own card, and keeps the final block", () => {

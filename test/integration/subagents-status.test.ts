@@ -321,6 +321,51 @@ describe("SubagentsStatusComponent", () => {
 		}
 	});
 
+	it("uses effective transcript display keys and keeps tool state aligned with Pi", () => {
+		const setterValues: boolean[] = [];
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [], recent: [] }),
+				refreshMs: 1000,
+				keybindings: {
+					getKeys: (binding) => {
+						if (binding === "app.tools.expand") return ["x"];
+						if (binding === "app.thinking.toggle") return ["z"];
+						return [];
+					},
+				},
+				getToolsExpanded: () => true,
+				setToolsExpanded: (expanded) => setterValues.push(expanded),
+			},
+		);
+
+		try {
+			const legend = component.render(120).join("\n");
+			assert.match(legend, /x\s+tools/);
+			assert.match(legend, /z\s+thinking/);
+			assert.doesNotMatch(legend, /ctrl\+o\s+tools|ctrl\+t\s+thinking/);
+
+			component.handleInput("\x0f");
+			assert.deepEqual(setterValues, [], "the default chord is inactive after a remap");
+
+			component.handleInput("x");
+			assert.deepEqual(setterValues, [false], "the getter seeds the initial expanded state");
+
+			component.handleInput("\t");
+			component.handleInput("x");
+			assert.deepEqual(setterValues, [false, true], "the action also works while the detail pane has focus");
+
+			component.handleInput("z");
+			component.handleInput("z");
+			assert.deepEqual(setterValues, [false, true], "thinking changes remain dashboard-local");
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("sorts running before complete and places cursor on the first row by default", () => {
 		const running = createRun("run-running", "running", { startedAt: 2000 });
 		const complete = createRun("run-done", "complete", { startedAt: 1000 });
@@ -589,7 +634,7 @@ describe("SubagentsStatusComponent", () => {
 		try {
 			const output = component.render(120).join("\n");
 			assert.match(output, /\(no events yet\)/);
-			assert.match(output, /◈ reviewer/);
+			assert.match(output, /◈ .*reviewer/);
 		} finally {
 			component.dispose();
 		}

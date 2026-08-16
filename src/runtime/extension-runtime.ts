@@ -21,6 +21,7 @@ import { createHostSubagentApi, registerChildSessionApi } from "../api/exposed-s
 import { createIdleTracker } from "../surfaces/idle-tracker.ts";
 import { logger } from "../shared/logger.ts";
 import { isInsideChildSession } from "../shared/child-session-context.ts";
+import { LiveSessionDirectory } from "../shared/live-session-relay.ts";
 import { resolveAgentToolPatterns } from "../dispatch/resolve-tool-patterns.ts";
 import { leafConcurrencyLimit } from "../dispatch/leaf-concurrency.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
@@ -33,6 +34,7 @@ import { ChildAgentRegistry } from "../dispatch/in-process-executor.ts";
 import { createAsyncJobTracker } from "../surfaces/async-job-tracker.ts";
 import { createRootRoleManager } from "../runtime/root-role-manager.ts";
 import { registerSlashCommands } from "../surfaces/slash-commands.ts";
+import { LiveToolComponentStore } from "../surfaces/dashboard-detail-renderer.ts";
 import { registerPromptTemplateDelegationBridge } from "../dispatch/prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "../surfaces/slash-bridge.ts";
 import { connect, type UtilsClient } from "pi-extension-utils";
@@ -70,6 +72,7 @@ import {
 	WIDGET_KEY,
 } from "../protocol/types.ts";
 import { configureXmlStripping } from "../shared/utils.ts";
+import { RendererCatalog } from "./renderer-catalog.ts";
 
 function normalizeName(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
@@ -175,8 +178,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		lastUiContext: null,
 		poller: null,
 	};
+	const liveToolComponents = isChildSession ? undefined : new LiveToolComponentStore();
+	const liveSessionDirectory = isChildSession ? undefined : new LiveSessionDirectory(liveToolComponents);
+	const rendererCatalog = isChildSession ? undefined : new RendererCatalog(state.baseCwd);
 
 	const runtimeCleanup = () => {
+		liveSessionDirectory?.dispose();
+		liveToolComponents?.dispose();
+		rendererCatalog?.dispose();
 		widgetClient?.dispose();
 		widgetClient = undefined;
 		stopWidgetAnimation();
@@ -325,7 +334,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool(tool);
 	pi.registerTool(workflowTool);
-	registerSlashCommands(pi, state, getWidgetClient, childRegistry);
+	registerSlashCommands(
+		pi,
+		state,
+		getWidgetClient,
+		childRegistry,
+		rendererCatalog,
+		liveSessionDirectory,
+		liveToolComponents,
+	);
 	roleManager.registerRoleCommand();
 
 	// Host-only cross-activate state. Children don't need to tear down a
@@ -414,6 +431,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		await roleManager.initializeRootRole(ctx);
 	});
 	pi.on("session_shutdown", () => {
+		liveSessionDirectory?.dispose();
+		liveToolComponents?.dispose();
+		rendererCatalog?.dispose();
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
 				unsubscribe();

@@ -14,7 +14,6 @@ import { formatPhase } from "../state/run-phase.ts";
 import { workflowDisplayName } from "../state/workflow-display.ts";
 import { getDisplayItems, getSingleResultDisplayOutput } from "../shared/utils.ts";
 import {
-	getTermWidth,
 	RUNNING_GLYPH,
 	themeBold,
 	tintAgentName,
@@ -250,10 +249,10 @@ function resultGlyph(
 	return theme.fg("success", "✓");
 }
 
-function compactCurrentActivity(progress: AgentProgress): string {
+function compactCurrentActivity(progress: AgentProgress, width: number): string {
 	const phaseLine = formatPhase(progress.phase, progress.phaseStartedAt, Date.now(), progress.currentTool);
 	if (phaseLine && isToolPhase(progress.phase) && !progress.currentToolArgs) return phaseLine;
-	const toolLine = formatCurrentToolLine(progress, getTermWidth() - 4, false);
+	const toolLine = formatCurrentToolLine(progress, width, false);
 	if (toolLine) return toolLine;
 	return phaseLine || buildLiveStatusLine(progress) || "thinking…";
 }
@@ -589,19 +588,17 @@ function thinkingBarMaxMs(level?: string): number {
  * Width for progress bars scales with terminal width.
  * 120-wide -> 15, 180-wide -> 22, 240-wide -> 30, hard cap 40.
  */
-function adaptiveBarWidth(): number {
-	const termWidth = getTermWidth();
-	return Math.max(8, Math.min(40, Math.floor(termWidth / 8)));
+function adaptiveBarWidth(width: number): number {
+	return Math.max(8, Math.min(40, Math.floor(width / 8)));
 }
 
 /**
  * Width for the inline sparkline. Same family as adaptiveBarWidth but capped a touch lower
  * so the right-aligned sparkline doesn't crowd the stats column.
  */
-function adaptiveSparkWidth(): number {
-	const termWidth = getTermWidth();
+function adaptiveSparkWidth(width: number): number {
 	// Aggressive on wide terminals: 120w → 20, 180w → 30, 240w → 40, 320w → 53, cap 80.
-	return Math.max(8, Math.min(80, Math.floor(termWidth / 6)));
+	return Math.max(8, Math.min(80, Math.floor(width / 6)));
 }
 
 /**
@@ -727,11 +724,11 @@ function resolveRowProgress(d: Details, r: Details["results"][number]) {
 // Sparkline persists after completion: when not running, anchor `now` to the
 // last sample's timestamp so the final shape freezes at the moment of finish
 // rather than continuing to age leftward into oblivion.
-function rowSparkline(progress: AgentProgress | undefined, isRunning: boolean, theme: Theme): string {
+function rowSparkline(progress: AgentProgress | undefined, isRunning: boolean, theme: Theme, width: number): string {
 	const samples = progress?.tokenSamples;
 	if (!progress || !samples || samples.length < 2) return "";
 	const now = isRunning ? Date.now() : (samples[samples.length - 1]?.ts ?? Date.now());
-	return buildSparkline(samples, adaptiveSparkWidth(), theme, now);
+	return buildSparkline(samples, adaptiveSparkWidth(width), theme, now);
 }
 
 // `· N↗ active` while running, `· N subagents` once settled — the inline child
@@ -763,15 +760,14 @@ function makePipelineItemHeaderTracker(hasPipeline: boolean): (r: Details["resul
 	};
 }
 
-function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme): Component {
+function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme, width: number): Component {
 	const output = r.truncation?.text || getSingleResultDisplayOutput(r);
 	const progress = r.progress || r.progressSummary;
 	const isRunning = r.progress?.status === "running";
 	const contextBadge = forkContextBadge(theme, d.context);
 	const stats = statJoin(theme, [formatTurnStat(r.usage?.turns), formatProgressStats(theme, progress)]);
 	const c = new Container();
-	const width = getTermWidth() - 4;
-	const spark = rowSparkline(r.progress, isRunning, theme);
+	const spark = rowSparkline(r.progress, isRunning, theme, width);
 	// Single-agent block has no parent headline above it, so the row glyph itself
 	// must carry the liveness signal -- use the accent running glyph instead of the
 	// static ◇ that resultGlyph returns for running multi-block rows.
@@ -834,7 +830,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	return c;
 }
 
-function renderMultiCompact(d: Details, theme: Theme): Component {
+function renderMultiCompact(d: Details, theme: Theme, width: number): Component {
 	const hasRunning = anyResultRunning(d);
 	const ok = d.results.filter(
 		(r) =>
@@ -911,13 +907,18 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 				: theme.fg("success", "✓");
 	const contextBadge = forkContextBadge(theme, d.context);
 	const c = new Container();
-	const width = getTermWidth() - 4;
 	// Progress bar: parent-step granularity already computed above as sequenceParentTotal/Ok.
 	// Intentionally disabled pending redesign; wiring kept in place behind this flag.
 	const sequenceBarEnabled = false;
 	const sequenceBar =
 		sequenceBarEnabled && sequenceParentTotal > 1
-			? buildProgressBar(theme, sequenceParentOk, hasRunning ? 1 : 0, sequenceParentTotal, adaptiveBarWidth())
+			? buildProgressBar(
+					theme,
+					sequenceParentOk,
+					hasRunning ? 1 : 0,
+					sequenceParentTotal,
+					adaptiveBarWidth(width),
+				)
 			: "";
 	const sequenceBarPrefix = sequenceBar ? `${sequenceBar} ` : "";
 	// Child tally lives on each per-row header in multi-compact; the top-level mode
@@ -997,7 +998,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			(progressFromArray && "tokenSamples" in progressFromArray
 				? (progressFromArray as AgentProgress)
 				: undefined);
-		const spark = rowSparkline(fullProgForSpark, Boolean(rRunning), theme);
+		const spark = rowSparkline(fullProgForSpark, Boolean(rRunning), theme, width);
 		const rowBoldName = themeBold(theme, agentName);
 		// Color survives completion: read from any progress-shaped object that carries it.
 		const rowColor =
@@ -1046,7 +1047,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 				);
 			} else {
 				// Fallback when only ProgressSummary is available (no recentTools).
-				const activity = compactCurrentActivity(rProg as AgentProgress);
+				const activity = compactCurrentActivity(rProg as AgentProgress, width);
 				c.addChild(new Text(truncLine(theme.fg("dim", `    └─ ${activity}`), width), 0, 0));
 			}
 		} else if (!rPending) {
@@ -1127,6 +1128,31 @@ export function renderSubagentResult(
 	options: { expanded: boolean },
 	theme: Theme,
 ): Component {
+	let renderedWidth: number | undefined;
+	let renderedComponent: Component | undefined;
+	return {
+		invalidate(): void {
+			renderedComponent?.invalidate();
+			renderedWidth = undefined;
+			renderedComponent = undefined;
+		},
+		render(width: number): string[] {
+			const contentWidth = Math.max(1, width);
+			if (renderedWidth !== contentWidth || !renderedComponent) {
+				renderedWidth = contentWidth;
+				renderedComponent = buildSubagentResult(result, options, theme, contentWidth);
+			}
+			return renderedComponent.render(contentWidth);
+		},
+	};
+}
+
+function buildSubagentResult(
+	result: AgentToolResult<Details>,
+	options: { expanded: boolean },
+	theme: Theme,
+	width: number,
+): Component {
 	// `details` is not always a real Details (the workflow tool can return an
 	// arbitrary script value or undefined here). Make this renderer TOTAL over any
 	// `details` shape — including poison accessors/proxies — via two boundaries:
@@ -1138,14 +1164,14 @@ export function renderSubagentResult(
 		const d = result.details;
 		if (hasRenderableResults(d)) {
 			try {
-				return renderDetailsBody(d, options, theme);
+				return renderDetailsBody(d, options, theme, width);
 			} catch (error) {
 				logger.warn("renderSubagentResult: structured render failed, falling back to text", {
 					error: safeErrorMessage(error),
 				});
 			}
 		}
-		return renderSubagentResultText(result, theme);
+		return renderSubagentResultText(result, theme, width);
 	} catch (error) {
 		logger.warn("renderSubagentResult: total fallback after render failure", { error: safeErrorMessage(error) });
 		return new Text("(unrenderable subagent result)", 0, 0);
@@ -1154,12 +1180,11 @@ export function renderSubagentResult(
 
 // Text fallback for non-Details payloads (or a structured-render failure). Uses
 // the result's content text, which always carries the human-readable output.
-function renderSubagentResultText(result: AgentToolResult<Details>, theme: Theme): Component {
+function renderSubagentResultText(result: AgentToolResult<Details>, theme: Theme, width: number): Component {
 	const d = result.details;
 	const t = result.content[0];
 	const text = t?.type === "text" ? t.text : "(no output)";
 	const contextPrefix = d?.context === "fork" ? `${theme.fg("warning", "[fork]")} ` : "";
-	const width = getTermWidth() - 4;
 	const lines = text.split("\n");
 	if (lines.length === 1) return new Text(truncLine(`${contextPrefix}${text}`, width), 0, 0);
 	const c = new Container();
@@ -1172,13 +1197,13 @@ function renderSubagentResultText(result: AgentToolResult<Details>, theme: Theme
 // The structured Details body. Total over real Details; may throw on a
 // malformed/partial Details, which renderSubagentResult catches and falls back
 // to text — so this never needs to defensively validate the SingleResult contract.
-function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Theme): Component {
+function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Theme, width: number): Component {
 	const expanded = options.expanded;
 	const mdTheme = getMarkdownTheme();
 
 	if (d.mode === "single" && d.results.length === 1) {
 		const r = d.results[0];
-		if (!expanded) return renderSingleCompact(d, r, theme);
+		if (!expanded) return renderSingleCompact(d, r, theme, width);
 		const isRunning = r.progress?.status === "running";
 		const icon = isRunning
 			? theme.fg("warning", "running")
@@ -1197,7 +1222,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 					? ` | ${r.progressSummary.toolCount} tools, ${formatTokens(r.progressSummary.tokens)} tok, ${formatDuration(r.progressSummary.durationMs)}`
 					: "";
 
-		const w = getTermWidth() - 4;
+		const w = width;
 		const fit = (text: string) => (expanded ? text : truncLine(text, w));
 		const toolCallLines = getToolCallLines(r, expanded);
 		const c = new Container();
@@ -1284,7 +1309,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		return c;
 	}
 
-	if (!expanded) return renderMultiCompact(d, theme);
+	if (!expanded) return renderMultiCompact(d, theme, width);
 
 	const hasRunning = anyResultRunning(d);
 	const ok = d.results.filter(
@@ -1369,7 +1394,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			})()
 		: null;
 
-	const w = getTermWidth() - 4;
+	const w = width;
 	const fit = (text: string) => (expanded ? text : truncLine(text, w));
 	const c = new Container();
 	c.addChild(

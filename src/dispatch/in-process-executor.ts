@@ -21,6 +21,7 @@ import {
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "../shared/logger.ts";
 import { runInChildSessionContext } from "../shared/child-session-context.ts";
+import { publishLiveSession } from "../shared/live-session-relay.ts";
 import {
 	getLineageForSession,
 	pushPendingChildLineage,
@@ -316,6 +317,8 @@ export function dispatchAsyncChild(step: ChildAgentStep, ctx: ChildAgentContext)
 
 function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAgentHandle {
 	let session: AgentSession | undefined;
+	let unpublishLiveSession: (() => void) | undefined;
+	const rootSessionId = step.rootSessionId ?? step.parentSessionId;
 	const localAbort = new AbortController();
 	const combinedAbort = combineAbortSignals([
 		ctx.abortSignal,
@@ -350,6 +353,13 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 		try {
 			const result = await executeChildAgent(step, teedCtx, combinedSignal, (createdSession) => {
 				session = createdSession;
+				unpublishLiveSession?.();
+				unpublishLiveSession = publishLiveSession({
+					runId: step.runId,
+					stepIndex: step.stepIndex,
+					session: createdSession,
+					...(rootSessionId ? { rootSessionId } : {}),
+				});
 			});
 			// Final usage is NOT carried in the patch stream; land it in memory here.
 			ctx.registry.finalizeView(step.runId, result);
@@ -359,6 +369,7 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 			// Drop this child's listeners from the long-lived source signals so
 			// completed children do not accumulate on the parent tool signal.
 			combinedAbort.dispose();
+			unpublishLiveSession?.();
 			ctx.registry.delete(step.runId, step.stepIndex);
 		}
 	})();

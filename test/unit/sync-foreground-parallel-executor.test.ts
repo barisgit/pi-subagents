@@ -22,6 +22,7 @@ let promptGate:
 	  }
 	| undefined;
 let openedSessionFiles: string[] = [];
+let promptEvents: Array<unknown | (() => void)> = [];
 
 class FakeResourceLoader {
 	async reload(): Promise<void> {}
@@ -38,6 +39,10 @@ class FakeAgentSession {
 	async prompt(): Promise<void> {
 		for (const listener of this.listeners)
 			listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
+		for (const event of promptEvents) {
+			if (typeof event === "function") event();
+			else for (const listener of this.listeners) listener(event);
+		}
 		if (promptGate) {
 			promptGate.started++;
 			if (promptGate.started === promptGate.expected) promptGate.resolveAllStarted();
@@ -192,6 +197,7 @@ afterEach(() => {
 	restoreRuntime?.();
 	restoreRuntime = undefined;
 	promptGate = undefined;
+	promptEvents = [];
 	openedSessionFiles = [];
 	setRegistryPathForTests(null);
 	if (previousHome === undefined) delete process.env.HOME;
@@ -201,6 +207,62 @@ afterEach(() => {
 });
 
 describe("sync foreground parallel executor", () => {
+	it("streams the latest bounded nested tool partial into parent progress before tool end", async () => {
+		const root = setupTempHome("sync-nested-tool-partial-");
+		installFakeRuntime();
+		const updates: Array<{ details?: { progress?: Array<{ recentOutput?: string[]; currentTool?: string }> } }> =
+			[];
+		let partialUpdatesBeforeEnd = 0;
+		promptEvents = [
+			{ type: "tool_execution_start", toolCallId: "nested", toolName: "subagent", args: {} },
+			...(["chunk-1", "chunk-2", "chunk-3"] as const).map((text) => ({
+				type: "tool_execution_update",
+				toolCallId: "nested",
+				toolName: "subagent",
+				args: {},
+				partialResult: {
+					content: [{ type: "text", text: "(running...)" }],
+					details: { progress: [{ recentOutput: [text] }] },
+				},
+			})),
+			() => {
+				partialUpdatesBeforeEnd = updates.filter((update) => JSON.stringify(update).includes("chunk-")).length;
+			},
+			{
+				type: "tool_execution_end",
+				toolCallId: "nested",
+				toolName: "subagent",
+				result: { content: [{ type: "text", text: "done" }] },
+				isError: false,
+			},
+		];
+		const executor = createSubagentExecutor(makeDeps(root));
+
+		const result = await executor.execute(
+			"id",
+			{ run: [{ agent: "A", task: "alpha" }] } as never,
+			new AbortController().signal,
+			(update) => updates.push(update as never),
+			makeCtx(root) as never,
+		);
+
+		const nestedSnapshots = updates.filter((update) => JSON.stringify(update).includes("chunk-"));
+		assert.ok(partialUpdatesBeforeEnd >= 1, "the parent receives a visible partial before tool end");
+		assert.ok(
+			nestedSnapshots.length >= 1,
+			`a nested partial reaches the parent before settlement: ${JSON.stringify({ result, updates })}`,
+		);
+		assert.ok(
+			nestedSnapshots.some((update) => JSON.stringify(update).includes('"currentTool":"subagent"')),
+			"nested partials preserve the current tool metadata",
+		);
+		assert.match(
+			JSON.stringify(nestedSnapshots.at(-1)),
+			/chunk-3/,
+			"the trailing flush preserves the newest nested output",
+		);
+	});
+
 	it("foreground parallel cleans up foregroundControls after completion", async () => {
 		const root = setupTempHome("sync-foreground-parallel-cleanup-");
 		installFakeRuntime();

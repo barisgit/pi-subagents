@@ -13,15 +13,17 @@ import {
 	getMarkdownTheme,
 	highlightCode,
 	ToolExecutionComponent,
+	type AgentSession,
 	type AgentSessionEvent,
 	type Theme,
+	type ToolDefinition,
 	UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Markdown, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
 import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
-import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
+import { readRunTranscript, type RunMessageSession, type TranscriptLine } from "../state/run-transcript.ts";
 import { formatDuration, formatTokenCounter, shortenPath } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
@@ -29,6 +31,11 @@ import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
 import { parentRunIdOf } from "./dashboard-row-model.ts";
 import type { LiveRun } from "../state/run-view.ts";
 import { shapeWorkflowPhasePlan } from "../state/workflow-display.ts";
+import {
+	dashboardPartialResult,
+	type LiveToolProgress,
+	type LiveToolProgressBySession,
+} from "../shared/live-session-relay.ts";
 
 // Single ellipsis glyph for every dashboard truncation. pi-tui's
 // truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
@@ -38,6 +45,73 @@ const TAB_WIDTH = 4;
 
 function normalizePaneText(text: string): string {
 	return text.replace(/\t/g, " ".repeat(TAB_WIDTH));
+}
+
+export class LiveToolComponentStore {
+	private readonly pendingTools = new Map<DashboardMessageSession, Map<string, PendingToolComponent>>();
+
+	toolsFor(session: DashboardMessageSession): Map<string, PendingToolComponent> {
+		let tools = this.pendingTools.get(session);
+		if (!tools) {
+			tools = new Map();
+			this.pendingTools.set(session, tools);
+		}
+		return tools;
+	}
+
+	handleSessionEvent(session: AgentSession, event: AgentSessionEvent): void {
+		if (event.type === "compaction_end") {
+			this.releaseSession(session);
+			return;
+		}
+		const tools = this.pendingTools.get(session);
+		if (!tools) return;
+		const pending = "toolCallId" in event ? tools.get(event.toolCallId) : undefined;
+		if (!pending) return;
+		if (event.type === "tool_execution_start" || event.type === "tool_execution_update") {
+			pending.component.updateArgs(event.args);
+			if (!pending.argsComplete) {
+				pending.component.setArgsComplete();
+				pending.argsComplete = true;
+			}
+			if (!pending.executionStarted) {
+				pending.component.markExecutionStarted();
+				pending.executionStarted = true;
+			}
+			if (event.type === "tool_execution_update") {
+				const partialResult = dashboardPartialResult(event.partialResult);
+				if (partialResult) {
+					pending.latestResult = partialResult;
+					pending.component.updateResult(partialResult, true);
+				}
+			}
+			return;
+		}
+		if (event.type === "tool_execution_end") {
+			pending.component.updateResult({ ...event.result, isError: event.isError });
+			tools.delete(event.toolCallId);
+			if (tools.size === 0) this.pendingTools.delete(session);
+		}
+	}
+
+	releaseSession(session: DashboardMessageSession): void {
+		const tools = this.pendingTools.get(session);
+		if (!tools) return;
+		for (const pending of tools.values()) {
+			pending.component.updateResult(pending.latestResult ?? { content: [], isError: true });
+		}
+		this.pendingTools.delete(session);
+	}
+
+	dispose(): void {
+		for (const session of [...this.pendingTools.keys()]) this.releaseSession(session);
+	}
+}
+
+export interface DashboardDisplayMode {
+	revision: number;
+	toolsExpanded: boolean;
+	hideThinking: boolean;
 }
 
 function clip(text: string, width: number): string {
@@ -432,8 +506,13 @@ function userMessageText(message: Extract<AgentMessage, { role: "user" }>): stri
 		.join("");
 }
 
-export interface LiveDashboardSession {
+interface DashboardMessageSession {
 	readonly messages: AgentMessage[];
+	readonly stepIndex?: number;
+	getToolDefinition?(name: string): ToolDefinition | undefined;
+}
+
+export interface LiveDashboardSession extends DashboardMessageSession {
 	subscribe(listener: (event?: AgentSessionEvent) => void): () => void;
 }
 
@@ -444,9 +523,19 @@ interface RenderedMessageGroup {
 
 interface LiveSessionCacheEntry {
 	width: number;
+	revision: number;
 	groups: RenderedMessageGroup[];
 	lines: string[];
 	dirtyFrom?: number;
+}
+
+type ToolResultPayload = Parameters<ToolExecutionComponent["updateResult"]>[0];
+
+interface PendingToolComponent {
+	component: ToolExecutionComponent;
+	executionStarted: boolean;
+	argsComplete: boolean;
+	latestResult?: ToolResultPayload;
 }
 
 function messageGroups(messages: AgentMessage[]): AgentMessage[][] {
@@ -476,15 +565,45 @@ function sameMessageGroup(left: AgentMessage[], right: AgentMessage[]): boolean 
 }
 
 export class LiveSessionRenderCache {
-	private readonly entries = new WeakMap<LiveDashboardSession, LiveSessionCacheEntry>();
+	private readonly entries = new WeakMap<DashboardMessageSession, LiveSessionCacheEntry>();
+	private readonly pendingTools = new WeakMap<DashboardMessageSession, Map<string, PendingToolComponent>>();
+	private readonly pendingSessions = new Set<DashboardMessageSession>();
+	private readonly liveToolComponents: LiveToolComponentStore | undefined;
+
+	constructor(liveToolComponents?: LiveToolComponentStore) {
+		this.liveToolComponents = liveToolComponents;
+	}
+
+	clear(session: DashboardMessageSession): void {
+		this.entries.delete(session);
+		if (!this.liveToolComponents) this.clearPendingTools(session);
+	}
+
+	private clearPendingTools(session: DashboardMessageSession): void {
+		const tools = this.pendingTools.get(session);
+		if (!tools) return;
+		for (const pending of tools.values()) {
+			pending.component.updateResult(pending.latestResult ?? { content: [], isError: true });
+		}
+		this.pendingTools.delete(session);
+		this.pendingSessions.delete(session);
+	}
+
+	dispose(): void {
+		if (this.liveToolComponents) return;
+		for (const session of [...this.pendingSessions]) this.clearPendingTools(session);
+	}
 
 	invalidate(session: LiveDashboardSession, event?: AgentSessionEvent): void {
 		const entry = this.entries.get(session);
-		if (!entry) return;
 		if (event?.type === "compaction_end") {
+			if (this.liveToolComponents) this.liveToolComponents.releaseSession(session);
+			else this.clearPendingTools(session);
+			if (!entry) return;
 			entry.dirtyFrom = 0;
 			return;
 		}
+		if (!entry) return;
 		if (event?.type === "message_start") {
 			entry.dirtyFrom = Math.min(entry.dirtyFrom ?? entry.groups.length, entry.groups.length);
 			return;
@@ -493,6 +612,8 @@ export class LiveSessionRenderCache {
 			event === undefined ||
 			event.type === "message_update" ||
 			event.type === "message_end" ||
+			event.type === "tool_execution_start" ||
+			event.type === "tool_execution_update" ||
 			event.type === "tool_execution_end" ||
 			event.type === "agent_end"
 		) {
@@ -501,16 +622,19 @@ export class LiveSessionRenderCache {
 	}
 
 	render(
-		session: LiveDashboardSession,
+		session: DashboardMessageSession,
 		width: number,
-		renderGroup: (messages: AgentMessage[]) => string[],
+		revision: number,
+		renderGroup: (messages: AgentMessage[], pendingTools: Map<string, PendingToolComponent>) => string[],
 	): string[] {
 		const entry = this.entries.get(session);
-		if (entry && entry.width === width && entry.dirtyFrom === undefined) return entry.lines;
+		if (entry && entry.width === width && entry.revision === revision && entry.dirtyFrom === undefined)
+			return entry.lines;
 
 		const groups = messageGroups(session.messages);
-		let rebuildFrom = entry?.width === width ? (entry.dirtyFrom ?? 0) : 0;
-		if (entry?.width === width) {
+		const canReuse = entry?.width === width && entry.revision === revision;
+		let rebuildFrom = canReuse ? (entry.dirtyFrom ?? 0) : 0;
+		if (canReuse) {
 			const shared = Math.min(entry.groups.length, groups.length);
 			for (let index = 0; index < shared; index++) {
 				if (!sameMessageGroup(entry.groups[index]!.messages, groups[index]!)) {
@@ -521,20 +645,105 @@ export class LiveSessionRenderCache {
 			if (groups.length < entry.groups.length) rebuildFrom = Math.min(rebuildFrom, groups.length);
 		}
 
-		const renderedGroups = entry?.width === width ? entry.groups.slice(0, rebuildFrom) : [];
+		const renderedGroups = canReuse ? entry.groups.slice(0, rebuildFrom) : [];
+		let pendingTools = this.liveToolComponents?.toolsFor(session) ?? this.pendingTools.get(session);
+		if (!pendingTools) {
+			pendingTools = new Map();
+			if (!this.liveToolComponents) this.pendingTools.set(session, pendingTools);
+		}
 		for (let index = rebuildFrom; index < groups.length; index++) {
 			const messages = groups[index]!;
-			renderedGroups.push({ messages, lines: renderGroup(messages) });
+			renderedGroups.push({ messages, lines: renderGroup(messages, pendingTools) });
 		}
 		const lines = renderedGroups.flatMap((group) => group.lines);
-		this.entries.set(session, { width, groups: renderedGroups, lines });
+		if (this.liveToolComponents && pendingTools.size === 0) this.liveToolComponents.releaseSession(session);
+		if (!this.liveToolComponents && pendingTools.size > 0 && "subscribe" in session) {
+			this.pendingSessions.add(session);
+		} else if (!this.liveToolComponents) {
+			if (pendingTools.size === 0) this.pendingTools.delete(session);
+			this.pendingSessions.delete(session);
+		}
+		this.entries.set(session, { width, revision, groups: renderedGroups, lines });
 		return lines;
 	}
 }
 
-function renderLiveMessages(messages: AgentMessage[], tui: TUI, width: number, cwd: string): string[] {
+function controlSequenceEnd(text: string, start: number): number {
+	for (let index = start; index < text.length; index++) {
+		const code = text.charCodeAt(index);
+		if (code >= 0x40 && code <= 0x7e) return index + 1;
+		if (code < 0x20 || code > 0x3f) return index + 1;
+	}
+	return text.length;
+}
+
+function controlStringEnd(text: string, start: number): number {
+	for (let index = start; index < text.length; index++) {
+		const code = text.charCodeAt(index);
+		if (code === 0x07 || code === 0x9c) return index + 1;
+		if (code === 0x1b && text[index + 1] === "\\") return index + 2;
+	}
+	return text.length;
+}
+
+function sanitizeLiveRow(row: string): string {
+	let safe = "";
+	for (let index = 0; index < row.length; ) {
+		const code = row.charCodeAt(index);
+		if (code === 0x1b) {
+			const introducer = row[index + 1];
+			if (introducer === "[") {
+				const end = controlSequenceEnd(row, index + 2);
+				const sequence = row.slice(index, end);
+				const parameters = sequence.slice(2, -1);
+				if (sequence.endsWith("m") && /^[0-9:;]*$/.test(parameters)) safe += sequence;
+				index = end;
+				continue;
+			}
+			if (
+				introducer === "]" ||
+				introducer === "P" ||
+				introducer === "_" ||
+				introducer === "^" ||
+				introducer === "X"
+			) {
+				index = controlStringEnd(row, index + 2);
+				continue;
+			}
+			index = Math.min(row.length, index + 2);
+			continue;
+		}
+		if (code === 0x9b) {
+			index = controlSequenceEnd(row, index + 1);
+			continue;
+		}
+		if (code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f) {
+			index = controlStringEnd(row, index + 1);
+			continue;
+		}
+		if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+			index++;
+			continue;
+		}
+		safe += row[index];
+		index++;
+	}
+	return safe;
+}
+
+function renderLiveMessages(
+	session: DashboardMessageSession,
+	messages: AgentMessage[],
+	pendingTools: Map<string, PendingToolComponent>,
+	tui: TUI,
+	width: number,
+	cwd: string,
+	getToolDefinition?: (name: string) => ToolDefinition | undefined,
+	toolProgress?: ReadonlyMap<string, LiveToolProgress>,
+	display: DashboardDisplayMode = { revision: 0, toolsExpanded: false, hideThinking: false },
+): string[] {
 	const lines: string[] = [];
-	const tools = new Map<string, ToolExecutionComponent>();
+	const openToolIds = new Set<string>();
 	const markdownTheme = getMarkdownTheme();
 	const renderTui = new Proxy(tui, {
 		get(target, property, receiver) {
@@ -548,55 +757,104 @@ function renderLiveMessages(messages: AgentMessage[], tui: TUI, width: number, c
 			const text = userMessageText(message);
 			if (text) component = new UserMessageComponent(text, markdownTheme, 0);
 		} else if (message.role === "assistant") {
-			component = new AssistantMessageComponent(message, false, markdownTheme, undefined, 0);
+			component = new AssistantMessageComponent(message, display.hideThinking, markdownTheme, undefined, 0);
 			for (const content of message.content) {
 				if (content.type !== "toolCall") continue;
-				const tool = new ToolExecutionComponent(
-					content.name,
-					content.id,
-					content.arguments,
-					{ showImages: false },
-					undefined,
-					renderTui,
-					cwd,
-				);
-				tools.set(content.id, tool);
+				let pending = pendingTools.get(content.id);
+				if (!pending) {
+					pending = {
+						component: new ToolExecutionComponent(
+							content.name,
+							content.id,
+							content.arguments,
+							{ showImages: false },
+							session.getToolDefinition?.(content.name) ?? getToolDefinition?.(content.name),
+							renderTui,
+							cwd,
+						),
+						executionStarted: false,
+						argsComplete: false,
+					};
+					pendingTools.set(content.id, pending);
+				} else {
+					pending.component.updateArgs(content.arguments);
+				}
+				pending.component.setExpanded(display.toolsExpanded);
+				const progress = toolProgress?.get(content.id);
+				if (progress) {
+					if (!pending.argsComplete) {
+						pending.component.setArgsComplete();
+						pending.argsComplete = true;
+					}
+					if (!pending.executionStarted) {
+						pending.component.markExecutionStarted();
+						pending.executionStarted = true;
+					}
+					if (progress.partialResult) {
+						pending.latestResult = progress.partialResult;
+						pending.component.updateResult(progress.partialResult, true);
+					}
+				}
+				openToolIds.add(content.id);
 			}
 		} else if (message.role === "toolResult") {
-			const tool = tools.get(message.toolCallId);
-			if (tool) {
-				tool.updateResult({
+			const pending = pendingTools.get(message.toolCallId);
+			if (pending) {
+				pending.component.updateResult({
 					...message,
 					content: message.content.filter((content) => content.type !== "image"),
 				});
-				lines.push(...tool.render(width));
-				tools.delete(message.toolCallId);
+				lines.push(...pending.component.render(width));
+				pendingTools.delete(message.toolCallId);
+				openToolIds.delete(message.toolCallId);
 			}
 		} else if (message.role === "bashExecution") {
 			const bash = new BashExecutionComponent(message.command, renderTui, message.excludeFromContext);
+			bash.setExpanded(display.toolsExpanded);
 			if (message.output) bash.appendOutput(message.output);
 			bash.setComplete(message.exitCode, message.cancelled, undefined, message.fullOutputPath);
 			component = bash;
 		}
 		if (component) lines.push(...component.render(width));
 	}
-	for (const tool of tools.values()) lines.push(...tool.render(width));
-	return lines;
+	for (const toolCallId of openToolIds) {
+		const pending = pendingTools.get(toolCallId);
+		if (pending) lines.push(...pending.component.render(width));
+	}
+	return lines.map(sanitizeLiveRow);
 }
 
-function buildLiveRightLines(
-	sessions: LiveDashboardSession[],
+function buildLiveRightLines<TSession extends DashboardMessageSession>(
+	sessions: TSession[],
 	tui: TUI,
 	width: number,
 	cwd: string,
 	cache?: LiveSessionRenderCache,
+	getToolDefinition?: (name: string) => ToolDefinition | undefined,
+	toolProgress?: ReadonlyMap<TSession, ReadonlyMap<string, LiveToolProgress>>,
+	display: DashboardDisplayMode = { revision: 0, toolsExpanded: false, hideThinking: false },
 ): string[] {
 	const lines: string[] = [];
 	for (const [index, session] of sessions.entries()) {
-		const render = (messages: AgentMessage[]) => renderLiveMessages(messages, tui, width, cwd);
-		const sessionLines = cache ? cache.render(session, width, render) : render(session.messages);
+		const uncachedPendingTools = new Map<string, PendingToolComponent>();
+		const render = (messages: AgentMessage[], pendingTools = uncachedPendingTools) =>
+			renderLiveMessages(
+				session,
+				messages,
+				pendingTools,
+				tui,
+				width,
+				cwd,
+				getToolDefinition,
+				toolProgress?.get(session),
+				display,
+			);
+		const sessionLines = cache ? cache.render(session, width, display.revision, render) : render(session.messages);
 		if (sessionLines.length === 0) continue;
-		if (sessions.length > 1) lines.push(`Step ${index + 1}`);
+		if (sessions.length > 1) {
+			const stepNumber = session.stepIndex === undefined ? index + 1 : session.stepIndex + 1;
+			lines.push(`Step ${stepNumber}`);
+		}
 		lines.push(...sessionLines);
 	}
 	return lines;
@@ -607,15 +865,54 @@ export function buildRightLines(
 	run: LiveRun | undefined,
 	width: number,
 	runs: LiveRun[] = [],
-	live?: { sessions: LiveDashboardSession[]; tui: TUI; cache?: LiveSessionRenderCache },
+	live?: {
+		sessions: LiveDashboardSession[];
+		tui: TUI;
+		cache?: LiveSessionRenderCache;
+		toolProgress?: LiveToolProgressBySession<LiveDashboardSession>;
+		display?: DashboardDisplayMode;
+	},
+	historical?: {
+		sessions: RunMessageSession[];
+		tui: TUI;
+		cache?: LiveSessionRenderCache;
+		getToolDefinition: (name: string) => ToolDefinition | undefined;
+		display?: DashboardDisplayMode;
+	},
 ): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
 	if (live?.sessions.length) {
 		try {
-			const lines = buildLiveRightLines(live.sessions, live.tui, width, run.run.cwd ?? process.cwd(), live.cache);
+			const lines = buildLiveRightLines(
+				live.sessions,
+				live.tui,
+				width,
+				run.run.cwd ?? process.cwd(),
+				live.cache,
+				undefined,
+				live.toolProgress,
+				live.display,
+			);
 			if (lines.length > 0) return lines;
 		} catch {
 			// A stale or unusable handle falls through to the persisted transcript.
+		}
+	}
+	if (historical?.sessions.some((session) => session.messages.length > 0)) {
+		try {
+			const lines = buildLiveRightLines(
+				historical.sessions,
+				historical.tui,
+				width,
+				run.run.cwd ?? process.cwd(),
+				historical.cache,
+				historical.getToolDefinition,
+				undefined,
+				historical.display,
+			);
+			if (lines.length > 0) return lines;
+		} catch {
+			// Malformed or unusable persisted messages fall through to the compact transcript.
 		}
 	}
 	if (run.run.workflow) {

@@ -15,6 +15,7 @@ import { getShardPath, setRegistryPathForTests } from "../../src/state/runs-regi
 import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
 import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
+import { __resetProcessGlobalForTest, processGlobal } from "../../src/shared/process-global.ts";
 
 function clearLineage(...sessionIds: string[]): void {
 	const globals = globalThis as Record<string, unknown>;
@@ -186,6 +187,31 @@ describe("spawnRaw API exposure", () => {
 			else process.env.PI_SUBAGENT_RUNTIME_MODE = previousRuntimeMode;
 			if (previousCurrentAgent === undefined) delete process.env.PI_SUBAGENT_CURRENT_AGENT;
 			else process.env.PI_SUBAGENT_CURRENT_AGENT = previousCurrentAgent;
+		}
+	});
+
+	it("owns the live-session observer only in the host activation and disposes it on reload cleanup", () => {
+		const relayKey = "pi.subagents.live-session-relay";
+		__resetProcessGlobalForTest(relayKey);
+		const relayListeners = processGlobal(relayKey, () => new Set<unknown>());
+		const globals = globalThis as Record<string, unknown>;
+		const host = createPiHarness();
+		const child = createPiHarness();
+
+		try {
+			registerSubagentExtension(host.pi as never);
+			const hostCleanup = globals.__piSubagentRuntimeCleanup;
+			assert.equal(relayListeners.size, 1);
+			assert.equal(typeof hostCleanup, "function");
+
+			runInChildSessionContext(() => registerSubagentExtension(child.pi as never));
+			assert.equal(relayListeners.size, 1);
+			assert.equal(globals.__piSubagentRuntimeCleanup, hostCleanup);
+
+			if (typeof hostCleanup === "function") hostCleanup();
+			assert.equal(relayListeners.size, 0);
+		} finally {
+			__resetProcessGlobalForTest(relayKey);
 		}
 	});
 

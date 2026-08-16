@@ -139,6 +139,87 @@ function snapshotProgress(progress: AgentProgress): AgentProgress {
 	};
 }
 
+export function createProgressUpdateCoalescer(input: {
+	emit: () => void;
+	delayMs?: number;
+	setTimeoutFn?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout> | number;
+	clearTimeoutFn?: (timer: ReturnType<typeof setTimeout> | number) => void;
+}): { request: () => void; flush: () => void; stop: (flushPending?: boolean) => void } {
+	const delayMs = input.delayMs ?? 300;
+	const setTimeoutFn = input.setTimeoutFn ?? setTimeout;
+	const clearTimeoutFn = input.clearTimeoutFn ?? clearTimeout;
+	let timer: ReturnType<typeof setTimeout> | number | undefined;
+	let pending = false;
+	let active = true;
+	const clearTimer = () => {
+		if (timer !== undefined) clearTimeoutFn(timer);
+		timer = undefined;
+	};
+	const scheduleWindow = () => {
+		timer = setTimeoutFn(() => {
+			timer = undefined;
+			if (!active || !pending) return;
+			pending = false;
+			input.emit();
+		}, delayMs);
+	};
+	return {
+		request: () => {
+			if (!active) return;
+			if (timer === undefined) {
+				input.emit();
+				scheduleWindow();
+				return;
+			}
+			pending = true;
+		},
+		flush: () => {
+			if (!active) return;
+			clearTimer();
+			if (!pending) return;
+			pending = false;
+			input.emit();
+		},
+		stop: (flushPending = true) => {
+			if (!active) return;
+			const shouldEmit = flushPending && pending;
+			clearTimer();
+			pending = false;
+			active = false;
+			if (shouldEmit) input.emit();
+		},
+	};
+}
+
+function nestedPartialProgressText(value: unknown): string {
+	if (typeof value !== "object" || value === null) return "";
+	const partial = value as Record<string, unknown>;
+	const output: string[] = [];
+	if (Array.isArray(partial.content)) {
+		for (const item of partial.content) {
+			if (typeof item === "object" && item !== null && "type" in item && item.type === "text" && "text" in item) {
+				if (typeof item.text === "string") output.push(item.text);
+			}
+		}
+	}
+	const collectProgress = (candidate: unknown) => {
+		if (typeof candidate !== "object" || candidate === null || !("recentOutput" in candidate)) return;
+		if (!Array.isArray(candidate.recentOutput)) return;
+		for (const line of candidate.recentOutput) if (typeof line === "string") output.push(line);
+	};
+	if (typeof partial.details === "object" && partial.details !== null) {
+		const details = partial.details as Record<string, unknown>;
+		if (Array.isArray(details.progress)) for (const item of details.progress) collectProgress(item);
+		if (Array.isArray(details.results)) {
+			for (const result of details.results) {
+				if (typeof result === "object" && result !== null && "progress" in result)
+					collectProgress(result.progress);
+			}
+		}
+	}
+	return output.join("\n");
+}
+
 export async function runInProcessChildStep(input: {
 	data: ExecutionContextData;
 	deps: ExecutorDeps;
@@ -266,6 +347,7 @@ export async function runInProcessChildStep(input: {
 		};
 		input.onUpdate?.(input.wrapUpdateDetails ? input.wrapUpdateDetails(update) : update);
 	};
+	const partialUpdateCoalescer = createProgressUpdateCoalescer({ emit: emitUpdate });
 	const applyStatusPatchToProgress = (patch: StatusPatch) => {
 		let shouldEmit = false;
 		if (patch.activity?.updatedAt !== undefined) {
@@ -305,7 +387,15 @@ export async function runInProcessChildStep(input: {
 						: undefined;
 					progress.currentToolStartedAt = now;
 					emitUpdate();
+				} else if (record.type === "tool_execution_update") {
+					if (progress.phase !== "tool_streaming") {
+						progress.phase = "tool_streaming";
+						progress.phaseStartedAt = now;
+					}
+					appendProgressOutput(progress, nestedPartialProgressText(record.partialResult));
+					partialUpdateCoalescer.request();
 				} else if (record.type === "tool_execution_end") {
+					partialUpdateCoalescer.flush();
 					if (progress.currentTool) {
 						const durationMs =
 							progress.currentToolStartedAt !== undefined
@@ -333,7 +423,9 @@ export async function runInProcessChildStep(input: {
 					progress.currentToolStartedAt = undefined;
 					progress.lastToolEndAt = now;
 					emitUpdate();
-				} else if (record.type === "message_end" && record.message) {
+				} else if (record.type === "message_end") {
+					partialUpdateCoalescer.flush();
+					if (!record.message) return;
 					const message = record.message as Message;
 					messages.push(message);
 					if (message.role === "assistant") {
@@ -367,6 +459,7 @@ export async function runInProcessChildStep(input: {
 			pi: deps.pi,
 		});
 	} finally {
+		partialUpdateCoalescer.stop();
 		activityTicker.stop();
 		// Drop this child's listeners from the long-lived parent/interrupt signals
 		// so completed children do not accumulate listeners on them.

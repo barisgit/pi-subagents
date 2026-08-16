@@ -1,7 +1,57 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import { describe, it } from "node:test";
-import { childResultToSingleResult, combineOptionalSignals } from "../../src/dispatch/child-step-runner.ts";
+import {
+	childResultToSingleResult,
+	combineOptionalSignals,
+	createProgressUpdateCoalescer,
+} from "../../src/dispatch/child-step-runner.ts";
+
+describe("createProgressUpdateCoalescer", () => {
+	it("bounds a burst to leading and trailing updates", () => {
+		let callback: (() => void) | undefined;
+		let emits = 0;
+		const coalescer = createProgressUpdateCoalescer({
+			emit: () => emits++,
+			setTimeoutFn: (next) => {
+				callback = next;
+				return 1 as never;
+			},
+			clearTimeoutFn: () => {
+				callback = undefined;
+			},
+		});
+
+		coalescer.request();
+		coalescer.request();
+		coalescer.request();
+		assert.equal(emits, 1);
+		callback?.();
+		assert.equal(emits, 2);
+	});
+
+	it("flushes once and prevents callbacks after settlement", () => {
+		let callback: (() => void) | undefined;
+		let emits = 0;
+		const coalescer = createProgressUpdateCoalescer({
+			emit: () => emits++,
+			setTimeoutFn: (next) => {
+				callback = next;
+				return 1 as never;
+			},
+			clearTimeoutFn: () => {},
+		});
+
+		coalescer.request();
+		coalescer.request();
+		const lateCallback = callback;
+		coalescer.stop();
+		assert.equal(emits, 2);
+		lateCallback?.();
+		coalescer.request();
+		assert.equal(emits, 2);
+	});
+});
 
 describe("combineOptionalSignals", () => {
 	it("removes listeners from the remaining signals after one aborts", () => {

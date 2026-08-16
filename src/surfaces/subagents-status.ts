@@ -1,6 +1,12 @@
 import * as path from "node:path";
 import { colorForAgentName } from "../shared/agents.ts";
-import { copyToClipboard, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+	copyToClipboard,
+	type AppKeybinding,
+	type KeybindingsManager,
+	type Theme,
+	type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -31,9 +37,11 @@ import {
 	buildRightLines,
 	type LiveDashboardSession,
 	LiveSessionRenderCache,
+	type LiveToolComponentStore,
 	statusGlyph,
 } from "./dashboard-detail-renderer.ts";
-import { readRunTranscript } from "../state/run-transcript.ts";
+import type { LiveToolProgress } from "../shared/live-session-relay.ts";
+import { readRunTranscript, RunMessageReader } from "../state/run-transcript.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
 import { workflowDisplayName } from "../state/workflow-display.ts";
@@ -122,6 +130,26 @@ interface StatusOverlayDeps {
 	// that only exercise the disk path.
 	getOwnedRunViews?: () => Map<string, AsyncRunSummary>;
 	getLiveSessions?: (runId: string) => LiveDashboardSession[];
+	getLiveToolProgress?: (session: LiveDashboardSession) => ReadonlyMap<string, LiveToolProgress>;
+	liveToolComponents?: LiveToolComponentStore;
+	rendererCatalog?: { getToolDefinition(name: string): ToolDefinition | undefined };
+	runMessageReader?: RunMessageReader;
+	keybindings?: Pick<KeybindingsManager, "getKeys">;
+	getToolsExpanded?: () => boolean;
+	setToolsExpanded?: (expanded: boolean) => void;
+}
+
+function effectiveKeys(
+	keybindings: Pick<KeybindingsManager, "getKeys"> | undefined,
+	binding: AppKeybinding,
+	fallback: string,
+): string[] {
+	try {
+		if (keybindings && typeof keybindings.getKeys === "function") return keybindings.getKeys(binding);
+	} catch {
+		// Older or headless hosts fall back to Pi's default binding.
+	}
+	return [fallback];
 }
 
 function entryMatchesOverlayScope(
@@ -719,14 +747,25 @@ export class SubagentsStatusComponent implements Component {
 	private readonly getBranchAnchorRunIds: (() => Set<string>) | undefined;
 	private readonly getOwnedRunViews: (() => Map<string, AsyncRunSummary>) | undefined;
 	private readonly getLiveSessions: ((runId: string) => LiveDashboardSession[]) | undefined;
-	private liveUnsubscribes: (() => void)[] = [];
-	private subscribedSessions: LiveDashboardSession[] = [];
-	private readonly liveRenderCache = new LiveSessionRenderCache();
+	private readonly getLiveToolProgress:
+		| ((session: LiveDashboardSession) => ReadonlyMap<string, LiveToolProgress>)
+		| undefined;
+	private readonly rendererCatalog: { getToolDefinition(name: string): ToolDefinition | undefined } | undefined;
+	private readonly runMessageReader: RunMessageReader;
+	private readonly setToolsExpanded: ((expanded: boolean) => void) | undefined;
+	private readonly toolsExpandKeys: string[];
+	private readonly thinkingToggleKeys: string[];
+	private readonly liveSubscriptions = new Map<LiveDashboardSession, () => void>();
+	private readonly liveSessionsByRun = new Map<string, LiveDashboardSession[]>();
+	private readonly liveRenderCache: LiveSessionRenderCache;
 	// The owned-run mirror snapshot for the CURRENT reload pass. Captured once at
 	// the top of reload() so the overlay producer and the ownership assignment in
 	// deriveLiveRuns agree on the exact same owned set within a pass.
 	private ownedViews: Map<string, AsyncRunSummary> = new Map();
 	private showAllSessions = false;
+	private toolsExpanded = false;
+	private hideThinking = false;
+	private displayRevision = 0;
 	// Charter-style focus: `tab` toggles which pane receives navigation.
 	// Left = move selection; right = scroll transcript.
 	private focus: "left" | "right" = "left";
@@ -757,6 +796,18 @@ export class SubagentsStatusComponent implements Component {
 		this.getBranchAnchorRunIds = deps.getBranchAnchorRunIds;
 		this.getOwnedRunViews = deps.getOwnedRunViews;
 		this.getLiveSessions = deps.getLiveSessions;
+		this.getLiveToolProgress = deps.getLiveToolProgress;
+		this.liveRenderCache = new LiveSessionRenderCache(deps.liveToolComponents);
+		this.rendererCatalog = deps.rendererCatalog;
+		this.runMessageReader = deps.runMessageReader ?? new RunMessageReader();
+		this.setToolsExpanded = deps.setToolsExpanded;
+		this.toolsExpandKeys = effectiveKeys(deps.keybindings, "app.tools.expand", "ctrl+o");
+		this.thinkingToggleKeys = effectiveKeys(deps.keybindings, "app.thinking.toggle", "ctrl+t");
+		try {
+			this.toolsExpanded = deps.getToolsExpanded?.() ?? false;
+		} catch {
+			this.toolsExpanded = false;
+		}
 		this.refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.overlay = this.createPaneOverlay();
 		this.reload();
@@ -775,7 +826,6 @@ export class SubagentsStatusComponent implements Component {
 				selectionKey: (row) => this.overlayRowKey(row),
 				onSelectionChange: (row) => {
 					this.selectedId = row && row.kind !== "empty" ? this.rowKey(row) : undefined;
-					this.subscribeToSelectedRun();
 				},
 				renderRow: (row, ctx) => this.renderOverlayPrimaryRow(row, ctx),
 				title: () => this.overlayPrimaryTitle(),
@@ -812,12 +862,38 @@ export class SubagentsStatusComponent implements Component {
 					// the constant DEFAULT_LEFT_FRACTION and went stale after a resize.
 					const detailWidth = Math.max(20, ctx.detail.width || this.lastRightWidth || 80);
 					const sessions = run ? this.liveSessions(run) : [];
+					const historicalSessions =
+						run && sessions.length === 0 && this.rendererCatalog && run.run.asyncDir
+							? this.runMessageReader.read(run.run.asyncDir)
+							: [];
 					return run
-						? buildRightLines(this.theme, run, detailWidth, this.runs, {
-								sessions,
-								tui: this.tui,
-								cache: this.liveRenderCache,
-							})
+						? buildRightLines(
+								this.theme,
+								run,
+								detailWidth,
+								this.runs,
+								{
+									sessions,
+									tui: this.tui,
+									cache: this.liveRenderCache,
+									toolProgress: new Map(
+										sessions.map((session) => [
+											session,
+											this.getLiveToolProgress?.(session) ?? new Map(),
+										]),
+									),
+									display: this.displayMode(),
+								},
+								this.rendererCatalog
+									? {
+											sessions: historicalSessions,
+											tui: this.tui,
+											cache: this.liveRenderCache,
+											getToolDefinition: (name) => this.rendererCatalog?.getToolDefinition(name),
+											display: this.displayMode(),
+										}
+									: undefined,
+							)
 						: [];
 				},
 				title: (ctx) => {
@@ -841,6 +917,16 @@ export class SubagentsStatusComponent implements Component {
 				stepCols: SPLIT_STEP_COLS,
 			},
 			customActions: [
+				{
+					keys: this.toolsExpandKeys,
+					label: "tools",
+					run: () => this.toggleToolsExpanded(),
+				},
+				{
+					keys: this.thinkingToggleKeys,
+					label: "thinking",
+					run: () => this.toggleThinking(),
+				},
 				{
 					keys: "y",
 					label: "copy id",
@@ -870,6 +956,27 @@ export class SubagentsStatusComponent implements Component {
 			],
 		});
 		return factory(this.tui, this.theme, undefined, () => this.done()) as PaneOverlayComponent;
+	}
+
+	private displayMode() {
+		return {
+			revision: this.displayRevision,
+			toolsExpanded: this.toolsExpanded,
+			hideThinking: this.hideThinking,
+		};
+	}
+
+	private toggleToolsExpanded(): void {
+		this.toolsExpanded = !this.toolsExpanded;
+		this.displayRevision++;
+		this.setToolsExpanded?.(this.toolsExpanded);
+		this.tui.requestRender();
+	}
+
+	private toggleThinking(): void {
+		this.hideThinking = !this.hideThinking;
+		this.displayRevision++;
+		this.tui.requestRender();
 	}
 
 	private overlayRows(): OverlayDisplayRow[] {
@@ -1006,7 +1113,7 @@ export class SubagentsStatusComponent implements Component {
 			this.errorMessage = error instanceof Error ? error.message : String(error);
 		}
 		this.reconcileSelection();
-		this.subscribeToSelectedRun();
+		this.reconcileLiveSubscriptions();
 	}
 
 	// Visible only to tests; mirrors the `a` keybinding for direct invocation.
@@ -1239,40 +1346,62 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private liveSessions(run: LiveRun): LiveDashboardSession[] {
-		if (run.ownership !== "live") return [];
-		try {
-			return this.getLiveSessions?.(run.run.id) ?? [];
-		} catch {
-			return [];
-		}
+		return this.liveSessionsByRun.get(run.run.id) ?? [];
 	}
 
 	private unsubscribeFromLiveSessions(): void {
-		for (const unsubscribe of this.liveUnsubscribes) unsubscribe();
-		this.liveUnsubscribes = [];
-		this.subscribedSessions = [];
+		for (const [session, unsubscribe] of this.liveSubscriptions) {
+			unsubscribe();
+			this.liveRenderCache.clear(session);
+		}
+		this.liveSubscriptions.clear();
+		this.liveSessionsByRun.clear();
 	}
 
-	private subscribeToSelectedRun(): void {
-		const run = this.selectedRun();
-		const sessions = run ? this.liveSessions(run) : [];
-		if (
-			sessions.length === this.subscribedSessions.length &&
-			sessions.every((session, index) => session === this.subscribedSessions[index])
-		)
-			return;
-		this.unsubscribeFromLiveSessions();
-		this.subscribedSessions = sessions;
-		this.liveUnsubscribes = sessions.map((session) =>
-			session.subscribe((event) => {
-				this.liveRenderCache.invalidate(session, event);
-				this.tui.requestRender();
-			}),
-		);
+	private subscribeToLiveSession(session: LiveDashboardSession): void {
+		let active = true;
+		const unsubscribe = session.subscribe((event) => {
+			if (!active) return;
+			this.liveRenderCache.invalidate(session, event);
+			const selectedRun = this.selectedRun();
+			if (selectedRun && this.liveSessions(selectedRun).includes(session)) this.tui.requestRender();
+		});
+		this.liveSubscriptions.set(session, () => {
+			active = false;
+			unsubscribe();
+		});
+	}
+
+	private reconcileLiveSubscriptions(): void {
+		const listedRunIds = new Set(this.runs.map((run) => run.run.id));
+		const nextSessions = new Set<LiveDashboardSession>();
+		for (const runId of listedRunIds) {
+			let sessions: LiveDashboardSession[];
+			try {
+				sessions = this.getLiveSessions?.(runId) ?? [];
+			} catch {
+				sessions = this.liveSessionsByRun.get(runId) ?? [];
+			}
+			this.liveSessionsByRun.set(runId, sessions);
+			for (const session of sessions) {
+				nextSessions.add(session);
+				if (!this.liveSubscriptions.has(session)) this.subscribeToLiveSession(session);
+			}
+		}
+		for (const runId of this.liveSessionsByRun.keys()) {
+			if (!listedRunIds.has(runId)) this.liveSessionsByRun.delete(runId);
+		}
+		for (const [session, unsubscribe] of this.liveSubscriptions) {
+			if (nextSessions.has(session)) continue;
+			unsubscribe();
+			this.liveSubscriptions.delete(session);
+			this.liveRenderCache.clear(session);
+		}
 	}
 
 	dispose(): void {
 		this.unsubscribeFromLiveSessions();
+		this.liveRenderCache.dispose();
 		if (this.refreshTimer) clearTimeout(this.refreshTimer);
 		this.refreshTimer = undefined;
 		if (this.actionNoticeTimer) clearTimeout(this.actionNoticeTimer);

@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
 import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
 
@@ -42,6 +44,68 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 const ARGS_PREVIEW_MAX = 60;
+const MESSAGE_CACHE_LIMIT = 32;
+
+export interface RunMessageSession {
+	stepIndex: number;
+	messages: AgentMessage[];
+}
+
+interface RunMessageCacheEntry {
+	files: CacheFileStat[];
+	sessions: RunMessageSession[];
+}
+
+/** Dashboard-owned reader for typed messages on each persisted session branch. */
+export class RunMessageReader {
+	private readonly cache = new Map<string, RunMessageCacheEntry>();
+
+	read(runRecordDir: string): RunMessageSession[] {
+		const statusPath = path.join(runRecordDir, "status.json");
+		const status = readStatusFile(statusPath);
+		const sessionFiles = discoverSessionFiles(runRecordDir, status);
+		if (sessionFiles.length === 0) {
+			this.cache.delete(runRecordDir);
+			return [];
+		}
+		const stats = [fileStat(statusPath), ...sessionFiles.map((session) => fileStat(session.filePath))].filter(
+			(stat): stat is CacheFileStat => Boolean(stat),
+		);
+		const cached = this.cache.get(runRecordDir);
+		if (cached && sameFileStats(cached.files, stats)) {
+			this.touch(runRecordDir, cached);
+			return cached.sessions;
+		}
+
+		const sessions: RunMessageSession[] = [];
+		try {
+			for (const sessionFile of sessionFiles) {
+				const manager = SessionManager.open(sessionFile.filePath);
+				const messages = manager
+					.getBranch()
+					.filter((entry) => entry.type === "message")
+					.map((entry) => entry.message);
+				if (messages.length > 0) sessions.push({ stepIndex: sessionFile.stepIndex, messages });
+			}
+		} catch {
+			this.cache.delete(runRecordDir);
+			return [];
+		}
+		const entry = { files: stats, sessions };
+		this.touch(runRecordDir, entry);
+		while (this.cache.size > MESSAGE_CACHE_LIMIT) {
+			const oldest = this.cache.keys().next().value;
+			if (oldest === undefined) break;
+			this.cache.delete(oldest);
+		}
+		return sessions;
+	}
+
+	private touch(runRecordDir: string, entry: RunMessageCacheEntry): void {
+		this.cache.delete(runRecordDir);
+		this.cache.set(runRecordDir, entry);
+	}
+}
 
 function previewArgs(args: unknown, maxLength = ARGS_PREVIEW_MAX): string {
 	if (args === undefined || args === null) return "";

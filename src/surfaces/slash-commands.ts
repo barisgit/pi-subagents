@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	KeybindingsManager,
+	ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { discoverAgents } from "../shared/agents.ts";
 import { foregroundRunsFromState, SubagentsStatusComponent } from "./subagents-status.ts";
+import type { LiveDashboardSession, LiveToolComponentStore } from "./dashboard-detail-renderer.ts";
 import { logger } from "../shared/logger.ts";
 import type { SubagentToolInput as SubagentParamsLike } from "../protocol/schemas.ts";
 import type { UtilsClient } from "pi-extension-utils";
@@ -27,6 +33,7 @@ import {
 	type SingleResult,
 	type SubagentState,
 } from "../protocol/types.ts";
+import type { LiveToolProgress } from "../shared/live-session-relay.ts";
 
 interface InlineConfig {
 	output?: string | false;
@@ -35,6 +42,16 @@ interface InlineConfig {
 	skill?: string[] | false;
 	progress?: boolean;
 	preset?: string;
+}
+
+interface DashboardLiveSessionSource {
+	sessionsForRun(runId: string): LiveDashboardSession[];
+	toolProgress?(session: LiveDashboardSession): ReadonlyMap<string, LiveToolProgress>;
+}
+
+interface DashboardRendererCatalog {
+	ensure(modelRegistry: ExtensionContext["modelRegistry"]): Promise<boolean>;
+	getToolDefinition(name: string): ToolDefinition | undefined;
 }
 
 const parseInlineConfig = (raw: string): InlineConfig => {
@@ -419,6 +436,9 @@ export function registerSlashCommands(
 	state: SubagentState,
 	getWidgetClient?: (ctx: ExtensionContext) => UtilsClient | undefined,
 	childRegistry?: { listRunViews: () => RunView[]; sessionsForRun: ChildAgentRegistry["sessionsForRun"] },
+	rendererCatalog?: DashboardRendererCatalog,
+	liveSessionSource?: DashboardLiveSessionSource,
+	liveToolComponents?: LiveToolComponentStore,
 ): void {
 	pi.registerCommand("run", {
 		description: "Run a subagent directly: /run [preset=name] agent[output=file] [task] [--bg] [--fork]",
@@ -511,6 +531,7 @@ export function registerSlashCommands(
 
 	// Shared opener so the slash command and the shortcut stay in sync.
 	const openSubagentsStatus = async (ctx: ExtensionContext) => {
+		const rendererCatalogReady = (await rendererCatalog?.ensure(ctx.modelRegistry)) === true;
 		const sessionCwd = (ctx as { cwd?: string }).cwd ?? state.baseCwd;
 		const sessionId = ctx.sessionManager?.getSessionId?.() ?? state.currentSessionId ?? undefined;
 		// Branch-aware membership: collect the top-level run ids anchored on the
@@ -528,7 +549,22 @@ export function registerSlashCommands(
 			}
 			return ids;
 		};
-		const componentFactory = (tui: unknown, theme: unknown, done: (value: void) => void) =>
+		// Child-session dashboards can fall back to registry session refs, but without
+		// the host directory they cannot replay a partial emitted while the UI was closed.
+		const getLiveSessions = (runId: string): LiveDashboardSession[] => {
+			const relayed = liveSessionSource?.sessionsForRun(runId) ?? [];
+			return relayed.length > 0 ? relayed : (childRegistry?.sessionsForRun(runId) ?? []);
+		};
+		const toolsUi = ctx.ui as {
+			getToolsExpanded?: () => boolean;
+			setToolsExpanded?: (expanded: boolean) => void;
+		};
+		const componentFactory = (
+			tui: unknown,
+			theme: unknown,
+			keybindings: unknown,
+			done: (value: undefined) => void,
+		) =>
 			new SubagentsStatusComponent(tui as never, theme as never, () => done(undefined), {
 				listForegroundRuns: () => foregroundRunsFromState(state),
 				sessionCwd,
@@ -537,13 +573,37 @@ export function registerSlashCommands(
 				...(childRegistry
 					? { getOwnedRunViews: () => new Map(childRegistry.listRunViews().map((view) => [view.id, view])) }
 					: {}),
-				...(childRegistry ? { getLiveSessions: (runId: string) => childRegistry.sessionsForRun(runId) } : {}),
+				...(liveSessionSource || childRegistry ? { getLiveSessions } : {}),
+				...(liveSessionSource?.toolProgress
+					? {
+							getLiveToolProgress: (session: LiveDashboardSession) =>
+								liveSessionSource.toolProgress?.(session) ?? new Map(),
+						}
+					: {}),
+				...(rendererCatalogReady && rendererCatalog ? { rendererCatalog } : {}),
+				...(liveToolComponents ? { liveToolComponents } : {}),
+				...(keybindings &&
+				typeof keybindings === "object" &&
+				"getKeys" in keybindings &&
+				typeof keybindings.getKeys === "function"
+					? { keybindings: keybindings as Pick<KeybindingsManager, "getKeys"> }
+					: {}),
+				...(typeof toolsUi.getToolsExpanded === "function"
+					? { getToolsExpanded: () => toolsUi.getToolsExpanded?.() ?? false }
+					: {}),
+				...(typeof toolsUi.setToolsExpanded === "function"
+					? { setToolsExpanded: (expanded: boolean) => toolsUi.setToolsExpanded?.(expanded) }
+					: {}),
 			});
 		const client = getWidgetClient?.(ctx);
 		if (client) {
-			await client.ui.fullscreen<void>((tui, theme, _kb, done) => componentFactory(tui, theme, done));
+			await client.ui.fullscreen<void>((tui, theme, keybindings, done) =>
+				componentFactory(tui, theme, keybindings, done),
+			);
 		} else {
-			await ctx.ui.custom<void>((tui, theme, _kb, done) => componentFactory(tui, theme, done));
+			await ctx.ui.custom<void>((tui, theme, keybindings, done) =>
+				componentFactory(tui, theme, keybindings, done),
+			);
 		}
 	};
 

@@ -15,6 +15,7 @@ import {
 } from "../../src/dispatch/in-process-executor.ts";
 import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "../../src/state/lineage.ts";
 import { isInsideChildSession } from "../../src/shared/child-session-context.ts";
+import { LiveSessionDirectory } from "../../src/shared/live-session-relay.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -57,15 +58,22 @@ it("updates the registered handle to the reopened fallback session", async () =>
 		self.lastAssistantText = "<output>done</output>";
 	});
 	installFakeRuntime([primarySession, fallbackSession]);
+	const directory = new LiveSessionDirectory();
 	const handle = dispatchAsyncChild(
 		makeStep({ modelCandidates: [{ provider: "test", id: "model-b" } as never] }),
 		makeContext(),
 	);
 
-	await fallbackStarted;
-	assert.equal(handle.session, fallbackSession as never);
-	releaseFallback();
-	assert.equal((await handle.completed).state, "complete");
+	try {
+		await fallbackStarted;
+		assert.equal(handle.session, fallbackSession as never);
+		assert.deepEqual(directory.sessionsForRun("run-1"), [fallbackSession]);
+		releaseFallback();
+		assert.equal((await handle.completed).state, "complete");
+		assert.deepEqual(directory.sessionsForRun("run-1"), []);
+	} finally {
+		directory.dispose();
+	}
 });
 
 it("continues fallback ordering after startup authentication selects a later candidate", async () => {
@@ -254,6 +262,65 @@ function installFakeRuntime(
 }
 
 describe("runChildAgent", () => {
+	it("publishes only a created session and unpublishes it after completion", async () => {
+		let markPromptStarted!: () => void;
+		let releasePrompt!: () => void;
+		const promptStarted = new Promise<void>((resolve) => {
+			markPromptStarted = resolve;
+		});
+		const promptReleased = new Promise<void>((resolve) => {
+			releasePrompt = resolve;
+		});
+		const session = new FakeAgentSession(async (self) => {
+			markPromptStarted();
+			await promptReleased;
+			self.lastAssistantText = "<output>done</output>";
+		});
+		installFakeRuntime([session]);
+		const directory = new LiveSessionDirectory();
+		const handle = dispatchAsyncChild(makeStep({ runId: "relay-complete" }), makeContext());
+
+		try {
+			assert.deepEqual(directory.sessionsForRun("relay-complete"), []);
+			await promptStarted;
+			assert.deepEqual(directory.sessionsForRun("relay-complete"), [session]);
+			releasePrompt();
+			assert.equal((await handle.completed).state, "complete");
+			assert.deepEqual(directory.sessionsForRun("relay-complete"), []);
+		} finally {
+			directory.dispose();
+		}
+	});
+
+	it("does not leak a relay entry when session creation fails", async () => {
+		installFakeRuntime([], undefined, undefined, [new Error("session create failed")]);
+		const directory = new LiveSessionDirectory();
+
+		try {
+			const result = await runChildAgent(makeStep({ runId: "relay-create-failure" }), makeContext());
+			assert.equal(result.state, "failed");
+			assert.deepEqual(directory.sessionsForRun("relay-create-failure"), []);
+		} finally {
+			directory.dispose();
+		}
+	});
+
+	it("unpublishes a created session after prompt failure", async () => {
+		const session = new FakeAgentSession(async () => {
+			throw new Error("prompt failed");
+		});
+		installFakeRuntime([session]);
+		const directory = new LiveSessionDirectory();
+
+		try {
+			const result = await runChildAgent(makeStep({ runId: "relay-prompt-failure" }), makeContext());
+			assert.equal(result.state, "failed");
+			assert.deepEqual(directory.sessionsForRun("relay-prompt-failure"), []);
+		} finally {
+			directory.dispose();
+		}
+	});
+
 	it("awaits prompt and returns complete output assembled from text_delta events", async () => {
 		const session = new FakeAgentSession(async (self) => {
 			self.emit({ type: "text_delta", delta: "hello " });
@@ -530,9 +597,14 @@ describe("runChildAgent", () => {
 		const session = new FakeAgentSession(async () => await new Promise<void>(() => {}));
 		installFakeRuntime([session]);
 		const controller = new AbortController();
-		const promise = runChildAgent(makeStep(), makeContext({ abortSignal: controller.signal }));
+		const directory = new LiveSessionDirectory();
+		const promise = runChildAgent(
+			makeStep({ runId: "relay-abort" }),
+			makeContext({ abortSignal: controller.signal }),
+		);
 
 		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(directory.sessionsForRun("relay-abort"), [session]);
 		controller.abort("stop-now");
 		const result = await promise;
 
@@ -540,6 +612,8 @@ describe("runChildAgent", () => {
 		assert.equal(session.disposeCalls, 1);
 		assert.equal(result.state, "interrupted");
 		assert.equal(result.error?.reason, "stop-now");
+		assert.deepEqual(directory.sessionsForRun("relay-abort"), []);
+		directory.dispose();
 	});
 
 	it("returns interrupted when an acknowledged abort arrives during exportToHtml", async () => {

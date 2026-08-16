@@ -160,6 +160,47 @@ describe("workflow final result rendering does not throw on non-Details payloads
 });
 
 describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
+	it("adapts compact layout to each render width instead of stdout columns", () => {
+		const originalColumns = process.stdout.columns;
+		Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
+		try {
+			const details: Details = {
+				mode: "single",
+				results: [
+					{
+						...result("A", "done", 0, 0),
+						progress: {
+							...result("A", "done", 0, 0).progress!,
+							tokenSamples: [
+								{ ts: 1_000, tokens: 0 },
+								{ ts: 2_000, tokens: 100 },
+								{ ts: 3_000, tokens: 300 },
+							],
+						},
+					},
+				],
+			};
+			const theme = {
+				fg: (_t: string, text: string) => text,
+				bg: (_t: string, text: string) => text,
+				bold: (text: string) => text,
+			} as never;
+			const component = renderSubagentResult(
+				{ content: [{ type: "text", text: "done" }], details },
+				{ expanded: false },
+				theme,
+			);
+
+			const narrowHeader = component.render(40)[0] ?? "";
+			const wideHeader = component.render(160)[0] ?? "";
+
+			assert.match(narrowHeader, /[▁▂▃▄▅▆▇█]/, "narrow layout keeps its adaptive sparkline");
+			assert.ok(wideHeader.length > narrowHeader.length, "the same component rebuilds for a wider width");
+		} finally {
+			Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
+		}
+	});
+
 	it("emits parallel details with phase summary and per-agent running/completed state", async () => {
 		const updates: Array<AgentToolResult<Details>> = [];
 		const tool = createWorkflowTool({
