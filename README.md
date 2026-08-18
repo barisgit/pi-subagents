@@ -20,7 +20,7 @@ subagent({
 })
 ```
 
-Multiple top-level `run` tasks execute independently. Use `async:true` for background work and `batch:true` for one rollup notification. How many agents run at once is bounded process-wide by `maxConcurrentAgents` (config, default 4), not per call.
+Multiple top-level `run` tasks execute independently. Use `async:true` for background work and `batch:true` for one rollup notification. How many agents actively run at once is bounded process-wide by `maxConcurrentAgents` (config, default 4). Workflows also use that value to bound direct children before creating their run records.
 
 Optional top-level `cwd` defaults all run entries. When omitted, it defaults to the caller/session cwd; a relative top-level path resolves from that caller/session cwd. Optional per-run `cwd` overrides the default; a relative per-run path resolves from the resolved top-level cwd. Runs may share a cwd.
 
@@ -53,7 +53,7 @@ return { status: "needs-attention", change, findings };
 ` })
 ```
 
-The workflow sandbox provides `agent(role, task, opts?)`, `parallel(thunks)`, `pipeline(items, ...stages)`, and `phase(title)`. `role` is one of the caller's configured agent roles; replace placeholders with real active roles. `agent()` returns the child's result directly: a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object). `parallel()` scales dynamic fan-out to many children, bounded by the process-wide leaf-concurrency pool; `pipeline()` streams each item through async stages without waiting for a whole-stage barrier. Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
+The workflow sandbox provides `agent(role, task, opts?)`, `parallel(thunks)`, `pipeline(items, ...stages)`, and `phase(title)`. `role` is one of the caller's configured agent roles; replace placeholders with real active roles. `agent()` returns the child's result directly: a string by default, or a validated object when you pass `opts.schema` (a plain JSON Schema object). `parallel()` scales dynamic fan-out while `maxConcurrentAgents` bounds admitted direct children and process-global active leaf sessions. `pipeline()` streams each item through async stages without waiting for a whole-stage barrier, preserves input-order results, and runs at most `workflow.maxPipelineItemsInFlight` item chains per workflow (default 8). Top-level `await` is supported; the script return value becomes the workflow result. Use `async:true` to background the whole workflow.
 
 ## Slash commands
 

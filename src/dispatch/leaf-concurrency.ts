@@ -7,8 +7,9 @@ import { __resetProcessGlobalForTest, processGlobal } from "../shared/process-gl
  * Every child agent — sync single, sync parallel, async single, async parallel,
  * and workflow agent()/parallel() — funnels through `startChildAgent`, which
  * acquires one permit here before its leaf session prompts and releases it when
- * the session settles. That makes this the single concurrency limit for the
- * whole runtime; there are no per-invocation or per-batch knobs.
+ * the session settles. This is the process-global active-session limit. Each
+ * workflow also uses the same configured value to bound direct children before
+ * their run records are created.
  *
  * "Leaf" semantics: a permit represents an agent actively prompting. A parent
  * that dispatches its own children RELEASES its permit while awaiting them

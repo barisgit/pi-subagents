@@ -27,13 +27,13 @@ This codebase is the product of two completed refactoring charters:
 
 | Directory | Responsibility Summary | Detailed Map |
 |-----------|------------------------|--------------|
-| `src/dispatch/` | Subagent dispatch + child-agent execution: tool entry, run-record funnel (`openRunRecord`), sync/async/parallel paths, in-process session bridge, one per-process leaf-concurrency pool, per-activation registry, cwd routing, resume, intercom. (29 files) | [View Map](src/dispatch/codemap.md) |
+| `src/dispatch/` | Subagent dispatch + child-agent execution: run-record funnel, sync/async paths, process-global active-leaf and per-workflow pre-run admission limits, registry, resume, intercom. (29 files) | [View Map](src/dispatch/codemap.md) |
 | `src/surfaces/` | Presentation/UI layer: split renderers (result/inline/shared/widget), fullscreen dashboard + pure row-model, slash commands, notifications, async job widget, agent CRUD. (20 files) | [View Map](src/surfaces/codemap.md) |
 | `src/state/` | Run-state + persistence: canonical in-memory `RunView` (two producers), one `StatusWriter`, status-patch applier, disk hydration, append-only registry, pure phase/liveness/shape kernels. (18 files) | [View Map](src/state/codemap.md) |
 | `src/shared/` | Low-level leaf utilities (imported downward, no upward imports): agent/skill discovery, fs codecs, runtime-env policy, path constants, stale-runner grace, live-session relay, formatting, settings, logging. (18 files) | [View Map](src/shared/codemap.md) |
 | `src/protocol/` | Protocol/vocabulary layer (pure DTOs, no fs): wire types, the canonical `PersistedRunStatus` + `parsePersistedRunStatus` codec, tool schemas, child completion contract. (4 files) | [View Map](src/protocol/codemap.md) |
 | `src/runtime/` | Runtime activation: per-activation wiring of tool/widgets/bridges, one host-owned live-session directory, one lazy all-tools renderer catalog, and root-session role lifecycle (`/role`). (3 files) | [View Map](src/runtime/codemap.md) |
-| `src/workflow/` | JavaScript workflow orchestration over subagents: `workflow` tool, sandbox globals (`agent`/`parallel`/`phase`), durable group lifecycle. (2 files) | [View Map](src/workflow/codemap.md) |
+| `src/workflow/` | Bounded JavaScript orchestration: sandbox globals, pipeline item-chain backpressure, progress, and durable workflow lifecycle. (2 files) | [View Map](src/workflow/codemap.md) |
 | `src/api/` | Frozen cross-extension public API boundary: session-scoped `SubagentExposedAPI` + lineage events for sibling extensions. (1 file) | [View Map](src/api/codemap.md) |
 
 ## Key Architectural Invariants

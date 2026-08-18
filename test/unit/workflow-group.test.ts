@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { readRunViewForEntry } from "../../src/state/async-status.ts";
@@ -20,6 +21,16 @@ import { makeAgent } from "../support/helpers.ts";
 const roots: string[] = [];
 let restoreRuntime: (() => void) | undefined;
 let previousHome: string | undefined;
+let promptImpl: ((task: string) => Promise<void>) | undefined;
+let abortImpl: (() => void) | undefined;
+
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
 
 class FakeResourceLoader {
 	async reload(): Promise<void> {}
@@ -35,6 +46,7 @@ class FakeSession {
 		};
 	}
 	async prompt(task: string): Promise<void> {
+		if (promptImpl) await promptImpl(task);
 		for (const listener of this.listeners)
 			listener({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } });
 		this.lastAssistantText = `<output>${task}</output>`;
@@ -42,12 +54,14 @@ class FakeSession {
 	getLastAssistantText(): string {
 		return this.lastAssistantText;
 	}
-	async abort(): Promise<void> {}
+	async abort(): Promise<void> {
+		abortImpl?.();
+	}
 	dispose(): void {}
 	setActiveToolsByName(): void {}
 }
 
-function setup(prefix: string) {
+function setup(prefix: string, config: Record<string, unknown> = {}) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	roots.push(root);
 	previousHome = process.env.HOME;
@@ -77,7 +91,7 @@ function setup(prefix: string) {
 			lastUiContext: null,
 			poller: null,
 		},
-		config: {},
+		config,
 		asyncByDefault: false,
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),
@@ -98,6 +112,8 @@ function setup(prefix: string) {
 }
 
 afterEach(() => {
+	promptImpl = undefined;
+	abortImpl = undefined;
 	restoreRuntime?.();
 	restoreRuntime = undefined;
 	setRegistryPathForTests(null);
@@ -108,6 +124,145 @@ afterEach(() => {
 });
 
 describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
+	it("releases workflow admission after a child failure", async () => {
+		const { executor, ctx } = setup("workflow-group-admission-failure-", { maxConcurrentAgents: 1 });
+		const tool = createWorkflowTool({
+			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
+		});
+
+		await tool.execute?.(
+			"wf",
+			{
+				script: `
+return await parallel([
+	() => agent('missing-role', 'fail').catch(() => 'failed'),
+	() => agent('A', 'runs-after-failure'),
+]);
+`,
+			},
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+
+		const entries = readAllEntries();
+		const group = entries.find((entry) => entry.kind === "workflow")!;
+		assert.equal(entries.filter((entry) => entry.parentRunId === group.runId).length, 2);
+	});
+
+	it("aborts admission waiters without creating queued child records", async () => {
+		const { executor, ctx } = setup("workflow-group-admission-abort-", { maxConcurrentAgents: 1 });
+		const started = deferred();
+		const release = deferred();
+		promptImpl = async () => {
+			started.resolve();
+			await release.promise;
+		};
+		abortImpl = release.resolve;
+		const controller = new AbortController();
+		const tool = createWorkflowTool({
+			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
+		});
+
+		const execution = tool.execute?.(
+			"wf",
+			{
+				script: "return await parallel(Array.from({ length: 4 }, (_, i) => () => agent('A', 'task-' + i)));",
+			},
+			controller.signal,
+			undefined,
+			ctx as never,
+		);
+		await started.promise;
+		controller.abort(new Error("stop workflow"));
+		await execution;
+
+		const entries = readAllEntries();
+		const group = entries.find((entry) => entry.kind === "workflow")!;
+		assert.equal(entries.filter((entry) => entry.parentRunId === group.runId).length, 1);
+	});
+
+	it("applies the configured per-workflow pipeline item-chain limit", async () => {
+		const { executor, ctx } = setup("workflow-group-pipeline-admission-", {
+			maxConcurrentAgents: 4,
+			workflow: { maxPipelineItemsInFlight: 2 },
+		});
+		let activeChains = 0;
+		let peakChains = 0;
+		promptImpl = async (task) => {
+			if (task.startsWith("start:")) {
+				activeChains++;
+				peakChains = Math.max(peakChains, activeChains);
+			} else {
+				await delay(2);
+				activeChains--;
+			}
+		};
+		const tool = createWorkflowTool({
+			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
+		});
+
+		await tool.execute?.(
+			"wf",
+			{
+				script: `
+const items = Array.from({ length: 12 }, (_, index) => index);
+return await pipeline(
+	items,
+	(index) => agent('A', 'start:' + index),
+	(value) => agent('A', 'finish:' + value),
+);
+`,
+			},
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+
+		assert.equal(peakChains, 2);
+	});
+
+	it("admits workflow children before creating run records and drains them in waves", async () => {
+		const { executor, ctx } = setup("workflow-group-admission-", {
+			maxConcurrentAgents: 2,
+		});
+		const firstWave = deferred();
+		const releaseWave = deferred();
+		let inFlight = 0;
+		let peak = 0;
+		promptImpl = async () => {
+			inFlight++;
+			peak = Math.max(peak, inFlight);
+			if (inFlight === 2) firstWave.resolve();
+			await releaseWave.promise;
+			inFlight--;
+		};
+		const tool = createWorkflowTool({
+			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
+		});
+
+		const execution = tool.execute?.(
+			"wf",
+			{
+				script: "return await parallel(Array.from({ length: 6 }, (_, i) => () => agent('A', 'task-' + i)));",
+			},
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+		await firstWave.promise;
+
+		const admittedEntries = readAllEntries();
+		const group = admittedEntries.find((entry) => entry.kind === "workflow")!;
+		const admittedChildren = admittedEntries.filter((entry) => entry.parentRunId === group.runId).length;
+		releaseWave.resolve();
+		await execution;
+
+		assert.equal(admittedChildren, 2, "only admitted children may create run records");
+		assert.equal(peak, 2);
+		assert.equal(readAllEntries().filter((entry) => entry.parentRunId === group.runId).length, 6);
+	});
+
 	it("returns declarative metadata and phase progress in immediate async details", async () => {
 		const { executor, ctx } = setup("workflow-group-async-details-");
 		const tool = createWorkflowTool({

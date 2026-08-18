@@ -6,6 +6,40 @@ import { runWorkflowScript } from "../../src/workflow/workflow.ts";
 const delays: Record<string, number> = { first: 60, second: 10, third: 30 };
 
 describe("workflow parallel global (VAL-PARALLEL)", () => {
+	it("bounds pipeline item chains while preserving input-order results", async () => {
+		let activeChains = 0;
+		let peakChains = 0;
+		const value = await runWorkflowScript({
+			dispatch: async (_role, task) => {
+				const [stage, rawIndex] = task.split(":");
+				const index = Number(rawIndex);
+				if (stage === "start") {
+					activeChains++;
+					peakChains = Math.max(peakChains, activeChains);
+					await delay(1);
+					return { result: index };
+				}
+				await delay((40 - index) % 5);
+				activeChains--;
+				return { result: index * 2 };
+			},
+			script: `
+const items = Array.from({ length: 40 }, (_, index) => index);
+return await pipeline(
+	items,
+	(index) => agent('worker', 'start:' + index),
+	(index) => agent('worker', 'finish:' + index),
+);
+`,
+		});
+
+		assert.equal(peakChains, 8);
+		assert.deepEqual(
+			value,
+			Array.from({ length: 40 }, (_, index) => index * 2),
+		);
+	});
+
 	it("runs thunks concurrently and returns results in input order", async () => {
 		let inFlight = 0;
 		let maxInFlight = 0;

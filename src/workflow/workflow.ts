@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import vm from "node:vm";
+import { ConcurrencySemaphore } from "../dispatch/concurrency-semaphore.ts";
 import type { AgentToolUpdateCallback, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
@@ -47,6 +48,7 @@ export type WorkflowPhaseEmit = (title: string) => void;
 
 export interface WorkflowGroupHandle {
 	groupRunId: string;
+	maxPipelineItemsInFlight?: number;
 	async?: boolean;
 	asyncDir?: string;
 	dispatchChild(args: {
@@ -76,6 +78,7 @@ export interface WorkflowGroupHandle {
 
 export interface WorkflowRuntimeOptions {
 	dispatch: WorkflowDispatch;
+	maxPipelineItemsInFlight?: number;
 	onMeta?: (meta: WorkflowMeta) => void;
 	onPhase?: WorkflowPhaseEmit;
 	// Announced synchronously when parallel(thunks) starts, BEFORE any child
@@ -297,6 +300,14 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	const settled: Array<Promise<void>> = [];
 	const owned = new Set<Promise<unknown>>();
 	const runState: WorkflowRunState = { token: {}, owned, floats: new Map<Promise<unknown>, unknown>() };
+	const configuredPipelineLimit = options.maxPipelineItemsInFlight;
+	const pipelineLimit =
+		typeof configuredPipelineLimit === "number" &&
+		Number.isInteger(configuredPipelineLimit) &&
+		configuredPipelineLimit > 0
+			? configuredPipelineLimit
+			: 8;
+	const pipelineAdmission = new ConcurrencySemaphore(pipelineLimit);
 	let metadataDeclared = false;
 	let orchestrationStarted = false;
 	registry.issuedTokens.add(runState.token);
@@ -488,11 +499,16 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 			const initial = items[itemIndex];
 			itemPromises.push(
 				(async () => {
-					let value = initial;
-					for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
-						value = await runStage(stageIndex, value, itemIndex);
+					const permit = await pipelineAdmission.acquire();
+					try {
+						let value = initial;
+						for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
+							value = await runStage(stageIndex, value, itemIndex);
+						}
+						return value;
+					} finally {
+						permit.release();
 					}
-					return value;
 				})(),
 			);
 		}
@@ -817,8 +833,8 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): Workflow
 		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Workflow is the harness's programmable control plane: agent calls, ordinary JavaScript state, and control flow can be nested and composed freely. Use it when runtime results shape later topology—dynamic fan-out, fan-in, branching, retries, feedback, convergence, or synthesis. Plain subagents and Workflow intentionally overlap; choose whichever representation helps the task.
 
 Scaling and composition:
-- Workflow has no prompt-imposed child count; fan-out shares the process-wide concurrency pool.
-- pipeline() streams each item through stages independently; parallel() forms a barrier that gathers its thunks. Either primitive may be nested inside the other or reused within loops and branches according to the data dependencies.
+- config maxConcurrentAgents is the process-global active leaf limit and per-workflow direct-child limit. Admission happens before child run records are created.
+- pipeline() streams at most config workflow.maxPipelineItemsInFlight item chains at once (default 8); parallel() is a barrier. Both compose in nested loops and branches.
 
 Worked examples—not templates or limits (replace role placeholders with configured roles):
 - Discovery-driven fan-out: a child's structured result sets the topology. Do not pre-author a work-list a child could discover at runtime. Build one self-contained brief; each branch gets a distinct focus.
@@ -841,8 +857,8 @@ These are ingredients, not canonical recipes; larger structures—queues, tourna
 The script runs in a sandbox with five globals:
 - meta({ name, description, phases }) — call once before other globals. phases: ["Recon"] or [{ title: "Recon" }]; objects may add detail; titles are non-empty and unique.
 - agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
-- parallel(thunks) -> Promise<results[]> — run agent calls concurrently, bounded by the process-wide leaf-concurrency pool (config maxConcurrentAgents), so it scales to many children: parallel(items.map((item) => () => agent("<configured-role>", "Handle " + item))). It is a FAIL-FAST barrier (awaits Promise.all): the first child that rejects rejects the whole call and the other results are lost. When partial results are acceptable, catch inside each thunk (.then(...).catch(...)) so every branch resolves.
-- pipeline(items, ...stages) -> Promise<results[]> — stream each item through async stages without waiting for a whole-stage barrier: pipeline(files, (file) => agent("<configured-role>", "Inspect " + file), (finding) => agent("<configured-role>", "Review " + finding)). The overall call is fail-fast like Promise.all, so catch inside a stage when partial results are acceptable.
+- parallel(thunks) -> Promise<results[]> — run thunks concurrently; maxConcurrentAgents bounds direct-child admission and active leaves. It is a FAIL-FAST Promise.all barrier. Catch inside each thunk when partial results are acceptable.
+- pipeline(items, ...stages) -> Promise<results[]> — stream each item through stages with at most workflow.maxPipelineItemsInFlight item chains active; results preserve input order. It is fail-fast like Promise.all.
 - phase(title) — label the current stage for live status displays.
 
 Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll. Child-session Workflow calls always run synchronously despite async/default, so the caller awaits them.
@@ -877,6 +893,7 @@ Task strings: each child starts with no conversation context — the script sees
 				});
 				const run = () =>
 					runWorkflowScript({
+						...(group ? { maxPipelineItemsInFlight: group.maxPipelineItemsInFlight } : {}),
 						onMeta: (meta) => {
 							if (group?.asyncDir) writeWorkflowMeta(group.asyncDir, meta);
 							emitter!.setMeta(meta);
@@ -932,8 +949,11 @@ Task strings: each child starts with no conversation context — the script sees
 						)
 						.catch(async (error) => {
 							const message = error instanceof Error ? error.message : String(error);
-							await asyncGroup.failWorkflow?.(message, currentPhaseTags());
-							asyncGroup.finishAsync?.(false, message);
+							try {
+								await asyncGroup.failWorkflow?.(message, currentPhaseTags());
+							} finally {
+								asyncGroup.finishAsync?.(false, message);
+							}
 						});
 					const asyncDir = asyncGroup.asyncDir ?? "";
 					return {
@@ -963,15 +983,19 @@ Task strings: each child starts with no conversation context — the script sees
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				await group?.failWorkflow?.(
-					message,
-					emitter
-						? {
-								phaseIndex: emitter.phaseIndex(),
-								...(emitter.phaseTitle() ? { phaseTitle: emitter.phaseTitle() } : {}),
-							}
-						: undefined,
-				);
+				try {
+					await group?.failWorkflow?.(
+						message,
+						emitter
+							? {
+									phaseIndex: emitter.phaseIndex(),
+									...(emitter.phaseTitle() ? { phaseTitle: emitter.phaseTitle() } : {}),
+								}
+							: undefined,
+					);
+				} finally {
+					if (group?.async) group.finishAsync?.(false, message);
+				}
 				return {
 					content: [{ type: "text", text: message }],
 					isError: true,

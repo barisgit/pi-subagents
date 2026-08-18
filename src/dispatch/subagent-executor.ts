@@ -7,7 +7,8 @@ import { getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveExecutionAgentScope } from "./agent-scope.ts";
 import { handleManagementAction } from "../surfaces/agent-management.ts";
 import { createForkContextResolver } from "./fork-context.ts";
-import { parkLeafPermit } from "./leaf-concurrency.ts";
+import { ConcurrencySemaphore } from "./concurrency-semaphore.ts";
+import { leafConcurrencyLimit, parkLeafPermit } from "./leaf-concurrency.ts";
 import type { ExecutionContextData, ExecutorDeps, InternalSubagentParams } from "./executor-types.ts";
 import {
 	batchToNotifyPolicy,
@@ -33,7 +34,16 @@ import { getSingleResultOutput } from "../shared/utils.ts";
 import { tokenUsageFromUsage } from "../state/usage-totals.ts";
 import { inspectSubagentStatus } from "../state/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
-import { spawnRun, openGroup, awaitRun, openRunRecord, finalizeRun, type OpenRunHandle } from "./layer0-runs.ts";
+import {
+	spawnRun,
+	openGroup,
+	awaitRun,
+	openRunRecord,
+	finalizeRun,
+	registerRunController,
+	releaseRunController,
+	type OpenRunHandle,
+} from "./layer0-runs.ts";
 import { getLineageForSession } from "../state/lineage.ts";
 import type { SubagentToolInput } from "../protocol/schemas.ts";
 import type { WorkflowGroupHandle } from "../workflow/workflow.ts";
@@ -715,6 +725,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const resolvedAsync = requestedAsync ?? deps.asyncByDefault;
 			const effectiveAsync = calledFromChildSession ? false : resolvedAsync;
 			const workflowDetachedAbort = new AbortController();
+			const activeLimit = leafConcurrencyLimit(deps.config.maxConcurrentAgents);
+			const workflowAdmission = new ConcurrencySemaphore(activeLimit);
+			const configuredPipelineInFlight = deps.config.workflow?.maxPipelineItemsInFlight;
+			const maxPipelineItemsInFlight =
+				typeof configuredPipelineInFlight === "number" &&
+				Number.isInteger(configuredPipelineInFlight) &&
+				configuredPipelineInFlight > 0
+					? configuredPipelineInFlight
+					: 8;
 			const controlConfig = resolveControlConfig(deps.config.control, undefined);
 			const group = openGroup({
 				cwd: effectiveCwd,
@@ -734,6 +753,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				source: effectiveAsync ? "async" : "sync",
 				mode: "parallel",
 			});
+			if (effectiveAsync) registerRunController(group.runId, workflowDetachedAbort);
 			const groupRootRunId = rootRunId === provisionalRunId ? group.runId : rootRunId;
 			emitRunAnchor(deps.pi, {
 				runId: group.runId,
@@ -787,6 +807,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			};
 			return {
 				groupRunId: group.runId,
+				maxPipelineItemsInFlight,
 				async: effectiveAsync,
 				asyncDir: group.runRecordDir,
 				// Park the calling agent's leaf permit while a sync workflow awaits its
@@ -803,153 +824,179 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					resultSchema,
 					onChildProgress,
 				}) => {
-					const childGuard = checkNestedDelegationGuard([role], currentLineage);
-					if (childGuard.blocked) {
-						throw new Error(childGuard.reason ?? "Nested subagent call blocked.");
+					const admissionPermit = await workflowAdmission.acquire(data.signal);
+					if (!admissionPermit) {
+						throw data.signal.reason instanceof Error ? data.signal.reason : new Error("Workflow aborted");
 					}
-					const agentConfig = agents.find((agent) => agent.name === role);
-					let result: SingleResult | undefined;
-					const handle = spawnRun(
-						{ agentName: role, task, cwd: effectiveCwd },
-						{
-							parentRunId: group.runId,
-							rootRunId: groupRootRunId,
-							notifyPolicy: "each",
-							parentSessionFile,
-							sessionDir: path.join(sessionRoot, `run-${index}`),
-							...(phaseIndex !== undefined ? { phaseIndex } : {}),
-							...(phaseTitle ? { phaseTitle } : {}),
-							...(parallelGroupId ? { parallelGroupId } : {}),
-							...(pipeline ? { pipeline } : {}),
-							...(deps.config.defaultSessionDir
-								? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
-								: {}),
-							...(ctx.sessionManager?.getSessionId
-								? { parentSessionId: ctx.sessionManager.getSessionId() }
-								: {}),
-							...(() => {
-								const root = resolveDispatchRootSessionId(
-									ctx,
-									deps.state.currentSessionId ?? undefined,
-								);
-								return root ? { rootSessionId: root } : {};
-							})(),
-							source: effectiveAsync ? "async" : "sync",
-							runAgent: async (prepared, layer0Ctx) => {
-								// Unknown agent: still resolve through a real child run so the group
-								// has a FAILED child row to synthesize from (otherwise a statusless
-								// group with no child looks complete on the dashboard).
-								if (!agentConfig) {
-									const error = `Unknown agent: ${role}`;
-									result = {
-										agent: role,
+					if (data.signal.aborted) {
+						admissionPermit.release();
+						throw data.signal.reason instanceof Error ? data.signal.reason : new Error("Workflow aborted");
+					}
+					try {
+						const childGuard = checkNestedDelegationGuard([role], currentLineage);
+						if (childGuard.blocked) {
+							throw new Error(childGuard.reason ?? "Nested subagent call blocked.");
+						}
+						const agentConfig = agents.find((agent) => agent.name === role);
+						let result: SingleResult | undefined;
+						const handle = spawnRun(
+							{ agentName: role, task, cwd: effectiveCwd },
+							{
+								parentRunId: group.runId,
+								rootRunId: groupRootRunId,
+								notifyPolicy: "each",
+								parentSessionFile,
+								sessionDir: path.join(sessionRoot, `run-${index}`),
+								...(phaseIndex !== undefined ? { phaseIndex } : {}),
+								...(phaseTitle ? { phaseTitle } : {}),
+								...(parallelGroupId ? { parallelGroupId } : {}),
+								...(pipeline ? { pipeline } : {}),
+								...(deps.config.defaultSessionDir
+									? {
+											defaultSessionDir: path.resolve(
+												deps.expandTilde(deps.config.defaultSessionDir),
+											),
+										}
+									: {}),
+								...(ctx.sessionManager?.getSessionId
+									? { parentSessionId: ctx.sessionManager.getSessionId() }
+									: {}),
+								...(() => {
+									const root = resolveDispatchRootSessionId(
+										ctx,
+										deps.state.currentSessionId ?? undefined,
+									);
+									return root ? { rootSessionId: root } : {};
+								})(),
+								source: effectiveAsync ? "async" : "sync",
+								runAgent: async (prepared, layer0Ctx) => {
+									// Unknown agent: still resolve through a real child run so the group
+									// has a FAILED child row to synthesize from (otherwise a statusless
+									// group with no child looks complete on the dashboard).
+									if (!agentConfig) {
+										const error = `Unknown agent: ${role}`;
+										result = {
+											agent: role,
+											task,
+											exitCode: 1,
+											messages: [],
+											usage: emptyUsage(),
+											error,
+										};
+										return {
+											runId: prepared.runId,
+											stepIndex: 0,
+											state: "failed",
+											exitCode: 1,
+											outputText: error,
+											toolCallCount: 0,
+											toolResultCount: 0,
+											toolErrorCount: 0,
+											durationMs: 0,
+											startedAt: Date.now(),
+											endedAt: Date.now(),
+											sessionFile: prepared.sessionFile,
+											error: { message: error },
+											usage: {
+												input: 0,
+												output: 0,
+												cacheRead: 0,
+												cacheWrite: 0,
+												cost: 0,
+												turns: 0,
+											},
+										};
+									}
+									result = await runInProcessChildStep({
+										data,
+										deps,
+										agentConfig,
 										task,
-										exitCode: 1,
-										messages: [],
-										usage: emptyUsage(),
-										error,
-									};
-									return {
-										runId: prepared.runId,
-										stepIndex: 0,
-										state: "failed",
-										exitCode: 1,
-										outputText: error,
-										toolCallCount: 0,
-										toolResultCount: 0,
-										toolErrorCount: 0,
-										durationMs: 0,
-										startedAt: Date.now(),
-										endedAt: Date.now(),
-										sessionFile: prepared.sessionFile,
-										error: { message: error },
-										usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-									};
-								}
-								result = await runInProcessChildStep({
-									data,
-									deps,
-									agentConfig,
-									task,
-									cleanTask: task,
-									stepIndex: index,
-									cwd: effectiveCwd,
-									interruptSignal: layer0Ctx.abortSignal,
-									maxSubagentDepth: resolveChildMaxSubagentDepth(
-										resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth, currentLineage),
-										agentConfig.maxSubagentDepth,
-									),
-									mode: "parallel",
-									...(resultSchema ? { resultSchema } : {}),
-									...(onChildProgress
-										? {
-												// Sync workflow live update: surface the running child's per-event
-												// progress so the workflow widget repaints mid-run instead of
-												// freezing between childStarted and childSettled.
-												onUpdate: (update: SubagentToolResult) => {
-													const live = update.details?.progress?.[0];
-													if (live) onChildProgress(live);
-												},
+										cleanTask: task,
+										stepIndex: index,
+										cwd: effectiveCwd,
+										interruptSignal: layer0Ctx.abortSignal,
+										maxSubagentDepth: resolveChildMaxSubagentDepth(
+											resolveCurrentMaxSubagentDepth(
+												deps.config.maxSubagentDepth,
+												currentLineage,
+											),
+											agentConfig.maxSubagentDepth,
+										),
+										mode: "parallel",
+										...(resultSchema ? { resultSchema } : {}),
+										...(onChildProgress
+											? {
+													// Sync workflow live update: surface the running child's per-event
+													// progress so the workflow widget repaints mid-run instead of
+													// freezing between childStarted and childSettled.
+													onUpdate: (update: SubagentToolResult) => {
+														const live = update.details?.progress?.[0];
+														if (live) onChildProgress(live);
+													},
+												}
+											: {}),
+										layer0: {
+											runId: prepared.runId,
+											runRecordDir: prepared.runRecordDir,
+											sessionFile: prepared.sessionFile,
+											rootRunId: groupRootRunId,
+										},
+										onLayer0StatusUpdate: (patch) =>
+											layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
+									});
+									return singleResultToChildAgentResult(result, prepared);
+								},
+								onLifecycle: effectiveAsync
+									? (event) => {
+											if (event.type === "run.started") {
+												safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
+													id: event.runId,
+													runId: event.runId,
+													metadata: undefined,
+													controlConfig,
+													agent: role,
+													task: task.slice(0, 50),
+													cwd: effectiveCwd,
+													asyncDir: event.runRecordDir,
+													parentRunId: group.runId,
+												});
+												return;
 											}
-										: {}),
-									layer0: {
-										runId: prepared.runId,
-										runRecordDir: prepared.runRecordDir,
-										sessionFile: prepared.sessionFile,
-										rootRunId: groupRootRunId,
-									},
-									onLayer0StatusUpdate: (patch) =>
-										layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
-								});
-								return singleResultToChildAgentResult(result, prepared);
-							},
-							onLifecycle: effectiveAsync
-								? (event) => {
-										if (event.type === "run.started") {
-											safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
+											const child = event.result;
+											// Workflow children never notify individually: the workflow is ONE
+											// entity and sends exactly one completion (with the script's return
+											// value) from finishAsync. The event still fires for non-notify
+											// consumers (widget liveness, tests).
+											safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
 												id: event.runId,
 												runId: event.runId,
-												metadata: undefined,
-												controlConfig,
-												agent: role,
-												task: task.slice(0, 50),
-												cwd: effectiveCwd,
-												asyncDir: event.runRecordDir,
 												parentRunId: group.runId,
+												rootRunId: groupRootRunId,
+												metadata: undefined,
+												notifyPolicy: "silent",
+												agent: role,
+												success: child ? child.state === "complete" : false,
+												summary: child?.outputText ?? (event.error ? String(event.error) : ""),
+												exitCode: child?.exitCode,
+												state: child?.state ?? "failed",
+												durationMs: child?.durationMs,
+												sessionFile: child?.sessionFile ?? event.sessionFile,
+												timestamp: event.timestamp,
+												taskIndex: index,
+												asyncDir: event.runRecordDir,
 											});
-											return;
 										}
-										const child = event.result;
-										// Workflow children never notify individually: the workflow is ONE
-										// entity and sends exactly one completion (with the script's return
-										// value) from finishAsync. The event still fires for non-notify
-										// consumers (widget liveness, tests).
-										safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
-											id: event.runId,
-											runId: event.runId,
-											parentRunId: group.runId,
-											rootRunId: groupRootRunId,
-											metadata: undefined,
-											notifyPolicy: "silent",
-											agent: role,
-											success: child ? child.state === "complete" : false,
-											summary: child?.outputText ?? (event.error ? String(event.error) : ""),
-											exitCode: child?.exitCode,
-											state: child?.state ?? "failed",
-											durationMs: child?.durationMs,
-											sessionFile: child?.sessionFile ?? event.sessionFile,
-											timestamp: event.timestamp,
-											taskIndex: index,
-											asyncDir: event.runRecordDir,
-										});
-									}
-								: undefined,
-						},
-					);
-					await awaitRun(handle);
-					if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
-					childResults.push({ runId: handle.runId, result, index });
-					return result;
+									: undefined,
+							},
+						);
+						await awaitRun(handle);
+						if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
+						childResults.push({ runId: handle.runId, result, index });
+						return result;
+					} finally {
+						admissionPermit.release();
+					}
 				},
 				failWorkflow: async (message, tags) => {
 					// A raw workflow-level error (e.g. the script throws after a successful
@@ -1019,6 +1066,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					if (result) childResults.push({ runId: handle.runId, result, index });
 				},
 				finishAsync: (success, summary) => {
+					releaseRunController(group.runId);
 					if (!effectiveAsync) return;
 					writeWorkflowGroupState(group.runRecordDir, success ? "complete" : "failed");
 					const ordered = [...childResults].sort((a, b) => a.index - b.index);

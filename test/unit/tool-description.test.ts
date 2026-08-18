@@ -70,18 +70,20 @@ describe("registered workflow tool description", () => {
 		assertNoHardcodedPersonaNames(description);
 		assert.match(description, /role is a string chosen from the caller's configured agent roles/i);
 		assert.match(description, /<implementation-role>/);
-		assert.match(description, /process-wide leaf-concurrency pool/i);
+		assert.match(description, /process-global active leaf limit/i);
+		assert.match(description, /workflow\.maxPipelineItemsInFlight/i);
 		assert.match(description, /meta\(\{ name, description, phases \}\)/i);
 		assert.match(description, /phases: \["Recon"\] or \[\{ title: "Recon" \}\]/i);
 		assert.match(description, /call once before other globals/i);
 		assert.match(description, /child-session Workflow calls always run synchronously despite async\/default/i);
 	});
 
-	it("presents uncapped programmable orchestration without prescribing one topology", () => {
+	it("presents bounded programmable orchestration without prescribing one topology", () => {
 		const description = readRegisteredWorkflowDescription();
 
 		assert.doesNotMatch(description, /prefer one child|2–4|default to pipeline/i);
-		assert.match(description, /no prompt-imposed child count/i);
+		assert.match(description, /admission happens before child run records are created/i);
+		assert.match(description, /at most config workflow\.maxPipelineItemsInFlight item chains/i);
 		assert.match(description, /ordinary JavaScript/i);
 		assert.match(description, /pipeline\(\).*streams[\s\S]*parallel\(\).*barrier/i);
 		assert.match(description, /nested[\s\S]*loops and branches/i);

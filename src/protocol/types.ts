@@ -690,6 +690,11 @@ export interface StripXmlTagsConfig {
 	tags?: string[];
 }
 
+export interface WorkflowConfig {
+	/** Maximum pipeline item chains executing within one workflow run. Default 8. */
+	maxPipelineItemsInFlight?: number;
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	forceTopLevelAsync?: boolean;
@@ -697,11 +702,11 @@ export interface ExtensionConfig {
 	maxSubagentDepth?: number;
 	/**
 	 * Per-process ceiling on concurrently executing leaf agents across ALL
-	 * dispatch paths (sync, async, parallel, workflow). This is the single
-	 * concurrency knob; there are no per-invocation or per-batch settings.
-	 * Parents awaiting their own children do not occupy a slot. Default 4.
+	 * dispatch paths (sync, async, parallel, workflow). Parents awaiting their
+	 * own children do not occupy a slot. Default 4.
 	 */
 	maxConcurrentAgents?: number;
+	workflow?: WorkflowConfig;
 	control?: ControlConfig;
 	parallel?: TopLevelParallelConfig;
 	intercomBridge?: IntercomBridgeConfig;
