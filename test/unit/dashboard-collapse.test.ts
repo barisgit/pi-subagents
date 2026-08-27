@@ -147,6 +147,33 @@ describe("dashboard collapse and container rows", () => {
 		}
 	});
 
+	it("focuses the run list when the sidebar is reopened", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "run-newer", agentName: "fixer", startedAt: 2000 });
+		seedRun(root, { runId: "run-older", agentName: "explorer", startedAt: 1000 });
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, {
+			refreshMs: 0,
+			sessionCwd: root,
+		});
+		try {
+			const selectedLine = () =>
+				leftOnly(component.render(120).map(stripAnsi).map(stripBorders)).find((line) => line.startsWith(">"));
+			const before = selectedLine();
+			assert.ok(before, "expected an initially selected run");
+
+			component.handleInput("s");
+			component.handleInput("s");
+			component.handleInput("j");
+
+			const after = selectedLine();
+			assert.ok(after, "expected a selected run after reopening the sidebar");
+			assert.notEqual(after, before, "j should move the sidebar selection after reopen");
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("enter collapses a workflow container: phase rows and children hide", () => {
 		const root = tmpRegistry();
 		seedRun(root, {

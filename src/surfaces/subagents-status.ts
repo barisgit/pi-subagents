@@ -769,6 +769,7 @@ export class SubagentsStatusComponent implements Component {
 	// Charter-style focus: `tab` toggles which pane receives navigation.
 	// Left = move selection; right = scroll transcript.
 	private focus: "left" | "right" = "left";
+	private sidebarCollapsed = false;
 	// Split fraction: portion of total width assigned to the left pane. `[` and
 	// `]` shift it in SPLIT_STEP_COLS-sized steps; clamped to keep both panes
 	// readable. Persists for the lifetime of the overlay instance.
@@ -1286,6 +1287,17 @@ export class SubagentsStatusComponent implements Component {
 	handleInput(data: string): void {
 		if (data === "q" || data === "\u001b" || data === "\u0003") {
 			this.done();
+			return;
+		}
+		if (data === "s") {
+			this.overlay.handleInput(data);
+			this.sidebarCollapsed = !this.sidebarCollapsed;
+			if (!this.sidebarCollapsed) {
+				// paneOverlay keeps detail focus when expanding; this dashboard treats
+				// reopening the sidebar as an explicit return to the run list.
+				this.focus = "left";
+				this.overlay.handleInput("\t");
+			}
 			return;
 		}
 		if (data === "\t" || data === "\u001b[D" || data === "\u001b[C") {
