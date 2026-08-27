@@ -69,26 +69,30 @@ export class LiveToolComponentStore {
 		const pending = "toolCallId" in event ? tools.get(event.toolCallId) : undefined;
 		if (!pending) return;
 		if (event.type === "tool_execution_start" || event.type === "tool_execution_update") {
-			pending.component.updateArgs(event.args);
-			if (!pending.argsComplete) {
-				pending.component.setArgsComplete();
-				pending.argsComplete = true;
-			}
-			if (!pending.executionStarted) {
-				pending.component.markExecutionStarted();
-				pending.executionStarted = true;
-			}
-			if (event.type === "tool_execution_update") {
-				const partialResult = dashboardPartialResult(event.partialResult);
-				if (partialResult) {
-					pending.latestResult = partialResult;
-					pending.component.updateResult(partialResult, true);
+			updatePendingTool(pending, () => {
+				pending.component.updateArgs(event.args);
+				if (!pending.argsComplete) {
+					pending.component.setArgsComplete();
+					pending.argsComplete = true;
 				}
-			}
+				if (!pending.executionStarted) {
+					pending.component.markExecutionStarted();
+					pending.executionStarted = true;
+				}
+				if (event.type === "tool_execution_update") {
+					const partialResult = dashboardPartialResult(event.partialResult);
+					if (partialResult) {
+						pending.latestResult = partialResult;
+						pending.component.updateResult(partialResult, true);
+					}
+				}
+			});
 			return;
 		}
 		if (event.type === "tool_execution_end") {
-			pending.component.updateResult({ ...event.result, isError: event.isError });
+			updatePendingTool(pending, () =>
+				pending.component.updateResult({ ...event.result, isError: event.isError }),
+			);
 			tools.delete(event.toolCallId);
 			if (tools.size === 0) this.pendingTools.delete(session);
 		}
@@ -98,7 +102,9 @@ export class LiveToolComponentStore {
 		const tools = this.pendingTools.get(session);
 		if (!tools) return;
 		for (const pending of tools.values()) {
-			pending.component.updateResult(pending.latestResult ?? { content: [], isError: true });
+			updatePendingTool(pending, () =>
+				pending.component.updateResult(pending.latestResult ?? { content: [], isError: true }),
+			);
 		}
 		this.pendingTools.delete(session);
 	}
@@ -535,7 +541,18 @@ interface PendingToolComponent {
 	component: ToolExecutionComponent;
 	executionStarted: boolean;
 	argsComplete: boolean;
+	completed: boolean;
+	renderRequestsEnabled: boolean;
 	latestResult?: ToolResultPayload;
+}
+
+function updatePendingTool(pending: PendingToolComponent, update: () => void): void {
+	pending.renderRequestsEnabled = false;
+	try {
+		update();
+	} finally {
+		pending.renderRequestsEnabled = true;
+	}
 }
 
 function messageGroups(messages: AgentMessage[]): AgentMessage[][] {
@@ -583,7 +600,9 @@ export class LiveSessionRenderCache {
 		const tools = this.pendingTools.get(session);
 		if (!tools) return;
 		for (const pending of tools.values()) {
-			pending.component.updateResult(pending.latestResult ?? { content: [], isError: true });
+			updatePendingTool(pending, () =>
+				pending.component.updateResult(pending.latestResult ?? { content: [], isError: true }),
+			);
 		}
 		this.pendingTools.delete(session);
 		this.pendingSessions.delete(session);
@@ -594,7 +613,7 @@ export class LiveSessionRenderCache {
 		for (const session of [...this.pendingSessions]) this.clearPendingTools(session);
 	}
 
-	invalidate(session: LiveDashboardSession, event?: AgentSessionEvent): void {
+	invalidate(session: DashboardMessageSession, event?: AgentSessionEvent): void {
 		const entry = this.entries.get(session);
 		if (event?.type === "compaction_end") {
 			if (this.liveToolComponents) this.liveToolComponents.releaseSession(session);
@@ -657,7 +676,7 @@ export class LiveSessionRenderCache {
 		}
 		const lines = renderedGroups.flatMap((group) => group.lines);
 		if (this.liveToolComponents && pendingTools.size === 0) this.liveToolComponents.releaseSession(session);
-		if (!this.liveToolComponents && pendingTools.size > 0 && "subscribe" in session) {
+		if (!this.liveToolComponents && pendingTools.size > 0) {
 			this.pendingSessions.add(session);
 		} else if (!this.liveToolComponents) {
 			if (pendingTools.size === 0) this.pendingTools.delete(session);
@@ -741,6 +760,7 @@ function renderLiveMessages(
 	getToolDefinition?: (name: string) => ToolDefinition | undefined,
 	toolProgress?: ReadonlyMap<string, LiveToolProgress>,
 	display: DashboardDisplayMode = { revision: 0, toolsExpanded: false, hideThinking: false },
+	requestRender?: () => void,
 ): string[] {
 	const lines: string[] = [];
 	const openToolIds = new Set<string>();
@@ -762,6 +782,14 @@ function renderLiveMessages(
 				if (content.type !== "toolCall") continue;
 				let pending = pendingTools.get(content.id);
 				if (!pending) {
+					let created: PendingToolComponent | undefined;
+					const componentTui = new Proxy(tui, {
+						get(target, property, receiver) {
+							if (property === "requestRender")
+								return () => created?.renderRequestsEnabled && requestRender?.();
+							return Reflect.get(target, property, receiver);
+						},
+					});
 					pending = {
 						component: new ToolExecutionComponent(
 							content.name,
@@ -769,43 +797,61 @@ function renderLiveMessages(
 							content.arguments,
 							{ showImages: false },
 							session.getToolDefinition?.(content.name) ?? getToolDefinition?.(content.name),
-							renderTui,
+							componentTui,
 							cwd,
 						),
 						executionStarted: false,
 						argsComplete: false,
+						completed: false,
+						renderRequestsEnabled: true,
 					};
+					created = pending;
 					pendingTools.set(content.id, pending);
-				} else {
+				}
+				updatePendingTool(pending, () => {
+					pending.component.setExpanded(display.toolsExpanded);
+					if (pending.completed) return;
 					pending.component.updateArgs(content.arguments);
-				}
-				pending.component.setExpanded(display.toolsExpanded);
-				const progress = toolProgress?.get(content.id);
-				if (progress) {
-					if (!pending.argsComplete) {
-						pending.component.setArgsComplete();
-						pending.argsComplete = true;
+					const progress = toolProgress?.get(content.id);
+					if (progress) {
+						if (!pending.argsComplete) {
+							pending.component.setArgsComplete();
+							pending.argsComplete = true;
+						}
+						if (!pending.executionStarted) {
+							pending.component.markExecutionStarted();
+							pending.executionStarted = true;
+						}
+						if (progress.partialResult) {
+							pending.latestResult = progress.partialResult;
+							pending.component.updateResult(progress.partialResult, true);
+						}
 					}
-					if (!pending.executionStarted) {
-						pending.component.markExecutionStarted();
-						pending.executionStarted = true;
-					}
-					if (progress.partialResult) {
-						pending.latestResult = progress.partialResult;
-						pending.component.updateResult(progress.partialResult, true);
-					}
-				}
+				});
 				openToolIds.add(content.id);
 			}
 		} else if (message.role === "toolResult") {
 			const pending = pendingTools.get(message.toolCallId);
 			if (pending) {
-				pending.component.updateResult({
-					...message,
-					content: message.content.filter((content) => content.type !== "image"),
-				});
-				lines.push(...pending.component.render(width));
-				pendingTools.delete(message.toolCallId);
+				pending.renderRequestsEnabled = false;
+				try {
+					if (!pending.completed) {
+						if (!pending.argsComplete) {
+							pending.component.setArgsComplete();
+							pending.argsComplete = true;
+						}
+						const finalResult = {
+							...message,
+							content: message.content.filter((content) => content.type !== "image"),
+						};
+						pending.latestResult = finalResult;
+						pending.component.updateResult(finalResult);
+						pending.completed = true;
+					}
+					lines.push(...pending.component.render(width));
+				} finally {
+					pending.renderRequestsEnabled = true;
+				}
 				openToolIds.delete(message.toolCallId);
 			}
 		} else if (message.role === "bashExecution") {
@@ -837,6 +883,10 @@ function buildLiveRightLines<TSession extends DashboardMessageSession>(
 	const lines: string[] = [];
 	for (const [index, session] of sessions.entries()) {
 		const uncachedPendingTools = new Map<string, PendingToolComponent>();
+		const requestRender = () => {
+			cache?.invalidate(session);
+			tui.requestRender();
+		};
 		const render = (messages: AgentMessage[], pendingTools = uncachedPendingTools) =>
 			renderLiveMessages(
 				session,
@@ -848,6 +898,7 @@ function buildLiveRightLines<TSession extends DashboardMessageSession>(
 				getToolDefinition,
 				toolProgress?.get(session),
 				display,
+				requestRender,
 			);
 		const sessionLines = cache ? cache.render(session, width, display.revision, render) : render(session.messages);
 		if (sessionLines.length === 0) continue;

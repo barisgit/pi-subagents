@@ -578,6 +578,76 @@ describe("dashboard detail pane redesign", () => {
 		assert.ok(narrow.length > wide.length, "a width change rebuilds and reflows cached message components");
 	});
 
+	it("repaints an async custom tool preview after its promise settles", async () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-async-preview", "/missing/async-preview") };
+		let settlePreview = () => {};
+		const previewReady = new Promise<void>((resolve) => {
+			settlePreview = resolve;
+		});
+		let previewScheduled = false;
+		const toolDefinition: ToolDefinition = {
+			name: "async_preview_tool",
+			label: "Async preview tool",
+			description: "Test async preview rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderShell: "self",
+			renderCall: (_args, _theme, context) => {
+				const component =
+					context.lastComponent instanceof Text ? context.lastComponent : new Text("pending preview", 0, 0);
+				if (!previewScheduled) {
+					previewScheduled = true;
+					void previewReady.then(() => {
+						component.setText("settled preview");
+						context.invalidate();
+					});
+				}
+				return component;
+			},
+		};
+		const session: LiveDashboardSession = {
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "call-async-preview", name: "async_preview_tool", arguments: {} },
+					],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
+			],
+			getToolDefinition: () => toolDefinition,
+			subscribe: () => () => {},
+		};
+		const cache = new LiveSessionRenderCache();
+		let renderRequests = 0;
+		const render = () =>
+			stripAnsi(
+				buildRightLines(theme, run, 100, [], {
+					sessions: [session],
+					tui: { requestRender: () => renderRequests++ } as never,
+					cache,
+				}).join("\n"),
+			);
+
+		assert.match(render(), /pending preview/);
+		settlePreview();
+		await previewReady;
+		assert.equal(renderRequests, 1, "the settled preview requests a dashboard repaint without a session event");
+		assert.match(render(), /settled preview/);
+	});
+
 	it("preserves builtin bash elapsed time and clears its interval on completion", () => {
 		const originalDateNow = Date.now;
 		const originalSetInterval = globalThis.setInterval;
@@ -1134,6 +1204,142 @@ describe("dashboard detail pane redesign", () => {
 			/Step 1[\s\S]*Persisted user text[\s\S]*Native assistant text[\s\S]*persisted custom call[\s\S]*persisted custom result[\s\S]*Step 2[\s\S]*printf nested[\s\S]*nested output/,
 		);
 		assert.doesNotMatch(output, /RAW_ARGS|FULL_RESULT_MARKER|unsafe/);
+	});
+
+	it("marks completed persisted tool arguments complete before rendering their result", () => {
+		const run: LiveRun = { ownership: "foreign", run: makeRun("run-persisted-args", "/missing/persisted-args") };
+		const toolDefinition: ToolDefinition = {
+			name: "args_gated_tool",
+			label: "Args-gated tool",
+			description: "Test completed argument rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderShell: "self",
+			renderCall: (_args, _theme, context) =>
+				new Text(context.argsComplete ? "completed input fallback" : "", 0, 0),
+			renderResult: () => new Text("persisted result", 0, 0),
+		};
+		const messages: LiveDashboardSession["messages"] = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-persisted-args", name: "args_gated_tool", arguments: {} }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-persisted-args",
+				toolName: "args_gated_tool",
+				content: [{ type: "text", text: "raw result" }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+
+		const output = stripAnsi(
+			buildRightLines(theme, run, 100, [], undefined, {
+				sessions: [{ stepIndex: 0, messages }],
+				tui: { requestRender: () => {} } as never,
+				getToolDefinition: () => toolDefinition,
+			}).join("\n"),
+		);
+
+		assert.match(output, /completed input fallback/);
+		assert.match(output, /persisted result/);
+	});
+
+	it("reuses a completed persisted tool component when its args-gated async preview settles", async () => {
+		const run: LiveRun = { ownership: "foreign", run: makeRun("run-settled-args", "/missing/settled-args") };
+		const scheduledStates = new WeakSet<object>();
+		let componentsCreated = 0;
+		const toolDefinition: ToolDefinition = {
+			name: "settled_args_tool",
+			label: "Settled args tool",
+			description: "Test settled persisted rendering",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderShell: "self",
+			renderCall: (_args, _theme, context) => {
+				const component =
+					context.lastComponent instanceof Text
+						? context.lastComponent
+						: new Text("pending persisted preview", 0, 0);
+				if (!context.lastComponent) componentsCreated++;
+				if (context.argsComplete && !scheduledStates.has(context.state)) {
+					scheduledStates.add(context.state);
+					void Promise.resolve().then(() => {
+						component.setText("settled persisted preview");
+						context.invalidate();
+					});
+				}
+				return component;
+			},
+			renderResult: () => new Text("persisted result", 0, 0),
+		};
+		const messages: LiveDashboardSession["messages"] = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-settled-args", name: "settled_args_tool", arguments: {} }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "call-settled-args",
+				toolName: "settled_args_tool",
+				content: [{ type: "text", text: "raw result" }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+		const session = { stepIndex: 0, messages };
+		const cache = new LiveSessionRenderCache();
+		let repaintRequests = 0;
+		let output = "";
+		const render = () => {
+			output = stripAnsi(
+				buildRightLines(theme, run, 100, [], undefined, {
+					sessions: [session],
+					tui: {
+						requestRender: () => {
+							repaintRequests++;
+							if (repaintRequests <= 5) queueMicrotask(render);
+						},
+					} as never,
+					cache,
+					getToolDefinition: () => toolDefinition,
+				}).join("\n"),
+			);
+		};
+
+		render();
+		for (let turn = 0; turn < 12; turn++) await Promise.resolve();
+
+		assert.equal(repaintRequests, 1, "the settled preview converges after one repaint");
+		assert.equal(componentsCreated, 1, "cache rebuilds reuse the completed tool component");
+		assert.match(output, /settled persisted preview/);
 	});
 
 	it("applies dashboard display modes to persisted native sessions", () => {
