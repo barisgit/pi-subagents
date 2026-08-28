@@ -31,6 +31,11 @@ import {
 } from "../state/lineage.ts";
 import { advanceRunPhase, initialRunPhaseState, setWaitingNetwork, type RunPhaseState } from "../state/run-phase.ts";
 import {
+	cloneRunTranscriptPreview,
+	createRunTranscriptPreviewWriter,
+	type RunTranscriptPreviewWriter,
+} from "../state/run-transcript-preview.ts";
+import {
 	SUBAGENT_PHASE_CHANGE_EVENT,
 	SUBAGENT_STUCK_EVENT,
 	type ControlConfig,
@@ -412,6 +417,7 @@ async function executeChildAgent(
 	let modelIndex = 0;
 	let structuredResult: SubmitResultEnvelope | undefined;
 	let ticker: PhaseTickerHandle | undefined;
+	let previewWriter: RunTranscriptPreviewWriter | undefined;
 	const usage: ChildUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 	const phaseEvents = createPhaseEventHandler({
 		runId: step.runId,
@@ -450,10 +456,18 @@ async function executeChildAgent(
 		}
 	};
 	const attachSession = (nextSession: AgentSession): void => {
+		previewWriter?.dispose();
 		session = nextSession;
+		previewWriter = createRunTranscriptPreviewWriter({
+			sessionFile: step.sessionFile,
+			stepIndex: step.stepIndex,
+			getMessages: () => nextSession.messages,
+		});
+		previewWriter.flush();
 		onSession(nextSession);
 		if (step.activeToolNames !== undefined) nextSession.setActiveToolsByName(step.activeToolNames);
 		unsubscribe = nextSession.subscribe((event) => {
+			previewWriter?.schedule();
 			const patch = handleSessionEvent(step, ctx, event, phaseEvents, {
 				appendOutput: (delta) => {
 					outputText += delta;
@@ -465,6 +479,13 @@ async function executeChildAgent(
 				accumulateUsage: usage,
 			});
 			if (patch) ctx.onStatusUpdate?.(patch);
+			if (
+				event.type === "message_end" ||
+				event.type === "tool_execution_end" ||
+				event.type === "agent_end" ||
+				event.type === "compaction_end"
+			)
+				previewWriter?.flush();
 		});
 	};
 	const activeSession = (): AgentSession => {
@@ -501,6 +522,7 @@ async function executeChildAgent(
 				targetPath: step.sessionFile,
 				childCwd: step.cwd,
 			});
+			cloneRunTranscriptPreview(step.forkReuse.sessionFile, step.sessionFile, step.stepIndex);
 		}
 		const created = await runInChildSessionContext(() =>
 			createSessionWithFallback(step, ctx, {
@@ -793,6 +815,7 @@ async function executeChildAgent(
 	} finally {
 		ticker?.stop();
 		unsubscribe?.();
+		previewWriter?.dispose();
 		session?.dispose();
 	}
 }

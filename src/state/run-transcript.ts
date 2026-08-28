@@ -4,6 +4,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
 import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
+import { readRunTranscriptPreview, writeRunTranscriptPreview } from "./run-transcript-preview.ts";
 
 export type TranscriptLine =
 	| { kind: "step-start"; stepIndex: number; agent: string; ts: number; task?: string; label?: string }
@@ -44,7 +45,6 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 const ARGS_PREVIEW_MAX = 60;
-const MESSAGE_CACHE_LIMIT = 32;
 
 export interface RunMessageSession {
 	stepIndex: number;
@@ -54,11 +54,46 @@ export interface RunMessageSession {
 interface RunMessageCacheEntry {
 	files: CacheFileStat[];
 	sessions: RunMessageSession[];
+	sourceBytes: number;
 }
 
 /** Dashboard-owned reader for typed messages on each persisted session branch. */
 export class RunMessageReader {
 	private readonly cache = new Map<string, RunMessageCacheEntry>();
+	private readonly maxEntries: number;
+	private readonly maxSourceBytes: number;
+
+	constructor(options: { maxEntries?: number; maxSourceBytes?: number } = {}) {
+		this.maxEntries = options.maxEntries ?? 10;
+		this.maxSourceBytes = options.maxSourceBytes ?? 32 * 1024 * 1024;
+	}
+
+	readPreview(runRecordDir: string): RunMessageSession[] {
+		const status = readStatusFile(path.join(runRecordDir, "status.json"));
+		return discoverSessionFiles(runRecordDir, status).flatMap((session) => {
+			const preview = readRunTranscriptPreview(session.filePath);
+			return preview && preview.messages.length > 0
+				? [{ stepIndex: session.stepIndex, messages: preview.messages }]
+				: [];
+		});
+	}
+
+	peek(runRecordDir: string): RunMessageSession[] | undefined {
+		const cached = this.cache.get(runRecordDir);
+		if (!cached) return undefined;
+		const statusPath = path.join(runRecordDir, "status.json");
+		const status = readStatusFile(statusPath);
+		const stats = [
+			fileStat(statusPath),
+			...discoverSessionFiles(runRecordDir, status).map((session) => fileStat(session.filePath)),
+		].filter((stat): stat is CacheFileStat => Boolean(stat));
+		if (!sameFileStats(cached.files, stats)) {
+			this.cache.delete(runRecordDir);
+			return undefined;
+		}
+		this.touch(runRecordDir, cached);
+		return cached.sessions;
+	}
 
 	read(runRecordDir: string): RunMessageSession[] {
 		const statusPath = path.join(runRecordDir, "status.json");
@@ -85,25 +120,39 @@ export class RunMessageReader {
 					.getBranch()
 					.filter((entry) => entry.type === "message")
 					.map((entry) => entry.message);
-				if (messages.length > 0) sessions.push({ stepIndex: sessionFile.stepIndex, messages });
+				if (messages.length > 0) {
+					sessions.push({ stepIndex: sessionFile.stepIndex, messages });
+					writeRunTranscriptPreview(sessionFile.filePath, sessionFile.stepIndex, messages);
+				}
 			}
 		} catch {
 			this.cache.delete(runRecordDir);
 			return [];
 		}
-		const entry = { files: stats, sessions };
+		const entry = {
+			files: stats,
+			sessions,
+			sourceBytes: stats.reduce((total, stat) => total + stat.size, 0),
+		};
 		this.touch(runRecordDir, entry);
-		while (this.cache.size > MESSAGE_CACHE_LIMIT) {
-			const oldest = this.cache.keys().next().value;
-			if (oldest === undefined) break;
-			this.cache.delete(oldest);
-		}
+		this.evict();
 		return sessions;
 	}
 
 	private touch(runRecordDir: string, entry: RunMessageCacheEntry): void {
 		this.cache.delete(runRecordDir);
 		this.cache.set(runRecordDir, entry);
+	}
+
+	private evict(): void {
+		let sourceBytes = [...this.cache.values()].reduce((total, entry) => total + entry.sourceBytes, 0);
+		while (this.cache.size > 1 && (this.cache.size > this.maxEntries || sourceBytes > this.maxSourceBytes)) {
+			const oldest = this.cache.keys().next().value;
+			if (oldest === undefined) break;
+			const entry = this.cache.get(oldest);
+			this.cache.delete(oldest);
+			sourceBytes -= entry?.sourceBytes ?? 0;
+		}
 	}
 }
 

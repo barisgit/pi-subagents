@@ -515,6 +515,7 @@ function userMessageText(message: Extract<AgentMessage, { role: "user" }>): stri
 interface DashboardMessageSession {
 	readonly messages: AgentMessage[];
 	readonly stepIndex?: number;
+	readonly cacheKey?: DashboardMessageSession;
 	getToolDefinition?(name: string): ToolDefinition | undefined;
 }
 
@@ -592,6 +593,7 @@ export class LiveSessionRenderCache {
 	}
 
 	clear(session: DashboardMessageSession): void {
+		session = session.cacheKey ?? session;
 		this.entries.delete(session);
 		if (!this.liveToolComponents) this.clearPendingTools(session);
 	}
@@ -614,6 +616,7 @@ export class LiveSessionRenderCache {
 	}
 
 	invalidate(session: DashboardMessageSession, event?: AgentSessionEvent): void {
+		session = session.cacheKey ?? session;
 		const entry = this.entries.get(session);
 		if (event?.type === "compaction_end") {
 			if (this.liveToolComponents) this.liveToolComponents.releaseSession(session);
@@ -646,7 +649,8 @@ export class LiveSessionRenderCache {
 		revision: number,
 		renderGroup: (messages: AgentMessage[], pendingTools: Map<string, PendingToolComponent>) => string[],
 	): string[] {
-		const entry = this.entries.get(session);
+		const cacheSession = session.cacheKey ?? session;
+		const entry = this.entries.get(cacheSession);
 		if (entry && entry.width === width && entry.revision === revision && entry.dirtyFrom === undefined)
 			return entry.lines;
 
@@ -665,24 +669,24 @@ export class LiveSessionRenderCache {
 		}
 
 		const renderedGroups = canReuse ? entry.groups.slice(0, rebuildFrom) : [];
-		let pendingTools = this.liveToolComponents?.toolsFor(session) ?? this.pendingTools.get(session);
+		let pendingTools = this.liveToolComponents?.toolsFor(cacheSession) ?? this.pendingTools.get(cacheSession);
 		if (!pendingTools) {
 			pendingTools = new Map();
-			if (!this.liveToolComponents) this.pendingTools.set(session, pendingTools);
+			if (!this.liveToolComponents) this.pendingTools.set(cacheSession, pendingTools);
 		}
 		for (let index = rebuildFrom; index < groups.length; index++) {
 			const messages = groups[index]!;
 			renderedGroups.push({ messages, lines: renderGroup(messages, pendingTools) });
 		}
 		const lines = renderedGroups.flatMap((group) => group.lines);
-		if (this.liveToolComponents && pendingTools.size === 0) this.liveToolComponents.releaseSession(session);
+		if (this.liveToolComponents && pendingTools.size === 0) this.liveToolComponents.releaseSession(cacheSession);
 		if (!this.liveToolComponents && pendingTools.size > 0) {
-			this.pendingSessions.add(session);
+			this.pendingSessions.add(cacheSession);
 		} else if (!this.liveToolComponents) {
-			if (pendingTools.size === 0) this.pendingTools.delete(session);
-			this.pendingSessions.delete(session);
+			if (pendingTools.size === 0) this.pendingTools.delete(cacheSession);
+			this.pendingSessions.delete(cacheSession);
 		}
-		this.entries.set(session, { width, revision, groups: renderedGroups, lines });
+		this.entries.set(cacheSession, { width, revision, groups: renderedGroups, lines });
 		return lines;
 	}
 }
@@ -929,6 +933,7 @@ export function buildRightLines(
 		cache?: LiveSessionRenderCache;
 		getToolDefinition: (name: string) => ToolDefinition | undefined;
 		display?: DashboardDisplayMode;
+		loading?: boolean;
 	},
 ): string[] {
 	if (!run) return [theme.fg("dim", "(no events yet)")];
@@ -966,6 +971,7 @@ export function buildRightLines(
 			// Malformed or unusable persisted messages fall through to the compact transcript.
 		}
 	}
+	if (historical?.loading) return [theme.fg("dim", "Loading transcript…")];
 	if (run.run.workflow) {
 		const workflowLines = buildWorkflowRightLines(theme, run.run, width, runs);
 		if (workflowLines.length > 0) return workflowLines;

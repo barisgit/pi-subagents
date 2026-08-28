@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, it } from "node:test";
 import { initTheme, type AgentSessionEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -126,6 +127,114 @@ describe("dashboard detail pane redesign", () => {
 			assert.match(output, /Persisted fallback text/);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("defers full persisted transcript reads until selection settles and cancels crossed rows", async () => {
+		const runA = makeRun("run-deferred-a", "/preview/a");
+		const runB = makeRun("run-deferred-b", "/preview/b");
+		const loaded = new Map<string, Array<{ messages: LiveDashboardSession["messages"] }>>();
+		const reads: string[] = [];
+		const reader = {
+			readPreview: (dir: string) =>
+				dir === "/preview/a" ? [{ messages: [{ role: "user", content: "preview A", timestamp: 1 }] }] : [],
+			peek: (dir: string) => loaded.get(dir),
+			read: (dir: string) => {
+				reads.push(dir);
+				const sessions = [{ messages: [{ role: "user" as const, content: `full ${dir}`, timestamp: 2 }] }];
+				loaded.set(dir, sessions);
+				return sessions;
+			},
+		};
+		const component = new SubagentsStatusComponent(
+			{ requestRender: () => {}, terminal: { rows: 32 } } as never,
+			theme,
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [runA, runB], recent: [] }),
+				getOwnedRunViews: () => new Map(),
+				rendererCatalog: { getToolDefinition: () => undefined },
+				runMessageReader: reader as never,
+				selectionSettleMs: 5,
+				refreshMs: 60000,
+			},
+		);
+
+		try {
+			assert.match(stripAnsi(component.render(120).join("\n")), /preview A/);
+			assert.deepEqual(reads, []);
+			component.handleInput("j");
+			const crossed = stripAnsi(component.render(120).join("\n"));
+			assert.match(crossed, /Loading transcript/);
+			assert.deepEqual(reads, []);
+			await delay(15);
+			assert.deepEqual(reads, ["/preview/b"]);
+			assert.match(stripAnsi(component.render(120).join("\n")), /full \/preview\/b/);
+			assert.doesNotMatch(stripAnsi(component.render(120).join("\n")), /full \/preview\/a/);
+		} finally {
+			component.dispose();
+		}
+
+		const cancelled = new SubagentsStatusComponent(
+			{ requestRender: () => {}, terminal: { rows: 32 } } as never,
+			theme,
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [runA], recent: [] }),
+				getOwnedRunViews: () => new Map(),
+				rendererCatalog: { getToolDefinition: () => undefined },
+				runMessageReader: reader as never,
+				selectionSettleMs: 5,
+				refreshMs: 60000,
+			},
+		);
+		cancelled.dispose();
+		await delay(15);
+		assert.deepEqual(reads, ["/preview/b"], "dispose clears a pending settled-selection load");
+	});
+
+	it("crossing twenty preview rows loads only the final selected transcript", async () => {
+		const runs = Array.from({ length: 20 }, (_, index) => makeRun(`run-preview-${index}`, `/preview/${index}`));
+		const loaded = new Map<string, Array<{ messages: LiveDashboardSession["messages"] }>>();
+		const reads: string[] = [];
+		const reader = {
+			readPreview: (dir: string) => [
+				{ messages: [{ role: "user" as const, content: `preview ${dir}`, timestamp: 1 }] },
+			],
+			peek: (dir: string) => loaded.get(dir),
+			read: (dir: string) => {
+				reads.push(dir);
+				const sessions = [{ messages: [{ role: "user" as const, content: `full ${dir}`, timestamp: 2 }] }];
+				loaded.set(dir, sessions);
+				return sessions;
+			},
+		};
+		const component = new SubagentsStatusComponent(
+			{ requestRender: () => {}, terminal: { rows: 32 } } as never,
+			theme,
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: runs, recent: [] }),
+				getOwnedRunViews: () => new Map(),
+				rendererCatalog: { getToolDefinition: () => undefined },
+				runMessageReader: reader as never,
+				selectionSettleMs: 5,
+				refreshMs: 60_000,
+			},
+		);
+
+		try {
+			component.render(120);
+			for (let index = 1; index < runs.length; index++) {
+				component.handleInput("j");
+				assert.match(stripAnsi(component.render(120).join("\n")), new RegExp(`preview \\/preview\\/${index}`));
+			}
+			assert.deepEqual(reads, [], "crossed rows remain preview-only");
+			await delay(15);
+			assert.deepEqual(reads, ["/preview/19"]);
+			assert.match(stripAnsi(component.render(120).join("\n")), /full \/preview\/19/);
+		} finally {
+			component.dispose();
 		}
 	});
 
@@ -534,7 +643,11 @@ describe("dashboard detail pane redesign", () => {
 				getOwnedRunViews: () => new Map(),
 				getLiveSessions: () => (published ? [liveSession] : []),
 				rendererCatalog: { getToolDefinition: () => undefined },
-				runMessageReader: { read: () => [historicalSession] } as never,
+				runMessageReader: {
+					peek: () => [historicalSession],
+					readPreview: () => [],
+					read: () => [historicalSession],
+				} as never,
 				refreshMs: 60000,
 			},
 		);

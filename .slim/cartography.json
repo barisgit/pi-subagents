@@ -1,7 +1,7 @@
 {
 	"metadata": {
 		"version": "1.0.0",
-		"last_run": "2026-08-18T19:32:18.572299Z",
+		"last_run": "2026-08-28T15:18:24.240104Z",
 		"root": ".",
 		"include_patterns": ["src/**/*.ts", "index.ts", "package.json"],
 		"exclude_patterns": ["**/*.test.ts", "dist/**", "node_modules/**", "test/**"],
@@ -9,7 +9,7 @@
 	},
 	"file_hashes": {
 		"index.ts": "81220eb5a67d8552cf3e128ebb6b31ea",
-		"package.json": "127d1a49d3bff7ca3c3ce852779e38dc",
+		"package.json": "6f7a4cf32b9a59819ee273d50af53fdf",
 		"src/api/exposed-subagent-api.ts": "2a94687a56bf8a816633601b05c3cde7",
 		"src/dispatch/agent-scope.ts": "96cfedbbce7ab5814db6db8289c8ed75",
 		"src/dispatch/child-agent-registry.ts": "1989c6c7c7b2c03e5757aa1f10e4ca22",
@@ -21,7 +21,7 @@
 		"src/dispatch/executor-types.ts": "7c8910995f6ff9b7de68130edb7b0306",
 		"src/dispatch/foreground-run-controller.ts": "6db03e6b07b2ec208c0ece3a76053078",
 		"src/dispatch/fork-context.ts": "d0cd2a02340c9164308dceec95c1dc44",
-		"src/dispatch/in-process-executor.ts": "477a419b6a1750d18d96e6a03a1fbc69",
+		"src/dispatch/in-process-executor.ts": "3db4ca3e3e7da385217dd176f5d878d3",
 		"src/dispatch/intercom-bridge.ts": "19872e83afe6d36c0de10ac6491328ad",
 		"src/dispatch/interrupt-control.ts": "30e40cabc721b235d500917eee0ca9a0",
 		"src/dispatch/layer0-runs.ts": "b77207e7609184ed21d1f97eaebd47a1",
@@ -78,7 +78,8 @@
 		"src/state/run-phase.ts": "4cb0521460ad55a5652ef333bbb98e15",
 		"src/state/run-shape.ts": "dfb806183c114626d699fd94216e0c48",
 		"src/state/run-status.ts": "40576678bf0820f46a3d1860e86e0a9c",
-		"src/state/run-transcript.ts": "e1725875de6d75f1d9da55852e2ff198",
+		"src/state/run-transcript-preview.ts": "6bcb6376b068e378dbe48bcc1655852b",
+		"src/state/run-transcript.ts": "351532c55371a00714d0ba93e41a6252",
 		"src/state/run-view.ts": "5d68c032af94347d8f5a7fc14dd5b070",
 		"src/state/runs-registry.ts": "a062e7f9ffbb090b7fd1ef907b77e5b9",
 		"src/state/session-paths.ts": "b30d6bcc359d03959e4a9bc0b364f477",
@@ -92,7 +93,7 @@
 		"src/surfaces/async-guidance.ts": "48c1356055eb192448749cc15e184a4d",
 		"src/surfaces/async-job-tracker.ts": "a5e21fe173b4a50450dd7f7f46979c3f",
 		"src/surfaces/control-notices.ts": "d00f4fdc645a0e4e5b80ebf606f1ae69",
-		"src/surfaces/dashboard-detail-renderer.ts": "c1e2e0f5b9f85ef68cf4abac1df08dc9",
+		"src/surfaces/dashboard-detail-renderer.ts": "3bfbd340bc71b29e8432d6aef4451808",
 		"src/surfaces/dashboard-row-model.ts": "e6f573ee0a898234bec1a4c85c98288c",
 		"src/surfaces/dashboard-run-source.ts": "fc4cc59bcff3bd3fdb6d1cb396f8ddfe",
 		"src/surfaces/formatters.ts": "34f5a772be826b5ebff8f46c97d62477",
@@ -106,20 +107,20 @@
 		"src/surfaces/single-output.ts": "784efc17c3958274ee910f754e80709a",
 		"src/surfaces/slash-bridge.ts": "87c89df57812769f1047de7e718aca57",
 		"src/surfaces/slash-commands.ts": "6701f80f397a7124585478cf47b4b08e",
-		"src/surfaces/subagents-status.ts": "8a66196e339a0d3300c4558708a31291",
+		"src/surfaces/subagents-status.ts": "bfa747481c8582cfed21e56b3e1b419e",
 		"src/workflow/workflow-group-state.ts": "9e74352b56d5cc019ba86d33a33c36c6",
 		"src/workflow/workflow.ts": "78cd24c68e49e3951bce5e277bae6036"
 	},
 	"folder_hashes": {
-		"src/surfaces": "a25e85c56f3095e84eeb57ca13d7944a",
-		".": "cb721a6cd9fe8ad960ff6f14c01a484b",
-		"src/runtime": "4e0b0ffa91ea16e68dcbe6b3df4a50cb",
 		"src/api": "33ad2568b1d838cde9f7aa0028f874d1",
-		"src/protocol": "941672ee3961a8fd6bac87fe3c103762",
-		"src/dispatch": "0af5a78d1460d009db16c7626331b875",
+		"src/runtime": "4e0b0ffa91ea16e68dcbe6b3df4a50cb",
 		"src/shared": "aefe5bc107c8daa98d549b40582e58c8",
-		"src/state": "8786a24ed80caecaf6ff6109325095c5",
-		"src/workflow": "5534f775a47634c9a79eae3893633a93",
-		"src": "cd2433f8c0f7a815bd1336f0e1c33d15"
+		"src/protocol": "941672ee3961a8fd6bac87fe3c103762",
+		"src/dispatch": "e2ecb32a5ab57f5b7053e9d6f356711a",
+		"src/state": "3bd7b18626c49682326ec20fefb28401",
+		".": "c7bb5aaf115896213f7fbfdab34bd3d4",
+		"src": "b4091c0461f293955dc3a997bad85ebc",
+		"src/surfaces": "f0959ab17f2fc3e12d5cb45016f721d3",
+		"src/workflow": "5534f775a47634c9a79eae3893633a93"
 	}
 }

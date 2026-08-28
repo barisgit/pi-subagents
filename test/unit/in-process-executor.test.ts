@@ -16,6 +16,7 @@ import {
 import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "../../src/state/lineage.ts";
 import { isInsideChildSession } from "../../src/shared/child-session-context.ts";
 import { LiveSessionDirectory } from "../../src/shared/live-session-relay.ts";
+import { readRunTranscriptPreview } from "../../src/state/run-transcript-preview.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -32,6 +33,18 @@ function clearLineage(...sessionIds: string[]): void {
 
 afterEach(() => {
 	while (restoreFns.length > 0) restoreFns.pop()?.();
+});
+
+it("writes the opened branch preview before prompting", async () => {
+	const step = makeStep({ runId: "run-preview-open" });
+	const session = new FakeAgentSession(async (self) => {
+		assert.match(JSON.stringify(readRunTranscriptPreview(step.sessionFile)), /opened branch/);
+		self.lastAssistantText = "<output>done</output>";
+	});
+	session.messages = [{ role: "user", content: "opened branch", timestamp: 1 }];
+	installFakeRuntime([session]);
+
+	assert.equal((await runChildAgent(step, makeContext())).state, "complete");
 });
 
 it("updates the registered handle to the reopened fallback session", async () => {
@@ -562,6 +575,24 @@ describe("runChildAgent", () => {
 			await firstRun?.catch(() => {});
 			clearLineage(firstStep.sessionFile, secondStep.sessionFile);
 		}
+	});
+
+	it("persists the branch-aware live message preview and flushes it at message boundaries", async () => {
+		const step = makeStep({ runId: "run-preview-events" });
+		const session = new FakeAgentSession(async (self) => {
+			self.messages = [{ role: "assistant", content: [{ type: "text", text: "preview text" }] }];
+			self.emit({ type: "message_update", message: self.messages[0] });
+			assert.equal(readRunTranscriptPreview(step.sessionFile)?.messages.length, 0);
+			self.emit({ type: "message_end", message: self.messages[0] });
+			assert.equal(readRunTranscriptPreview(step.sessionFile)?.messages[0]?.role, "assistant");
+			self.lastAssistantText = "<output>done</output>";
+		});
+		installFakeRuntime([session]);
+
+		const result = await runChildAgent(step, makeContext());
+
+		assert.equal(result.state, "complete");
+		assert.match(JSON.stringify(readRunTranscriptPreview(step.sessionFile)), /preview text/);
 	});
 
 	it("increments tool counters on tool_execution_start and tool_execution_end", async () => {

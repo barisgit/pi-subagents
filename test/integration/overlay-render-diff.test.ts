@@ -98,7 +98,7 @@ describe("overlay render-on-diff", () => {
 			}),
 			createTestTheme(),
 			() => {},
-			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },
+			{ listRunsForOverlay: () => snapshot, refreshMs: 10, selectionSettleMs: 60_000 },
 		);
 		// Let several ticks pass with no change to the snapshot.
 		await wait(60);
@@ -115,7 +115,7 @@ describe("overlay render-on-diff", () => {
 			}),
 			createTestTheme(),
 			() => {},
-			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },
+			{ listRunsForOverlay: () => snapshot, refreshMs: 10, selectionSettleMs: 60_000 },
 		);
 		await wait(30);
 		assert.equal(renders, 0, "no change yet => no render");
@@ -137,7 +137,7 @@ describe("overlay render-on-diff", () => {
 			}),
 			createTestTheme(),
 			() => {},
-			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },
+			{ listRunsForOverlay: () => snapshot, refreshMs: 10, selectionSettleMs: 60_000 },
 		);
 		await wait(60);
 		component.dispose();
@@ -153,7 +153,7 @@ describe("overlay render-on-diff", () => {
 			}),
 			createTestTheme(),
 			() => {},
-			{ listRunsForOverlay: () => snapshot, refreshMs: 10 },
+			{ listRunsForOverlay: () => snapshot, refreshMs: 10, selectionSettleMs: 60_000 },
 		);
 		await wait(55);
 		component.dispose();

@@ -25,7 +25,7 @@ shared/    → low-level utilities, agent/skill discovery, env policy (leaf)
 |-----------|----------------|-----|
 | `dispatch/` | Subagent dispatch + child-agent execution, including process-global active-leaf and per-workflow child-admission limits (29 files) | [Map](dispatch/codemap.md) |
 | `surfaces/` | Presentation/UI: renderers, dashboard, slash, notify (20 files) | [Map](surfaces/codemap.md) |
-| `state/` | Run-state + persistence: RunView, StatusWriter, registry (18 files) | [Map](state/codemap.md) |
+| `state/` | Run-state + persistence: RunView, StatusWriter, registry, bounded transcript previews (19 files) | [Map](state/codemap.md) |
 | `shared/` | Low-level leaf utilities + agent/skill discovery + live-session relay (18 files) | [Map](shared/codemap.md) |
 | `protocol/` | Pure DTOs, schemas, PersistedRunStatus codec (4 files) | [Map](protocol/codemap.md) |
 | `runtime/` | Activation wiring, activation-owned live-session directory/renderer catalog + root-role lifecycle (3 files) | [Map](runtime/codemap.md) |

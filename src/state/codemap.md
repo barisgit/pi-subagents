@@ -10,7 +10,7 @@ Run-state and persistence layer for pi-subagents: canonical in-memory run displa
 - `status-patch.ts` is pure shared mutation logic: `applyPatchToStatus` applies structured `StatusPatch` in place, `stepFor` grows persisted steps, and `StatusWriter` plus live mirrors share it to avoid disk/in-memory divergence.
 - `run-phase.ts`, `run-liveness.ts`, `run-shape.ts`, and `workflow-display.ts` are pure display kernels: phase state transitions/labels, heartbeat/activity-derived display state + ordering, single/parallel handle/label/badge formatting, and declarative workflow name/progress/phase-plan shaping.
 - `runs-registry.ts` is append-only discovery state: global `runs-index.jsonl` plus per-session shards, guarded by `parseRunsRegistryEntryLine`; readers tolerate malformed lines and missing files.
-- Caches are bounded or stat-keyed where display is hot: `async-status.ts` caches terminal leaf summaries by `status.json` mtime/size; `run-transcript.ts` caches compact lines and exposes a dashboard-owned bounded reader of typed active-branch messages invalidated by status/session-file stats; `completion-dedupe.ts` uses global TTL maps.
+- Caches are bounded or stat-keyed where display is hot: `async-status.ts` caches terminal leaf summaries by `status.json` mtime/size; `RunMessageReader` uses validated `session.preview.json` sidecars for the fast tier and an LRU full-transcript cache capped by 10 entries and 32 MiB of source bytes; `completion-dedupe.ts` uses global TTL maps.
 
 ## Flow
 1. Dispatch resolves per-run storage with `session-paths.ts` and appends metadata through `runs-registry.ts`.
@@ -18,12 +18,12 @@ Run-state and persistence layer for pi-subagents: canonical in-memory run displa
 3. Runtime session events advance phase with `run-phase.ts`; structured patches flow through `applyPatchToStatus` into both `StatusWriter.enqueue`/`finalize` and the live in-memory mirror.
 4. Disk readers call `readStatus` for `PersistedRunStatus`, then `async-status.ts` converts it via `statusToRunView`; `readRunViewForEntry` overlays registry lineage/workflow fields, uses owned live views when present, hydrates foreign runs from disk when absent, synthesizes queued stubs briefly, and builds group summaries from child entries.
 5. Status surfaces call `run-status.ts` and `formatAsyncRunList` to list scoped registry views or inspect a specific run/group; active rows are derived each tick, terminal rows may be cached.
-6. Transcript/history side channels are read separately: `run-transcript.ts` canonically discovers ordered per-step `session.jsonl` files from status first, either parses compact step/tool/final-text lines or opens each file with Pi's `SessionManager` and returns typed active-branch messages; `run-history.ts` records small best-effort JSONL history by agent.
+6. Transcript/history side channels are read separately: `run-transcript.ts` discovers ordered per-step sessions, serves validated preview sidecars, and falls back to Pi's `SessionManager` for full active-branch messages; full reads backfill legacy or missing previews, while `run-history.ts` records small best-effort JSONL history by agent.
 
 ## Integration
 - Producers: dispatch/runtime code (`child-agent-registry.ts`, `layer0-runs.ts`, in-process executors) uses `StatusWriter`, `statusFromMeta`, `applyPatchToStatus`, `appendRunEntry`, and `resolveChildSessionFile`.
 - Consumers: `/subagents-status`, `/runs`, right-pane/transcript UI, completion notifications, and run inspect tools consume `RunView` via `async-status.ts`, `run-status.ts`, `run-transcript.ts`, `completion-dedupe.ts`, and pure display kernels.
-- Persistence contracts: `status.json` conforms to `src/protocol/status-types.ts::PersistedRunStatus`; registry entries conform to `RunsRegistryEntry`; session files are JSONL under `<runRecordDir>/run-<stepIndex>/session.jsonl` unless status points to fork-reuse files.
+- Persistence contracts: `status.json` conforms to `src/protocol/status-types.ts::PersistedRunStatus`; registry entries conform to `RunsRegistryEntry`; session files are JSONL under `<runRecordDir>/run-<stepIndex>/session.jsonl` unless status points to fork-reuse files. Each session may have an adjacent version-1 `session.preview.json` sidecar; previews are sanitized and hard-bounded to 128 KiB.
 - Lineage contracts: `lineage.ts` stores host/child session ancestry on `globalThis`, resolves `rootSessionId`, and lets registry/session-scoped overlays render nested run trees.
 
 - `async-status.ts` — hydrates `PersistedRunStatus` into canonical `RunView`, lists registry-backed runs, scopes overlays, caches terminal leaf views, synthesizes group/queued views, and formats run lists.
@@ -35,7 +35,8 @@ Run-state and persistence layer for pi-subagents: canonical in-memory run displa
 - `run-phase.ts` — pure session-event phase state machine and formatter for waiting/thinking/writing/tool/retry/queued/paused labels.
 - `run-shape.ts` — pure single/parallel presentation helpers for run handles, agent labels, colors, and shape badges.
 - `run-status.ts` — tool/slash inspection entry point for listing scoped runs or resolving a run/group by id/dir from registry + status files.
-- `run-transcript.ts` — canonical per-step session discovery plus compact transcript parsing and a bounded dashboard-owned `RunMessageReader` that opens typed active-branch messages with stat invalidation as files grow.
+- `run-transcript.ts` — canonical per-step session discovery, compact transcript parsing, validated preview-sidecar reads, legacy full-session backfill, and a stat-invalidated full-message LRU capped by 10 entries/32 MiB of source bytes (retaining one oversized newest entry).
+- `run-transcript-preview.ts` — builds recent complete message-group previews, sanitizes and truncates payloads, validates version/step/messages/size, writes atomically by temporary-file rename, and supports reads, fork cloning, and coalesced flush/dispose writing.
 - `run-view.ts` — canonical in-memory `RunView`/`RunViewStep` display schema plus `LiveRun` provenance wrapper; no IO.
 - `runs-registry.ts` — append/read layer for global and per-session registry JSONL, with env/test path overrides and guarded line parsing.
 - `session-paths.ts` — resolves canonical run record dirs and per-step `session.jsonl` paths, including fork-context seeding paths without collapsing child storage into parent storage.

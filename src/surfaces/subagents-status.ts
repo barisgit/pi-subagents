@@ -134,6 +134,7 @@ interface StatusOverlayDeps {
 	liveToolComponents?: LiveToolComponentStore;
 	rendererCatalog?: { getToolDefinition(name: string): ToolDefinition | undefined };
 	runMessageReader?: RunMessageReader;
+	selectionSettleMs?: number;
 	keybindings?: Pick<KeybindingsManager, "getKeys">;
 	getToolsExpanded?: () => boolean;
 	setToolsExpanded?: (expanded: boolean) => void;
@@ -752,6 +753,12 @@ export class SubagentsStatusComponent implements Component {
 		| undefined;
 	private readonly rendererCatalog: { getToolDefinition(name: string): ToolDefinition | undefined } | undefined;
 	private readonly runMessageReader: RunMessageReader;
+	private readonly selectionSettleMs: number;
+	private transcriptLoadTimer: ReturnType<typeof setTimeout> | undefined;
+	private transcriptLoadGeneration = 0;
+	private readonly settledLiveSelections = new Set<string>();
+	private readonly settledPersistedSelections = new Set<string>();
+	private readonly livePreviewSessions = new WeakMap<LiveDashboardSession, LiveDashboardSession>();
 	private readonly setToolsExpanded: ((expanded: boolean) => void) | undefined;
 	private readonly toolsExpandKeys: string[];
 	private readonly thinkingToggleKeys: string[];
@@ -801,6 +808,7 @@ export class SubagentsStatusComponent implements Component {
 		this.liveRenderCache = new LiveSessionRenderCache(deps.liveToolComponents);
 		this.rendererCatalog = deps.rendererCatalog;
 		this.runMessageReader = deps.runMessageReader ?? new RunMessageReader();
+		this.selectionSettleMs = deps.selectionSettleMs ?? 50;
 		this.setToolsExpanded = deps.setToolsExpanded;
 		this.toolsExpandKeys = effectiveKeys(deps.keybindings, "app.tools.expand", "ctrl+o");
 		this.thinkingToggleKeys = effectiveKeys(deps.keybindings, "app.thinking.toggle", "ctrl+t");
@@ -827,6 +835,7 @@ export class SubagentsStatusComponent implements Component {
 				selectionKey: (row) => this.overlayRowKey(row),
 				onSelectionChange: (row) => {
 					this.selectedId = row && row.kind !== "empty" ? this.rowKey(row) : undefined;
+					this.scheduleTranscriptLoad();
 				},
 				renderRow: (row, ctx) => this.renderOverlayPrimaryRow(row, ctx),
 				title: () => this.overlayPrimaryTitle(),
@@ -863,9 +872,18 @@ export class SubagentsStatusComponent implements Component {
 					// the constant DEFAULT_LEFT_FRACTION and went stale after a resize.
 					const detailWidth = Math.max(20, ctx.detail.width || this.lastRightWidth || 80);
 					const sessions = run ? this.liveSessions(run) : [];
+					const selectionKey = run ? runKey(run) : undefined;
+					const liveSessions =
+						run && selectionKey && !this.settledLiveSelections.has(selectionKey)
+							? this.previewLiveSessions(sessions)
+							: sessions;
+					const cachedHistorical =
+						run && sessions.length === 0 && this.rendererCatalog && run.run.asyncDir
+							? this.runMessageReader.peek(run.run.asyncDir)
+							: undefined;
 					const historicalSessions =
 						run && sessions.length === 0 && this.rendererCatalog && run.run.asyncDir
-							? this.runMessageReader.read(run.run.asyncDir)
+							? (cachedHistorical ?? this.runMessageReader.readPreview(run.run.asyncDir))
 							: [];
 					return run
 						? buildRightLines(
@@ -874,13 +892,13 @@ export class SubagentsStatusComponent implements Component {
 								detailWidth,
 								this.runs,
 								{
-									sessions,
+									sessions: liveSessions,
 									tui: this.tui,
 									cache: this.liveRenderCache,
 									toolProgress: new Map(
-										sessions.map((session) => [
+										liveSessions.map((session, index) => [
 											session,
-											this.getLiveToolProgress?.(session) ?? new Map(),
+											this.getLiveToolProgress?.(sessions[index] ?? session) ?? new Map(),
 										]),
 									),
 									display: this.displayMode(),
@@ -892,6 +910,10 @@ export class SubagentsStatusComponent implements Component {
 											cache: this.liveRenderCache,
 											getToolDefinition: (name) => this.rendererCatalog?.getToolDefinition(name),
 											display: this.displayMode(),
+											loading:
+												cachedHistorical === undefined &&
+												(selectionKey === undefined ||
+													!this.settledPersistedSelections.has(selectionKey)),
 										}
 									: undefined,
 							)
@@ -1093,6 +1115,7 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private reload(): void {
+		const previousSelection = this.selectedId;
 		try {
 			// Snapshot the registry memory mirror ONCE per pass: the overlay producer
 			// memory-resolves owned leaves and deriveLiveRuns stamps ownership:'live'
@@ -1114,7 +1137,8 @@ export class SubagentsStatusComponent implements Component {
 			this.errorMessage = error instanceof Error ? error.message : String(error);
 		}
 		this.reconcileSelection();
-		this.reconcileLiveSubscriptions();
+		const selectedLiveSessionsChanged = this.reconcileLiveSubscriptions();
+		if (this.selectedId !== previousSelection || selectedLiveSessionsChanged) this.scheduleTranscriptLoad();
 	}
 
 	// Visible only to tests; mirrors the `a` keybinding for direct invocation.
@@ -1361,6 +1385,68 @@ export class SubagentsStatusComponent implements Component {
 		return this.liveSessionsByRun.get(run.run.id) ?? [];
 	}
 
+	private previewLiveSessions(sessions: LiveDashboardSession[]): LiveDashboardSession[] {
+		return sessions.map((session, index) => {
+			let preview = this.livePreviewSessions.get(session);
+			if (!preview) {
+				preview = {
+					stepIndex: session.stepIndex ?? index,
+					messages: this.tailLiveMessages(session.messages),
+					cacheKey: session,
+					getToolDefinition: session.getToolDefinition,
+					subscribe: (listener) => session.subscribe(listener),
+				};
+				this.livePreviewSessions.set(session, preview);
+			}
+			return preview;
+		});
+	}
+
+	private tailLiveMessages(messages: LiveDashboardSession["messages"]): LiveDashboardSession["messages"] {
+		const groups: Array<LiveDashboardSession["messages"]> = [];
+		for (let index = 0; index < messages.length; index++) {
+			const message = messages[index]!;
+			const group = [message];
+			if (message.role === "assistant") {
+				const toolCallIds = new Set(
+					message.content.filter((content) => content.type === "toolCall").map((content) => content.id),
+				);
+				while (toolCallIds.size > 0 && index + 1 < messages.length) {
+					const result = messages[index + 1]!;
+					if (result.role !== "toolResult" || !toolCallIds.has(result.toolCallId)) break;
+					group.push(result);
+					toolCallIds.delete(result.toolCallId);
+					index++;
+				}
+			}
+			groups.push(group);
+		}
+		return groups.slice(-12).flat();
+	}
+
+	private scheduleTranscriptLoad(): void {
+		if (this.transcriptLoadTimer) clearTimeout(this.transcriptLoadTimer);
+		this.transcriptLoadTimer = undefined;
+		const selection = this.selectedId;
+		const generation = ++this.transcriptLoadGeneration;
+		if (!selection) return;
+		this.settledPersistedSelections.delete(selection);
+		this.transcriptLoadTimer = setTimeout(() => {
+			this.transcriptLoadTimer = undefined;
+			if (generation !== this.transcriptLoadGeneration || this.selectedId !== selection) return;
+			const run = this.selectedRun();
+			if (!run || runKey(run) !== selection) return;
+			const sessions = this.liveSessions(run);
+			if (sessions.length > 0) this.settledLiveSelections.add(selection);
+			else if (run.run.asyncDir) {
+				this.runMessageReader.read(run.run.asyncDir);
+				this.settledPersistedSelections.add(selection);
+			}
+			if (generation === this.transcriptLoadGeneration && this.selectedId === selection) this.tui.requestRender();
+		}, this.selectionSettleMs);
+		this.transcriptLoadTimer.unref?.();
+	}
+
 	private unsubscribeFromLiveSessions(): void {
 		for (const [session, unsubscribe] of this.liveSubscriptions) {
 			unsubscribe();
@@ -1374,7 +1460,14 @@ export class SubagentsStatusComponent implements Component {
 		let active = true;
 		const unsubscribe = session.subscribe((event) => {
 			if (!active) return;
+			const preview = this.livePreviewSessions.get(session);
+			if (preview)
+				this.livePreviewSessions.set(session, {
+					...preview,
+					messages: this.tailLiveMessages(session.messages),
+				});
 			this.liveRenderCache.invalidate(session, event);
+			if (preview) this.liveRenderCache.invalidate(preview, event);
 			const selectedRun = this.selectedRun();
 			if (selectedRun && this.liveSessions(selectedRun).includes(session)) this.tui.requestRender();
 		});
@@ -1384,9 +1477,11 @@ export class SubagentsStatusComponent implements Component {
 		});
 	}
 
-	private reconcileLiveSubscriptions(): void {
+	private reconcileLiveSubscriptions(): boolean {
 		const listedRunIds = new Set(this.runs.map((run) => run.run.id));
 		const nextSessions = new Set<LiveDashboardSession>();
+		const selectedRunId = this.selectedRun()?.run.id;
+		let selectedSessionsChanged = false;
 		for (const runId of listedRunIds) {
 			let sessions: LiveDashboardSession[];
 			try {
@@ -1394,7 +1489,13 @@ export class SubagentsStatusComponent implements Component {
 			} catch {
 				sessions = this.liveSessionsByRun.get(runId) ?? [];
 			}
+			const previous = this.liveSessionsByRun.get(runId) ?? [];
 			this.liveSessionsByRun.set(runId, sessions);
+			if (
+				runId === selectedRunId &&
+				(previous.length !== sessions.length || previous.some((session, index) => session !== sessions[index]))
+			)
+				selectedSessionsChanged = true;
 			for (const session of sessions) {
 				nextSessions.add(session);
 				if (!this.liveSubscriptions.has(session)) this.subscribeToLiveSession(session);
@@ -1409,9 +1510,13 @@ export class SubagentsStatusComponent implements Component {
 			this.liveSubscriptions.delete(session);
 			this.liveRenderCache.clear(session);
 		}
+		return selectedSessionsChanged;
 	}
 
 	dispose(): void {
+		this.transcriptLoadGeneration++;
+		if (this.transcriptLoadTimer) clearTimeout(this.transcriptLoadTimer);
+		this.transcriptLoadTimer = undefined;
 		this.unsubscribeFromLiveSessions();
 		this.liveRenderCache.dispose();
 		if (this.refreshTimer) clearTimeout(this.refreshTimer);
