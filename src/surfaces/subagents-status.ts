@@ -923,7 +923,7 @@ export class SubagentsStatusComponent implements Component {
 					const run = this.runForOverlayRow(ctx.selectedRow);
 					if (!run) return "No run selected";
 					return this.sidebarCollapsed
-						? collapsedRunTitle(run, this.runs, ctx.detail.width, this.theme)
+						? collapsedRunTitle(run, this.runs, ctx.detail.width)
 						: selectedRunTitle(run);
 				},
 			},
@@ -939,6 +939,7 @@ export class SubagentsStatusComponent implements Component {
 				label: "sidebar",
 				collapsedWidth: 0,
 				horizontalPrimaryNavigation: true,
+				horizontalPrimaryNavigationLabel: "agents",
 			},
 			split: {
 				initialFraction: DEFAULT_LEFT_FRACTION,
@@ -1562,7 +1563,7 @@ function runAgentColor(run: LiveRun): string | undefined {
 	return step?.color ?? (step?.agent ? colorForAgentName(step.agent) : undefined);
 }
 
-function collapsedRunTitle(run: LiveRun, runs: LiveRun[], width: number, theme: Theme) {
+function collapsedRunTitle(run: LiveRun, runs: LiveRun[], width: number) {
 	const labelBudget = Math.max(0, width - 3);
 	const currentPlain = truncateToWidth(selectedRunTitle(run), labelBudget, "");
 	const currentRendered = tintAgentName(currentPlain, runAgentColor(run));
@@ -1575,11 +1576,12 @@ function collapsedRunTitle(run: LiveRun, runs: LiveRun[], width: number, theme: 
 	}
 
 	const parentPlain = truncateToWidth(selectedRunTitle(parent), parentBudget, "");
+	const parentRendered = tintAgentName(parentPlain, runAgentColor(parent));
 	const labelPlain = `${parentPlain}${separator}${currentPlain}`;
 	return {
 		label: labelPlain,
 		labelPlain,
-		labelRendered: `${theme.fg("dim", parentPlain)}${separator}${currentRendered}`,
+		labelRendered: `${parentRendered}${separator}${currentRendered}`,
 	};
 }
 

@@ -219,16 +219,17 @@ describe("SubagentsStatusComponent", () => {
 		}
 	});
 
-	it("shows a dim parent breadcrumb and colored current run only in the collapsed title", () => {
+	it("colors each run in the collapsed breadcrumb with its own agent color", () => {
 		const parent = createRun("run-parent", "running", {
 			label: "very-long-parent-run-name",
 			startedAt: 1000,
+			steps: [{ index: 0, agent: "fixer", color: "red", status: "running" }],
 		});
 		const child = createRun("run-child", "running", {
 			label: "api-module-refactor",
 			parentRunId: parent.id,
 			startedAt: 2000,
-			steps: [{ index: 0, agent: "explorer", status: "running" }],
+			steps: [{ index: 0, agent: "explorer", color: "cyan", status: "running" }],
 		});
 		const theme = {
 			fg: (token: string, text: string) => (token === "dim" ? `\u001b[2m${text}\u001b[22m` : text),
@@ -252,8 +253,8 @@ describe("SubagentsStatusComponent", () => {
 
 			component.handleInput("s");
 			const collapsedTitle = component.render(100)[0]!;
-			assert.match(collapsedTitle, /\u001b\[2mvery-long-parent-run-name\u001b\[22m ›/);
-			assert.match(collapsedTitle, /\u001b\[[0-9;]*mapi-module-refactor/);
+			assert.ok(collapsedTitle.includes("\u001b[38;5;196mvery-long-parent-run-name\u001b[39m ›"));
+			assert.ok(collapsedTitle.includes("\u001b[38;5;51mapi-module-refactor\u001b[39m"));
 
 			const narrowTitle = component.render(32)[0]!;
 			assert.match(narrowTitle, /api-module-refactor/);
@@ -393,6 +394,7 @@ describe("SubagentsStatusComponent", () => {
 			// The reopen hint surfaces in the always-visible detail footer (the primary
 			// legend that normally carries it is gone while collapsed).
 			assert.match(collapsed, /s sidebar/, "reopen hint shown in the bottom bar when collapsed");
+			assert.match(collapsed, /←\/→ agents/, "collapsed navigation hint shown in the bottom bar");
 
 			// Toggle back: the list returns.
 			component.handleInput("s");
