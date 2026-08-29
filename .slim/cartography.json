@@ -107,7 +107,7 @@
 		"src/surfaces/single-output.ts": "784efc17c3958274ee910f754e80709a",
 		"src/surfaces/slash-bridge.ts": "87c89df57812769f1047de7e718aca57",
 		"src/surfaces/slash-commands.ts": "6701f80f397a7124585478cf47b4b08e",
-		"src/surfaces/subagents-status.ts": "bfa747481c8582cfed21e56b3e1b419e",
+		"src/surfaces/subagents-status.ts": "584f75aa48005102c24817c82006abcb",
 		"src/workflow/workflow-group-state.ts": "9e74352b56d5cc019ba86d33a33c36c6",
 		"src/workflow/workflow.ts": "78cd24c68e49e3951bce5e277bae6036"
 	},
@@ -119,8 +119,8 @@
 		"src/dispatch": "e2ecb32a5ab57f5b7053e9d6f356711a",
 		"src/state": "3bd7b18626c49682326ec20fefb28401",
 		".": "c7bb5aaf115896213f7fbfdab34bd3d4",
-		"src": "b4091c0461f293955dc3a997bad85ebc",
-		"src/surfaces": "f0959ab17f2fc3e12d5cb45016f721d3",
+		"src": "10d8ac1d2656a7e242cb6c19c0cbd09c",
+		"src/surfaces": "8e2d77183d101edbd81c4558047c1c5a",
 		"src/workflow": "5534f775a47634c9a79eae3893633a93"
 	}
 }

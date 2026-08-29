@@ -219,6 +219,88 @@ describe("SubagentsStatusComponent", () => {
 		}
 	});
 
+	it("shows a dim parent breadcrumb and colored current run only in the collapsed title", () => {
+		const parent = createRun("run-parent", "running", {
+			label: "very-long-parent-run-name",
+			startedAt: 1000,
+		});
+		const child = createRun("run-child", "running", {
+			label: "api-module-refactor",
+			parentRunId: parent.id,
+			startedAt: 2000,
+			steps: [{ index: 0, agent: "explorer", status: "running" }],
+		});
+		const theme = {
+			fg: (token: string, text: string) => (token === "dim" ? `\u001b[2m${text}\u001b[22m` : text),
+			bg: (_token: string, text: string) => text,
+		} as StatusTheme;
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			theme,
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [parent, child], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			component.handleInput("j");
+			const expandedTitle = component.render(100)[0]!;
+			assert.match(expandedTitle, /api-module-refactor/);
+			assert.doesNotMatch(expandedTitle, /very-long-parent-run-name|›/);
+
+			component.handleInput("s");
+			const collapsedTitle = component.render(100)[0]!;
+			assert.match(collapsedTitle, /\u001b\[2mvery-long-parent-run-name\u001b\[22m ›/);
+			assert.match(collapsedTitle, /\u001b\[[0-9;]*mapi-module-refactor/);
+
+			const narrowTitle = component.render(32)[0]!;
+			assert.match(narrowTitle, /api-module-refactor/);
+			assert.equal(visibleWidth(narrowTitle), 32);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("uses Left and Right to navigate runs only while the sidebar is collapsed", () => {
+		const newer = createRun("run-newer", "running", {
+			label: "newer-run",
+			startedAt: 2000,
+			steps: [{ index: 0, agent: "explorer", status: "running" }],
+		});
+		const older = createRun("run-older", "running", { label: "older-run", startedAt: 1000 });
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [newer, older], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			assert.match(component.render(120)[0]!, /newer-run/);
+			component.handleInput("\u001b[C");
+			assert.match(component.render(120)[0]!, /newer-run/, "expanded arrows change pane focus, not selection");
+			component.handleInput("\u001b[D");
+			assert.match(component.render(120)[0]!, /newer-run/);
+			component.handleInput("s");
+			component.handleInput("\u001b[C");
+			assert.match(component.render(120)[0]!, /older-run/);
+			component.handleInput("\u001b[C");
+			assert.match(component.render(120)[0]!, /older-run/, "selection clamps at the last visible row");
+			component.handleInput("\u001b[D");
+			const rootTitle = component.render(120)[0]!;
+			assert.match(rootTitle, /\u001b\[[0-9;]*mnewer-run/);
+			assert.doesNotMatch(rootTitle, /›/);
+			assert.doesNotMatch(component.render(120).join("\n"), /Subagent runs/, "sidebar stays collapsed");
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("renders header, a left-pane row, and right-pane event log for a single async run", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-status-"));
 		try {

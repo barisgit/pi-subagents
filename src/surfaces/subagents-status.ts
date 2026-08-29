@@ -921,7 +921,10 @@ export class SubagentsStatusComponent implements Component {
 				},
 				title: (ctx) => {
 					const run = this.runForOverlayRow(ctx.selectedRow);
-					return run ? selectedRunTitle(run) : "No run selected";
+					if (!run) return "No run selected";
+					return this.sidebarCollapsed
+						? collapsedRunTitle(run, this.runs, ctx.detail.width, this.theme)
+						: selectedRunTitle(run);
 				},
 			},
 			closeKeys: ["escape", "ctrl+c", "q"],
@@ -931,7 +934,12 @@ export class SubagentsStatusComponent implements Component {
 			stickyBottom: true,
 			// Press 's' to collapse the run list entirely and give the detail pane the
 			// full width (and back). Same key + "sidebar" label as the charter picker.
-			collapse: { key: "s", label: "sidebar", collapsedWidth: 0 },
+			collapse: {
+				key: "s",
+				label: "sidebar",
+				collapsedWidth: 0,
+				horizontalPrimaryNavigation: true,
+			},
 			split: {
 				initialFraction: DEFAULT_LEFT_FRACTION,
 				minPrimaryWidth: MIN_LEFT_PANE,
@@ -1324,7 +1332,7 @@ export class SubagentsStatusComponent implements Component {
 			}
 			return;
 		}
-		if (data === "\t" || data === "\u001b[D" || data === "\u001b[C") {
+		if (data === "\t" || (!this.sidebarCollapsed && (data === "\u001b[D" || data === "\u001b[C"))) {
 			this.focus = togglePaneFocus(this.focus);
 		}
 		this.overlay.handleInput(data);
@@ -1544,6 +1552,35 @@ function selectedRunTitle(run: LiveRun): string {
 	const running = run.run.steps?.find((s) => s.status === "running");
 	const step = running ?? run.run.steps?.[0];
 	return step?.agent ?? run.run.mode ?? "(run)";
+}
+
+function runAgentColor(run: LiveRun): string | undefined {
+	if (run.run.currentAgent) {
+		return run.run.currentAgentColor ?? colorForAgentName(run.run.currentAgent);
+	}
+	const step = run.run.steps.find((candidate) => candidate.status === "running") ?? run.run.steps[0];
+	return step?.color ?? (step?.agent ? colorForAgentName(step.agent) : undefined);
+}
+
+function collapsedRunTitle(run: LiveRun, runs: LiveRun[], width: number, theme: Theme) {
+	const labelBudget = Math.max(0, width - 3);
+	const currentPlain = truncateToWidth(selectedRunTitle(run), labelBudget, "");
+	const currentRendered = tintAgentName(currentPlain, runAgentColor(run));
+	const parentId = parentRunIdOf(run);
+	const parent = parentId ? runs.find((candidate) => candidate.run.id === parentId) : undefined;
+	const separator = " › ";
+	const parentBudget = labelBudget - visibleWidth(currentPlain) - visibleWidth(separator);
+	if (!parent || parentBudget <= 0) {
+		return { label: currentPlain, labelPlain: currentPlain, labelRendered: currentRendered };
+	}
+
+	const parentPlain = truncateToWidth(selectedRunTitle(parent), parentBudget, "");
+	const labelPlain = `${parentPlain}${separator}${currentPlain}`;
+	return {
+		label: labelPlain,
+		labelPlain,
+		labelRendered: `${theme.fg("dim", parentPlain)}${separator}${currentRendered}`,
+	};
 }
 
 type ThemeFg = Parameters<Theme["fg"]>[0];
