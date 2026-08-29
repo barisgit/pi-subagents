@@ -119,6 +119,18 @@ describe("output contract", () => {
 	it("contract text instructs the end-of-prompt convention generically (no tool, no persona)", () => {
 		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /<output>/);
 		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /LAST/);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /only part .* returned to the parent agent\/caller/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /cannot see earlier narration or intermediate assistant messages/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /self-contained, complete handoff/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /decision-relevant conclusion/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /finding/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /evidence/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /verification result/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /risk/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /blocker/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /next step/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /exact paths and commands when material/i);
+		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /do not reduce it to a one-line summary/i);
 		assert.match(OUTPUT_SYSTEM_INSTRUCTION, /do not call any finish tool/i);
 		assert.doesNotMatch(OUTPUT_SYSTEM_INSTRUCTION, /submit_result/);
 		assert.match(
