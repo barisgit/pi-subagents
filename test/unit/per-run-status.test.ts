@@ -31,6 +31,7 @@ async function waitForCompleteStatus(runRecordDir: string): Promise<void> {
 }
 
 class FakeAgentSession {
+	async bindExtensions(): Promise<void> {}
 	subscribe(): () => void {
 		return () => {};
 	}

@@ -34,6 +34,7 @@ const { makeAgent } = await import(moduleUrl("test/support/helpers.ts"));
 
 class FakeResourceLoader { async reload() {} }
 class FakeSession {
+	async bindExtensions() {}
 	messages = [];
 	lastAssistantText = "";
 	subscribe() { return () => {}; }

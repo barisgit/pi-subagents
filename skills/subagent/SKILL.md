@@ -15,7 +15,7 @@ Multiple `run` entries execute in parallel. Adding a shared `message` applies on
 
 Optional top-level `cwd` defaults all run entries. When omitted, it defaults to the caller/session cwd; a relative top-level path resolves from that caller/session cwd. Optional per-run `cwd` overrides the default; a relative per-run path resolves from the resolved top-level cwd. Runs may share a cwd.
 
-Delegation invoked from a child session always runs synchronously, even when `async:true` is explicit or async is enabled by default. This applies to plain subagent and Workflow calls because the child caller owns and awaits the result.
+Delegation invoked from a child session runs synchronously, even when `async:true` is explicit or async is enabled by default, unless `allowNestedAsync:true` is set in extension config. With that strict opt-in, plain subagent and Workflow calls return immediately and completion starts a new turn in the immediate parent session.
 
 `context:"fresh"` gives a clean child context. Same-role `context:"fork"` inherits the parent context and provides isolation or concurrency rather than a different perspective. After an async dispatch, either stop or continue only work that neither overlaps nor duplicates the child's scope; do not poll or redo its work because the host sends a new turn when it finishes. If a delayed check is truly necessary and a background scheduler is available, schedule it for 10–15 minutes or longer.
 

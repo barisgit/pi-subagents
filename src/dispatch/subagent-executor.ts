@@ -9,6 +9,7 @@ import { handleManagementAction } from "../surfaces/agent-management.ts";
 import { createForkContextResolver } from "./fork-context.ts";
 import { ConcurrencySemaphore } from "./concurrency-semaphore.ts";
 import { leafConcurrencyLimit, parkLeafPermit } from "./leaf-concurrency.ts";
+import { registerNestedAsyncCancellation } from "./nested-async-coordinator.ts";
 import type { ExecutionContextData, ExecutorDeps, InternalSubagentParams } from "./executor-types.ts";
 import {
 	batchToNotifyPolicy,
@@ -394,7 +395,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		// async:true only downgrades to sync when clarify is explicitly true (interactive
 		// preview gates the run). Undefined clarify means "no clarify", so it must not
 		// suppress async — single/parallel all share this rule.
-		const effectiveAsync = calledFromChildSession ? false : resolvedAsync && effectiveParams.clarify !== true;
+		const effectiveAsync =
+			calledFromChildSession && deps.config.allowNestedAsync !== true
+				? false
+				: resolvedAsync && effectiveParams.clarify !== true;
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 
 		const artifactConfig: ArtifactConfig = {
@@ -723,8 +727,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				? currentLineage.role === "child"
 				: normalizeName(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
 			const resolvedAsync = requestedAsync ?? deps.asyncByDefault;
-			const effectiveAsync = calledFromChildSession ? false : resolvedAsync;
+			const effectiveAsync =
+				calledFromChildSession && deps.config.allowNestedAsync !== true ? false : resolvedAsync;
 			const workflowDetachedAbort = new AbortController();
+			const unregisterNestedCancellation =
+				effectiveAsync && parentRunId
+					? registerNestedAsyncCancellation(parentRunId, () => workflowDetachedAbort.abort())
+					: () => {};
 			const activeLimit = leafConcurrencyLimit(deps.config.maxConcurrentAgents);
 			const workflowAdmission = new ConcurrencySemaphore(activeLimit);
 			const configuredPipelineInFlight = deps.config.workflow?.maxPipelineItemsInFlight;
@@ -769,16 +778,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				// The workflow is ONE entity: give the widget a group row up front.
 				// Children also emit STARTED (below) so the tracker can aggregate
 				// phase/progress, but the widget renders only this row.
-				safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
-					id: group.runId,
-					runId: group.runId,
-					metadata: undefined,
-					controlConfig,
-					kind: "workflow",
-					agent: "workflow",
-					cwd: effectiveCwd,
-					asyncDir: group.runRecordDir,
-				});
+				safeEmit(
+					SUBAGENT_ASYNC_STARTED_EVENT,
+					{
+						id: group.runId,
+						runId: group.runId,
+						metadata: undefined,
+						controlConfig,
+						kind: "workflow",
+						agent: "workflow",
+						cwd: effectiveCwd,
+						asyncDir: group.runRecordDir,
+						parentRunId,
+					},
+					parentRunId ? deps.pi : undefined,
+				);
 			}
 			const childResults: Array<{ runId: string; result: SingleResult; index: number }> = [];
 			const data: ExecutionContextData = {
@@ -950,17 +964,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								onLifecycle: effectiveAsync
 									? (event) => {
 											if (event.type === "run.started") {
-												safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
-													id: event.runId,
-													runId: event.runId,
-													metadata: undefined,
-													controlConfig,
-													agent: role,
-													task: task.slice(0, 50),
-													cwd: effectiveCwd,
-													asyncDir: event.runRecordDir,
-													parentRunId: group.runId,
-												});
+												safeEmit(
+													SUBAGENT_ASYNC_STARTED_EVENT,
+													{
+														id: event.runId,
+														runId: event.runId,
+														metadata: undefined,
+														controlConfig,
+														agent: role,
+														task: task.slice(0, 50),
+														cwd: effectiveCwd,
+														asyncDir: event.runRecordDir,
+														parentRunId: group.runId,
+													},
+													parentRunId ? deps.pi : undefined,
+												);
 												return;
 											}
 											const child = event.result;
@@ -968,24 +986,29 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 											// entity and sends exactly one completion (with the script's return
 											// value) from finishAsync. The event still fires for non-notify
 											// consumers (widget liveness, tests).
-											safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
-												id: event.runId,
-												runId: event.runId,
-												parentRunId: group.runId,
-												rootRunId: groupRootRunId,
-												metadata: undefined,
-												notifyPolicy: "silent",
-												agent: role,
-												success: child ? child.state === "complete" : false,
-												summary: child?.outputText ?? (event.error ? String(event.error) : ""),
-												exitCode: child?.exitCode,
-												state: child?.state ?? "failed",
-												durationMs: child?.durationMs,
-												sessionFile: child?.sessionFile ?? event.sessionFile,
-												timestamp: event.timestamp,
-												taskIndex: index,
-												asyncDir: event.runRecordDir,
-											});
+											safeEmit(
+												SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
+												{
+													id: event.runId,
+													runId: event.runId,
+													parentRunId: group.runId,
+													rootRunId: groupRootRunId,
+													metadata: undefined,
+													notifyPolicy: "silent",
+													agent: role,
+													success: child ? child.state === "complete" : false,
+													summary:
+														child?.outputText ?? (event.error ? String(event.error) : ""),
+													exitCode: child?.exitCode,
+													state: child?.state ?? "failed",
+													durationMs: child?.durationMs,
+													sessionFile: child?.sessionFile ?? event.sessionFile,
+													timestamp: event.timestamp,
+													taskIndex: index,
+													asyncDir: event.runRecordDir,
+												},
+												parentRunId ? deps.pi : undefined,
+											);
 										}
 									: undefined,
 							},
@@ -1066,6 +1089,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					if (result) childResults.push({ runId: handle.runId, result, index });
 				},
 				finishAsync: (success, summary) => {
+					unregisterNestedCancellation();
 					releaseRunController(group.runId);
 					if (!effectiveAsync) return;
 					writeWorkflowGroupState(group.runRecordDir, success ? "complete" : "failed");
@@ -1126,6 +1150,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								agents: ordered.map(({ result }) => result.agent).join(","),
 							},
 						}),
+						parentRunId ? deps.pi : undefined,
 					);
 				},
 			};

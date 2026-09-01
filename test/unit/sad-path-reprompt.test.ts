@@ -27,6 +27,7 @@ class FakeResourceLoader {
 }
 
 class ProseOnlySession {
+	async bindExtensions(): Promise<void> {}
 	messages: unknown[] = [];
 	prompts: string[] = [];
 	lastAssistantText = "";
@@ -55,6 +56,7 @@ class ProseOnlySession {
 }
 
 class SchemaInvalidOutputSession {
+	async bindExtensions(): Promise<void> {}
 	messages: unknown[] = [];
 	prompts: string[] = [];
 	lastAssistantText = "";
@@ -66,7 +68,7 @@ class SchemaInvalidOutputSession {
 	}
 	async prompt(text: string): Promise<void> {
 		this.prompts.push(text);
-		this.lastAssistantText = "The result is ready.\n<output>{\"ok\": \"yes\", \"extra\": true}</output>";
+		this.lastAssistantText = 'The result is ready.\n<output>{"ok": "yes", "extra": true}</output>';
 		this.messages.push({ role: "assistant", content: [{ type: "text", text: this.lastAssistantText }] });
 	}
 	getLastAssistantText(): string {
@@ -82,6 +84,7 @@ class SchemaInvalidOutputSession {
 // the status.json writer persists, so this pins the async/post-reload channel
 // (which never passes through child-step-runner) to the block, not the preamble.
 class PreambleThenSubmitSession {
+	async bindExtensions(): Promise<void> {}
 	messages: unknown[] = [];
 	prompts: string[] = [];
 	lastAssistantText = "";
@@ -97,7 +100,8 @@ class PreambleThenSubmitSession {
 	async prompt(text: string): Promise<void> {
 		this.prompts.push(text);
 		this.emit({ type: "text_delta", delta: "PREAMBLE: let me compile the findings." });
-		this.lastAssistantText = "PREAMBLE: let me compile the findings.\n<output>REAL RESULT: VERDICT APPROVED</output>";
+		this.lastAssistantText =
+			"PREAMBLE: let me compile the findings.\n<output>REAL RESULT: VERDICT APPROVED</output>";
 		this.messages.push({ role: "assistant", content: [{ type: "text", text: this.lastAssistantText }] });
 	}
 	getLastAssistantText(): string {

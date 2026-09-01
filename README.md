@@ -20,7 +20,7 @@ subagent({
 })
 ```
 
-Multiple top-level `run` tasks execute independently. Use `async:true` for background work and `batch:true` for one rollup notification. How many agents actively run at once is bounded process-wide by `maxConcurrentAgents` (config, default 4). Workflows also use that value to bound direct children before creating their run records.
+Multiple top-level `run` tasks execute independently. Use `async:true` for background work and `batch:true` for one rollup notification. How many agents actively run at once is bounded process-wide by `maxConcurrentAgents` (config, default 4). Workflows also use that value to bound direct children before creating their run records. Child-session async remains synchronous by default; set `allowNestedAsync:true` in `~/.pi/agent/subagent.json` to opt in. With that strict opt-in, nested plain and Workflow calls return immediately and completion starts a new turn in the immediate parent session.
 
 Optional top-level `cwd` defaults all run entries. When omitted, it defaults to the caller/session cwd; a relative top-level path resolves from that caller/session cwd. Optional per-run `cwd` overrides the default; a relative per-run path resolves from the resolved top-level cwd. Runs may share a cwd.
 

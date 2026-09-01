@@ -36,6 +36,7 @@ class FakeResourceLoader {
 	async reload(): Promise<void> {}
 }
 class FakeSession {
+	async bindExtensions(): Promise<void> {}
 	messages: unknown[] = [];
 	lastAssistantText = "";
 	private listeners: Array<(event: unknown) => void> = [];

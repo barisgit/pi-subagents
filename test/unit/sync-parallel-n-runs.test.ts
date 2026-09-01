@@ -17,6 +17,7 @@ class FakeResourceLoader {
 }
 
 class FakeAgentSession {
+	async bindExtensions(): Promise<void> {}
 	subscribe(): () => void {
 		return () => {};
 	}

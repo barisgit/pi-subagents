@@ -9,7 +9,7 @@
  * Toggle: async parameter (default: false, configurable via config.json)
  *
  * Config file: ~/.pi/agent/subagent.json
- *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" } }
+ *   { "asyncByDefault": true, "allowNestedAsync": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" } }
  *
  * This file is intentionally a thin entry-point shell: the pi extension manifest
  * (package.json) registers `./index.ts`, so the real composition root lives in

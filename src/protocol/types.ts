@@ -697,6 +697,7 @@ export interface WorkflowConfig {
 
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
+	allowNestedAsync?: boolean;
 	forceTopLevelAsync?: boolean;
 	defaultSessionDir?: string;
 	maxSubagentDepth?: number;

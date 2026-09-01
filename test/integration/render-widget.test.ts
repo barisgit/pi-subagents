@@ -434,6 +434,90 @@ describe("subagent async widget rendering", () => {
 		}
 	});
 
+	it("keeps the host animation running when a child renders without UI", async () => {
+		const host = createUiContext();
+		try {
+			renderWidget(host.ctx as never, [
+				{ asyncId: "host-running", asyncDir: "/tmp/host", status: "running", agents: ["worker"] },
+			]);
+			const beforeChildRender = host.renderRequests;
+
+			renderWidget({ hasUI: false } as never, []);
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
+
+			assert.ok(host.renderRequests > beforeChildRender);
+		} finally {
+			stopWidgetAnimation();
+		}
+	});
+
+	it("stops the animation timer when stale-context guidance has a changed suffix", async () => {
+		let stale = false;
+		let contextAccesses = 0;
+		let renderRequests = 0;
+		const ctx = {
+			get hasUI() {
+				contextAccesses++;
+				if (stale) {
+					throw new Error(
+						"This extension ctx is stale after session replacement or reload. Updated SDK recovery guidance.",
+					);
+				}
+				return true;
+			},
+			ui: {
+				setWidget: (_key: string, factory: unknown) => {
+					if (typeof factory === "function") {
+						factory({ requestRender: () => renderRequests++ }, theme);
+					}
+				},
+			},
+		};
+		try {
+			renderWidget(ctx as never, [
+				{ asyncId: "stale-running", asyncDir: "/tmp/stale", status: "running", agents: ["worker"] },
+			]);
+			stale = true;
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
+			const accessesAfterStop = contextAccesses;
+			const rendersAfterStop = renderRequests;
+			await new Promise((resolve) => setTimeout(resolve, ANIM_WAIT));
+
+			assert.equal(contextAccesses, accessesAfterStop);
+			assert.equal(renderRequests, rendersAfterStop);
+		} finally {
+			stopWidgetAnimation();
+		}
+	});
+
+	it("rethrows unrelated errors from the widget timer", () => {
+		const originalSetInterval = globalThis.setInterval;
+		let timerCallback: (() => void) | undefined;
+		globalThis.setInterval = ((callback: () => void) => {
+			timerCallback = callback;
+			return originalSetInterval(() => {}, 60_000);
+		}) as typeof setInterval;
+		let contextAccesses = 0;
+		const ctx = {
+			get hasUI() {
+				contextAccesses++;
+				if (contextAccesses > 1) throw new Error("widget timer failed");
+				return true;
+			},
+			ui: { setWidget: () => {} },
+		};
+		try {
+			renderWidget(ctx as never, [
+				{ asyncId: "timer-error", asyncDir: "/tmp/timer-error", status: "running", agents: ["worker"] },
+			]);
+			assert.ok(timerCallback);
+			assert.throws(timerCallback, /widget timer failed/);
+		} finally {
+			globalThis.setInterval = originalSetInterval;
+			stopWidgetAnimation();
+		}
+	});
+
 	it("renders static jobs through the registered widget factory", () => {
 		try {
 			for (const status of ["queued", "complete"] as const) {

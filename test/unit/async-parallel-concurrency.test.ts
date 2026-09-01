@@ -59,6 +59,7 @@ function setup(prefix: string, concurrency: number) {
 	const filledFirstWave = deferred();
 
 	class FakeSession {
+		async bindExtensions(): Promise<void> {}
 		messages: unknown[] = [];
 		subscribe(): () => void {
 			return () => {};

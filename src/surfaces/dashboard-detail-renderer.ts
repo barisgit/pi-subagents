@@ -36,6 +36,7 @@ import {
 	type LiveToolProgress,
 	type LiveToolProgressBySession,
 } from "../shared/live-session-relay.ts";
+import { locateOutputBlockForDisplay, OUTPUT_OPEN } from "../protocol/output-contract.ts";
 
 // Single ellipsis glyph for every dashboard truncation. pi-tui's
 // truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
@@ -45,6 +46,113 @@ const TAB_WIDTH = 4;
 
 function normalizePaneText(text: string): string {
 	return text.replace(/\t/g, " ".repeat(TAB_WIDTH));
+}
+
+function outputPanelContent(content: string): { kind: "json" | "markdown"; text: string } {
+	try {
+		return { kind: "json", text: JSON.stringify(JSON.parse(content), null, 2) };
+	} catch {
+		return { kind: "markdown", text: content };
+	}
+}
+
+function renderOutputPanel(theme: Theme, content: string, width: number): string[] {
+	const innerWidth = Math.max(1, width - 2);
+	const panel = outputPanelContent(content);
+	const rendered =
+		panel.kind === "json"
+			? fitAnsiLines(panel.text.split("\n"), innerWidth)
+			: renderMarkdownLines(panel.text, innerWidth);
+	const lines = ["", ...rendered.map((line) => ` ${line}`), ""];
+	return ["", ...lines.map((line) => bgLine(theme, "customMessageBg", theme.fg("customMessageText", line), width))];
+}
+
+function renderOutputAwareText(theme: Theme, text: string, width: number): string[] | undefined {
+	const output = locateOutputBlockForDisplay(text);
+	if (!output) return undefined;
+	return [
+		...renderMarkdownLines(output.prefix, width),
+		...renderOutputPanel(theme, output.content, width),
+		...renderMarkdownLines(output.suffix, width),
+	];
+}
+
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+
+function withoutAssistantStopMetadata(message: AssistantMessage): AssistantMessage {
+	return { ...message, stopReason: "stop", errorMessage: undefined };
+}
+
+function hasAssistantStopFooter(message: AssistantMessage): boolean {
+	return message.stopReason === "length" || message.stopReason === "aborted" || message.stopReason === "error";
+}
+
+function isOutputPanelEligible(message: AssistantMessage): boolean {
+	return !message.content.some((content) => content.type === "toolCall");
+}
+
+function renderAssistantMessage(
+	theme: Theme,
+	message: AssistantMessage,
+	hideThinking: boolean,
+	width: number,
+): string[] {
+	let laterIncompleteOutput = false;
+	for (let index = message.content.length - 1; index >= 0; index--) {
+		const item = message.content[index];
+		if (item?.type !== "text") continue;
+		const output = locateOutputBlockForDisplay(item.text);
+		if (!output) {
+			if (item.text.includes(OUTPUT_OPEN)) laterIncompleteOutput = true;
+			continue;
+		}
+		if (laterIncompleteOutput) break;
+		const beforeContent = [
+			...message.content.slice(0, index),
+			...(output.prefix ? [{ ...item, text: output.prefix }] : []),
+		];
+		const afterContent = [
+			...(output.suffix ? [{ ...item, text: output.suffix }] : []),
+			...message.content.slice(index + 1),
+		];
+		const lines: string[] = [];
+		if (beforeContent.length > 0) {
+			lines.push(
+				...new AssistantMessageComponent(
+					{ ...withoutAssistantStopMetadata(message), content: beforeContent },
+					hideThinking,
+					getMarkdownTheme(),
+					undefined,
+					0,
+				).render(width),
+			);
+		}
+		lines.push(...renderOutputPanel(theme, output.content, width));
+		if (afterContent.length > 0) {
+			lines.push(
+				...new AssistantMessageComponent(
+					{ ...withoutAssistantStopMetadata(message), content: afterContent },
+					hideThinking,
+					getMarkdownTheme(),
+					undefined,
+					0,
+				).render(width),
+			);
+		}
+		if (hasAssistantStopFooter(message)) {
+			lines.push(
+				...new AssistantMessageComponent(
+					{ ...message, content: [] },
+					hideThinking,
+					getMarkdownTheme(),
+					undefined,
+					0,
+				).render(width),
+			);
+		}
+		return lines;
+	}
+	return new AssistantMessageComponent(message, hideThinking, getMarkdownTheme(), undefined, 0).render(width);
 }
 
 export class LiveToolComponentStore {
@@ -755,6 +863,7 @@ function sanitizeLiveRow(row: string): string {
 }
 
 function renderLiveMessages(
+	theme: Theme,
 	session: DashboardMessageSession,
 	messages: AgentMessage[],
 	pendingTools: Map<string, PendingToolComponent>,
@@ -781,7 +890,15 @@ function renderLiveMessages(
 			const text = userMessageText(message);
 			if (text) component = new UserMessageComponent(text, markdownTheme, 0);
 		} else if (message.role === "assistant") {
-			component = new AssistantMessageComponent(message, display.hideThinking, markdownTheme, undefined, 0);
+			if (isOutputPanelEligible(message)) {
+				lines.push(...renderAssistantMessage(theme, message, display.hideThinking, width));
+			} else {
+				lines.push(
+					...new AssistantMessageComponent(message, display.hideThinking, markdownTheme, undefined, 0).render(
+						width,
+					),
+				);
+			}
 			for (const content of message.content) {
 				if (content.type !== "toolCall") continue;
 				let pending = pendingTools.get(content.id);
@@ -875,6 +992,7 @@ function renderLiveMessages(
 }
 
 function buildLiveRightLines<TSession extends DashboardMessageSession>(
+	theme: Theme,
 	sessions: TSession[],
 	tui: TUI,
 	width: number,
@@ -893,6 +1011,7 @@ function buildLiveRightLines<TSession extends DashboardMessageSession>(
 		};
 		const render = (messages: AgentMessage[], pendingTools = uncachedPendingTools) =>
 			renderLiveMessages(
+				theme,
 				session,
 				messages,
 				pendingTools,
@@ -940,6 +1059,7 @@ export function buildRightLines(
 	if (live?.sessions.length) {
 		try {
 			const lines = buildLiveRightLines(
+				theme,
 				live.sessions,
 				live.tui,
 				width,
@@ -957,6 +1077,7 @@ export function buildRightLines(
 	if (historical?.sessions.some((session) => session.messages.length > 0)) {
 		try {
 			const lines = buildLiveRightLines(
+				theme,
 				historical.sessions,
 				historical.tui,
 				width,
@@ -995,6 +1116,7 @@ export function buildRightLines(
 		final?: string;
 		task?: string;
 		lastKind?: "tool" | "narration" | "other";
+		finalOutputEligible?: boolean;
 	};
 	const steps = new Map<number, Step>();
 	const ensureStep = (index: number, agent: string): Step => {
@@ -1026,6 +1148,12 @@ export function buildRightLines(
 		}
 		if (event.kind === "assistant-text") {
 			const step = ensureStep(event.stepIndex, "");
+			const outputLines =
+				event.outputEligible !== false ? renderOutputAwareText(theme, event.text, width) : undefined;
+			if (outputLines) {
+				pushStepLines(step, "other", outputLines);
+				continue;
+			}
 			// Mid-run narration: markdown-rendered but dimmed, so it reads as the
 			// agent's running commentary rather than competing with the final block.
 			pushStepLines(
@@ -1065,6 +1193,7 @@ export function buildRightLines(
 		if (event.kind === "final-text") {
 			const step = ensureStep(event.stepIndex, event.agent);
 			step.final = event.text;
+			step.finalOutputEligible = event.outputEligible !== false;
 		}
 	}
 
@@ -1088,11 +1217,16 @@ export function buildRightLines(
 		if (step.lines.length > 0) out.push("");
 		for (const line of step.lines) out.push(line);
 		if (step.final) {
-			const border = "─".repeat(Math.max(0, width));
-			out.push(theme.fg("dim", border));
-			// Agent output is typically markdown; render it as such.
-			for (const wrapped of renderMarkdownLines(step.final, width)) out.push(wrapped);
-			out.push(theme.fg("dim", border));
+			const outputLines =
+				step.finalOutputEligible !== false ? renderOutputAwareText(theme, step.final, width) : undefined;
+			if (outputLines) {
+				out.push(...outputLines);
+			} else {
+				const border = "─".repeat(Math.max(0, width));
+				out.push(theme.fg("dim", border));
+				for (const wrapped of renderMarkdownLines(step.final, width)) out.push(wrapped);
+				out.push(theme.fg("dim", border));
+			}
 		}
 	}
 	return out;

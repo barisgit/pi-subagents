@@ -203,7 +203,7 @@ describe("readRunTranscript", () => {
 		}
 	});
 
-	it("strips the agent preamble to the trailing <output> block in final-text", () => {
+	it("preserves the full final assistant message for dashboard output-aware rendering", () => {
 		const dir = makeRunDir();
 		try {
 			writeStatus(dir);
@@ -216,8 +216,12 @@ describe("readRunTranscript", () => {
 				]),
 			]);
 			const finalLine = readRunTranscript(dir).find((line) => line.kind === "final-text");
-			// The dashboard final-text surface shows ONLY the result, never the preamble.
-			assert.deepEqual(finalLine, { kind: "final-text", stepIndex: 0, agent: "fixer", text: "the clean result" });
+			assert.deepEqual(finalLine, {
+				kind: "final-text",
+				stepIndex: 0,
+				agent: "fixer",
+				text: "Let me compile the findings.\nHere is what I found.\n<output>the clean result</output>",
+			});
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

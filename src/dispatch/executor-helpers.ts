@@ -140,9 +140,9 @@ export function publishSubagentUsage(
  * window where the previous pi is disposed but the new activate hasn't fired
  * yet — we drop those (rare) emits rather than crash the executor.
  */
-export function safeEmit(channel: string, data: unknown): void {
+export function safeEmit(channel: string, data: unknown, targetPi?: ExtensionAPI): void {
 	try {
-		const pi = getCurrentPi();
+		const pi = targetPi ?? getCurrentPi();
 		logger.info("safeEmit", { channel, hasPi: !!pi });
 		pi?.events.emit(channel, data);
 	} catch (err) {

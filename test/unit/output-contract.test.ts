@@ -5,6 +5,7 @@ import {
 	buildOutputContractAppend,
 	extractOutputBlock,
 	extractOutputBlockForDisplay,
+	locateOutputBlockForDisplay,
 	fallbackSubmitResultEnvelope,
 	hasOutputBlock,
 	OUTPUT_REPROMPT,
@@ -23,6 +24,20 @@ describe("output contract", () => {
 		].join("\n");
 		assert.equal(extractOutputBlock(text), "the real result");
 		assert.equal(hasOutputBlock(text), true);
+	});
+
+	it("locates the last complete display block while preserving surrounding narration", () => {
+		assert.deepEqual(
+			locateOutputBlockForDisplay(
+				'Before.\n<output>sample</output>\nBetween.\n<output>{"ok":true}</output>\nAfter.',
+			),
+			{ prefix: "Before.\n<output>sample</output>\nBetween.\n", content: '{"ok":true}', suffix: "\nAfter." },
+		);
+	});
+
+	it("does not locate malformed or incomplete output blocks", () => {
+		assert.equal(locateOutputBlockForDisplay("Before <output>unfinished"), undefined);
+		assert.equal(locateOutputBlockForDisplay("<output>complete</output>\nThen <output>unfinished"), undefined);
 	});
 
 	it("rejects a complete output block followed by trailing prose", () => {

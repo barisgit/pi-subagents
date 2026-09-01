@@ -75,7 +75,11 @@ describe("registered workflow tool description", () => {
 		assert.match(description, /meta\(\{ name, description, phases \}\)/i);
 		assert.match(description, /phases: \["Recon"\] or \[\{ title: "Recon" \}\]/i);
 		assert.match(description, /call once before other globals/i);
-		assert.match(description, /child-session Workflow calls always run synchronously despite async\/default/i);
+		assert.match(
+			description,
+			/child-session Workflow calls run synchronously despite async\/default unless nested async is explicitly enabled/i,
+		);
+		assert.match(description, /immediate parent session/i);
 	});
 
 	it("presents bounded programmable orchestration without prescribing one topology", () => {

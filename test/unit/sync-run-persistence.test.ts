@@ -28,6 +28,7 @@ class FakeResourceLoader {
 }
 
 class FakeAgentSession {
+	async bindExtensions(): Promise<void> {}
 	private listeners: Listener[] = [];
 	readonly promptImpl: (session: FakeAgentSession) => Promise<void>;
 	abortCount = 0;

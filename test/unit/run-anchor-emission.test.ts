@@ -21,6 +21,7 @@ class FakeResourceLoader {
 // A child session that completes immediately with an <output> block so
 // async/workflow children reach a terminal state within the test.
 class FakeAgentSession {
+	async bindExtensions(): Promise<void> {}
 	private listeners: Array<(event: unknown) => void> = [];
 	subscribe(listener: (event: unknown) => void): () => void {
 		this.listeners.push(listener);

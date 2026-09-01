@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { renderWidget } from "./render-widget.ts";
+import { isStaleExtensionContextError, renderWidget } from "./render-widget.ts";
 import { deriveRunDisplayState, displayStatePriority, isRunnerHardDead } from "../state/run-liveness.ts";
 import { reconcileRunToTerminalOnDisk } from "../state/status-writer.ts";
 import {
@@ -162,6 +162,7 @@ export function createAsyncJobTracker(
 	handleStarted: (data: unknown) => void;
 	handleComplete: (data: unknown) => void;
 	resetJobs: (ctx?: ExtensionContext) => void;
+	shutdown: () => void;
 	rehydrateFromRegistry: (ctx?: ExtensionContext) => number;
 	handleDelivered: (data: unknown) => void;
 } {
@@ -171,26 +172,50 @@ export function createAsyncJobTracker(
 	const getWidgetClient = options.getWidgetClient;
 	const onRunTerminal = options.onRunTerminal;
 	const lastActivityStateByRunId = new Map<string, ActivityState | undefined>();
+	let disposed = false;
 	// Runs whose completion notification already reached the host turn. Guards
 	// the delivered-before-complete listener-order race: notify may emit the
 	// delivered event before this tracker's own complete handler runs.
 	const deliveredRunIds = new Set<string>();
+	const shutdown = () => {
+		if (disposed) return;
+		disposed = true;
+		if (state.poller) clearInterval(state.poller);
+		state.poller = null;
+		for (const timer of state.cleanupTimers.values()) {
+			clearTimeout(timer);
+		}
+		state.cleanupTimers.clear();
+		state.lastUiContext = null;
+		state.asyncJobs.clear();
+		lastActivityStateByRunId.clear();
+		deliveredRunIds.clear();
+	};
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
 		// renderWidget captures TUI.requestRender for animation ticks; the SDK's
 		// ExtensionUIContext exposes no repaint API of its own.
 		renderWidget(ctx, jobs, getWidgetClient?.(ctx));
 	};
+	const rerenderDelayed = (jobs?: AsyncJobState[]) => {
+		const ctx = state.lastUiContext;
+		if (!ctx) return;
+		try {
+			if (ctx.hasUI) rerenderWidget(ctx, jobs);
+		} catch (error) {
+			if (!isStaleExtensionContextError(error)) throw error;
+			shutdown();
+		}
+	};
 	const scheduleCleanup = (asyncId: string) => {
 		const existingTimer = state.cleanupTimers.get(asyncId);
 		if (existingTimer) clearTimeout(existingTimer);
 		const timer = setTimeout(() => {
+			if (disposed) return;
 			state.cleanupTimers.delete(asyncId);
 			state.asyncJobs.delete(asyncId);
 			lastActivityStateByRunId.delete(asyncId);
 			deliveredRunIds.delete(asyncId);
-			if (state.lastUiContext) {
-				rerenderWidget(state.lastUiContext);
-			}
+			rerenderDelayed();
 		}, completionRetentionMs);
 		timer.unref?.();
 		state.cleanupTimers.set(asyncId, timer);
@@ -220,10 +245,11 @@ export function createAsyncJobTracker(
 		return current;
 	};
 	const ensurePoller = () => {
-		if (state.poller) return;
+		if (disposed || state.poller) return;
 		state.poller = setInterval(() => {
+			if (disposed) return;
 			if (state.asyncJobs.size === 0) {
-				if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext, []);
+				rerenderDelayed([]);
 				if (state.poller) {
 					clearInterval(state.poller);
 					state.poller = null;
@@ -441,12 +467,13 @@ export function createAsyncJobTracker(
 				}
 			}
 
-			if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+			rerenderDelayed();
 		}, pollIntervalMs);
 		state.poller.unref?.();
 	};
 
 	const handleStarted = (data: unknown) => {
+		if (disposed) return;
 		const info = data as {
 			id?: string;
 			asyncDir?: string;
@@ -503,6 +530,7 @@ export function createAsyncJobTracker(
 	};
 
 	const handleComplete = (data: unknown) => {
+		if (disposed) return;
 		const result = data as { id?: string; success?: boolean; asyncDir?: string };
 		const asyncId = result.id;
 		logger.info("handleComplete: FIRED", {
@@ -545,6 +573,7 @@ export function createAsyncJobTracker(
 	};
 
 	const handleDelivered = (data: unknown) => {
+		if (disposed) return;
 		const info = data as { runIds?: unknown };
 		const runIds = Array.isArray(info?.runIds)
 			? info.runIds.filter((id): id is string => typeof id === "string")
@@ -567,6 +596,7 @@ export function createAsyncJobTracker(
 	};
 
 	const resetJobs = (ctx?: ExtensionContext) => {
+		if (disposed) return;
 		for (const timer of state.cleanupTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -605,6 +635,7 @@ export function createAsyncJobTracker(
 	};
 
 	const rehydrateFromRegistry = (ctx?: ExtensionContext): number => {
+		if (disposed) return 0;
 		const hostSessionId = ctx?.sessionManager?.getSessionId?.();
 		if (!hostSessionId) return 0;
 		let added = 0;
@@ -734,5 +765,5 @@ export function createAsyncJobTracker(
 		return added;
 	};
 
-	return { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered };
+	return { ensurePoller, handleStarted, handleComplete, resetJobs, shutdown, rehydrateFromRegistry, handleDelivered };
 }

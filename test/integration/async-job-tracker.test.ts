@@ -19,6 +19,7 @@ interface AsyncJobTrackerModule {
 		options?: { completionRetentionMs?: number; pollIntervalMs?: number },
 	): {
 		resetJobs(ctx?: unknown): void;
+		shutdown(): void;
 		handleStarted(data: unknown): void;
 		handleComplete(data: unknown): void;
 		rehydrateFromRegistry(ctx?: unknown): number;
@@ -97,6 +98,109 @@ function createUiContext() {
 }
 
 describe("async job tracker", { skip: !available ? "pi packages not available" : undefined }, () => {
+	it("does not access a stale UI context after tracker shutdown", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-complete");
+			writeStatus(runDir, {
+				runId: "run-complete",
+				mode: "single",
+				state: "complete",
+				startedAt: Date.now(),
+				lastUpdate: Date.now(),
+			});
+			let stale = false;
+			let contextAccesses = 0;
+			const ctx = {
+				get hasUI() {
+					contextAccesses += 1;
+					if (stale) throw new Error("stale extension context");
+					return true;
+				},
+				ui: {
+					theme: { fg: (_theme: string, text: string) => text },
+					setWidget: () => {},
+					requestRender: () => {},
+				},
+			};
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, {
+				completionRetentionMs: 1,
+				pollIntervalMs: 1,
+			});
+			tracker.resetJobs(ctx);
+			tracker.handleStarted({ id: "run-complete", asyncDir: runDir, agent: "worker" });
+			tracker.handleDelivered({ runIds: ["run-complete"] });
+			tracker.handleComplete({ id: "run-complete", success: true, asyncDir: runDir });
+
+			tracker.shutdown();
+			tracker.shutdown();
+			const accessesAtShutdown = contextAccesses;
+			stale = true;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			assert.equal(contextAccesses, accessesAtShutdown);
+			assert.equal(state.lastUiContext, null);
+			assert.equal(state.poller, null);
+			assert.equal(state.cleanupTimers.size, 0);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("stops an active tracker when its delayed UI access finds the exact stale context", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		const runDir = path.join(asyncRoot, "run-stale");
+		writeStatus(runDir, {
+			runId: "run-stale",
+			mode: "single",
+			state: "running",
+			startedAt: Date.now(),
+			lastUpdate: Date.now(),
+		});
+		let stale = false;
+		let contextAccesses = 0;
+		const ctx = {
+			get hasUI() {
+				contextAccesses++;
+				if (stale) {
+					throw new Error(
+						"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+					);
+				}
+				return true;
+			},
+			ui: {
+				theme: { fg: (_theme: string, text: string) => text },
+				setWidget: () => {},
+				requestRender: () => {},
+			},
+		};
+		const state = createState();
+		const tracker = trackerMod!.createAsyncJobTracker(createEventRecorder().pi, state as never, {
+			pollIntervalMs: 1,
+		});
+		try {
+			tracker.resetJobs(ctx);
+			tracker.handleStarted({ id: "run-stale", asyncDir: runDir, agent: "worker" });
+			assert.ok(state.poller);
+
+			stale = true;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			assert.equal(state.poller, null);
+			assert.equal(state.lastUiContext, null);
+			assert.equal(state.asyncJobs.size, 0);
+			const accessesAfterStop = contextAccesses;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			assert.equal(contextAccesses, accessesAfterStop);
+		} finally {
+			tracker.shutdown();
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("rehydrates only same-session non-terminal async jobs from the registry", () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {

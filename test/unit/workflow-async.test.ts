@@ -16,6 +16,14 @@ import {
 import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 import type { SubagentLineage } from "../../src/state/lineage.ts";
 import { makeAgent } from "../support/helpers.ts";
+import {
+	enqueueNestedCompletionReprompt,
+	markNestedAsyncFinished,
+	markNestedAsyncStarted,
+	nestedAsyncParentSnapshot,
+	registerNestedAsyncParent,
+	releaseNestedAsyncParent,
+} from "../../src/dispatch/nested-async-coordinator.ts";
 
 const roots: string[] = [];
 let restoreRuntime: (() => void) | undefined;
@@ -51,6 +59,7 @@ function deferred<T = void>() {
 	const promise = new Promise<T>((r) => {
 		resolve = r;
 	});
+
 	return { promise, resolve };
 }
 
@@ -75,7 +84,12 @@ function waitForEvent(
 
 function setup(
 	prefix: string,
-	options: { asyncByDefault?: boolean; blockPrompt?: boolean; promptDelayMs?: (task: string) => number } = {},
+	options: {
+		asyncByDefault?: boolean;
+		allowNestedAsync?: boolean;
+		blockPrompt?: boolean;
+		promptDelayMs?: (task: string) => number;
+	} = {},
 ) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	roots.push(root);
@@ -89,6 +103,7 @@ function setup(
 		subscribe(): () => void {
 			return () => {};
 		}
+		async bindExtensions(): Promise<void> {}
 		async prompt(task: string): Promise<void> {
 			promptStarted.resolve();
 			if (options.blockPrompt) await promptGate.promise;
@@ -137,7 +152,7 @@ function setup(
 			lastUiContext: null,
 			poller: null,
 		},
-		config: {},
+		config: { allowNestedAsync: options.allowNestedAsync },
 		asyncByDefault: options.asyncByDefault ?? false,
 		tempArtifactsDir: root,
 		childRegistry: new ChildAgentRegistry(),
@@ -217,6 +232,93 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 			clearLineage(sessionId);
 		}
 	});
+	it("returns an async receipt for a child subagent when nested async is enabled", async () => {
+		const sessionId = "workflow-parent";
+		const { executor, ctx, promptGate } = setup("nested-subagent-async-opt-in-", {
+			allowNestedAsync: true,
+			blockPrompt: true,
+		});
+		setLineageForSession(sessionId, {
+			role: "child",
+			currentAgent: "A",
+			parentAgent: "host-role",
+			parentSessionId: "host-session",
+			rootSessionId: "host-session",
+			depth: 1,
+			runId: "parent-run",
+			canDelegate: true,
+			allowedDelegateAgents: ["A"],
+			maxSubagentDepth: 2,
+		});
+		try {
+			const result = await executor.execute(
+				"nested-opt-in",
+				{ run: [{ agent: "A", task: "slow" }], async: true },
+				new AbortController().signal,
+				undefined,
+				ctx as never,
+			);
+			assert.equal(typeof result.details?.asyncId, "string");
+			assert.deepEqual(result.details?.results, []);
+		} finally {
+			promptGate.resolve();
+			clearLineage(sessionId);
+		}
+	});
+	it("holds a nested parallel parent through the batch rollup enqueue", async () => {
+		const sessionId = "workflow-parent";
+		const parentRunId = "parent-batch-rollup";
+		const { events, executor, ctx } = setup("nested-batch-rollup-", { allowNestedAsync: true });
+		registerNestedAsyncParent(parentRunId);
+		setLineageForSession(sessionId, {
+			role: "child",
+			currentAgent: "A",
+			parentAgent: "host-role",
+			parentSessionId: "host-session",
+			rootSessionId: "host-session",
+			depth: 1,
+			runId: parentRunId,
+			canDelegate: true,
+			allowedDelegateAgents: ["A"],
+			maxSubagentDepth: 2,
+		});
+		let activeAtLastLeaf = false;
+		events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data: { runId: string }) => {
+			markNestedAsyncStarted(parentRunId, data.runId);
+		});
+		events.on(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, (data: { runId: string }) => {
+			markNestedAsyncFinished(parentRunId, data.runId);
+			activeAtLastLeaf = nestedAsyncParentSnapshot(parentRunId)?.active === true;
+		});
+		events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data: { runId: string }) => {
+			enqueueNestedCompletionReprompt(parentRunId, () => true);
+			markNestedAsyncFinished(parentRunId, data.runId);
+		});
+		const complete = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT);
+		try {
+			const receipt = await executor.execute(
+				"nested-batch-rollup",
+				{
+					run: [
+						{ agent: "A", task: "one" },
+						{ agent: "A", task: "two" },
+					],
+					async: true,
+					batch: true,
+				},
+				new AbortController().signal,
+				undefined,
+				ctx as never,
+			);
+			assert.equal(typeof receipt.details?.asyncId, "string");
+			await complete;
+			assert.equal(activeAtLastLeaf, true);
+			assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 1);
+		} finally {
+			releaseNestedAsyncParent(parentRunId);
+			clearLineage(sessionId);
+		}
+	});
 
 	it("preserves host subagent async defaults and explicit overrides", async () => {
 		const { executor, ctx } = setup("host-subagent-async-modes-", { asyncByDefault: true });
@@ -287,6 +389,52 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 				assert.equal("asyncId" in ((result?.details as object | undefined) ?? {}), false, name);
 			}
 		} finally {
+			clearLineage(sessionId);
+		}
+	});
+
+	it("returns an async receipt for a child workflow when nested async is enabled", async () => {
+		const sessionId = "workflow-parent";
+		const { events, tool, ctx, promptGate, promptStarted } = setup("nested-workflow-async-opt-in-", {
+			allowNestedAsync: true,
+			blockPrompt: true,
+		});
+		const childStarted: unknown[] = [];
+		const hostEmits: Array<{ channel: string; data: unknown }> = [];
+		events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data) => childStarted.push(data));
+		setCurrentPi({
+			events: { emit: (channel: string, data: unknown) => hostEmits.push({ channel, data }) },
+		} as never);
+		setLineageForSession(sessionId, {
+			role: "child",
+			currentAgent: "A",
+			parentAgent: "host-role",
+			parentSessionId: "host-session",
+			rootSessionId: "host-session",
+			depth: 1,
+			runId: "parent-run",
+			canDelegate: true,
+			allowedDelegateAgents: ["A"],
+			maxSubagentDepth: 2,
+		});
+		try {
+			const result = await tool.execute?.(
+				"wf-nested-opt-in",
+				{ script: "await agent('A', 'slow');", async: true },
+				new AbortController().signal,
+				undefined,
+				ctx as never,
+			);
+			await promptStarted.promise;
+			assert.equal(typeof (result?.details as { asyncId?: string } | undefined)?.asyncId, "string");
+			assert.deepEqual((result?.details as { results?: unknown[] } | undefined)?.results, []);
+			assert.equal(childStarted.length > 0, true);
+			assert.equal(
+				hostEmits.some(({ channel }) => channel === SUBAGENT_ASYNC_STARTED_EVENT),
+				false,
+			);
+		} finally {
+			promptGate.resolve();
 			clearLineage(sessionId);
 		}
 	});

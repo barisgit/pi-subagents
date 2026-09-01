@@ -27,13 +27,13 @@ This codebase is the product of two completed refactoring charters:
 
 | Directory | Responsibility Summary | Detailed Map |
 |-----------|------------------------|--------------|
-| `src/dispatch/` | Subagent dispatch + child-agent execution: run-record funnel, sync/async paths, process-global active-leaf and per-workflow pre-run admission limits, registry, resume, intercom. (29 files) | [View Map](src/dispatch/codemap.md) |
-| `src/surfaces/` | Presentation/UI layer: split renderers (result/inline/shared/widget), fullscreen dashboard + pure row-model, slash commands, notifications, async job widget, agent CRUD. (20 files) | [View Map](src/surfaces/codemap.md) |
+| `src/dispatch/` | Subagent dispatch + child-agent execution: run-record funnel, sync/async paths, parent-linked nested lifecycle coordination, concurrency limits, registry, resume, intercom. (30 files) | [View Map](src/dispatch/codemap.md) |
+| `src/surfaces/` | Presentation/UI layer: split renderers, dashboard, slash commands, notifications with queued nested completion reprompts, async widget, agent CRUD. (20 files) | [View Map](src/surfaces/codemap.md) |
 | `src/state/` | Run-state + persistence: canonical in-memory `RunView` (two producers), one `StatusWriter`, bounded transcript preview sidecars and full-message cache, disk hydration, append-only registry, pure phase/liveness/shape kernels. (19 files) | [View Map](src/state/codemap.md) |
 | `src/shared/` | Low-level leaf utilities (imported downward, no upward imports): agent/skill discovery, fs codecs, runtime-env policy, path constants, stale-runner grace, live-session relay, formatting, settings, logging. (18 files) | [View Map](src/shared/codemap.md) |
-| `src/protocol/` | Protocol/vocabulary layer (pure DTOs, no fs): wire types, the canonical `PersistedRunStatus` + `parsePersistedRunStatus` codec, tool schemas, child completion contract. (4 files) | [View Map](src/protocol/codemap.md) |
-| `src/runtime/` | Runtime activation: per-activation wiring of tool/widgets/bridges, one host-owned live-session directory, one lazy all-tools renderer catalog, and root-session role lifecycle (`/role`). (3 files) | [View Map](src/runtime/codemap.md) |
-| `src/workflow/` | Bounded JavaScript orchestration: sandbox globals, pipeline item-chain backpressure, progress, and durable workflow lifecycle. (2 files) | [View Map](src/workflow/codemap.md) |
+| `src/protocol/` | Protocol/vocabulary layer (pure DTOs, no fs): wire types, persisted-status/workflow-metadata codecs, tool schemas, child completion contract. (5 files) | [View Map](src/protocol/codemap.md) |
+| `src/runtime/` | Runtime activation: per-activation wiring, child-session lineage/nested lifecycle tracking, host-owned dashboard resources, and root-session role lifecycle (`/role`). (3 files) | [View Map](src/runtime/codemap.md) |
+| `src/workflow/` | Bounded JavaScript orchestration: sandbox globals, opt-in detached child-session workflows, pipeline backpressure, progress, and durable lifecycle. (2 files) | [View Map](src/workflow/codemap.md) |
 | `src/api/` | Frozen cross-extension public API boundary: session-scoped `SubagentExposedAPI` + lineage events for sibling extensions. (1 file) | [View Map](src/api/codemap.md) |
 
 ## Key Architectural Invariants
@@ -42,6 +42,7 @@ This codebase is the product of two completed refactoring charters:
 - **One persisted type:** `PersistedRunStatus` (`src/protocol/status-types.ts`), written by one `StatusWriter` through one `openRunRecord` funnel.
 - **No storage facade:** there is exactly one filesystem backend; do NOT introduce a `RunStore`/`RunRepository`/`StorageAdapter`/`RunPersistence` interface (reserved tokens, enforced by the canonical verifier).
 - **No hardcoded role defaults** (`main`/`orchestrator`); root-role selection is generic with fallback-to-first-discovered.
+- **Nested async is opt-in:** child-session subagent, Workflow, and resume calls stay foreground unless `allowNestedAsync` is enabled. Enabled descendants are parent-linked; the coordinator holds the parent until descendants and queued completion reprompts settle, parks its idle leaf permit while descendants run, and cancels descendants when the parent ends.
 - **Dashboard taxonomy:** `workflow` is the durable entity; `parallel` is a receipt/container. No PgUp/PgDn paging (paneOverlay owns scroll). The live-session relay is display-only: the global hub retains listeners only, while the host activation owns and disposes session references. Stable selection promotes a bounded live or persisted preview to the full transcript after 50 ms; rapid traversal must not synchronously load each intermediate transcript.
 
 ## Tests

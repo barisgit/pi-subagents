@@ -17,6 +17,19 @@ import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "
 import { isInsideChildSession } from "../../src/shared/child-session-context.ts";
 import { LiveSessionDirectory } from "../../src/shared/live-session-relay.ts";
 import { readRunTranscriptPreview } from "../../src/state/run-transcript-preview.ts";
+import {
+	enqueueNestedCompletionReprompt,
+	flushNestedCompletionReprompts,
+	holdNestedAsyncRollup,
+	markNestedAsyncFinished,
+	markNestedAsyncStarted,
+	markNestedParentTurn,
+	nestedAsyncParentSnapshot,
+	registerNestedAsyncParent,
+	registerNestedAsyncCancellation,
+	releaseNestedAsyncParent,
+} from "../../src/dispatch/nested-async-coordinator.ts";
+import { __resetLeafConcurrencyForTest, leafConcurrencyLimit } from "../../src/dispatch/leaf-concurrency.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -33,6 +46,183 @@ function clearLineage(...sessionIds: string[]): void {
 
 afterEach(() => {
 	while (restoreFns.length > 0) restoreFns.pop()?.();
+	__resetLeafConcurrencyForTest();
+});
+
+it("reaches quiescence and releases the leaf permit after a failed completion send", async () => {
+	leafConcurrencyLimit(1);
+	const parentRunId = "run-failed-send-parent";
+	let promptSettled!: () => void;
+	const settled = new Promise<void>((resolve) => {
+		promptSettled = resolve;
+	});
+	const parentSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		markNestedAsyncStarted(parentRunId, "run-failed-send-child");
+		self.lastAssistantText = "<output>waiting</output>";
+		promptSettled();
+	});
+	const nextSession = new FakeAgentSession(async (self) => {
+		self.lastAssistantText = "<output>next</output>";
+	});
+	installFakeRuntime([parentSession, nextSession]);
+	const parent = runChildAgent(makeStep({ runId: parentRunId }), makeContext());
+	await settled;
+	markNestedAsyncFinished(parentRunId, "run-failed-send-child");
+	enqueueNestedCompletionReprompt(parentRunId, () => false);
+
+	assert.equal((await parent).state, "complete");
+	assert.equal(parentSession.disposeCalls, 1);
+	assert.equal((await runChildAgent(makeStep({ runId: "run-after-failed-send" }), makeContext())).state, "complete");
+});
+
+it("releases nested coordinator state when an active parent child is aborted", async () => {
+	const parentRunId = "run-aborted-nested-parent";
+	let promptStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		promptStarted = resolve;
+	});
+	let cancelCalls = 0;
+	const session = new FakeAgentSession(async () => {
+		registerNestedAsyncParent(parentRunId);
+		markNestedAsyncStarted(parentRunId, "run-active-descendant");
+		registerNestedAsyncCancellation(parentRunId, () => cancelCalls++);
+		promptStarted();
+		await new Promise(() => {});
+	});
+	installFakeRuntime([session]);
+	const handle = dispatchAsyncChild(makeStep({ runId: parentRunId }), makeContext());
+	await started;
+
+	await handle.abort("test abort");
+	assert.equal((await handle.completed).state, "interrupted");
+	assert.equal(session.disposeCalls, 1);
+	assert.equal(cancelCalls, 1);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
+});
+
+it("keeps a nested batch parent active between its last leaf and rollup enqueue", () => {
+	const parentRunId = "run-batch-parent";
+	const groupRunId = "run-batch-group";
+	registerNestedAsyncParent(parentRunId);
+	holdNestedAsyncRollup(parentRunId, groupRunId);
+	markNestedAsyncStarted(parentRunId, "run-batch-last-leaf");
+
+	markNestedAsyncFinished(parentRunId, "run-batch-last-leaf");
+	assert.equal(nestedAsyncParentSnapshot(parentRunId)?.active, true);
+
+	enqueueNestedCompletionReprompt(parentRunId, () => true);
+	markNestedAsyncFinished(parentRunId, groupRunId);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 1);
+	releaseNestedAsyncParent(parentRunId);
+});
+
+it("clears speculative parent activity when a completion reprompt cannot be queued", () => {
+	const parentRunId = "run-failed-reprompt";
+	registerNestedAsyncParent(parentRunId);
+	enqueueNestedCompletionReprompt(parentRunId, () => false);
+
+	flushNestedCompletionReprompts(parentRunId);
+	assert.deepEqual(nestedAsyncParentSnapshot(parentRunId), {
+		active: false,
+		agentInFlight: false,
+		pendingReprompts: 0,
+		version: 2,
+	});
+	releaseNestedAsyncParent(parentRunId);
+});
+
+it("cancels nested descendants and drops pending reprompts when the parent is released", () => {
+	const parentRunId = "run-cancel-nested-parent";
+	let cancelCalls = 0;
+	let repromptCalls = 0;
+	registerNestedAsyncParent(parentRunId);
+	registerNestedAsyncCancellation(parentRunId, () => cancelCalls++);
+	enqueueNestedCompletionReprompt(parentRunId, () => {
+		repromptCalls++;
+		return true;
+	});
+
+	releaseNestedAsyncParent(parentRunId);
+	assert.equal(cancelCalls, 1);
+	assert.equal(repromptCalls, 0);
+});
+
+it("retains an idle parent, parks its leaf permit, and disposes after its nested completion turn", async () => {
+	leafConcurrencyLimit(1);
+	const parentRunId = "run-nested-parent";
+	let parentPromptSettled!: () => void;
+	const promptSettled = new Promise<void>((resolve) => {
+		parentPromptSettled = resolve;
+	});
+	const parentSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		markNestedAsyncStarted(parentRunId, "run-descendant");
+		registerNestedAsyncCancellation(parentRunId, () => cancelCalls++);
+		self.lastAssistantText = "<output>waiting</output>";
+		parentPromptSettled();
+	});
+	const siblingSession = new FakeAgentSession(async (self) => {
+		self.lastAssistantText = "<output>sibling</output>";
+	});
+	installFakeRuntime([parentSession, siblingSession]);
+	let cancelCalls = 0;
+
+	const parent = runChildAgent(makeStep({ runId: parentRunId }), makeContext());
+	await promptSettled;
+	assert.equal(parentSession.disposeCalls, 0);
+
+	const sibling = await runChildAgent(makeStep({ runId: "run-sibling" }), makeContext());
+	assert.equal(sibling.state, "complete");
+
+	let reprompted = false;
+	markNestedAsyncFinished(parentRunId, "run-descendant");
+	enqueueNestedCompletionReprompt(parentRunId, () => {
+		reprompted = true;
+		queueMicrotask(() => markNestedParentTurn(parentRunId, false));
+		return true;
+	});
+	const result = await parent;
+	assert.equal(result.state, "complete");
+	assert.equal(reprompted, true);
+	assert.equal(parentSession.disposeCalls, 1);
+	assert.equal(cancelCalls, 1);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
+});
+
+it("binds extensions before prompting so nested async activation retains the parent", async () => {
+	const parentRunId = "run-sdk-faithful-parent";
+	const descendantRunId = "run-sdk-faithful-descendant";
+	let promptSettled!: () => void;
+	const settled = new Promise<void>((resolve) => {
+		promptSettled = resolve;
+	});
+	let activated = false;
+	const session = new FakeAgentSession(
+		async (self) => {
+			if (activated) markNestedAsyncStarted(parentRunId, descendantRunId);
+			self.lastAssistantText = "<output>Nested async started.</output>";
+			promptSettled();
+		},
+		async () => {
+			activated = true;
+			registerNestedAsyncParent(parentRunId);
+		},
+	);
+	installFakeRuntime([session]);
+	const parent = runChildAgent(makeStep({ runId: parentRunId }), makeContext());
+	await settled;
+	await Promise.resolve();
+
+	assert.equal(session.bindExtensionsCalls, 1);
+	assert.equal(session.disposeCalls, 0);
+	markNestedAsyncFinished(parentRunId, descendantRunId);
+	enqueueNestedCompletionReprompt(parentRunId, () => {
+		queueMicrotask(() => markNestedParentTurn(parentRunId, false));
+		return true;
+	});
+	assert.equal((await parent).state, "complete");
+	assert.equal(session.disposeCalls, 1);
 });
 
 it("writes the opened branch preview before prompting", async () => {
@@ -48,6 +238,7 @@ it("writes the opened branch preview before prompting", async () => {
 });
 
 it("updates the registered handle to the reopened fallback session", async () => {
+	const primaryCleanup: string[] = [];
 	const primarySession = new FakeAgentSession(async (self) => {
 		self.messages.push({
 			role: "assistant",
@@ -56,6 +247,12 @@ it("updates the registered handle to the reopened fallback session", async () =>
 			content: [],
 		});
 	});
+	primarySession.shutdownHandler = () => {
+		primaryCleanup.push("shutdown");
+	};
+	primarySession.disposeImpl = () => {
+		primaryCleanup.push("dispose");
+	};
 	let markFallbackStarted!: () => void;
 	let releaseFallback!: () => void;
 	const fallbackStarted = new Promise<void>((resolve) => {
@@ -79,6 +276,7 @@ it("updates the registered handle to the reopened fallback session", async () =>
 
 	try {
 		await fallbackStarted;
+		assert.deepEqual(primaryCleanup, ["shutdown", "dispose"]);
 		assert.equal(handle.session, fallbackSession as never);
 		assert.deepEqual(directory.sessionsForRun("run-1"), [fallbackSession]);
 		releaseFallback();
@@ -87,6 +285,38 @@ it("updates the registered handle to the reopened fallback session", async () =>
 	} finally {
 		directory.dispose();
 	}
+});
+
+it("disposes the failed provider session only once when reopening the fallback throws", async () => {
+	const primarySession = new FakeAgentSession(async (self) => {
+		self.messages.push({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "HTTP 429 rate limit exceeded",
+			content: [],
+		});
+	});
+	let shutdownCalls = 0;
+	primarySession.shutdownHandler = () => {
+		shutdownCalls++;
+	};
+	const fallbackSession = new FakeAgentSession(
+		async () => {},
+		async () => {
+			throw new Error("fallback activation failed");
+		},
+	);
+	installFakeRuntime([primarySession, fallbackSession]);
+
+	const result = await runChildAgent(
+		makeStep({ modelCandidates: [{ provider: "test", id: "model-b" } as never] }),
+		makeContext(),
+	);
+
+	assert.equal(result.state, "failed");
+	assert.match(result.error?.message ?? "", /fallback activation failed/);
+	assert.equal(shutdownCalls, 1);
+	assert.equal(primarySession.disposeCalls, 1);
 });
 
 it("continues fallback ordering after startup authentication selects a later candidate", async () => {
@@ -146,15 +376,34 @@ class FakeAgentSession {
 	activeToolNames: string[] = [];
 	abortCalls = 0;
 	disposeCalls = 0;
+	bindExtensionsCalls = 0;
 	promptCalls = 0;
 	setModelCalls: Array<{ provider: string; id: string }> = [];
 	messages: unknown[] = [];
 	lastAssistantText = "";
 	exportImpl?: () => Promise<string>;
+	disposeImpl?: () => void;
+	shutdownHandler?: () => void | Promise<void>;
 	readonly promptImpl: (session: FakeAgentSession) => Promise<void>;
+	readonly bindExtensionsImpl?: (session: FakeAgentSession) => Promise<void>;
+	readonly extensionRunner = {
+		hasHandlers: (eventType: string) => eventType === "session_shutdown" && this.shutdownHandler !== undefined,
+		emit: async (event: { type: string; reason?: string }) => {
+			if (event.type === "session_shutdown") await this.shutdownHandler?.();
+		},
+	};
 
-	constructor(promptImpl: (session: FakeAgentSession) => Promise<void>) {
+	constructor(
+		promptImpl: (session: FakeAgentSession) => Promise<void>,
+		bindExtensionsImpl?: (session: FakeAgentSession) => Promise<void>,
+	) {
 		this.promptImpl = promptImpl;
+		this.bindExtensionsImpl = bindExtensionsImpl;
+	}
+
+	async bindExtensions(_bindings: Record<string, unknown>): Promise<void> {
+		this.bindExtensionsCalls++;
+		await this.bindExtensionsImpl?.(this);
 	}
 
 	subscribe(listener: Listener): () => void {
@@ -183,6 +432,7 @@ class FakeAgentSession {
 
 	dispose(): void {
 		this.disposeCalls++;
+		this.disposeImpl?.();
 	}
 
 	setActiveToolsByName(names: string[]): void {
@@ -275,6 +525,49 @@ function installFakeRuntime(
 }
 
 describe("runChildAgent", () => {
+	it("runs child lifecycle shutdown before dispose invalidates its live tracker context", async () => {
+		let stale = false;
+		let contextAccesses = 0;
+		let staleAccesses = 0;
+		const context = {
+			get hasUI() {
+				contextAccesses++;
+				if (stale) throw new Error("stale context accessed");
+				return false;
+			},
+		};
+		const timer = setInterval(() => {
+			try {
+				context.hasUI;
+			} catch {
+				staleAccesses++;
+			}
+		}, 1);
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		session.shutdownHandler = () => clearInterval(timer);
+		session.disposeImpl = () => {
+			stale = true;
+		};
+		installFakeRuntime([session]);
+
+		try {
+			assert.equal(
+				(await runChildAgent(makeStep({ runId: "lifecycle-before-dispose" }), makeContext())).state,
+				"complete",
+			);
+			const accessesAtDispose = contextAccesses;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			assert.equal(contextAccesses, accessesAtDispose);
+			assert.equal(staleAccesses, 0);
+			assert.equal(session.disposeCalls, 1);
+		} finally {
+			clearInterval(timer);
+		}
+	});
+
 	it("publishes only a created session and unpublishes it after completion", async () => {
 		let markPromptStarted!: () => void;
 		let releasePrompt!: () => void;

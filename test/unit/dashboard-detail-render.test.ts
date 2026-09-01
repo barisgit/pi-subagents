@@ -1780,9 +1780,10 @@ const BG_OPEN: Record<string, string> = {
 	toolSuccessBg: "\x1b[42m",
 	toolErrorBg: "\x1b[41m",
 	userMessageBg: "\x1b[44m",
+	customMessageBg: "\x1b[45m",
 };
 const styledTheme = {
-	fg: (_name: string, text: string) => text,
+	fg: (name: string, text: string) => (name === "customMessageText" ? `\x1b[37m${text}\x1b[39m` : text),
 	bg: (name: string, text: string) => `${BG_OPEN[name] ?? "\x1b[40m"}${text}\x1b[49m`,
 } as never;
 
@@ -1922,6 +1923,339 @@ describe("dashboard selected-run status section", () => {
 });
 
 describe("dashboard detail pane tool cards", () => {
+	it("renders compact final output as a full-width panel while preserving narration", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-output-${randomUUID()}-`));
+		try {
+			writeStatus(dir, "run-output");
+			writeSession(dir, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{
+						type: "text",
+						text: 'Before the result.\n<output>{"ok":true,"items":[1,2]}</output>\nAfter the result.',
+					},
+				]),
+			]);
+			const width = 44;
+			const lines = buildRightLines(
+				styledTheme,
+				{ ownership: "foreign", run: makeRun("run-output", dir) },
+				width,
+			);
+			const plain = lines.map(stripAnsi).join("\n");
+			const panel = lines.filter((line) => line.startsWith(BG_OPEN.customMessageBg!));
+
+			assert.match(plain, /Before the result\./);
+			assert.match(plain, /After the result\./);
+			assert.match(
+				panel.map((line) => stripAnsi(line).trimEnd()).join("\n"),
+				/\{\n[\s\S]*"ok": true,[\s\S]*"items": \[/,
+			);
+			assert.doesNotMatch(plain, /<\/?output>/);
+			assert.ok(panel.length >= 3);
+			const panelStart = lines.findIndex((line) => line.startsWith(BG_OPEN.customMessageBg!));
+			assert.equal(lines[panelStart - 1], "");
+			for (const line of panel) {
+				assert.equal(visibleWidth(line), width);
+				assert.ok(line.endsWith("\x1b[49m"));
+				assert.ok(line.includes("\x1b[37m"));
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("panelizes each completed compact output turn while leaving tool-call samples raw", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-output-resume-${randomUUID()}-`));
+		try {
+			writeStatus(dir, "run-output-resume");
+			writeSession(dir, [
+				assistant("2026-05-20T00:00:01.000Z", [
+					{ type: "text", text: "First attempt.\n<output>EARLIER</output>" },
+				]),
+				user("2026-05-20T00:00:02.000Z", [{ type: "text", text: "Continue" }]),
+				assistant("2026-05-20T00:00:03.000Z", [
+					{ type: "text", text: "Example: <output>sample only</output>" },
+					{ type: "tool_use", id: "sample-tool", name: "run", input: { code: "return 1" } },
+				]),
+				user("2026-05-20T00:00:04.000Z", [{ type: "tool_result", tool_use_id: "sample-tool", content: "ok" }]),
+				assistant("2026-05-20T00:00:05.000Z", [
+					{ type: "text", text: "Second attempt.\n<output>LATER</output>" },
+				]),
+			]);
+			const lines = buildRightLines(
+				styledTheme,
+				{ ownership: "foreign", run: makeRun("run-output-resume", dir) },
+				48,
+			);
+			const plain = stripAnsi(lines.join("\n"));
+
+			assert.match(plain, /EARLIER/);
+			assert.match(plain, /LATER/);
+			assert.match(plain, /Example: <output>sample only<\/output>/);
+			assert.doesNotMatch(plain, /<output>EARLIER|<output>LATER/);
+			assert.ok(lines.filter((line) => line.startsWith(BG_OPEN.customMessageBg!)).length >= 6);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses the same output panel for retained live and persisted typed assistant messages", () => {
+		const run = {
+			ownership: "foreign",
+			run: makeRun("run-native-output", "/missing/native-output"),
+		} satisfies LiveRun;
+		const message: LiveDashboardSession["messages"][number] = {
+			role: "assistant",
+			content: [
+				{
+					type: "text",
+					text: "Narration before.\n<output>## Result\n\nPlain **Markdown**.</output>\nNarration after.",
+				},
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1,
+		};
+		const liveSession: LiveDashboardSession = { messages: [message], subscribe: () => () => {} };
+		const historicalSession = { stepIndex: 0, messages: [message] };
+		const liveLines = buildRightLines(styledTheme, run, 40, [], {
+			sessions: [liveSession],
+			tui: { requestRender: () => {} } as never,
+		});
+		const persistedLines = buildRightLines(styledTheme, run, 40, [], undefined, {
+			sessions: [historicalSession],
+			tui: { requestRender: () => {} } as never,
+			getToolDefinition: () => undefined,
+		});
+
+		for (const lines of [liveLines, persistedLines]) {
+			const plain = stripAnsi(lines.join("\n"));
+			assert.match(plain, /Narration before\./);
+			assert.match(plain, /Result/);
+			assert.match(plain, /Plain Markdown\./);
+			assert.match(plain, /Narration after\./);
+			assert.doesNotMatch(plain, /<\/?output>/);
+			assert.ok(lines.some((line) => line.startsWith(BG_OPEN.customMessageBg!)));
+		}
+	});
+
+	it("leaves incomplete output markup unchanged", () => {
+		const run = { ownership: "foreign", run: makeRun("run-incomplete", "/missing/incomplete") } satisfies LiveRun;
+		const message: LiveDashboardSession["messages"][number] = {
+			role: "assistant",
+			content: [{ type: "text", text: "<output>complete</output>\nThen <output>unfinished" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1,
+		};
+		const lines = buildRightLines(styledTheme, run, 40, [], {
+			sessions: [{ messages: [message], subscribe: () => () => {} }],
+			tui: { requestRender: () => {} } as never,
+		});
+
+		assert.match(stripAnsi(lines.join("\n")), /<output>complete<\/output>[\s\S]*<output>unfinished/);
+		assert.ok(lines.every((line) => !line.startsWith(BG_OPEN.customMessageBg!)));
+	});
+
+	it("panelizes completed output turns consistently with and without the live render cache", () => {
+		const run = {
+			ownership: "foreign",
+			run: makeRun("run-output-resume", "/missing/output-resume"),
+		} satisfies LiveRun;
+		const completedOutput = (
+			text: string,
+			timestamp: number,
+		): Extract<LiveDashboardSession["messages"][number], { role: "assistant" }> => ({
+			role: "assistant",
+			content: [{ type: "text", text }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp,
+		});
+		const sampleWithToolCall: LiveDashboardSession["messages"][number] = {
+			...completedOutput("", 3),
+			content: [
+				{ type: "text", text: "Example: <output>sample only</output>" },
+				{ type: "toolCall", id: "sample-tool", name: "run", arguments: { code: "return 1" } },
+			],
+		};
+		const toolResult: LiveDashboardSession["messages"][number] = {
+			role: "toolResult",
+			toolCallId: "sample-tool",
+			toolName: "run",
+			content: [{ type: "text", text: "ok" }],
+			isError: false,
+			timestamp: 4,
+		};
+		const messages: LiveDashboardSession["messages"] = [
+			completedOutput("First attempt.\n<output>EARLIER</output>", 1),
+			{ role: "user", content: "Continue the run", timestamp: 2 },
+			sampleWithToolCall,
+			toolResult,
+			completedOutput("Second attempt.\n<output>LATER</output>", 5),
+		];
+		const session: LiveDashboardSession = { messages, subscribe: () => () => {} };
+		const render = (cache?: LiveSessionRenderCache) =>
+			buildRightLines(styledTheme, run, 40, [], {
+				sessions: [session],
+				tui: { requestRender: () => {} } as never,
+				...(cache ? { cache } : {}),
+			});
+		const uncached = render();
+		const cached = render(new LiveSessionRenderCache());
+
+		assert.deepEqual(cached, uncached, "cache grouping cannot change output-block presentation");
+		const plain = stripAnsi(cached.join("\n"));
+		assert.match(plain, /EARLIER/);
+		assert.match(plain, /LATER/);
+		assert.match(plain, /Example: <output>sample only<\/output>/);
+		assert.doesNotMatch(plain, /<output>EARLIER|<output>LATER/);
+		assert.ok(cached.filter((line) => line.startsWith(BG_OPEN.customMessageBg!)).length >= 6);
+	});
+
+	it("renders assistant stop metadata once after a split output panel", () => {
+		const run = {
+			ownership: "foreign",
+			run: makeRun("run-output-stop-metadata", "/missing/output-stop-metadata"),
+		} satisfies LiveRun;
+		const cases = [
+			{ stopReason: "error" as const, errorMessage: "boom", marker: "Error: boom" },
+			{ stopReason: "aborted" as const, errorMessage: "stopped by user", marker: "stopped by user" },
+			{
+				stopReason: "length" as const,
+				marker: "Error: Model stopped because it reached the maximum output token limit.",
+			},
+		];
+		type AssistantContent = Extract<LiveDashboardSession["messages"][number], { role: "assistant" }>["content"];
+		const variants: Array<{ label: string; content: AssistantContent; lastContent: string }> = [
+			{
+				label: "suffix narration",
+				content: [
+					{
+						type: "text",
+						text: "Narration before.\n<output>Result body.</output>\nNarration after.",
+					},
+				],
+				lastContent: "Narration after.",
+			},
+			{
+				label: "trailing output",
+				content: [{ type: "text", text: "Narration before.\n<output>Result body.</output>" }],
+				lastContent: "Result body.",
+			},
+			{
+				label: "thinking before trailing output",
+				content: [
+					{ type: "thinking", thinking: "Private reasoning." },
+					{ type: "text", text: "<output>Result body.</output>" },
+				],
+				lastContent: "Result body.",
+			},
+		];
+
+		for (const [index, testCase] of cases.entries()) {
+			for (const [variantIndex, variant] of variants.entries()) {
+				const message: LiveDashboardSession["messages"][number] = {
+					role: "assistant",
+					content: variant.content,
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					...testCase,
+					timestamp: index * variants.length + variantIndex + 1,
+				};
+				const lines = buildRightLines(styledTheme, run, 50, [], {
+					sessions: [{ messages: [message], subscribe: () => () => {} }],
+					tui: { requestRender: () => {} } as never,
+				});
+				const plain = stripAnsi(lines.join("\n"));
+				const normalized = plain.replace(/\s+/g, " ");
+
+				assert.equal(
+					normalized.split(testCase.marker).length - 1,
+					1,
+					`${testCase.stopReason} footer appears once for ${variant.label}`,
+				);
+				assert.ok(
+					normalized.lastIndexOf(testCase.marker) > normalized.lastIndexOf(variant.lastContent),
+					`${testCase.stopReason} footer follows ${variant.label}: ${normalized}`,
+				);
+			}
+		}
+	});
+
+	it("pretty-prints valid JSON without interpreting Markdown inside string values", () => {
+		const run = { ownership: "foreign", run: makeRun("run-output-json", "/missing/output-json") } satisfies LiveRun;
+		const message: LiveDashboardSession["messages"][number] = {
+			role: "assistant",
+			content: [
+				{
+					type: "text",
+					text: '<output>{"note":"**bold** and # head","list":"- a"}</output>',
+				},
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1,
+		};
+		const lines = buildRightLines(styledTheme, run, 60, [], {
+			sessions: [{ messages: [message], subscribe: () => () => {} }],
+			tui: { requestRender: () => {} } as never,
+		});
+		const panel = stripAnsi(lines.filter((line) => line.startsWith(BG_OPEN.customMessageBg!)).join("\n"));
+
+		assert.match(panel, /"note": "\*\*bold\*\* and # head"/);
+		assert.match(panel, /"list": "- a"/);
+	});
+
 	it("renders tool calls as padded multi-line bg cards with verbatim args and inner result hints", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-render-${randomUUID()}-`));
 		try {

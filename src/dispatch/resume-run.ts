@@ -18,6 +18,7 @@ import { logger } from "../shared/logger.ts";
 import { getLineageForSession } from "../state/lineage.ts";
 import { createForegroundRunController } from "./foreground-run-controller.ts";
 import { registerRunController, releaseRunController } from "./layer0-runs.ts";
+import { registerNestedAsyncCancellation } from "./nested-async-coordinator.ts";
 import {
 	type Details,
 	type SingleResult,
@@ -216,7 +217,8 @@ async function resumeRun(
 	const calledFromChildSession = currentLineage
 		? currentLineage.role === "child"
 		: normalizeAgentIdentity(process.env.PI_SUBAGENT_CURRENT_AGENT) !== undefined;
-	const effectiveAsyncMode = calledFromChildSession ? false : asyncMode;
+	const effectiveAsyncMode = calledFromChildSession && deps.config.allowNestedAsync !== true ? false : asyncMode;
+	const nestedParentRunId = calledFromChildSession ? currentLineage?.runId : undefined;
 	const effectiveData: ExecutionContextData = { ...data, effectiveAsync: effectiveAsyncMode !== false };
 	const authorizeTarget = (agentName: string | undefined): SubagentToolResult | null => {
 		const targetGuard = checkNestedDelegationGuard(
@@ -607,6 +609,9 @@ async function resumeRun(
 		pi: deps.pi,
 	};
 	const childHandle = dispatchAsyncChild(step, asyncCtx);
+	const unregisterNestedCancellation = nestedParentRunId
+		? registerNestedAsyncCancellation(nestedParentRunId, () => childHandle.abort("parent session ended"))
+		: () => {};
 	const finalize = async () => {
 		let result: ChildAgentResult | undefined;
 		try {
@@ -625,24 +630,31 @@ async function resumeRun(
 				totalUsage: totals.totalUsage,
 				...(stepTokens ? { stepTokens } : {}),
 			});
-			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
-				id: target.runId,
-				runId: target.runId,
-				...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
-				rootRunId: target.rootRunId,
-				notifyPolicy: "each",
-				success: result.state === "complete",
-				agent: target.agentName,
-				summary: result.outputText,
-				exitCode: result.exitCode,
-				state: result.state,
-				durationMs: result.durationMs,
-				sessionFile: result.sessionFile,
-				timestamp: Date.now(),
-				result,
-				asyncDir: target.runRecordDir,
-			});
+			safeEmit(
+				SUBAGENT_ASYNC_COMPLETE_EVENT,
+				{
+					id: target.runId,
+					runId: target.runId,
+					...((nestedParentRunId ?? target.parentRunId)
+						? { parentRunId: nestedParentRunId ?? target.parentRunId }
+						: {}),
+					rootRunId: target.rootRunId,
+					notifyPolicy: "each",
+					success: result.state === "complete",
+					agent: target.agentName,
+					summary: result.outputText,
+					exitCode: result.exitCode,
+					state: result.state,
+					durationMs: result.durationMs,
+					sessionFile: result.sessionFile,
+					timestamp: Date.now(),
+					result,
+					asyncDir: target.runRecordDir,
+				},
+				nestedParentRunId ? deps.pi : undefined,
+			);
 		} finally {
+			unregisterNestedCancellation();
 			releaseRunController(target.runId);
 			statusWriter.dispose();
 			resumeInFlight.delete(resumeKey);
@@ -650,15 +662,21 @@ async function resumeRun(
 		return result;
 	};
 	const completed = finalize();
-	safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
-		id: target.runId,
-		runId: target.runId,
-		agent: target.agentName,
-		task: message.slice(0, 50),
-		cwd: target.cwd,
-		asyncDir: target.runRecordDir,
-		...(target.parentRunId ? { parentRunId: target.parentRunId } : {}),
-	});
+	safeEmit(
+		SUBAGENT_ASYNC_STARTED_EVENT,
+		{
+			id: target.runId,
+			runId: target.runId,
+			agent: target.agentName,
+			task: message.slice(0, 50),
+			cwd: target.cwd,
+			asyncDir: target.runRecordDir,
+			...((nestedParentRunId ?? target.parentRunId)
+				? { parentRunId: nestedParentRunId ?? target.parentRunId }
+				: {}),
+		},
+		nestedParentRunId ? deps.pi : undefined,
+	);
 	void completed.catch((error) =>
 		logger.warn("disk resume failed after dispatch", {
 			runId,

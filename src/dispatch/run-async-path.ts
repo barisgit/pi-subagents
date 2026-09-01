@@ -21,6 +21,7 @@ import {
 	releaseRunController,
 } from "./layer0-runs.ts";
 import { logger } from "../shared/logger.ts";
+import { holdNestedAsyncRollup, registerNestedAsyncCancellation } from "./nested-async-coordinator.ts";
 import {
 	type Details,
 	type Usage,
@@ -177,6 +178,10 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 		// must be registered in the shared layer0 map here or a reload leaves the
 		// group uninterruptible (the per-activation childRegistry dies on reload).
 		registerRunController(groupRunId, asyncDetachedAbort);
+		if (parentRunId) holdNestedAsyncRollup(parentRunId, groupRunId);
+		const unregisterNestedCancellation = parentRunId
+			? registerNestedAsyncCancellation(parentRunId, () => asyncDetachedAbort.abort())
+			: () => {};
 		// spawnRun reserves the run record + handle eagerly (so we still return all N
 		// handles immediately). The per-process leaf-concurrency pool inside
 		// startChildAgent bounds how many children run leaf sessions at once.
@@ -243,40 +248,48 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 					},
 					onLifecycle: (event) => {
 						if (event.type === "run.started") {
-							safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
-								id: event.runId,
-								runId: event.runId,
-								metadata: params.metadata,
-								controlConfig,
-								agent: item.step.agentName,
-								task: item.cleanTask.slice(0, 50),
-								cwd: item.step.cwd,
-								asyncDir: event.runRecordDir,
-								parentRunId: groupRunId,
-							});
+							safeEmit(
+								SUBAGENT_ASYNC_STARTED_EVENT,
+								{
+									id: event.runId,
+									runId: event.runId,
+									metadata: params.metadata,
+									controlConfig,
+									agent: item.step.agentName,
+									task: item.cleanTask.slice(0, 50),
+									cwd: item.step.cwd,
+									asyncDir: event.runRecordDir,
+									parentRunId: groupRunId,
+								},
+								parentRunId ? deps.pi : undefined,
+							);
 							return;
 						}
 						const result = event.result;
-						safeEmit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
-							id: event.runId,
-							runId: event.runId,
-							parentRunId: groupRunId,
-							rootRunId: groupRootRunId,
-							metadata: params.metadata,
-							notifyPolicy,
-							agent: item.step.agentName,
-							...(item.step.label ? { label: item.step.label } : {}),
-							success: result ? result.state === "complete" : false,
-							summary: result?.outputText ?? (event.error ? String(event.error) : ""),
-							exitCode: result?.exitCode,
-							state: result?.state ?? "failed",
-							durationMs: result?.durationMs,
-							sessionFile: result?.sessionFile ?? event.sessionFile,
-							timestamp: event.timestamp,
-							taskIndex: originalStepIndex,
-							totalTasks: steps.length,
-							asyncDir: event.runRecordDir,
-						});
+						safeEmit(
+							SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
+							{
+								id: event.runId,
+								runId: event.runId,
+								parentRunId: groupRunId,
+								rootRunId: groupRootRunId,
+								metadata: params.metadata,
+								notifyPolicy,
+								agent: item.step.agentName,
+								...(item.step.label ? { label: item.step.label } : {}),
+								success: result ? result.state === "complete" : false,
+								summary: result?.outputText ?? (event.error ? String(event.error) : ""),
+								exitCode: result?.exitCode,
+								state: result?.state ?? "failed",
+								durationMs: result?.durationMs,
+								sessionFile: result?.sessionFile ?? event.sessionFile,
+								timestamp: event.timestamp,
+								taskIndex: originalStepIndex,
+								totalTasks: steps.length,
+								asyncDir: event.runRecordDir,
+							},
+							parentRunId ? deps.pi : undefined,
+						);
 					},
 				},
 			);
@@ -387,6 +400,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 							batchId: groupRunId,
 						},
 					}),
+					parentRunId ? deps.pi : undefined,
 				);
 			} catch (err) {
 				logger.error(
@@ -395,6 +409,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 					{ runId: groupRunId },
 				);
 			} finally {
+				unregisterNestedCancellation();
 				releaseRunController(groupRunId);
 				deps.childRegistry.delete(groupRunId);
 			}
@@ -489,6 +504,9 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 	// must be registered in the shared layer0 map here or a reload leaves the
 	// run uninterruptible (the per-activation childRegistry dies on reload).
 	registerRunController(runId, asyncDetachedAbort);
+	const unregisterNestedCancellation = parentRunId
+		? registerNestedAsyncCancellation(parentRunId, () => asyncDetachedAbort.abort())
+		: () => {};
 	const asyncCtx = {
 		extensionCtx: ctx,
 		abortSignal: asyncDetachedAbort.signal,
@@ -645,10 +663,12 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 						batchId: runId,
 					},
 				}),
+				parentRunId ? deps.pi : undefined,
 			);
 		} catch (err) {
 			logger.error("finalizeAsync: threw", err instanceof Error ? err : new Error(String(err)), { runId });
 		} finally {
+			unregisterNestedCancellation();
 			releaseRunController(runId);
 			statusWriter.dispose();
 			deps.childRegistry.delete(runId);
@@ -659,16 +679,21 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 	const handlesPromise: Promise<ChildAgentHandle[]> = Promise.resolve([dispatchAsyncChild(first.step, asyncCtx)]);
 	void finalizeAsync(handlesPromise);
 
-	safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, {
-		id: runId,
-		runId,
-		metadata: params.metadata,
-		controlConfig,
-		agent: first.step.agentName,
-		task: first.cleanTask.slice(0, 50),
-		cwd: effectiveCwd,
-		asyncDir: runRecordDir,
-	});
+	safeEmit(
+		SUBAGENT_ASYNC_STARTED_EVENT,
+		{
+			id: runId,
+			runId,
+			metadata: params.metadata,
+			controlConfig,
+			agent: first.step.agentName,
+			task: first.cleanTask.slice(0, 50),
+			cwd: effectiveCwd,
+			asyncDir: runRecordDir,
+			parentRunId,
+		},
+		parentRunId ? deps.pi : undefined,
+	);
 
 	const handleText =
 		mode === "single"

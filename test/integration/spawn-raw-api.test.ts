@@ -16,6 +16,14 @@ import { createMockPi, createTempDir, removeTempDir } from "../support/helpers.t
 import type { MockPi } from "../support/helpers.ts";
 import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
 import { __resetProcessGlobalForTest, processGlobal } from "../../src/shared/process-global.ts";
+import {
+	buildSlashInitialResult,
+	clearSlashSnapshots,
+	getSlashRenderableSnapshot,
+} from "../../src/state/slash-live-state.ts";
+import { renderWidget, stopWidgetAnimation } from "../../src/surfaces/render-widget.ts";
+import { stopResultAnimations, syncResultAnimation } from "../../src/surfaces/render-result.ts";
+import { __setWidgetAnimationMsForTest } from "../../src/surfaces/render-shared.ts";
 
 function clearLineage(...sessionIds: string[]): void {
 	const globals = globalThis as Record<string, unknown>;
@@ -66,6 +74,7 @@ function createPiHarness() {
 		exposed = api as SubagentExposedAPI;
 		exposeCount += 1;
 	});
+
 	return {
 		pi,
 		events,
@@ -212,6 +221,70 @@ describe("spawnRaw API exposure", () => {
 			assert.equal(relayListeners.size, 0);
 		} finally {
 			__resetProcessGlobalForTest(relayKey);
+		}
+	});
+
+	it("leaves host UI module state intact when a child session shuts down", async () => {
+		const host = createPiHarness();
+		const child = createPiHarness();
+		const hostShutdown = () => host.sessionHandlers.get("session_shutdown")?.();
+		let widgetRenders = 0;
+		let resultInvalidations = 0;
+		const resultContext = {
+			state: {} as { subagentResultAnimationTimer?: ReturnType<typeof setInterval> },
+			invalidate: () => resultInvalidations++,
+		};
+		const slashDetails = buildSlashInitialResult("host-slash", {
+			run: [{ agent: "worker", task: "host task" }],
+		});
+
+		__setWidgetAnimationMsForTest(10);
+		try {
+			registerSubagentExtension(host.pi as never);
+			renderWidget(
+				{
+					hasUI: true,
+					ui: {
+						setWidget: (_key: string, factory: unknown) => {
+							if (typeof factory === "function") {
+								factory(
+									{ requestRender: () => widgetRenders++ },
+									{ fg: (_name: string, text: string) => text },
+								);
+							}
+						},
+					},
+				} as never,
+				[{ asyncId: "host-running", asyncDir: "/tmp/host", status: "running", agents: ["worker"] }],
+			);
+			syncResultAnimation(
+				{
+					content: [{ type: "text", text: "running" }],
+					details: {
+						mode: "parallel",
+						results: [{ agent: "worker", task: "host task", exitCode: 0, progress: { status: "running" } }],
+					},
+				} as never,
+				resultContext,
+			);
+			const slashVersion = getSlashRenderableSnapshot(slashDetails).version;
+
+			runInChildSessionContext(() => registerSubagentExtension(child.pi as never));
+			await child.sessionHandlers.get("session_shutdown")?.();
+
+			assert.equal(getSlashRenderableSnapshot(slashDetails).version, slashVersion);
+			assert.ok(resultContext.state.subagentResultAnimationTimer);
+			const widgetRendersBeforeWait = widgetRenders;
+			const resultInvalidationsBeforeWait = resultInvalidations;
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			assert.ok(widgetRenders > widgetRendersBeforeWait);
+			assert.ok(resultInvalidations > resultInvalidationsBeforeWait);
+		} finally {
+			await hostShutdown();
+			clearSlashSnapshots();
+			stopWidgetAnimation();
+			stopResultAnimations();
+			__setWidgetAnimationMsForTest(null);
 		}
 	});
 

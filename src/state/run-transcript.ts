@@ -3,7 +3,6 @@ import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { type PersistedRunStatus, parsePersistedRunStatus } from "../protocol/status-types.ts";
-import { extractOutputBlockForDisplay } from "../protocol/output-contract.ts";
 import { readRunTranscriptPreview, writeRunTranscriptPreview } from "./run-transcript-preview.ts";
 
 export type TranscriptLine =
@@ -20,7 +19,7 @@ export type TranscriptLine =
 			isError?: boolean;
 			ts: number;
 	  }
-	| { kind: "assistant-text"; stepIndex: number; text: string; ts: number }
+	| { kind: "assistant-text"; stepIndex: number; text: string; ts: number; outputEligible?: false }
 	| {
 			kind: "step-end";
 			stepIndex: number;
@@ -30,7 +29,7 @@ export type TranscriptLine =
 			tokens?: number;
 			status?: string;
 	  }
-	| { kind: "final-text"; stepIndex: number; agent: string; text: string };
+	| { kind: "final-text"; stepIndex: number; agent: string; text: string; outputEligible?: false };
 
 interface CacheFileStat {
 	filePath: string;
@@ -358,6 +357,10 @@ function parseSessionFile(input: {
 		const role = message.role;
 		const content = Array.isArray(message.content) ? message.content : [];
 		if (role === "assistant") {
+			const outputEligible = !content.some((part) => {
+				const item = objectRecord(part);
+				return item?.type === "tool_use" || item?.type === "toolUse" || item?.type === "toolCall";
+			});
 			for (const part of content) {
 				const item = objectRecord(part);
 				if (!item) continue;
@@ -367,7 +370,13 @@ function parseSessionFile(input: {
 					if (typeof text === "string" && text.trim()) {
 						// Every non-empty assistant text survives as narration; the LAST one
 						// is peeled off below as the run's final-text.
-						out.push({ kind: "assistant-text", stepIndex: input.stepIndex, text, ts });
+						out.push({
+							kind: "assistant-text",
+							stepIndex: input.stepIndex,
+							text,
+							ts,
+							...(!outputEligible ? { outputEligible: false as const } : {}),
+						});
 						lastAssistantTextIndex = out.length - 1;
 					}
 					continue;
@@ -440,9 +449,13 @@ function parseSessionFile(input: {
 	// The LAST assistant text is the run's final message: peel it out of the feed
 	// so final-text semantics stay unchanged and narration is never doubled.
 	let finalText = "";
+	let finalOutputEligible = true;
 	if (lastAssistantTextIndex >= 0) {
 		const last = out[lastAssistantTextIndex];
-		if (last?.kind === "assistant-text") finalText = last.text;
+		if (last?.kind === "assistant-text") {
+			finalText = last.text;
+			finalOutputEligible = last.outputEligible !== false;
+		}
 		out.splice(lastAssistantTextIndex, 1);
 	}
 
@@ -487,12 +500,14 @@ function parseSessionFile(input: {
 			...(status ? { status } : {}),
 		});
 	}
-	// The last assistant text is the full final message, which carries the agent's
-	// preamble/narration around its trailing <output> block. The dashboard final-text
-	// surface only wants the result, so leniently strip to the last <output> block
-	// (a message with no block passes through unchanged).
-	const finalDisplay = finalText ? (extractOutputBlockForDisplay(finalText) ?? finalText) : finalText;
-	if (finalDisplay) lines.push({ kind: "final-text", stepIndex: input.stepIndex, agent, text: finalDisplay });
+	if (finalText)
+		lines.push({
+			kind: "final-text",
+			stepIndex: input.stepIndex,
+			agent,
+			text: finalText,
+			...(!finalOutputEligible ? { outputEligible: false as const } : {}),
+		});
 	return lines;
 }
 

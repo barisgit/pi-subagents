@@ -861,7 +861,7 @@ The script runs in a sandbox with five globals:
 - pipeline(items, ...stages) -> Promise<results[]> — stream each item through stages with at most workflow.maxPipelineItemsInFlight item chains active; results preserve input order. It is fail-fast like Promise.all.
 - phase(title) — label the current stage for live status displays.
 
-Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll. Child-session Workflow calls always run synchronously despite async/default, so the caller awaits them.
+Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll. Child-session Workflow calls run synchronously despite async/default unless nested async is explicitly enabled in extension config; when enabled, completion starts a new turn in the immediate parent session.
 
 Rules: always await every agent()/parallel()/pipeline() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel() or pipeline(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.
 

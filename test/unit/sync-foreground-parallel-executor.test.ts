@@ -29,6 +29,7 @@ class FakeResourceLoader {
 }
 
 class FakeAgentSession {
+	async bindExtensions(): Promise<void> {}
 	private listeners: Array<(event: unknown) => void> = [];
 	subscribe(listener: (event: unknown) => void): () => void {
 		this.listeners.push(listener);

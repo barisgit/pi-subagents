@@ -22,6 +22,7 @@ class FakeResourceLoader {
 }
 
 class FakeAgentSession {
+	async bindExtensions(): Promise<void> {}
 	private listeners: Listener[] = [];
 	messages: unknown[] = [];
 	private readonly promptImpl: (task: string, session: FakeAgentSession) => Promise<void>;

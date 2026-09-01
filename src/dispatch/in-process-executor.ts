@@ -63,7 +63,13 @@ import {
 import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 import { addUsageInto, nestedSubagentUsageFromToolEvent } from "./executor-helpers.ts";
-import { acquireLeafPermit } from "./leaf-concurrency.ts";
+import { acquireLeafPermit, parkLeafPermit } from "./leaf-concurrency.ts";
+import {
+	flushNestedCompletionReprompts,
+	nestedAsyncParentSnapshot,
+	releaseNestedAsyncParent,
+	waitForNestedAsyncParentChange,
+} from "./nested-async-coordinator.ts";
 import { isFallbackModelFailure, isTransportModelFailure } from "./model-fallback.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
 export type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
@@ -320,6 +326,21 @@ export function dispatchAsyncChild(step: ChildAgentStep, ctx: ChildAgentContext)
 	return startChildAgent(step, ctx);
 }
 
+async function settleNestedAsyncParent(runId: string, signal: AbortSignal): Promise<void> {
+	while (!signal.aborted) {
+		const snapshot = nestedAsyncParentSnapshot(runId);
+		if (!snapshot) return;
+		if (snapshot.pendingReprompts > 0) {
+			flushNestedCompletionReprompts(runId);
+			continue;
+		}
+		if (!snapshot.active && !snapshot.agentInFlight) return;
+		const wait = () => waitForNestedAsyncParentChange(runId, snapshot.version, signal);
+		if (snapshot.active && !snapshot.agentInFlight) await parkLeafPermit(runId, wait);
+		else await wait();
+	}
+}
+
 function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAgentHandle {
 	let session: AgentSession | undefined;
 	let unpublishLiveSession: (() => void) | undefined;
@@ -395,6 +416,18 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 
 	ctx.registry.register(handle);
 	return handle;
+}
+
+async function disposeChildSession(session: AgentSession | undefined): Promise<void> {
+	if (!session) return;
+	try {
+		const extensionRunner = session.extensionRunner;
+		if (extensionRunner?.hasHandlers("session_shutdown")) {
+			await extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		}
+	} finally {
+		session.dispose();
+	}
 }
 
 async function executeChildAgent(
@@ -592,7 +625,8 @@ async function executeChildAgent(
 				}
 				unsubscribe?.();
 				unsubscribe = undefined;
-				promptSession.dispose();
+				session = undefined;
+				await disposeChildSession(promptSession);
 				const reopened = await runInChildSessionContext(() =>
 					createSessionWithFallback(step, ctx, {
 						models,
@@ -642,6 +676,8 @@ async function executeChildAgent(
 			});
 			return result;
 		}
+
+		await settleNestedAsyncParent(step.runId, signal);
 
 		if (!outputText.trim()) {
 			outputText = activeSession().getLastAssistantText?.() ?? "";
@@ -729,6 +765,10 @@ async function executeChildAgent(
 			}
 		}
 
+		// Completion can race the output-contract reprompt above. Drain any new
+		// descendant completion turn before the parent can become terminal.
+		await settleNestedAsyncParent(step.runId, signal);
+
 		// Detect provider-level failures that the SDK swallows.
 		//
 		// When the upstream provider returns an error response (e.g. cursor proxy
@@ -813,10 +853,14 @@ async function executeChildAgent(
 		});
 		return result;
 	} finally {
-		ticker?.stop();
-		unsubscribe?.();
-		previewWriter?.dispose();
-		session?.dispose();
+		try {
+			ticker?.stop();
+			unsubscribe?.();
+			previewWriter?.dispose();
+			await disposeChildSession(session);
+		} finally {
+			releaseNestedAsyncParent(step.runId);
+		}
 	}
 }
 
@@ -984,6 +1028,7 @@ async function createSessionWithFallback(
 					resourceLoader: loader,
 					sessionManager,
 				});
+				await created.session.bindExtensions({});
 				return { session: created.session, model, modelIndex: index, attemptedModels };
 			} catch (error) {
 				lastError = error;

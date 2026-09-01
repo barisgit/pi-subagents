@@ -9,7 +9,7 @@
  * Toggle: async parameter (default: false, configurable via config.json)
  *
  * Config file: ~/.pi/agent/subagent.json
- *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" } }
+ *   { "asyncByDefault": true, "allowNestedAsync": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" } }
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -24,6 +24,14 @@ import { isInsideChildSession } from "../shared/child-session-context.ts";
 import { LiveSessionDirectory } from "../shared/live-session-relay.ts";
 import { resolveAgentToolPatterns } from "../dispatch/resolve-tool-patterns.ts";
 import { leafConcurrencyLimit } from "../dispatch/leaf-concurrency.ts";
+import {
+	markNestedAsyncFinished,
+	markNestedAsyncStarted,
+	markNestedParentTurn,
+	registerNestedAsyncParent,
+	releaseNestedAsyncParent,
+} from "../dispatch/nested-async-coordinator.ts";
+import { getLineageForSession } from "../state/lineage.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { renderWidget, stopWidgetAnimation } from "../surfaces/render-widget.ts";
 import { stopResultAnimations } from "../surfaces/render-result.ts";
@@ -107,11 +115,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// works AND a child can dispatch its own async subagents tracked
 	// independently of the host.
 	//
-	// The ONLY things the child must NOT do are process-global side effects
-	// that would clobber the host: the currentPi pin (host owns it for SDK
-	// action calls across activate boundaries) and the singleton runtime
-	// cleanup hook. Per-session globalStore keys are scoped by piId so the
-	// child's listeners don't tear down the host's.
+	// Children must not mutate process-global state owned by the host: the
+	// currentPi pin, cross-activate cleanup/listener stores, or module-global UI
+	// snapshots and animation state. Child teardown only removes listener and
+	// cleanup entries it owns, leaving host entries untouched.
 	const idleTracker = createIdleTracker(pi);
 	const isChildSession = isInsideChildSession();
 	if (isChildSession) {
@@ -178,31 +185,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		lastUiContext: null,
 		poller: null,
 	};
+	let currentParentRunId: string | null = null;
 	const liveToolComponents = isChildSession ? undefined : new LiveToolComponentStore();
 	const liveSessionDirectory = isChildSession ? undefined : new LiveSessionDirectory(liveToolComponents);
 	const rendererCatalog = isChildSession ? undefined : new RendererCatalog(state.baseCwd);
-
-	const runtimeCleanup = () => {
-		liveSessionDirectory?.dispose();
-		liveToolComponents?.dispose();
-		rendererCatalog?.dispose();
-		widgetClient?.dispose();
-		widgetClient = undefined;
-		stopWidgetAnimation();
-		stopResultAnimations();
-		if (state.poller) {
-			clearInterval(state.poller);
-			state.poller = null;
-		}
-		for (const timer of state.cleanupTimers.values()) {
-			clearTimeout(timer);
-		}
-		state.cleanupTimers.clear();
-		state.asyncJobs.clear();
-	};
-	// Host-only: install the runtime cleanup hook. Children don't outlive
-	// their session and their state goes with them.
-	if (!isChildSession) globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 
 	let widgetClient: UtilsClient | undefined;
 	const getWidgetClient = (ctx: ExtensionContext) => {
@@ -215,8 +201,21 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		isChildSession,
 		globalStore,
 	});
-	const { ensurePoller, handleStarted, handleComplete, resetJobs, rehydrateFromRegistry, handleDelivered } =
+	const { ensurePoller, handleStarted, handleComplete, resetJobs, shutdown, rehydrateFromRegistry, handleDelivered } =
 		createAsyncJobTracker(pi, state, { idleTracker, getWidgetClient, onRunTerminal: controlRunTerminalHandler });
+	const runtimeCleanup = () => {
+		shutdown();
+		liveSessionDirectory?.dispose();
+		liveToolComponents?.dispose();
+		rendererCatalog?.dispose();
+		widgetClient?.dispose();
+		widgetClient = undefined;
+		stopWidgetAnimation();
+		stopResultAnimations();
+	};
+	// Host-only: install the runtime cleanup hook. Children don't outlive
+	// their session and their state goes with them.
+	if (!isChildSession) globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
 	const childRegistry = new ChildAgentRegistry();
 	const resolveAgentTools = (agents: AgentConfig[]): AgentConfig[] => {
 		const available = pi.getAllTools().map((t) => t.name);
@@ -362,13 +361,37 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 		}
 	}
-	registerSubagentNotify(pi);
+	registerSubagentNotify(pi, () => currentParentRunId);
+	pi.on("agent_start", () => {
+		if (currentParentRunId) markNestedParentTurn(currentParentRunId, true);
+	});
+	pi.on("agent_end", () => {
+		if (currentParentRunId) markNestedParentTurn(currentParentRunId, false);
+	});
+
+	const asyncEventRunId = (data: unknown): string | null => {
+		if (!data || typeof data !== "object") return null;
+		const runId = Reflect.get(data, "runId") ?? Reflect.get(data, "id");
+		return typeof runId === "string" && runId.length > 0 ? runId : null;
+	};
 
 	const eventUnsubscribes = [
-		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
-		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
+		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data) => {
+			handleStarted(data);
+			const runId = currentParentRunId ? asyncEventRunId(data) : null;
+			if (currentParentRunId && runId) markNestedAsyncStarted(currentParentRunId, runId);
+		}),
+		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data) => {
+			handleComplete(data);
+			const runId = currentParentRunId ? asyncEventRunId(data) : null;
+			if (currentParentRunId && runId) markNestedAsyncFinished(currentParentRunId, runId);
+		}),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, controlRunTerminalHandler),
-		pi.events.on(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, controlRunTerminalHandler),
+		pi.events.on(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, (data) => {
+			controlRunTerminalHandler(data);
+			const runId = currentParentRunId ? asyncEventRunId(data) : null;
+			if (currentParentRunId && runId) markNestedAsyncFinished(currentParentRunId, runId);
+		}),
 		pi.events.on(SUBAGENT_COMPLETED_EVENT, controlRunTerminalHandler),
 		pi.events.on(SUBAGENT_FAILED_EVENT, controlRunTerminalHandler),
 		pi.events.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, handleDelivered),
@@ -426,11 +449,22 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		resetSessionState(ctx);
+		if (isChildSession) {
+			const sessionId = ctx.sessionManager.getSessionId();
+			currentParentRunId = sessionId ? (getLineageForSession(sessionId)?.runId ?? null) : null;
+			if (currentParentRunId) registerNestedAsyncParent(currentParentRunId);
+		}
 		hostApi?.republish();
 		if (isChildSession || roleManager.isDelegatedSubagentSession()) return;
 		await roleManager.initializeRootRole(ctx);
 	});
 	pi.on("session_shutdown", () => {
+		// Reload/session replacement can tear down the runtime before the executor
+		// reaches its own finally; release is idempotent across both cleanup paths.
+		const parentRunId = currentParentRunId;
+		currentParentRunId = null;
+		if (parentRunId) releaseNestedAsyncParent(parentRunId);
+		shutdown();
 		liveSessionDirectory?.dispose();
 		liveToolComponents?.dispose();
 		rendererCatalog?.dispose();
@@ -445,20 +479,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			delete globalStore[eventUnsubscribeStoreKey];
 		}
 		roleManager.resetRoleState();
-		if (state.poller) clearInterval(state.poller);
-		state.poller = null;
-		for (const timer of state.cleanupTimers.values()) {
-			clearTimeout(timer);
-		}
-		state.cleanupTimers.clear();
-		state.asyncJobs.clear();
-		clearSlashSnapshots();
 		slashBridge.cancelAll();
 		slashBridge.dispose();
 		promptTemplateBridge.cancelAll();
 		promptTemplateBridge.dispose();
-		stopWidgetAnimation();
-		stopResultAnimations();
+		if (!isChildSession) {
+			clearSlashSnapshots();
+			stopWidgetAnimation();
+			stopResultAnimations();
+		}
 		if (globalStore[runtimeCleanupStoreKey] === runtimeCleanup) {
 			delete globalStore[runtimeCleanupStoreKey];
 		}

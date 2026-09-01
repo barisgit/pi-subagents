@@ -34,6 +34,7 @@ function state(cwd: string): SubagentState {
 	};
 }
 class DoneSession {
+	async bindExtensions(): Promise<void> {}
 	subscribe() {
 		return () => {};
 	}

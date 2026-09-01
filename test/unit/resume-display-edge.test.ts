@@ -37,6 +37,7 @@ function state(cwd: string): SubagentState {
 }
 
 class BlockingSession {
+	async bindExtensions(): Promise<void> {}
 	resolvePrompt: (() => void) | undefined;
 	messages: unknown[] = [];
 	subscribe() {

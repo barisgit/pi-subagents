@@ -34,6 +34,7 @@ function makeState(cwd: string): SubagentState {
 }
 
 class FakeSession {
+	async bindExtensions(): Promise<void> {}
 	prompts: string[] = [];
 	messages: unknown[] = [];
 	resolvePrompt: (() => void) | undefined;

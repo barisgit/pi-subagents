@@ -29,6 +29,12 @@ let latestWidgetCtx: ExtensionContext | undefined;
 let latestWidgetTui: TUI | undefined;
 let latestWidgetJobs: AsyncJobState[] = [];
 
+const STALE_EXTENSION_CONTEXT_ERROR_PREFIX = "This extension ctx is stale after session replacement or reload.";
+
+export function isStaleExtensionContextError(error: unknown): boolean {
+	return error instanceof Error && error.message.startsWith(STALE_EXTENSION_CONTEXT_ERROR_PREFIX);
+}
+
 function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
 	// A 'lost' run (stale runner heartbeat) must not drive the spinner animation.
 	return jobs.some((job) => job.status === "running" && job.displayState !== "lost");
@@ -297,10 +303,15 @@ function buildWidgetComponent(theme: Theme): Component {
 }
 
 function refreshAnimatedWidget(): void {
-	if (!latestWidgetCtx?.hasUI || latestWidgetJobs.length === 0) return;
-	// The widget factory captures TUI.requestRender; before the factory has run
-	// there is nothing on screen to repaint yet.
-	latestWidgetTui?.requestRender();
+	try {
+		if (!latestWidgetCtx?.hasUI || latestWidgetJobs.length === 0) return;
+		// The widget factory captures TUI.requestRender; before the factory has run
+		// there is nothing on screen to repaint yet.
+		latestWidgetTui?.requestRender();
+	} catch (error) {
+		if (!isStaleExtensionContextError(error)) throw error;
+		stopWidgetAnimation();
+	}
 }
 
 function ensureWidgetAnimation(): void {
@@ -333,16 +344,13 @@ export function stopWidgetAnimation(): void {
  * Render the async jobs widget
  */
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[], client?: UtilsClient): void {
+	// Same-module activation paths can share this animation state with the host.
+	// Non-UI child renders must not tear down the host widget timer.
+	if (!ctx.hasUI) return;
 	if (jobs.length === 0) {
 		stopWidgetAnimation();
-		if (ctx.hasUI) {
-			if (client) client.widgets.remove("aboveEditor", WIDGET_KEY);
-			else ctx.ui.setWidget(WIDGET_KEY, undefined);
-		}
-		return;
-	}
-	if (!ctx.hasUI) {
-		stopWidgetAnimation();
+		if (client) client.widgets.remove("aboveEditor", WIDGET_KEY);
+		else ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}
 	latestWidgetCtx = ctx;

@@ -5,6 +5,12 @@ import registerSubagentNotify from "../../src/surfaces/notify.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
 import {
+	flushNestedCompletionReprompts,
+	nestedAsyncParentSnapshot,
+	registerNestedAsyncParent,
+	releaseNestedAsyncParent,
+} from "../../src/dispatch/nested-async-coordinator.ts";
+import {
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
 	SUBAGENT_NOTIFY_DELIVERED_EVENT,
@@ -70,6 +76,34 @@ function asChildSession<T>(fn: () => T): T {
 }
 
 describe("registerSubagentNotify", () => {
+	it("clears parent activity when an immediate-parent completion send throws", () => {
+		const parentRunId = "parent-send-failure";
+		const { inner, bus } = createBus();
+		const childPi = {
+			events: bus,
+			on() {},
+			sendMessage() {
+				throw new Error("parent session unavailable");
+			},
+		};
+		registerNestedAsyncParent(parentRunId);
+		asChildSession(() => registerSubagentNotify(childPi as never, () => parentRunId));
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "failed-send-completion",
+			runId: "failed-send-completion",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 123,
+		});
+
+		flushNestedCompletionReprompts(parentRunId);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, false);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 0);
+		releaseNestedAsyncParent(parentRunId);
+	});
+
 	it("uses a fallback summary when a background completion is empty", () => {
 		const { events, sent } = createPi();
 
@@ -163,9 +197,7 @@ describe("registerSubagentNotify", () => {
 				throw new Error("child pi.sendMessage must not be invoked for host events");
 			},
 		};
-		asChildSession(() => {
-			registerSubagentNotify(childPi as never);
-		});
+		asChildSession(() => registerSubagentNotify(childPi as never));
 
 		// Host bus must still have its notify listener attached.
 		assert.equal(
@@ -190,7 +222,7 @@ describe("registerSubagentNotify", () => {
 		);
 	});
 
-	it("child-session subscriptions are scoped to their own bus, not the host's", () => {
+	it("routes child completion to the immediate parent without waking the host", () => {
 		// A child session subscribing to async-complete on its own ephemeral bus
 		// must NOT also pick up host-bus events. Otherwise every async would be
 		// notified twice (once by host pi, once by every alive child pi).
@@ -205,9 +237,13 @@ describe("registerSubagentNotify", () => {
 				childSent.push({ message, options });
 			},
 		};
-		asChildSession(() => {
-			registerSubagentNotify(childPi as never);
-		});
+		const parentRunId = "immediate-parent-run";
+		registerNestedAsyncParent(parentRunId);
+		asChildSession(() => registerSubagentNotify(childPi as never, () => parentRunId));
+		let hostDelivered = 0;
+		let childDelivered = 0;
+		host.events.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, () => hostDelivered++);
+		childBus.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, () => childDelivered++);
 
 		host.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
 			id: "child-scope-1",
@@ -220,11 +256,27 @@ describe("registerSubagentNotify", () => {
 
 		assert.equal(host.sent.length, 1);
 		assert.equal(childSent.length, 0, "child bus must not receive host events");
+		assert.equal(hostDelivered, 1);
+		assert.equal(childDelivered, 0);
 
-		// Child bus emits route to its own listener (which sends via the pinned
-		// host pi by design — child does not pin its pi as current). What matters
-		// for regression: the child listener exists on the child bus only.
-		void childInner;
+		childInner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "nested-complete-1",
+			runId: "nested-complete-1",
+			agent: "worker",
+			success: true,
+			summary: "Nested done",
+			exitCode: 0,
+			timestamp: 2001,
+		});
+		assert.equal(childSent.length, 0, "reprompt waits for the parent leaf permit");
+		assert.equal(host.sent.length, 1, "nested completion must not create a second host wake");
+		assert.equal(hostDelivered, 1);
+		assert.equal(childDelivered, 1);
+
+		flushNestedCompletionReprompts(parentRunId);
+		assert.equal(childSent.length, 1);
+		assert.equal(host.sent.length, 1);
+		releaseNestedAsyncParent(parentRunId);
 	});
 
 	it("labels paused completions as paused even without an exit code", () => {

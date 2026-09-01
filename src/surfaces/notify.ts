@@ -3,6 +3,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { enqueueNestedCompletionReprompt } from "../dispatch/nested-async-coordinator.ts";
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "../state/completion-dedupe.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { logger } from "../shared/logger.ts";
@@ -224,7 +225,10 @@ function childResultFrom(result: SubagentResult, child: ChildStepResult, index: 
 	};
 }
 
-export default function registerSubagentNotify(pi: ExtensionAPI): void {
+export default function registerSubagentNotify(
+	pi: ExtensionAPI,
+	getParentRunId: () => string | null = () => null,
+): void {
 	const unsubscribeStoreKey = "__pi_subagents_notify_unsubscribe__";
 	const globalStore = globalThis as Record<string, unknown>;
 	const isChildSession = isInsideChildSession();
@@ -249,6 +253,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
 	const ttlMs = 10 * 60 * 1000;
 	const groupedRuns = new Map<string, SubagentResult[]>();
+	const notificationPi = () => (isChildSession ? pi : getCurrentPi());
 
 	// Tell the widget which runs a notification covered (or would have covered,
 	// for deduped/silent results) so it can retire their rows. Resolve the
@@ -257,7 +262,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		const ids = runIds.filter((id): id is string => typeof id === "string" && id.length > 0);
 		if (ids.length === 0) return;
 		try {
-			getCurrentPi().events.emit(SUBAGENT_NOTIFY_DELIVERED_EVENT, { runIds: ids });
+			notificationPi().events.emit(SUBAGENT_NOTIFY_DELIVERED_EVENT, { runIds: ids });
 		} catch (err) {
 			logger.warn("notify.emitDelivered: threw", { err: err instanceof Error ? err.message : String(err) });
 		}
@@ -288,31 +293,38 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		// registered this handler may have been replaced by ctx.reload()/fork()/
 		// newSession()/switchSession(), invalidating that pi. We must resolve the
 		// CURRENT pi at call time.
-		try {
-			const currentPi = getCurrentPi();
-			logger.info("notify.handleComplete: calling sendMessage", { id: idLabel, hasPi: !!currentPi });
-			currentPi.sendMessage(
-				{
-					customType: "subagent-notify",
-					content,
-					display: true,
-					...(details ? { details } : {}),
-				},
-				{ triggerTurn: true },
-			);
-			if (agentStreaming) {
-				unconfirmedSends.push({ idLabel, content, details });
-				if (unconfirmedSends.length > UNCONFIRMED_CAP)
-					unconfirmedSends.splice(0, unconfirmedSends.length - UNCONFIRMED_CAP);
+		const send = () => {
+			try {
+				const currentPi = notificationPi();
+				logger.info("notify.handleComplete: calling sendMessage", { id: idLabel, hasPi: !!currentPi });
+				currentPi.sendMessage(
+					{
+						customType: "subagent-notify",
+						content,
+						display: true,
+						...(details ? { details } : {}),
+					},
+					{ triggerTurn: true },
+				);
+				if (agentStreaming) {
+					unconfirmedSends.push({ idLabel, content, details });
+					if (unconfirmedSends.length > UNCONFIRMED_CAP)
+						unconfirmedSends.splice(0, unconfirmedSends.length - UNCONFIRMED_CAP);
+				}
+				logger.info("notify.handleComplete: sendMessage returned", { id: idLabel });
+				return true;
+			} catch (err) {
+				logger.error(
+					"notify.handleComplete: sendMessage threw",
+					err instanceof Error ? err : new Error(String(err)),
+					{ id: idLabel },
+				);
+				return false;
 			}
-			logger.info("notify.handleComplete: sendMessage returned", { id: idLabel });
-		} catch (err) {
-			logger.error(
-				"notify.handleComplete: sendMessage threw",
-				err instanceof Error ? err : new Error(String(err)),
-				{ id: idLabel },
-			);
-		}
+		};
+		const parentRunId = isChildSession ? getParentRunId() : null;
+		if (parentRunId) enqueueNestedCompletionReprompt(parentRunId, send);
+		else send();
 	};
 
 	const sendOnce = (result: SubagentResult, now: number) => {
@@ -478,7 +490,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 	});
 	pi.on("message_end", (event) => {
 		const message = (event as { message?: { role?: string; customType?: string; content?: unknown } }).message;
-		if (!message || message.role !== "custom" || message.customType !== "subagent-notify") return;
+		if (message?.role !== "custom" || message.customType !== "subagent-notify") return;
 		const index = unconfirmedSends.findIndex((entry) => entry.content === message.content);
 		if (index >= 0) unconfirmedSends.splice(index, 1);
 	});
@@ -493,7 +505,7 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		for (const entry of resend) {
 			try {
 				logger.info("notify: resending interrupt-dropped notification as nextTurn", { id: entry.idLabel });
-				getCurrentPi().sendMessage(
+				notificationPi().sendMessage(
 					{
 						customType: "subagent-notify",
 						content: entry.content,

@@ -144,4 +144,4 @@ subagent({
 
 Choose `async` whenever no remaining work, synthesis, or response in the current turn requires the child result. After dispatching, end the turn or continue only independent work without polling so the caller—or, at the root, the user—can keep working while children run; the host notifies you on completion or needs-attention. Use synchronous dispatch whenever any later work, synthesis, or response in the same turn must consume the result.
 
-Calls made from a child session always execute synchronously, regardless of an explicit `async:true` or the configured default. The child caller owns and awaits nested subagent and Workflow results.
+Calls made from a child session execute synchronously, regardless of an explicit `async:true` or the configured default, unless `allowNestedAsync:true` is set in extension config. With that strict opt-in, nested subagent and Workflow calls return immediately and completion starts a new turn in the immediate parent session.

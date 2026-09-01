@@ -52,6 +52,7 @@ function setup(prefix: string, poison: string) {
 	setRegistryPathForTests(path.join(root, ".pi", "agent", "pi-subagents", "runs-index.jsonl"));
 
 	class FakeSession {
+		async bindExtensions(): Promise<void> {}
 		messages: unknown[] = [];
 		lastAssistantText = "";
 		subscribe(): () => void {

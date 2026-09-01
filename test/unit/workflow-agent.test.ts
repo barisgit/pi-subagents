@@ -117,6 +117,7 @@ describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {
 			async reload(): Promise<void> {}
 		}
 		class FakeSession {
+			async bindExtensions(): Promise<void> {}
 			messages: unknown[] = [];
 			lastAssistantText = "";
 			subscribe(): () => void {

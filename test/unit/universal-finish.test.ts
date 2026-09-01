@@ -34,6 +34,7 @@ class FakeResourceLoader {
 // <output> block (the contract) AFTER a prose preamble in the SAME turn. There is
 // no finish tool: the runtime must take the block, not the preamble.
 class FakeAgentSession {
+	async bindExtensions(): Promise<void> {}
 	prompts: string[] = [];
 	listeners: Array<(event: Record<string, unknown>) => void> = [];
 

@@ -79,6 +79,28 @@ export function extractOutputBlockForDisplay(text: string): string | undefined {
 	return last?.trim();
 }
 
+export interface LocatedOutputBlock {
+	prefix: string;
+	content: string;
+	suffix: string;
+}
+
+/** Locate the last complete display block without discarding surrounding narration. */
+export function locateOutputBlockForDisplay(text: string): LocatedOutputBlock | undefined {
+	if (!text) return undefined;
+	let last: RegExpExecArray | undefined;
+	OUTPUT_BLOCK_RE.lastIndex = 0;
+	for (let match = OUTPUT_BLOCK_RE.exec(text); match !== null; match = OUTPUT_BLOCK_RE.exec(text)) last = match;
+	if (!last) return undefined;
+	const end = last.index + last[0].length;
+	if (text.indexOf(OUTPUT_OPEN, end) !== -1) return undefined;
+	return {
+		prefix: text.slice(0, last.index),
+		content: last[1] ?? "",
+		suffix: text.slice(end),
+	};
+}
+
 /** True when `text` ends with a complete <output> block followed only by whitespace. */
 export function hasOutputBlock(text: string): boolean {
 	return extractOutputBlock(text) !== undefined;

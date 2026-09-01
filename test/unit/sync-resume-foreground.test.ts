@@ -38,6 +38,17 @@ afterEach(async () => {
 	tempDir = undefined;
 });
 
+it("returns an async handle for child resume when nested async is enabled", async () => {
+	const h = setup({ pending: true, allowNestedAsync: true });
+	markParentSessionAsChild();
+	writeCompleteRun(tempDir!);
+	const result = await h.execute({ action: "resume", id: "resume-run", message: "continue", async: true });
+	assert.equal(result.isError, undefined, result.content[0]?.text);
+	assert.match(result.content[0]?.text ?? "", /Async resume/);
+	assert.equal(h.state.foregroundControls.size, 0);
+	h.session.resolvePrompt?.();
+});
+
 function makeState(cwd: string): SubagentState {
 	return {
 		baseCwd: cwd,
@@ -68,6 +79,7 @@ function markParentSessionAsChild(): void {
 }
 
 class FakeSession {
+	async bindExtensions(): Promise<void> {}
 	prompts: string[] = [];
 	messages: unknown[] = [];
 	eventsToEmit: object[] = [];
@@ -110,7 +122,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 	assert.equal(predicate(), true, "timed out waiting for condition");
 }
 
-function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
+function setup(opts: { pending?: boolean; asyncByDefault?: boolean; allowNestedAsync?: boolean } = {}) {
 	tempDir = createTempDir("pi-subagent-sync-resume-foreground-");
 	setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	const state = makeState(tempDir);
@@ -158,7 +170,7 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean } = {}) {
 	const executor = createSubagentExecutor({
 		pi,
 		state,
-		config: {},
+		config: { allowNestedAsync: opts.allowNestedAsync },
 		asyncByDefault: opts.asyncByDefault ?? false,
 		tempArtifactsDir: tempDir,
 		childRegistry,
