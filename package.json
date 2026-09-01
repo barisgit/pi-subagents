@@ -72,7 +72,7 @@
 		"@earendil-works/pi-tui": "*"
 	},
 	"dependencies": {
-		"pi-extension-utils": "^0.7.4",
+		"pi-extension-utils": "^0.7.6",
 		"typebox": "^1.1.24"
 	},
 	"devDependencies": {
