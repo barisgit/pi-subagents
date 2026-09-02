@@ -17,6 +17,8 @@ export type WorkflowGroupLifecycle = "running" | "complete" | "failed";
 // liveness without ever writing status.json. Best-effort: never throw into a run.
 const WORKFLOW_GROUP_STATE_FILE = "workflow-group.json";
 const WORKFLOW_SCRIPT_FILE = "workflow-script.json";
+const MAX_WORKFLOW_RESULT_BYTES = 8 * 1024;
+const WORKFLOW_RESULT_TRUNCATION_MARKER = "\n[TRUNCATED]";
 
 export interface WorkflowGroupPhase {
 	phaseIndex: number;
@@ -54,6 +56,7 @@ export function writeWorkflowGroupPhase(runRecordDir: string, phaseIndex: number
 				phaseIndex,
 				phaseTitle: title,
 				reachedPhaseTitles: boundedReachedPhaseTitles,
+				...(current?.result ? { result: current.result } : {}),
 			}),
 			"utf8",
 		);
@@ -62,12 +65,57 @@ export function writeWorkflowGroupPhase(runRecordDir: string, phaseIndex: number
 	}
 }
 
-interface WorkflowGroupRecord {
-	state?: WorkflowGroupLifecycle;
-	phase?: WorkflowGroupPhase;
+function stringifyWorkflowGroupResult(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (value === undefined) return "undefined";
+	return JSON.stringify(value, null, 2) ?? "undefined";
 }
 
-function readWorkflowGroupRecord(runRecordDir: string): WorkflowGroupRecord | undefined {
+function truncateWorkflowGroupResult(text: string): string {
+	if (Buffer.byteLength(text, "utf8") <= MAX_WORKFLOW_RESULT_BYTES) return text;
+	const availableBytes = MAX_WORKFLOW_RESULT_BYTES - Buffer.byteLength(WORKFLOW_RESULT_TRUNCATION_MARKER, "utf8");
+	let kept = "";
+	let keptBytes = 0;
+	for (const character of text) {
+		const characterBytes = Buffer.byteLength(character, "utf8");
+		if (keptBytes + characterBytes > availableBytes) break;
+		kept += character;
+		keptBytes += characterBytes;
+	}
+	return `${kept}${WORKFLOW_RESULT_TRUNCATION_MARKER}`;
+}
+
+export function writeWorkflowGroupResult(runRecordDir: string, value: unknown): void {
+	try {
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		const current = readWorkflowGroupRecord(runRecordDir);
+		const result = {
+			text: truncateWorkflowGroupResult(stringifyWorkflowGroupResult(value)),
+			json: typeof value !== "string",
+			endedAt: Date.now(),
+		};
+		fs.writeFileSync(
+			path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE),
+			JSON.stringify({
+				...(current?.state ? { state: current.state } : {}),
+				updatedAt: Date.now(),
+				...current?.phase,
+				result,
+			}),
+			"utf8",
+		);
+	} catch {
+		/* result marker is best-effort; must never break the run */
+	}
+}
+
+export interface WorkflowGroupRecord {
+	state?: WorkflowGroupLifecycle;
+	phase?: WorkflowGroupPhase;
+	result?: { text: string; json: boolean; endedAt: number };
+}
+
+export function readWorkflowGroupRecord(runRecordDir: string): WorkflowGroupRecord | undefined {
 	try {
 		const parsed: unknown = JSON.parse(fs.readFileSync(path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE), "utf8"));
 		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
@@ -106,7 +154,23 @@ function readWorkflowGroupRecord(runRecordDir: string): WorkflowGroupRecord | un
 						reachedPhaseTitles,
 					}
 				: undefined;
-		return { ...(state ? { state } : {}), ...(phase ? { phase } : {}) };
+		const rawResult = Reflect.get(parsed, "result");
+		let result: WorkflowGroupRecord["result"];
+		if (rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult)) {
+			const text = Reflect.get(rawResult, "text");
+			const json = Reflect.get(rawResult, "json");
+			const endedAt = Reflect.get(rawResult, "endedAt");
+			if (
+				typeof text === "string" &&
+				Buffer.byteLength(text, "utf8") <= MAX_WORKFLOW_RESULT_BYTES &&
+				typeof json === "boolean" &&
+				typeof endedAt === "number" &&
+				Number.isFinite(endedAt)
+			) {
+				result = { text, json, endedAt };
+			}
+		}
+		return { ...(state ? { state } : {}), ...(phase ? { phase } : {}), ...(result ? { result } : {}) };
 	} catch {
 		return undefined;
 	}
@@ -115,10 +179,15 @@ function readWorkflowGroupRecord(runRecordDir: string): WorkflowGroupRecord | un
 export function writeWorkflowGroupState(runRecordDir: string, state: WorkflowGroupLifecycle): void {
 	try {
 		fs.mkdirSync(runRecordDir, { recursive: true });
-		const phase = readWorkflowGroupRecord(runRecordDir)?.phase;
+		const current = readWorkflowGroupRecord(runRecordDir);
 		fs.writeFileSync(
 			path.join(runRecordDir, WORKFLOW_GROUP_STATE_FILE),
-			JSON.stringify({ state, updatedAt: Date.now(), ...phase }),
+			JSON.stringify({
+				state,
+				updatedAt: Date.now(),
+				...current?.phase,
+				...(current?.result ? { result: current.result } : {}),
+			}),
 			"utf8",
 		);
 	} catch {

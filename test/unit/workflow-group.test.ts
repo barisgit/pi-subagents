@@ -11,9 +11,12 @@ import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../s
 import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
 import { readStatus } from "../../src/shared/utils.ts";
 import {
+	readWorkflowGroupRecord,
 	readWorkflowGroupPhase,
 	readWorkflowMeta,
 	readWorkflowScript,
+	writeWorkflowGroupPhase,
+	writeWorkflowGroupResult,
 	writeWorkflowGroupState,
 } from "../../src/workflow/workflow-group-state.ts";
 import { createWorkflowTool } from "../../src/workflow/workflow.ts";
@@ -310,6 +313,140 @@ return await pipeline(
 		assert.equal(typeof Reflect.get(details, "asyncDir"), "string");
 	});
 
+	it("round trips a plain string workflow result", () => {
+		const { root } = setup("workflow-group-string-result-");
+		const runRecordDir = path.join(root, "group-run");
+
+		writeWorkflowGroupResult(runRecordDir, "plain text");
+
+		const result = readWorkflowGroupRecord(runRecordDir)?.result;
+		assert.equal(result?.text, "plain text");
+		assert.equal(result?.json, false);
+		assert.equal(typeof result?.endedAt, "number");
+	});
+
+	it("round trips an object workflow result as formatted JSON", () => {
+		const { root } = setup("workflow-group-object-result-");
+		const runRecordDir = path.join(root, "group-run");
+
+		writeWorkflowGroupState(runRecordDir, "running");
+		writeWorkflowGroupResult(runRecordDir, { answer: 42 });
+		writeWorkflowGroupPhase(runRecordDir, 1, "Verify");
+		writeWorkflowGroupState(runRecordDir, "complete");
+
+		const record = readWorkflowGroupRecord(runRecordDir);
+		assert.equal(record?.state, "complete");
+		assert.deepEqual(record?.phase, {
+			phaseIndex: 1,
+			phaseTitle: "Verify",
+			reachedPhaseTitles: ["Verify"],
+		});
+		const result = record?.result;
+		assert.equal(result?.text, '{\n  "answer": 42\n}');
+		assert.equal(result?.json, true);
+		assert.equal(typeof result?.endedAt, "number");
+	});
+
+	it("persists the successful async workflow return value before completing its group", async () => {
+		const { executor, ctx } = setup("workflow-group-script-result-");
+		const completed = deferred();
+		const tool = createWorkflowTool({
+			openWorkflowGroup: (workflowContext) => {
+				const group = executor.openWorkflowGroup(workflowContext);
+				return {
+					...group,
+					finishAsync: (success, summary) => {
+						group.finishAsync?.(success, summary);
+						completed.resolve();
+					},
+				};
+			},
+		});
+
+		const result = await tool.execute?.(
+			"wf",
+			{ async: true, script: "return { answer: 42 };" },
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+		await completed.promise;
+
+		assert.equal(result?.isError, undefined);
+		const group = readAllEntries().find((entry) => entry.kind === "workflow")!;
+		const record = readWorkflowGroupRecord(group.runRecordDir);
+		assert.equal(record?.state, "complete");
+		const persistedResult = record?.result;
+		assert.equal(persistedResult?.text, '{\n  "answer": 42\n}');
+		assert.equal(persistedResult?.json, true);
+		assert.equal(typeof persistedResult?.endedAt, "number");
+	});
+
+	it("reads workflow group records written before result persistence", () => {
+		const { root } = setup("workflow-group-result-compat-");
+		const runRecordDir = path.join(root, "group-run");
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(runRecordDir, "workflow-group.json"),
+			JSON.stringify({
+				state: "complete",
+				phaseIndex: 1,
+				phaseTitle: "Verify",
+				reachedPhaseTitles: ["Verify"],
+			}),
+		);
+
+		assert.deepEqual(readWorkflowGroupRecord(runRecordDir), {
+			state: "complete",
+			phase: { phaseIndex: 1, phaseTitle: "Verify", reachedPhaseTitles: ["Verify"] },
+		});
+	});
+
+	it("ignores a malformed workflow result without rejecting lifecycle and phase", () => {
+		const { root } = setup("workflow-group-malformed-result-");
+		const runRecordDir = path.join(root, "group-run");
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(runRecordDir, "workflow-group.json"),
+			JSON.stringify({
+				state: "complete",
+				phaseIndex: 1,
+				phaseTitle: "Verify",
+				reachedPhaseTitles: ["Verify"],
+				result: { text: 42, json: "yes", endedAt: "now" },
+			}),
+		);
+
+		assert.deepEqual(readWorkflowGroupRecord(runRecordDir), {
+			state: "complete",
+			phase: { phaseIndex: 1, phaseTitle: "Verify", reachedPhaseTitles: ["Verify"] },
+		});
+	});
+
+	it("caps oversized workflow results with a trailing marker", () => {
+		const { root } = setup("workflow-group-oversized-result-");
+		const runRecordDir = path.join(root, "group-run");
+
+		writeWorkflowGroupResult(runRecordDir, "x".repeat(9 * 1024));
+
+		const result = readWorkflowGroupRecord(runRecordDir)?.result;
+		assert.ok(result);
+		assert.ok(Buffer.byteLength(result.text, "utf8") <= 8 * 1024);
+		assert.match(result.text, /\n\[TRUNCATED\]$/);
+	});
+
+	it("does not throw when a workflow result cannot be written", () => {
+		const { root } = setup("workflow-group-result-write-failure-");
+		const runRecordDir = path.join(root, "readonly");
+		fs.mkdirSync(runRecordDir, { recursive: true });
+		fs.chmodSync(runRecordDir, 0o500);
+		try {
+			assert.doesNotThrow(() => writeWorkflowGroupResult(runRecordDir, "result"));
+		} finally {
+			fs.chmodSync(runRecordDir, 0o700);
+		}
+	});
+
 	it("keeps an empty async workflow group running via its statusless lifecycle marker", () => {
 		const { root } = setup("workflow-group-marker-");
 		const runRecordDir = path.join(root, "group-run");
@@ -553,6 +690,7 @@ return await pipeline(
 			(entry) =>
 				entry.mode === "parallel" && !Object.hasOwn(entry, "agentName") && !Object.hasOwn(entry, "agentNames"),
 		)!;
+		assert.equal(readWorkflowGroupRecord(group.runRecordDir)?.result, undefined);
 		const children = entries.filter((entry) => entry.parentRunId === group.runId);
 		assert.equal(children.length, 2, "successful child A plus a synthetic failed workflow child");
 		assert.equal(

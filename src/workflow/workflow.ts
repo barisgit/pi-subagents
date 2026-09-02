@@ -5,7 +5,12 @@ import { ConcurrencySemaphore } from "../dispatch/concurrency-semaphore.ts";
 import type { AgentToolUpdateCallback, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
-import { writeWorkflowGroupPhase, writeWorkflowMeta, writeWorkflowScript } from "./workflow-group-state.ts";
+import {
+	writeWorkflowGroupPhase,
+	writeWorkflowGroupResult,
+	writeWorkflowMeta,
+	writeWorkflowScript,
+} from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
 import { parseWorkflowMeta, type WorkflowMeta } from "../protocol/workflow-meta.ts";
 import { processGlobal } from "../shared/process-global.ts";
@@ -1048,12 +1053,17 @@ Each child starts with no conversation context. Make tasks self-contained with p
 						onParallelGroupSettled: (groupId) => emitter!.parallelGroupSettled(groupId),
 						script: params.script,
 					});
+				const runAndPersistResult = async () => {
+					const value = await run();
+					if (group?.asyncDir) writeWorkflowGroupResult(group.asyncDir, value);
+					return value;
+				};
 				if (group?.async) {
 					const asyncGroup = group;
-					void run()
-						.then((value) =>
-							asyncGroup.finishAsync?.(true, value === undefined ? "" : stringifyWorkflowValue(value)),
-						)
+					void runAndPersistResult()
+						.then((value) => {
+							asyncGroup.finishAsync?.(true, value === undefined ? "" : stringifyWorkflowValue(value));
+						})
 						.catch(async (error) => {
 							const message = error instanceof Error ? error.message : String(error);
 							try {
@@ -1080,7 +1090,9 @@ Each child starts with no conversation context. Make tasks self-contained with p
 						},
 					};
 				}
-				const value = group?.parkWhileRunning ? await group.parkWhileRunning(run) : await run();
+				const value = group?.parkWhileRunning
+					? await group.parkWhileRunning(runAndPersistResult)
+					: await runAndPersistResult();
 				return {
 					content: [{ type: "text", text: stringifyWorkflowValue(value) }],
 					// `details` must ALWAYS be a real Details (or undefined), never the
