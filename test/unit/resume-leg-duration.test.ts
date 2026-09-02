@@ -52,9 +52,9 @@ describe("resume leg duration display", () => {
 			},
 		};
 		const line = buildLeftLine(theme as never, run, false, now, 240);
-		// Never-resumed terminal row stays byte-identical to the pre-resume layout:
-		// date stamp only, no leg elapsed / identity age / resumed chip.
-		assert.doesNotMatch(line, /\ds\b/);
+		// The shared grammar always gives terminal rows a frozen duration; only
+		// resume-specific identity age and the resumed chip remain gated.
+		assert.match(line, /12\.0s/);
 		assert.doesNotMatch(line, /resumed/);
 		assert.doesNotMatch(line, /age /);
 

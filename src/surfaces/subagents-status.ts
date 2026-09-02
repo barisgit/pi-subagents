@@ -38,8 +38,8 @@ import {
 	type LiveDashboardSession,
 	LiveSessionRenderCache,
 	type LiveToolComponentStore,
-	statusGlyph,
 } from "./dashboard-detail-renderer.ts";
+import { aggregateState, cellsFromRunView, renderRowLine, type RowCells, type RowState } from "./row-line.ts";
 import type { LiveToolProgress } from "../shared/live-session-relay.ts";
 import { readRunTranscript, RunMessageReader } from "../state/run-transcript.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
@@ -559,18 +559,39 @@ function buildPhaseLine(
 	row: Extract<DisplayRow, { kind: "phase" }>,
 	selected: boolean,
 	width: number,
+	children: readonly RowState[],
 ): string {
-	const cursor = selected ? theme.fg("accent", "> ") : "  ";
-	const indent = row.depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, row.depth - 1))}└─`) : "";
 	const label = row.title ? `Phase ${row.phaseIndex}: ${row.title}` : `Phase ${row.phaseIndex}`;
-	if (!row.expandable && row.planState) {
-		const glyph = theme.fg("dim", "·");
-		const status = theme.fg(row.planState === "current" ? "accent" : "dim", row.planState);
-		return truncateToWidth(`${cursor}${indent}${glyph} ${theme.fg("dim", label)} · ${status}`, width, "");
-	}
-	const glyph = theme.fg(row.running ? "accent" : "dim", row.collapsed ? "▸" : "▾");
-	const text = `${cursor}${indent}${glyph} ${theme.fg("dim", label)} · ${theme.fg("dim", `${row.done}/${row.total}`)}`;
-	return truncateToWidth(text, width, "");
+	const cells: RowCells = {
+		state: aggregateState(children),
+		name: label,
+		depth: row.depth,
+		selected,
+		...(row.expandable ? { marker: row.collapsed ? "collapsed" : "expanded" } : { stageStrip: [] }),
+		badge: !row.expandable && row.planState ? row.planState : `${row.done}/${row.total}`,
+	};
+	return renderRowLine(theme, cells, width, "dashboard");
+}
+
+function childRowStates(
+	runs: readonly LiveRun[],
+	row: Extract<DisplayRow, { kind: "phase" | "pipelineItem" }>,
+): RowState[] {
+	return runs
+		.filter((child) => {
+			if (child.run.parentRunId !== row.workflowId) return false;
+			if (row.kind === "pipelineItem") {
+				return child.run.pipeline?.id === row.pipelineId && child.run.pipeline.itemIndex === row.itemIndex;
+			}
+			if (row.title !== undefined) {
+				return (
+					child.run.phaseTitle !== undefined &&
+					canonicalWorkflowPhaseTitle(child.run.phaseTitle) === row.title
+				);
+			}
+			return child.run.phaseIndex === row.phaseIndex;
+		})
+		.map((child) => cellsFromRunView(child.run, Date.now()).state);
 }
 
 function buildPipelineItemLine(
@@ -578,13 +599,17 @@ function buildPipelineItemLine(
 	row: Extract<DisplayRow, { kind: "pipelineItem" }>,
 	selected: boolean,
 	width: number,
+	children: readonly RowState[],
 ): string {
-	const cursor = selected ? theme.fg("accent", "> ") : "  ";
-	const indent = row.depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, row.depth - 1))}└─`) : "";
-	const glyph = theme.fg(row.running ? "accent" : "dim", row.collapsed ? "▸" : "▾");
-	const label = row.label || `Item ${row.itemIndex + 1}`;
-	const text = `${cursor}${indent}${glyph} ${theme.fg("accent", label)} · ${theme.fg("dim", `${row.done}/${row.total}`)}`;
-	return truncateToWidth(text, width, "");
+	const cells: RowCells = {
+		state: aggregateState(children),
+		name: row.label || `Item ${row.itemIndex + 1}`,
+		depth: row.depth,
+		selected,
+		marker: row.collapsed ? "collapsed" : "expanded",
+		badge: `${row.done}/${row.total}`,
+	};
+	return renderRowLine(theme, cells, width, "dashboard");
 }
 
 export function buildLeftLine(
@@ -600,114 +625,61 @@ export function buildLeftLine(
 	suppressPhaseChip = false,
 	parallelMarker = false,
 ): string {
-	const cursor = selected ? theme.fg("accent", "> ") : "  ";
-	// charter nested-subagent-display: indent between cursor and glyph keeps cursor aligned.
-	const indent = depth > 0 ? theme.fg("dim", `${"  ".repeat(Math.max(0, depth - 1))}└─`) : "";
 	// Container rows (workflow/parallel groups with visible children) carry a
-	// collapse marker instead of a state glyph — the status text + child progress
-	// already convey state. A child that finished while its group is still open
+	// collapse marker instead of a state glyph; the marker's color carries state.
+	// A child that finished while its group is still open
 	// renders an accent ✓ (done, result not yet delivered to the parent turn)
 	// instead of terminal green. Agentless group rows without child rows keep the
 	// hollow group marker.
-	const glyph = containerInfo
-		? theme.fg(run.run.state === "running" ? "accent" : "dim", containerInfo.collapsed ? "▸" : "▾")
-		: pendingDelivery
-			? theme.fg("accent", "✓")
-			: run.run.state === "complete" && run.run.steps.length === 0
-				? theme.fg("dim", "○")
-				: statusGlyph(theme, run.run.state, run.run.activityState, run.run.displayState);
-	const agent = `${parallelMarker ? theme.fg("dim", "∥ ") : ""}${runAgentLabel(run, theme)}`;
+	const cells = cellsFromRunView(run.run, now, {
+		depth,
+		selected,
+		pendingDelivery,
+	});
+	cells.name = runAgentLabel(run, theme);
+	delete cells.nameColor;
+	if (containerInfo) cells.marker = containerInfo.collapsed ? "collapsed" : "expanded";
+	if (run.run.state === "complete" && run.run.steps.length === 0 && !containerInfo) cells.empty = true;
+	cells.parallel = parallelMarker;
 	// Terminal runs must not advertise a live phase chip (`streaming Xs`,
 	// `tool: bash Xs`). Older status.json files written before the
 	// status-writer finalize phase-clear may still carry stale phase fields;
 	// suppress here so the seconds counter doesn't keep ticking after
 	// `complete`/`failed`/`lost`.
 	const isTerminal =
-		run.run.state === "complete" ||
-		run.run.state === "failed" ||
-		run.run.state === "interrupted" ||
-		run.run.state === "skipped" ||
-		run.run.state === "lost" ||
-		run.run.displayState === "lost";
+		cells.state === "complete" ||
+		cells.state === "failed" ||
+		cells.state === "interrupted" ||
+		cells.state === "skipped" ||
+		cells.state === "lost";
 	const phase =
 		containerInfo?.phaseChip ||
 		(suppressPhaseChip ? "" : workflowPhaseChip(run)) ||
 		(isTerminal ? "" : formatPhase(run.run.phase, run.run.phaseStartedAt, now, run.run.currentTool));
-	// A 'lost' displayState is authoritative over the stale on-disk state: show just
-	// 'lost' rather than the confusing 'running/lost' a force-killed run would produce.
-	// When an active phase chip is present (`finishing`, `writing`, `tool: bash`), it
-	// already conveys what the runner is doing; the `working`/`quiet` displayState
-	// discriminant then only adds noise and can contradict it (a run mid-`finishing`
-	// whose heartbeat aged past the quiet threshold would read `finishing · running/quiet`).
-	// Suppress the discriminant in that case; keep bare `state/displayState` when there's
-	// no phase chip (there displayState is the only live-activity signal), and keep `lost`
-	// authoritative always. A queued run's displayState is ALWAYS `quiet` (it hasn't begun
-	// executing), so the discriminant carries no information there — show bare `queued`.
-	// The state glyph already encodes the run state for leaf rows, so the bare
-	// state word ("complete", "running", "interrupted", ...) is redundant prose:
-	// drop it. The only thing the glyph can't convey on a running row is *what it
-	// is doing*, so keep the live-activity signal — the displayState discriminant
-	// (working/quiet/tool_running/needs_attention) when a phase chip isn't already
-	// showing it. Container rows render a collapse marker (▾/▸) instead of a state
-	// glyph, so they keep the explicit state word as their only state signal.
-	const status = containerInfo
-		? run.run.displayState === "lost"
-			? "lost"
-			: run.run.state === "queued"
-				? "queued"
-				: phase && run.run.displayState
-					? run.run.state
-					: run.run.displayState
-						? `${run.run.state}/${run.run.displayState}`
-						: run.run.state
-		: run.run.displayState === "lost"
-			? "lost"
-			: run.run.state === "running" && !phase && run.run.displayState
-				? run.run.displayState
-				: "";
-	const elapsed = runElapsed(run, now);
-	const identityAge = runIdentityAge(run, now);
-	const dateStamp = runEndedStamp(run);
+	// A lost display state is authoritative over stale on-disk `running`, and its
+	// glyph is the only state signal. For live rows without a richer phase chip,
+	// keep the coarse activity label; queued and attention rows need no state word.
+	const activity =
+		!phase && cells.state === "running" && run.run.displayState && run.run.displayState !== "needs_attention"
+			? run.run.displayState
+			: "";
+	cells.phaseChip = phase || activity || undefined;
 	// Containers have empty steps[] (state synthesized from children), so the
 	// shape badge is computed from the children instead: `2/3` done/total.
 	const badge = containerInfo ? `${containerInfo.done}/${containerInfo.total}` : runShapeBadge(run);
-	const badgePart = badge ? ` · ${theme.fg("dim", badge)}` : "";
-	const resumePart = (run.run.resumeCount ?? 0) > 0 ? ` · ${theme.fg("dim", `resumed ${run.run.resumeCount}×`)}` : "";
+	cells.badge = badge || undefined;
 	// Don't pre-truncate the label here — the final `truncateToWidth(text, width)`
 	// below clips the whole row once at the right edge. Pre-truncating produced
 	// `tally-v4-showcase ... ...` style double-ellipsis noise.
-	const labelPart = run.run.label ? ` · ${theme.fg("muted", run.run.label)}` : "";
 	// Collapsed containers summarize their hidden children inline.
-	const collapsedPart =
-		containerInfo?.collapsed && containerInfo.agentsSummary
-			? ` · ${theme.fg("dim", `(${containerInfo.agentsSummary})`)}`
-			: "";
-	const phasePart = phase ? ` · ${theme.fg("dim", phase)}` : "";
 	const cwdBadge = runCwdBadge(run, showCwd);
-	const cwdPart = cwdBadge ? ` · ${theme.fg("dim", cwdBadge)}` : "";
-	// Elapsed for active runs (`5.2s`), date stamp for terminated runs (`HH:MM`
-	// or `MM-DD HH:MM`). Both never apply to the same row.
-	const identityPart = identityAge ? ` · ${theme.fg("dim", `age ${identityAge}`)}` : "";
-	// Never-resumed rows stay byte-identical to the pre-resume layout: terminal =
-	// date stamp only, active = leg elapsed. Resumed rows additionally surface the
-	// current-leg elapsed (and identity age) alongside the terminal date stamp.
-	const resumed = (run.run.resumeCount ?? 0) > 0;
-	// A queued run yields empty `elapsed` (no running timer); drop the would-be
-	// ` · <elapsed>` tail so the row ends cleanly at the queued state instead of a
-	// dangling separator.
-	const activeTail = elapsed ? ` · ${elapsed}${identityPart}` : identityPart;
-	const tail = dateStamp
-		? resumed
-			? ` · ${elapsed}${identityPart} · ${theme.fg("dim", dateStamp)}`
-			: ` · ${theme.fg("dim", dateStamp)}`
-		: activeTail;
-	// status may be empty (leaf rows whose glyph already conveys the state); drop the
-	// would-be ` · ${status}` separator so the row doesn't carry a dangling middot.
-	const statusPart = status ? ` · ${status}` : "";
-	const text = `${cursor}${indent}${glyph} ${agent}${phasePart}${statusPart}${badgePart}${resumePart}${labelPart}${collapsedPart}${cwdPart}${tail}`;
-	// Hard-clip with no ellipsis — the row already ends at the pane border, so an
-	// ellipsis adds zero information and steals 1–3 columns of label space.
-	return truncateToWidth(text, width, "");
+	const labels = [
+		run.run.label,
+		containerInfo?.collapsed && containerInfo.agentsSummary ? `(${containerInfo.agentsSummary})` : undefined,
+		cwdBadge || undefined,
+	].filter((part): part is string => part !== undefined);
+	cells.label = labels.length > 0 ? labels.join(" · ") : undefined;
+	return renderRowLine(theme, cells, width, "dashboard");
 }
 
 export class SubagentsStatusComponent implements Component {
@@ -1029,8 +1001,12 @@ export class SubagentsStatusComponent implements Component {
 		// [ / ] resizes; this.lastLeftWidth came from the constant DEFAULT_LEFT_FRACTION
 		// and went stale after a resize (the same defect fixed for the detail pane).
 		const lineWidth = Math.max(20, ctx.primary.width || this.lastLeftWidth || 80);
-		if (row.kind === "phase") return buildPhaseLine(this.theme, row, isSelected, lineWidth);
-		if (row.kind === "pipelineItem") return buildPipelineItemLine(this.theme, row, isSelected, lineWidth);
+		if (row.kind === "phase") {
+			return buildPhaseLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
+		}
+		if (row.kind === "pipelineItem") {
+			return buildPipelineItemLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
+		}
 		const containerInfo = this.containerRowInfo(row.run);
 		return buildLeftLine(
 			this.theme,

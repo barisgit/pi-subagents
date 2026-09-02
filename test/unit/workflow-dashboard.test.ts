@@ -282,8 +282,8 @@ describe("workflow dashboard reader overlays", () => {
 			const text = rendered.join("\n");
 			const leftText = rendered.map((line) => line.split("│")[0]).join("\n");
 			assert.match(text, /┬─ Parity audit /);
-			// Container row: collapse marker + done/total child progress.
-			assert.match(text, /▾ Parity audit · complete · 3\/3/);
+			// Container row: state-tinted collapse marker + done/total child progress.
+			assert.match(text, /▾ Parity audit · 3\/3/);
 			assert.doesNotMatch(text, /┬─ parallel /);
 			assert.doesNotMatch(text, /▾ parallel · complete/);
 			// Phase labels are tree rows; children no longer carry P1/P2 chips.

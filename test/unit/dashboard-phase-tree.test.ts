@@ -160,8 +160,9 @@ describe("dashboard workflow phase tree", () => {
 		try {
 			const body = leftRows(component).join("\n");
 			assert.match(body, /Phase 1: Scope · 1\/1/);
-			assert.match(body, /· Phase 2: Review · upcoming/);
-			assert.match(body, /· Phase 3: Report · upcoming/);
+			// Childless phase headers use the aggregate empty-state ○ glyph.
+			assert.match(body, /○ Phase 2: Review · upcoming/);
+			assert.match(body, /○ Phase 3: Report · upcoming/);
 			assert.doesNotMatch(body, /Review · 0\/0|Report · 0\/0/);
 		} finally {
 			component.dispose();
@@ -186,8 +187,9 @@ describe("dashboard workflow phase tree", () => {
 		try {
 			const body = leftRows(component).join("\n");
 			assert.match(body, /Parity audit .*Phase 2\/3: Review/);
-			assert.match(body, /· Phase 2: Review · current/);
-			assert.match(body, /· Phase 3: Report · upcoming/);
+			// Plan labels remain badges; aggregate state is carried by the ○ glyph.
+			assert.match(body, /○ Phase 2: Review · current/);
+			assert.match(body, /○ Phase 3: Report · upcoming/);
 		} finally {
 			component.dispose();
 		}
@@ -210,8 +212,9 @@ describe("dashboard workflow phase tree", () => {
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
 			const body = leftRows(component).join("\n");
-			assert.match(body, /· Phase 2: Review · unreached/);
-			assert.match(body, /· Phase 3: Report · unreached/);
+			// Unreached childless phases retain their badge after the aggregate ○ glyph.
+			assert.match(body, /○ Phase 2: Review · unreached/);
+			assert.match(body, /○ Phase 3: Report · unreached/);
 		} finally {
 			component.dispose();
 		}
@@ -255,7 +258,8 @@ describe("dashboard workflow phase tree", () => {
 		try {
 			const body = leftRows(component).join("\n");
 			assert.match(body, /Phase 1: Scope · 1\/1/);
-			assert.match(body, /· Phase 2: Verify · upcoming/);
+			// Declared childless rows now use the shared queued glyph.
+			assert.match(body, /○ Phase 2: Verify · upcoming/);
 			assert.match(body, /Phase 2: Ad hoc · 0\/1/);
 			assert.match(body, /review/);
 		} finally {
@@ -332,7 +336,8 @@ describe("dashboard workflow phase tree", () => {
 		try {
 			const rows = leftRows(component);
 			const body = rows.join("\n");
-			assert.match(body, /▾ workflow · complete · 3\/3/);
+			// Container state is encoded by the tinted marker, not a status word.
+			assert.match(body, /▾ workflow · 3\/3/);
 			const phase1 = rows.findIndex((line) => /▾ Phase 1: recon · 2\/2/.test(line));
 			const explorer = rows.findIndex((line) => line.includes("explorer"));
 			const review = rows.findIndex((line) => line.includes("review"));
@@ -360,7 +365,8 @@ describe("dashboard workflow phase tree", () => {
 			component.handleInput("k");
 			component.handleInput("\r");
 			const collapsedWorkflow = leftRows(component).join("\n");
-			assert.match(collapsedWorkflow, /▸ workflow · complete · 3\/3/);
+			// Collapsing changes the marker, while state remains marker color only.
+			assert.match(collapsedWorkflow, /▸ workflow · 3\/3/);
 			assert.doesNotMatch(collapsedWorkflow, /Phase 1: recon/);
 			assert.doesNotMatch(collapsedWorkflow, /Phase 2: verify/);
 		} finally {

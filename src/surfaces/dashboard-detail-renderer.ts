@@ -27,7 +27,7 @@ import { readRunTranscript, type RunMessageSession, type TranscriptLine } from "
 import { formatDuration, formatTokenCounter, shortenPath } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
-import type { ActivityState, RunDisplayState } from "../protocol/types.ts";
+import { cellsFromRunView, rowGlyph } from "./row-line.ts";
 import { parentRunIdOf } from "./dashboard-row-model.ts";
 import type { LiveRun } from "../state/run-view.ts";
 import { shapeWorkflowPhasePlan } from "../state/workflow-display.ts";
@@ -237,35 +237,6 @@ function clip(text: string, width: number): string {
 function renderMarkdownLines(text: string, width: number): string[] {
 	if (width <= 0) return [];
 	return new Markdown(normalizePaneText(text), 0, 0, getMarkdownTheme()).render(width);
-}
-
-export function statusGlyph(
-	theme: Theme,
-	state: AsyncRunSummary["state"],
-	activity: ActivityState | undefined,
-	displayState?: RunDisplayState,
-): string {
-	if (displayState === "lost") return theme.fg("error", "!");
-	if (displayState === "needs_attention" || activity === "needs_attention") return theme.fg("warning", "!");
-	switch (state) {
-		case "running":
-			return theme.fg("accent", RUNNING_GLYPH);
-		case "queued":
-			return theme.fg("dim", "○");
-		case "paused":
-			return theme.fg("warning", "⏸");
-		case "complete":
-			return theme.fg("success", "✓");
-		case "failed":
-			return theme.fg("error", "✗");
-		case "interrupted":
-			return theme.fg("warning", "■");
-		case "skipped":
-			return theme.fg("dim", "·");
-		case "lost":
-			return theme.fg("error", "!");
-	}
-	return theme.fg("dim", "·");
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -486,7 +457,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 				if (label) out.push(theme.fg("muted", clip(label, width)));
 			}
 			const agent = child.steps.find((step) => step.agent)?.agent ?? child.mode;
-			const glyph = statusGlyph(theme, child.state, child.activityState, child.displayState);
+			const glyph = rowGlyph(theme, cellsFromRunView(child, Date.now()).state);
 			// parallelGroupId is a raw UUID; render a compact marker instead of the id.
 			const parallelTag = child.parallelGroupId ? theme.fg("dim", "∥ ") : "";
 			const stats: string[] = [child.state];

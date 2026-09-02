@@ -1141,7 +1141,7 @@ describe("SubagentsStatusComponent", () => {
 			assert.match(output, /tool: bash 45\.0s/);
 		});
 
-		it("shows just 'lost' (not 'running/lost') for a force-killed run", () => {
+		it("shows the lost glyph without a stale state word for a force-killed run", () => {
 			const output = renderStatus(
 				createRun("phase-lost", "running", {
 					currentTool: undefined,
@@ -1151,13 +1151,15 @@ describe("SubagentsStatusComponent", () => {
 				}),
 			);
 
-			// displayState 'lost' is authoritative over the stale on-disk 'running' state:
-			// render the lost glyph + a bare 'lost' label, never the confusing 'running/lost'.
-			assert.match(output, /! .*waiter .* lost /);
+			// displayState 'lost' is authoritative over the stale on-disk 'running' state;
+			// state is carried only by the glyph in the shared row grammar.
+			const leftRow = output.split("\n").find((line) => /! .*waiter/.test(line));
+			assert.ok(leftRow);
+			assert.doesNotMatch(leftRow, / · lost · |running\/lost/);
 			assert.doesNotMatch(output, /running\/lost/);
 		});
 
-		it("stamps a lost run with a clock time, not a frozen elapsed duration", () => {
+		it("shows a frozen lost duration and a separate clock stamp", () => {
 			const died = new Date();
 			died.setHours(14, 7, 0, 0);
 			const output = renderStatus(
@@ -1171,10 +1173,9 @@ describe("SubagentsStatusComponent", () => {
 				}),
 			);
 
-			// A lost run has no endedAt; stamp its last heartbeat as the clock time like
-			// any other terminal row, rather than the frozen 'Xs' elapsed duration.
-			assert.match(output, /14:07/);
-			assert.doesNotMatch(output, /\d+(\.\d+)?s\b/);
+			// Duration and wall clock no longer share a column: elapsed time freezes at
+			// the last heartbeat and the dashboard alone right-aligns @HH:MM.
+			assert.match(output, /(?:\d+ms|\d+(?:\.\d+)?s|\d+m\d+s)\s+@14:07/);
 		});
 
 		it("freezes the resumed identity age once a run is terminal", () => {

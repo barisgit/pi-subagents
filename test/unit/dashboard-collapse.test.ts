@@ -206,7 +206,8 @@ describe("dashboard collapse and container rows", () => {
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
 			const expanded = leftOnly(component.render(180).map(stripBorders)).join("\n");
-			assert.match(expanded, /▾ workflow · complete · 2\/2/);
+			// Container state is carried by the success-tinted marker.
+			assert.match(expanded, /▾ workflow · 2\/2/);
 			assert.match(expanded, /▾ Phase 1: recon · 1\/1/);
 			assert.match(expanded, /✓ .*explorer/);
 			assert.match(expanded, /▾ Phase 2: verify · 1\/1/);
@@ -222,13 +223,13 @@ describe("dashboard collapse and container rows", () => {
 			component.handleInput("\r");
 
 			const collapsed = leftOnly(component.render(180).map(stripBorders)).join("\n");
-			assert.match(collapsed, /▸ workflow · complete · 2\/2/);
+			assert.match(collapsed, /▸ workflow · 2\/2/);
 			assert.doesNotMatch(collapsed, /Phase 1: recon/);
 			assert.doesNotMatch(collapsed, /✓ .*explorer/);
 
 			component.handleInput("\r");
 			const reexpanded = leftOnly(component.render(180).map(stripBorders)).join("\n");
-			assert.match(reexpanded, /▾ workflow · complete · 2\/2/);
+			assert.match(reexpanded, /▾ workflow · 2\/2/);
 			assert.match(reexpanded, /▾ Phase 1: recon · 1\/1/);
 		} finally {
 			component.dispose();
@@ -268,8 +269,8 @@ describe("dashboard collapse and container rows", () => {
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
 			const text = component.render(180).map(stripBorders).join("\n");
-			// Group state synthesized from children: one still running -> running.
-			assert.match(text, /▾ workflow · Phase 2: verify · running · 1\/2/);
+			// Group state is synthesized into the marker color, not repeated as a word.
+			assert.match(text, /▾ workflow · Phase 2: verify · 1\/2/);
 		} finally {
 			component.dispose();
 		}
@@ -338,7 +339,8 @@ describe("dashboard collapse and container rows", () => {
 		try {
 			const text = component.render(180).map(stripBorders).join("\n");
 			// Container chip: "Phase 2: verify", not "Phase 2: Phase 2: verify".
-			assert.match(text, /▾ workflow · Phase 2: verify · running/);
+			// The marker carries the running state in the shared grammar.
+			assert.match(text, /▾ workflow · Phase 2: verify · 1\/2/);
 			assert.doesNotMatch(text, /Phase 2: Phase 2/);
 			// Phase row: "Phase 1: recon", not "Phase 1: Phase 1: recon".
 			assert.match(text, /▾ Phase 1: recon · 1\/1/);

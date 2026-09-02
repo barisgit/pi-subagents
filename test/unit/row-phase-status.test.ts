@@ -107,8 +107,9 @@ describe("row phase/displayState contradiction", () => {
 			},
 		};
 		const line = buildLeftLine(theme as never, run, false, now, 240);
-		// lost wins: no phase chip, just `lost`, never `running/lost`.
-		assert.match(line, /\blost\b/);
+		// Lost wins via the ! glyph; the shared grammar never emits state words.
+		assert.match(line, /! .*explorer/);
+		assert.doesNotMatch(line, /\blost\b/);
 		assert.doesNotMatch(line, /running\/lost/);
 		assert.doesNotMatch(line, /finishing/);
 	});
