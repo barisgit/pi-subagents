@@ -249,7 +249,7 @@ describe("dashboard workflow phase tree", () => {
 			new Set(),
 		);
 		const phaseRows = displayRows.filter((row) => row.kind === "phase");
-		assert.equal(new Set(phaseRows.map((row) => row.id)).size, phaseRows.length);
+		assert.equal(new Set(phaseRows.map((row) => row.title)).size, phaseRows.length);
 		assert.equal(phaseRows.find((row) => row.title === "Scope")?.planState, "completed");
 		assert.equal(phaseRows.find((row) => row.title === "Verify")?.planState, "upcoming");
 		assert.equal(phaseRows.find((row) => row.title === "Ad hoc")?.running, true);

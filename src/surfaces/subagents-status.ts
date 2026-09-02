@@ -58,10 +58,13 @@ import {
 	containerRowInfo as deriveContainerRowInfo,
 	countAgentRows as deriveCountAgentRows,
 	deriveDisplayRows,
+	detailTargetForRow,
 	isGroupContainerRow as deriveIsGroupContainerRow,
 	isPendingDelivery as deriveIsPendingDelivery,
 	parentRunIdOf,
+	rowKey as dashboardRowKey,
 	type ContainerRowInfo,
+	type DetailTarget,
 	type DisplayRow,
 } from "./dashboard-row-model.ts";
 import { deriveLiveRuns } from "./dashboard-run-source.ts";
@@ -806,13 +809,13 @@ export class SubagentsStatusComponent implements Component {
 				rows: () => this.overlayRows(),
 				selectionKey: (row) => this.overlayRowKey(row),
 				onSelectionChange: (row) => {
-					this.selectedId = row && row.kind !== "empty" ? this.rowKey(row) : undefined;
+					this.selectedId = row && row.kind !== "empty" ? dashboardRowKey(row) : undefined;
 					this.scheduleTranscriptLoad();
 				},
 				renderRow: (row, ctx) => this.renderOverlayPrimaryRow(row, ctx),
 				title: () => this.overlayPrimaryTitle(),
 				info: (ctx) => {
-					const run = this.runForOverlayRow(ctx.selectedRow);
+					const run = this.runForDetailTarget(this.detailTargetForOverlayRow(ctx.selectedRow));
 					const width = Math.max(1, ctx.primary.width || this.lastLeftWidth || MIN_LEFT_PANE);
 					const lines = run ? buildSelectedRunStatusBox(this.theme, run, width, Date.now()) : [];
 					if (this.actionNotice) {
@@ -837,14 +840,18 @@ export class SubagentsStatusComponent implements Component {
 			},
 			detail: {
 				rows: (ctx) => {
-					const run = this.runForOverlayRow(ctx.selectedRow);
+					const target = this.detailTargetForOverlayRow(ctx.selectedRow);
+					const run = this.runForDetailTarget(target);
 					// ctx.detail.width is the overlay's live, drag-adjusted pane width
 					// (pi-extension-utils >= 0.5). Using it keeps the detail lines
 					// reactive to [ / ] resizes; this.lastRightWidth was computed from
 					// the constant DEFAULT_LEFT_FRACTION and went stale after a resize.
 					const detailWidth = Math.max(20, ctx.detail.width || this.lastRightWidth || 80);
 					const sessions = run ? this.liveSessions(run) : [];
-					const selectionKey = run ? runKey(run) : undefined;
+					const selectionKey =
+						target?.kind === "run"
+							? dashboardRowKey({ kind: "run", run: target.run, depth: 0 })
+							: undefined;
 					const liveSessions =
 						run && selectionKey && !this.settledLiveSelections.has(selectionKey)
 							? this.previewLiveSessions(sessions)
@@ -892,7 +899,7 @@ export class SubagentsStatusComponent implements Component {
 						: [];
 				},
 				title: (ctx) => {
-					const run = this.runForOverlayRow(ctx.selectedRow);
+					const run = this.runForDetailTarget(this.detailTargetForOverlayRow(ctx.selectedRow));
 					if (!run) return "No run selected";
 					return this.sidebarCollapsed
 						? collapsedRunTitle(run, this.runs, ctx.detail.width)
@@ -989,7 +996,7 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private overlayRowKey(row: OverlayDisplayRow): string {
-		return row.kind === "empty" ? row.id : this.rowKey(row);
+		return row.kind === "empty" ? row.id : dashboardRowKey(row);
 	}
 
 	private renderOverlayPrimaryRow(row: OverlayDisplayRow, ctx: PaneOverlayContext<void, OverlayDisplayRow>): string {
@@ -1007,6 +1014,7 @@ export class SubagentsStatusComponent implements Component {
 		if (row.kind === "pipelineItem") {
 			return buildPipelineItemLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
 		}
+		if (row.kind === "pipeline") return "";
 		const containerInfo = this.containerRowInfo(row.run);
 		return buildLeftLine(
 			this.theme,
@@ -1029,10 +1037,14 @@ export class SubagentsStatusComponent implements Component {
 		return `Subagent runs · ${this.countAgentRows()} total${scopeMarker}`;
 	}
 
-	private runForOverlayRow(row: OverlayDisplayRow | undefined): LiveRun | undefined {
+	private detailTargetForOverlayRow(row: OverlayDisplayRow | undefined): DetailTarget | undefined {
 		if (!row || row.kind === "empty") return undefined;
-		if (row.kind === "run") return row.run;
-		return this.runs.find((run) => run.run.id === row.workflowId);
+		return detailTargetForRow(row, this.runs);
+	}
+
+	private runForDetailTarget(target: DetailTarget | undefined): LiveRun | undefined {
+		if (!target) return undefined;
+		return target.kind === "run" ? target.run : target.workflow;
 	}
 
 	private setActionNotice(message: string): void {
@@ -1047,7 +1059,7 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private copySelectedRunId(row: OverlayDisplayRow | undefined): void {
-		const run = this.runForOverlayRow(row);
+		const run = this.runForDetailTarget(this.detailTargetForOverlayRow(row));
 		if (!run) return;
 		const id = run.run.id;
 		void copyToClipboard(id).then(
@@ -1060,7 +1072,7 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private copySelectedRunDir(row: OverlayDisplayRow | undefined): void {
-		const run = this.runForOverlayRow(row);
+		const run = this.runForDetailTarget(this.detailTargetForOverlayRow(row));
 		if (!run) return;
 		const dir = run.run.asyncDir ?? run.run.sessionDir;
 		if (!dir) {
@@ -1139,15 +1151,12 @@ export class SubagentsStatusComponent implements Component {
 			this.leftScroll = 0;
 			return;
 		}
-		const stillHere = this.selectedId !== undefined && visible.some((row) => this.rowKey(row) === this.selectedId);
+		const stillHere =
+			this.selectedId !== undefined && visible.some((row) => dashboardRowKey(row) === this.selectedId);
 		if (!stillHere) {
-			this.selectedId = this.rowKey(visible[0]!);
+			this.selectedId = dashboardRowKey(visible[0]!);
 		}
 		this.ensureSelectionVisible();
-	}
-
-	private rowKey(row: DisplayRow): string {
-		return row.kind === "run" ? runKey(row.run) : row.id;
 	}
 
 	private displayRows(): DisplayRow[] {
@@ -1164,9 +1173,11 @@ export class SubagentsStatusComponent implements Component {
 		let id: string | undefined;
 		if (row.kind === "phase") {
 			if (!row.expandable) return;
-			id = row.id;
-		} else if (row.kind === "pipelineItem") id = row.id;
-		else if (row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) id = row.run.run.id;
+			id = dashboardRowKey(row);
+		} else if (row.kind === "pipeline" || row.kind === "pipelineItem") id = dashboardRowKey(row);
+		else if (row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) {
+			id = dashboardRowKey(row);
+		}
 		if (!id) return;
 		if (this.collapsedIds.has(id)) this.collapsedIds.delete(id);
 		else this.collapsedIds.add(id);
@@ -1178,7 +1189,7 @@ export class SubagentsStatusComponent implements Component {
 		const visible = this.displayRows();
 		if (visible.length === 0) return -1;
 		const id = this.selectedId;
-		const index = id !== undefined ? visible.findIndex((row) => this.rowKey(row) === id) : -1;
+		const index = id !== undefined ? visible.findIndex((row) => dashboardRowKey(row) === id) : -1;
 		return index === -1 ? 0 : index;
 	}
 
@@ -1190,8 +1201,8 @@ export class SubagentsStatusComponent implements Component {
 	private selectedRun(): LiveRun | undefined {
 		const row = this.selectedRow();
 		if (!row) return undefined;
-		if (row.kind === "run") return row.run;
-		return this.runs.find((run) => run.run.id === row.workflowId);
+		const target = detailTargetForRow(row, this.runs);
+		return target?.kind === "run" ? target.run : undefined;
 	}
 
 	/** Count of actual agent runs for the header label. A parallel/workflow GROUP
@@ -1234,7 +1245,7 @@ export class SubagentsStatusComponent implements Component {
 	private applySelectionState(state: { cursor: number; scroll: number }): void {
 		const visible = this.displayRows();
 		if (visible.length === 0) return;
-		this.selectedId = this.rowKey(visible[state.cursor]!);
+		this.selectedId = dashboardRowKey(visible[state.cursor]!);
 		this.leftScroll = state.scroll;
 	}
 
@@ -1419,8 +1430,11 @@ export class SubagentsStatusComponent implements Component {
 		this.transcriptLoadTimer = setTimeout(() => {
 			this.transcriptLoadTimer = undefined;
 			if (generation !== this.transcriptLoadGeneration || this.selectedId !== selection) return;
-			const run = this.selectedRun();
-			if (!run || runKey(run) !== selection) return;
+			const row = this.selectedRow();
+			if (!row || dashboardRowKey(row) !== selection) return;
+			const target = detailTargetForRow(row, this.runs);
+			if (target?.kind !== "run") return;
+			const run = target.run;
 			const sessions = this.liveSessions(run);
 			if (sessions.length > 0) this.settledLiveSelections.add(selection);
 			else if (run.run.asyncDir) {

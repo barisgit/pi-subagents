@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatAsyncRunList, readRunViewForEntry } from "../../src/state/async-status.ts";
 import { buildRightLines, buildWorkflowRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
-import { deriveDisplayRows } from "../../src/surfaces/dashboard-row-model.ts";
+import { deriveDisplayRows, detailTargetForRow, rowKey } from "../../src/surfaces/dashboard-row-model.ts";
 import {
 	SubagentsStatusComponent,
 	runViewFromRegistryEntry,
@@ -93,6 +93,7 @@ function appendWorkflowChild(
 		phaseIndex: number;
 		phaseTitle: string;
 		parallelGroupId?: string;
+		pipeline?: { id: string; itemIndex: number; stageIndex: number; itemLabel?: string };
 	},
 ): RunsRegistryEntry {
 	const runRecordDir = path.join(root, "runs", entry.runId);
@@ -133,6 +134,14 @@ function appendWorkflowChild(
 		phaseIndex: entry.phaseIndex,
 		phaseTitle: entry.phaseTitle,
 		...(entry.parallelGroupId ? { parallelGroupId: entry.parallelGroupId } : {}),
+		...(entry.pipeline
+			? {
+					pipelineId: entry.pipeline.id,
+					pipelineItemIndex: entry.pipeline.itemIndex,
+					pipelineStageIndex: entry.pipeline.stageIndex,
+					...(entry.pipeline.itemLabel ? { pipelineItemLabel: entry.pipeline.itemLabel } : {}),
+				}
+			: {}),
 	};
 	appendRunEntry(registryEntry);
 	return registryEntry;
@@ -434,6 +443,115 @@ describe("workflow dashboard reader overlays", () => {
 		assert.doesNotMatch(lines, /─ Script ─/);
 		assert.match(lines, /─ Steps ─/);
 		assert.match(lines, /Phase 1: inspect/);
+	});
+
+	it("gives every phase-spanning pipeline row one unique namespaced key and target", () => {
+		const workflow: LiveRun = {
+			ownership: "foreign",
+			run: { id: "wf", workflow: true, mode: "parallel", state: "running", startedAt: 1, steps: [] },
+		};
+		const stage = (id: string, phaseIndex: number, stageIndex: number): LiveRun => ({
+			ownership: "foreign",
+			run: {
+				id,
+				parentRunId: "wf",
+				mode: "single",
+				state: "complete",
+				startedAt: 10 + stageIndex,
+				phaseIndex,
+				phaseTitle: phaseIndex === 1 ? "Inspect" : "Confirm",
+				pipeline: { id: "pipe", itemIndex: 0, stageIndex, itemLabel: "widget" },
+				steps: [{ index: 0, agent: `agent-${stageIndex}`, status: "complete" }],
+			},
+		});
+		const runs = [workflow, stage("inspect", 1, 0), stage("confirm", 2, 1)];
+		const rows = deriveDisplayRows(runs, new Set());
+		const keys = rows.map(rowKey);
+		assert.equal(new Set(keys).size, keys.length);
+		assert.equal(keys.filter((key) => key === "wf:wf:pipe:pipe:item:0").length, 1);
+
+		const runRow = rows.find((row) => row.kind === "run" && row.run.run.id === "inspect");
+		const phaseRow = rows.find((row) => row.kind === "phase" && row.phaseIndex === 1);
+		const itemRow = rows.find((row) => row.kind === "pipelineItem");
+		assert.equal(runRow && detailTargetForRow(runRow, runs)?.kind, "run");
+		const phaseTarget = phaseRow && detailTargetForRow(phaseRow, runs);
+		assert.equal(phaseTarget?.kind, "phase");
+		assert.deepEqual(phaseTarget?.kind === "phase" ? phaseTarget.children.map((child) => child.run.id) : [], [
+			"inspect",
+		]);
+		const itemTarget = itemRow && detailTargetForRow(itemRow, runs);
+		assert.equal(itemTarget?.kind, "pipelineItem");
+		assert.deepEqual(
+			itemTarget?.kind === "pipelineItem" ? itemTarget.item.stages.map((child) => child.run.id) : [],
+			["inspect", "confirm"],
+		);
+		const pipelineTarget = detailTargetForRow(
+			{ kind: "pipeline", workflowId: "wf", pipelineId: "pipe", depth: 1, collapsed: false },
+			runs,
+		);
+		assert.equal(pipelineTarget?.kind, "pipeline");
+		assert.equal(pipelineTarget?.kind === "pipeline" ? pipelineTarget.items.length : 0, 1);
+	});
+
+	it("selects one phase-spanning pipeline item and preserves its namespaced collapse key across reload", () => {
+		const root = tmpRegistry();
+		const group = appendWorkflowGroup(root);
+		appendWorkflowChild(root, {
+			runId: "inspect-stage",
+			parentRunId: group.runId,
+			agentName: "inspect-agent",
+			startedAt: 2000,
+			phaseIndex: 1,
+			phaseTitle: "Inspect",
+			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 0, itemLabel: "widget" },
+		});
+		appendWorkflowChild(root, {
+			runId: "confirm-stage",
+			parentRunId: group.runId,
+			agentName: "confirm-agent",
+			startedAt: 3000,
+			phaseIndex: 2,
+			phaseTitle: "Confirm",
+			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 1, itemLabel: "widget" },
+		});
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				refreshMs: 0,
+			},
+		);
+		try {
+			for (let index = 0; index < 5; index++) {
+				const selected = component
+					.render(180)
+					.map(stripBorders)
+					.map((line) => line.split("│")[0] ?? line)
+					.filter((line) => line.trimStart().startsWith(">"));
+				if (selected.some((line) => line.includes("widget"))) break;
+				component.handleInput("j");
+			}
+			const selected = component
+				.render(180)
+				.map(stripBorders)
+				.map((line) => line.split("│")[0] ?? line)
+				.filter((line) => line.trimStart().startsWith(">"));
+			assert.equal(selected.length, 1);
+			assert.match(selected[0] ?? "", /widget/);
+
+			component.handleInput("\r");
+			component.setShowAllSessions(false);
+			const collapsed = component
+				.render(180)
+				.map(stripBorders)
+				.map((line) => line.split("│")[0] ?? line)
+				.join("\n");
+			assert.match(collapsed, /▸ widget/);
+			assert.doesNotMatch(collapsed, /inspect-agent|confirm-agent/);
+		} finally {
+			component.dispose();
+		}
 	});
 });
 

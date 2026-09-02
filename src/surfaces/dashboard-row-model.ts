@@ -29,8 +29,14 @@ export interface ContainerRowInfo {
 export type DisplayRow =
 	| { kind: "run"; run: LiveRun; depth: number; parallelMarker?: boolean; suppressPhaseChip?: boolean }
 	| {
+			kind: "pipeline";
+			workflowId: string;
+			pipelineId: string;
+			depth: number;
+			collapsed: boolean;
+	  }
+	| {
 			kind: "pipelineItem";
-			id: string;
 			workflowId: string;
 			pipelineId: string;
 			itemIndex: number;
@@ -43,7 +49,6 @@ export type DisplayRow =
 	  }
 	| {
 			kind: "phase";
-			id: string;
 			workflowId: string;
 			phaseIndex: number;
 			title?: string;
@@ -55,6 +60,108 @@ export type DisplayRow =
 			expandable: boolean;
 			planState?: WorkflowPhasePlanState;
 	  };
+
+export interface PipelineItemView {
+	pipelineId: string;
+	itemIndex: number;
+	label?: string;
+	stages: LiveRun[];
+}
+
+export type DetailTarget =
+	| { kind: "run"; run: LiveRun }
+	| { kind: "phase"; workflow: LiveRun; phaseIndex: number; title?: string; children: LiveRun[] }
+	| { kind: "pipeline"; workflow: LiveRun; pipelineId: string; items: PipelineItemView[] }
+	| { kind: "pipelineItem"; workflow: LiveRun; item: PipelineItemView };
+
+export function rowKey(row: DisplayRow): string {
+	switch (row.kind) {
+		case "run":
+			return `run:${row.run.run.id}`;
+		case "phase":
+			return `wf:${row.workflowId}:phase:${row.phaseIndex}`;
+		case "pipeline":
+			return `wf:${row.workflowId}:pipe:${row.pipelineId}`;
+		case "pipelineItem":
+			return `wf:${row.workflowId}:pipe:${row.pipelineId}:item:${row.itemIndex}`;
+	}
+}
+
+function pipelineItemView(row: Extract<DisplayRow, { kind: "pipelineItem" }>, runs: LiveRun[]): PipelineItemView {
+	const stages = runs
+		.filter(
+			(run) =>
+				run.run.parentRunId === row.workflowId &&
+				run.run.pipeline?.id === row.pipelineId &&
+				run.run.pipeline.itemIndex === row.itemIndex,
+		)
+		.sort((a, b) => (a.run.pipeline?.stageIndex ?? 0) - (b.run.pipeline?.stageIndex ?? 0));
+	const label = row.label ?? stages.find((stage) => stage.run.pipeline?.itemLabel)?.run.pipeline?.itemLabel;
+	return {
+		pipelineId: row.pipelineId,
+		itemIndex: row.itemIndex,
+		...(label !== undefined ? { label } : {}),
+		stages,
+	};
+}
+
+export function detailTargetForRow(row: DisplayRow, runs: LiveRun[]): DetailTarget | undefined {
+	if (row.kind === "run") return { kind: "run", run: row.run };
+	const workflow = runs.find((run) => run.run.id === row.workflowId);
+	if (!workflow) return undefined;
+	if (row.kind === "phase") {
+		const children = runs.filter((child) => {
+			if (child.run.parentRunId !== row.workflowId) return false;
+			if (row.title !== undefined) {
+				return (
+					child.run.phaseTitle !== undefined &&
+					canonicalWorkflowPhaseTitle(child.run.phaseTitle) === row.title
+				);
+			}
+			return child.run.phaseIndex === row.phaseIndex;
+		});
+		return {
+			kind: "phase",
+			workflow,
+			phaseIndex: row.phaseIndex,
+			...(row.title !== undefined ? { title: row.title } : {}),
+			children,
+		};
+	}
+	if (row.kind === "pipelineItem") {
+		return { kind: "pipelineItem", workflow, item: pipelineItemView(row, runs) };
+	}
+	const itemIndexes = Array.from(
+		new Set(
+			runs
+				.filter(
+					(child) => child.run.parentRunId === row.workflowId && child.run.pipeline?.id === row.pipelineId,
+				)
+				.map((child) => child.run.pipeline!.itemIndex),
+		),
+	).sort((a, b) => a - b);
+	return {
+		kind: "pipeline",
+		workflow,
+		pipelineId: row.pipelineId,
+		items: itemIndexes.map((itemIndex) =>
+			pipelineItemView(
+				{
+					kind: "pipelineItem",
+					workflowId: row.workflowId,
+					pipelineId: row.pipelineId,
+					itemIndex,
+					depth: row.depth + 1,
+					done: 0,
+					total: 0,
+					running: false,
+					collapsed: false,
+				},
+				runs,
+			),
+		),
+	};
+}
 
 export function parentRunIdOf(run: LiveRun): string | undefined {
 	return run.run.parentRunId;
@@ -294,7 +401,7 @@ export function containerRowInfo(
 			phaseChip = formatWorkflowPhase(run.run.workflowMeta, phaseIndex, phaseTitle) ?? `Phase ${phaseIndex}`;
 		}
 	}
-	const collapsed = collapsedIds.has(run.run.id);
+	const collapsed = collapsedIds.has(rowKey({ kind: "run", run, depth: 0 }));
 	let agentsSummary: string | undefined;
 	if (collapsed) {
 		// Field priority preserved: currentAgent (live-only) wins, else first
@@ -357,7 +464,7 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 		rows.push({ kind: "run", run, depth, ...options });
 	};
 	const emitWorkflowChildren = (workflow: LiveRun, depth: number) => {
-		if (collapsedIds.has(workflow.run.id)) return;
+		if (collapsedIds.has(rowKey({ kind: "run", run: workflow, depth }))) return;
 		const children = childrenByParent.get(workflow.run.id) ?? [];
 		// phaseIndex is undefined on foreground views, so field-presence alone
 		// partitions phaseless vs phased children identically to the old guard.
@@ -375,20 +482,19 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 			const title = rawTitle ? canonicalWorkflowPhaseTitle(rawTitle) : undefined;
 			return { phaseIndex, phaseChildren, title };
 		});
+		const emittedPipelineItems = new Set<string>();
 		const emitPhase = (
 			phaseIndex: number,
 			title: string | undefined,
 			phaseChildren: LiveRun[],
-			phaseId: string,
 			planState?: WorkflowPhasePlanState,
 		) => {
 			const parallelGroups = new Set(
 				phaseChildren.map((child) => child.run.parallelGroupId).filter((id): id is string => Boolean(id)),
 			);
 			const expandable = phaseChildren.length > 0;
-			rows.push({
+			const phaseRow: Extract<DisplayRow, { kind: "phase" }> = {
 				kind: "phase",
-				id: phaseId,
 				workflowId: workflow.run.id,
 				phaseIndex,
 				...(title !== undefined ? { title } : {}),
@@ -398,11 +504,14 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 				running:
 					planState === "current" ||
 					phaseChildren.some((child) => child.run.state === "running" || child.run.state === "queued"),
-				collapsed: expandable && collapsedIds.has(phaseId),
+				collapsed: false,
 				expandable,
 				...(planState ? { planState } : {}),
-			});
-			if (!expandable || collapsedIds.has(phaseId)) return;
+			};
+			const phaseKey = rowKey(phaseRow);
+			phaseRow.collapsed = expandable && collapsedIds.has(phaseKey);
+			rows.push(phaseRow);
+			if (!expandable || collapsedIds.has(phaseKey)) return;
 			const pipelineChildren = phaseChildren.filter((child) => child.run.pipeline);
 			const pipelineKeys = Array.from(
 				new Set(pipelineChildren.map((child) => `${child.run.pipeline!.id}:${child.run.pipeline!.itemIndex}`)),
@@ -413,15 +522,19 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 			});
 			const emittedPipelineIds = new Set<string>();
 			for (const key of pipelineKeys) {
-				const itemChildren = pipelineChildren
-					.filter((child) => `${child.run.pipeline!.id}:${child.run.pipeline!.itemIndex}` === key)
+				if (emittedPipelineItems.has(key)) continue;
+				const itemChildren = children
+					.filter(
+						(child) =>
+							child.run.pipeline !== undefined &&
+							`${child.run.pipeline.id}:${child.run.pipeline.itemIndex}` === key,
+					)
 					.sort((a, b) => (a.run.pipeline?.stageIndex ?? 0) - (b.run.pipeline?.stageIndex ?? 0));
 				const first = itemChildren[0];
 				if (!first?.run.pipeline) continue;
-				const itemId = `pipeline:${workflow.run.id}:${first.run.pipeline.id}:${first.run.pipeline.itemIndex}`;
-				rows.push({
+				emittedPipelineItems.add(key);
+				const itemRow: Extract<DisplayRow, { kind: "pipelineItem" }> = {
 					kind: "pipelineItem",
-					id: itemId,
 					workflowId: workflow.run.id,
 					pipelineId: first.run.pipeline.id,
 					itemIndex: first.run.pipeline.itemIndex,
@@ -432,15 +545,18 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 					running: itemChildren.some(
 						(child) => child.run.state === "running" || child.run.state === "queued",
 					),
-					collapsed: collapsedIds.has(itemId),
-				});
-				if (!collapsedIds.has(itemId)) {
+					collapsed: false,
+				};
+				const itemKey = rowKey(itemRow);
+				itemRow.collapsed = collapsedIds.has(itemKey);
+				rows.push(itemRow);
+				if (!collapsedIds.has(itemKey)) {
 					for (const child of itemChildren) emitTree(child, depth + 3, { suppressPhaseChip: true });
 				}
 				for (const child of itemChildren) emittedPipelineIds.add(child.run.id);
 			}
 			for (const child of phaseChildren) {
-				if (emittedPipelineIds.has(child.run.id)) continue;
+				if (child.run.pipeline !== undefined || emittedPipelineIds.has(child.run.id)) continue;
 				emitTree(child, depth + 2, {
 					suppressPhaseChip: true,
 					parallelMarker:
@@ -451,12 +567,7 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 		const workflowMeta = workflow.run.workflowMeta;
 		if (!workflowMeta) {
 			for (const runtime of runtimePhases) {
-				emitPhase(
-					runtime.phaseIndex,
-					runtime.title,
-					runtime.phaseChildren,
-					`phase:${workflow.run.id}:${runtime.phaseIndex}`,
-				);
+				emitPhase(runtime.phaseIndex, runtime.title, runtime.phaseChildren);
 			}
 			return;
 		}
@@ -479,18 +590,12 @@ export function deriveDisplayRows(runs: LiveRun[], collapsedIds: ReadonlySet<str
 				declaredIndex + 1,
 				phase.title,
 				matches.flatMap((match) => match.phaseChildren),
-				`phase-plan:${workflow.run.id}:${declaredIndex}`,
 				phase.state,
 			);
 		}
 		for (const runtime of runtimePhases) {
 			if (matchedRuntimeIndexes.has(runtime.phaseIndex)) continue;
-			emitPhase(
-				runtime.phaseIndex,
-				runtime.title,
-				runtime.phaseChildren,
-				`phase:${workflow.run.id}:${runtime.phaseIndex}`,
-			);
+			emitPhase(runtime.phaseIndex, runtime.title, runtime.phaseChildren);
 		}
 	};
 	const emitTree = (
