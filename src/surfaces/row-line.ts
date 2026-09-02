@@ -4,7 +4,7 @@
  * RowCells is an identity-free text-line DTO, NOT a run representation. It
  * must not gain run ids, parent ids, lineage, or other identity fields.
  */
-import type { SingleResult } from "../protocol/types.ts";
+import type { PipelineMetadata, SingleResult } from "../protocol/types.ts";
 import type { RunView } from "../state/run-view.ts";
 import { colorForAgentName } from "../shared/agents.ts";
 import { formatDuration, formatTokenCounter } from "../shared/formatting.ts";
@@ -68,6 +68,62 @@ export function aggregateState(children: readonly RowState[]): RowState {
 	if (children.includes("running")) return "running";
 	if (children.includes("queued")) return "queued";
 	return "complete";
+}
+
+export function pipelineSortKey(metadata: PipelineMetadata): string {
+	return `${metadata.id}:${metadata.itemIndex}`;
+}
+
+export function groupByPipelineItem<T>(
+	items: readonly T[],
+	of: (item: T) => PipelineMetadata | undefined,
+): Array<{ pipelineId: string; itemIndex: number; label?: string; members: T[] }> {
+	const pipelineOrder = new Map<string, number>();
+	const groups = new Map<
+		string,
+		{
+			pipelineId: string;
+			itemIndex: number;
+			label?: string;
+			pipelineOrder: number;
+			members: Array<{ item: T; stageIndex: number; inputIndex: number }>;
+		}
+	>();
+	for (const [inputIndex, item] of items.entries()) {
+		const metadata = of(item);
+		if (!metadata) continue;
+		let order = pipelineOrder.get(metadata.id);
+		if (order === undefined) {
+			order = pipelineOrder.size;
+			pipelineOrder.set(metadata.id, order);
+		}
+		const key = pipelineSortKey(metadata);
+		let group = groups.get(key);
+		if (!group) {
+			group = {
+				pipelineId: metadata.id,
+				itemIndex: metadata.itemIndex,
+				...(metadata.itemLabel ? { label: metadata.itemLabel } : {}),
+				pipelineOrder: order,
+				members: [],
+			};
+			groups.set(key, group);
+		} else if (!group.label && metadata.itemLabel) {
+			group.label = metadata.itemLabel;
+		}
+		group.members.push({ item, stageIndex: metadata.stageIndex, inputIndex });
+	}
+
+	return [...groups.values()]
+		.sort((a, b) => a.pipelineOrder - b.pipelineOrder || a.itemIndex - b.itemIndex)
+		.map(({ pipelineId, itemIndex, label, members }) => ({
+			pipelineId,
+			itemIndex,
+			...(label ? { label } : {}),
+			members: members
+				.sort((a, b) => a.stageIndex - b.stageIndex || a.inputIndex - b.inputIndex)
+				.map(({ item }) => item),
+		}));
 }
 
 export interface RowCells {

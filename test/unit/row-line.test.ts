@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Theme } from "../../src/surfaces/render-shared.ts";
-import { aggregateState, renderRowLine, rowGlyph, stateKey, type RowState } from "../../src/surfaces/row-line.ts";
+import {
+	aggregateState,
+	groupByPipelineItem,
+	pipelineSortKey,
+	renderRowLine,
+	rowGlyph,
+	stateKey,
+	type RowState,
+} from "../../src/surfaces/row-line.ts";
 
 const theme: Theme = {
 	fg: (color, text) => `<${color}>${text}</${color}>`,
@@ -37,6 +45,33 @@ describe("row-line state grammar", () => {
 		assert.equal(aggregateState(["complete", "running", "queued"]), "running");
 		assert.equal(aggregateState(["complete", "queued"]), "queued");
 		assert.equal(aggregateState(["complete", "interrupted", "skipped", "paused", "delivering"]), "complete");
+	});
+});
+
+describe("pipeline item grouping", () => {
+	it("keeps pipelines contiguous and orders each item's members by stage", () => {
+		const items = [
+			{ name: "a1", pipeline: { id: "a", itemIndex: 1, stageIndex: 0, itemLabel: "A1" } },
+			{ name: "b0", pipeline: { id: "b", itemIndex: 0, stageIndex: 0, itemLabel: "B0" } },
+			{ name: "a0s1", pipeline: { id: "a", itemIndex: 0, stageIndex: 1, itemLabel: "A0" } },
+			{ name: "plain" },
+			{ name: "a0s0", pipeline: { id: "a", itemIndex: 0, stageIndex: 0, itemLabel: "A0" } },
+		];
+
+		const groups = groupByPipelineItem(items, (item) => item.pipeline);
+		assert.deepEqual(
+			groups.map((group) => ({
+				key: `${group.pipelineId}:${group.itemIndex}`,
+				label: group.label,
+				members: group.members.map((member) => member.name),
+			})),
+			[
+				{ key: "a:0", label: "A0", members: ["a0s0", "a0s1"] },
+				{ key: "a:1", label: "A1", members: ["a1"] },
+				{ key: "b:0", label: "B0", members: ["b0"] },
+			],
+		);
+		assert.equal(pipelineSortKey(items[0]!.pipeline!), "a:1");
 	});
 });
 

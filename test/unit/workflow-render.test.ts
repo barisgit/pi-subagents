@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { createWorkflowTool } from "../../src/workflow/workflow.ts";
 import { renderSubagentResult, syncResultAnimation } from "../../src/surfaces/render-result.ts";
+import { groupByPipelineItem } from "../../src/surfaces/row-line.ts";
 import type { Details, SingleResult } from "../../src/protocol/types.ts";
 
 function result(
@@ -34,9 +35,9 @@ function result(
 	};
 }
 
-function renderText(details: Details, expanded: boolean): string {
+function renderText(details: Details, expanded: boolean, tagged = false): string {
 	const theme = {
-		fg: (_t: string, s: string) => s,
+		fg: (tone: string, text: string) => (tagged ? `<${tone}>${text}</${tone}>` : text),
 		bg: (_t: string, s: string) => s,
 		bold: (s: string) => s,
 	} as never;
@@ -347,8 +348,9 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			assert.match(text, /sync widget/);
 			assert.match(text, /dashboard left pane/);
 			assert.doesNotMatch(text, /Item 1/);
-			assert.match(text, /Stage 1: A/);
-			assert.match(text, /Stage 2: B/);
+			// Expanded detail rows use shared glyph/name/badge order; compact rows retain their dense label order.
+			assert.match(text, expanded ? /✓ A · Stage 1/ : /Stage 1: A/);
+			assert.match(text, expanded ? /✓ B · Stage 2/ : /Stage 2: B/);
 			assert.doesNotMatch(text, /pipeline 2/);
 		}
 	});
@@ -377,9 +379,17 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 				},
 			],
 		};
+		const groupedLabels = groupByPipelineItem(details.results, (entry) => entry.pipeline).map(
+			(group) => group.label ?? `Item ${group.itemIndex + 1}`,
+		);
 
 		for (const expanded of [false, true]) {
 			const text = renderText(details, expanded);
+			const renderedItemHeaders = text
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line === "computer-science" || line === "biology");
+			assert.deepEqual(renderedItemHeaders, groupedLabels);
 			const pipelineHeaders = text
 				.split("\n")
 				.map((line) => line.trim())
@@ -391,9 +401,30 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 				"computer-science",
 				"biology",
 			]);
-			assert.equal(text.match(/Stage 1: A/g)?.length, 2);
-			assert.equal(text.match(/Stage 1: B/g)?.length, 2);
-			assert.doesNotMatch(text, /Stage [234]: [AB]/);
+			const firstStageA = expanded ? /✓ A · Stage 1/g : /Stage 1: A/g;
+			const firstStageB = expanded ? /✓ B · Stage 1/g : /Stage 1: B/g;
+			assert.equal(text.match(firstStageA)?.length, 2);
+			assert.equal(text.match(firstStageB)?.length, 2);
+			assert.doesNotMatch(text, expanded ? /[AB] · Stage [234]/ : /Stage [234]: [AB]/);
+		}
+	});
+
+	it("colors pipeline item headers from their aggregate member state", () => {
+		const running = result("A", "active", 0, 0);
+		running.progress = { ...running.progress!, status: "running" };
+		running.pipeline = { id: "pipe", itemIndex: 0, stageIndex: 0, itemLabel: "active item" };
+		const failed = result("B", "broken", 1, 1);
+		failed.pipeline = { id: "pipe", itemIndex: 1, stageIndex: 0, itemLabel: "broken item" };
+		const details: Details = {
+			mode: "parallel",
+			workflow: true,
+			results: [running, failed],
+		};
+
+		for (const expanded of [false, true]) {
+			const text = renderText(details, expanded, true);
+			assert.match(text, /<accent>  active item<\/accent>/);
+			assert.match(text, /<error>  broken item<\/error>/);
 		}
 	});
 
@@ -554,10 +585,11 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 
 		const expanded = renderText(final!, true);
 		assert.match(expanded, /workflow/);
-		assert.match(expanded, /\[done explorer ∥ done explorer\] → done synth/);
-		assert.match(expanded, /Agent 1\.1∥: explorer/);
-		assert.match(expanded, /Agent 1\.2∥: explorer/);
-		assert.match(expanded, /Agent 2: synth/);
+		// Expanded sequence and step headers carry state with the shared glyph instead of state words.
+		assert.match(expanded, /\[✓ explorer ∥ ✓ explorer\] → ✓ synth/);
+		assert.match(expanded, /✓ explorer · Agent 1\.1∥/);
+		assert.match(expanded, /✓ explorer · Agent 1\.2∥/);
+		assert.match(expanded, /✓ synth · Agent 2/);
 		assert.match(expanded, /Phase 2: synthesis/);
 
 		const compact = renderText(final!, false);
