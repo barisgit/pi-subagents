@@ -310,8 +310,8 @@ describe("workflow dashboard reader overlays", () => {
 			assert.match(leftText, /explorer/);
 			assert.match(leftText, /review/);
 			assert.match(leftText, /fixer/);
-			assert.doesNotMatch(text, /P1 inspect/);
-			assert.doesNotMatch(text, /P2 patch/);
+			assert.doesNotMatch(leftText, /P1 inspect/);
+			assert.doesNotMatch(leftText, /P2 patch/);
 		} finally {
 			component.dispose();
 		}
@@ -378,26 +378,24 @@ describe("workflow dashboard reader overlays", () => {
 
 		assert.match(lines, /Parity audit/);
 		assert.match(lines, /Compare behavior/);
-		assert.match(lines, /1\. inspect · completed — Discover areas/);
-		assert.match(lines, /2\. patch · completed/);
-		assert.match(lines, /3\. report · completed/);
-		assert.match(lines, /─ Script ─/);
+		assert.match(lines, /Phase 1: inspect .*2\/2/);
+		assert.match(lines, /Phase 2: patch .*1\/1/);
+		assert.match(lines, /Phase 3: report .*0\/0/);
+		assert.match(lines, /─── Script/);
 		assert.match(lines, /const a = await agent\("explorer", "inspect"\);/);
 		assert.match(lines, /return a\.summary;/);
-		assert.match(lines, /─ Steps ─/);
-		// Phase headers appear once per phase, children grouped beneath.
+		assert.match(lines, /─── Loose runs/);
 		assert.match(lines, /Phase 1: inspect/);
 		assert.match(lines, /Phase 2: patch/);
-		const scriptIdx = lines.indexOf("─ Script ─");
-		const stepsIdx = lines.indexOf("─ Steps ─");
-		assert.ok(scriptIdx !== -1 && stepsIdx !== -1 && scriptIdx < stepsIdx, "script section renders before steps");
+		const scriptIdx = lines.indexOf("─── Script");
+		const runsIdx = lines.indexOf("─── Loose runs");
+		assert.ok(runsIdx !== -1 && scriptIdx !== -1 && runsIdx < scriptIdx, "script section renders last");
 		const p1 = lines.indexOf("Phase 1: inspect");
 		const p2 = lines.indexOf("Phase 2: patch");
 		assert.ok(p1 < p2, "phases render in order");
 		// Children render with agent + state under their phase.
 		assert.match(lines, /explorer/);
 		assert.match(lines, /fixer/);
-		assert.match(lines, /complete/);
 		// Parallel children carry the compact parallel marker; the solo phase-2 child does not.
 		assert.match(lines, /∥ .*explorer/);
 		assert.doesNotMatch(lines, /∥ .*fixer/);
@@ -414,8 +412,8 @@ describe("workflow dashboard reader overlays", () => {
 		const lines = buildRightLines(createTestTheme(), { ownership: "foreign", run: groupSummary }, 120, runs).join(
 			"\n",
 		);
-		assert.match(lines, /─ Script ─/, "mutant: buildRightLines must route workflow groups to the workflow pane");
-		assert.match(lines, /─ Steps ─/);
+		assert.match(lines, /─── Script/, "mutant: buildRightLines must route workflow groups to the workflow pane");
+		assert.match(lines, /─── Loose runs/);
 	});
 
 	it("workflow right pane renders the whole script without truncation", () => {
@@ -440,8 +438,8 @@ describe("workflow dashboard reader overlays", () => {
 			run: runViewFromRegistryEntry(entry, entries),
 		}));
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, runs).join("\n");
-		assert.doesNotMatch(lines, /─ Script ─/);
-		assert.match(lines, /─ Steps ─/);
+		assert.doesNotMatch(lines, /─── Script/);
+		assert.match(lines, /─── Loose runs/);
 		assert.match(lines, /Phase 1: inspect/);
 	});
 

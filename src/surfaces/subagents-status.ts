@@ -903,7 +903,7 @@ export class SubagentsStatusComponent implements Component {
 			detail: {
 				rows: (ctx) => {
 					const target = this.detailTargetForOverlayRow(ctx.selectedRow);
-					const run = this.runForDetailTarget(target);
+					const run = target?.kind === "run" ? target.run : undefined;
 					// ctx.detail.width is the overlay's live, drag-adjusted pane width
 					// (pi-extension-utils >= 0.5). Using it keeps the detail lines
 					// reactive to [ / ] resizes; this.lastRightWidth was computed from
@@ -926,10 +926,10 @@ export class SubagentsStatusComponent implements Component {
 						run && sessions.length === 0 && this.rendererCatalog && run.run.asyncDir
 							? (cachedHistorical ?? this.runMessageReader.readPreview(run.run.asyncDir))
 							: [];
-					return run
+					return target
 						? buildRightLines(
 								this.theme,
-								run,
+								target,
 								detailWidth,
 								this.runs,
 								{
