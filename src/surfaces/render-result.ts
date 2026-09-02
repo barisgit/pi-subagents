@@ -333,8 +333,8 @@ function addLiveCurrentLines(
 	if (progress.currentTool === "subagent" && parentRunId && !argBoolean(rawArgs, "async")) {
 		const child = findInlineChildRun(parentRunId, rawArgs, used);
 		if (child) {
-			for (const line of renderNestedChild(child.id, 1, rawArgs, used)) {
-				c.addChild(new Text(truncLine(theme.fg("dim", `${indent}${line}`), width), 0, 0));
+			for (const line of renderNestedChild(child.id, 1, rawArgs, used, theme)) {
+				c.addChild(new Text(truncLine(`${indent}${line}`, width), 0, 0));
 			}
 			return;
 		}
@@ -379,8 +379,8 @@ function addCompactRecentToolLines(
 			if (!expandSyncChildren || !parentRunId) continue;
 			const child = findInlineChildRun(parentRunId, entry.rawArgs, used, entry.endMs);
 			if (!child) continue;
-			for (const line of renderNestedChild(child.id, 1, entry.rawArgs, used)) {
-				c.addChild(new Text(truncLine(theme.fg("dim", `${indent}${line}`), width), 0, 0));
+			for (const line of renderNestedChild(child.id, 1, entry.rawArgs, used, theme)) {
+				c.addChild(new Text(truncLine(`${indent}${line}`, width), 0, 0));
 			}
 			continue;
 		}

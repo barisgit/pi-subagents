@@ -378,20 +378,21 @@ describe("workflow dashboard reader overlays", () => {
 
 		assert.match(lines, /Parity audit/);
 		assert.match(lines, /Compare behavior/);
-		assert.match(lines, /Phase 1: inspect .*2\/2/);
-		assert.match(lines, /Phase 2: patch .*1\/1/);
-		assert.match(lines, /Phase 3: report .*0\/0/);
+		// Root progress reuses the canonical phase label, including the declared phase count.
+		assert.match(lines, /Phase 1\/3: inspect .*2\/2/);
+		assert.match(lines, /Phase 2\/3: patch .*1\/1/);
+		assert.match(lines, /Phase 3\/3: report .*0\/0/);
 		assert.match(lines, /─── Script/);
 		assert.match(lines, /const a = await agent\("explorer", "inspect"\);/);
 		assert.match(lines, /return a\.summary;/);
 		assert.match(lines, /─── Loose runs/);
-		assert.match(lines, /Phase 1: inspect/);
-		assert.match(lines, /Phase 2: patch/);
+		assert.match(lines, /Phase 1\/3: inspect/);
+		assert.match(lines, /Phase 2\/3: patch/);
 		const scriptIdx = lines.indexOf("─── Script");
 		const runsIdx = lines.indexOf("─── Loose runs");
 		assert.ok(runsIdx !== -1 && scriptIdx !== -1 && runsIdx < scriptIdx, "script section renders last");
-		const p1 = lines.indexOf("Phase 1: inspect");
-		const p2 = lines.indexOf("Phase 2: patch");
+		const p1 = lines.indexOf("Phase 1/3: inspect");
+		const p2 = lines.indexOf("Phase 2/3: patch");
 		assert.ok(p1 < p2, "phases render in order");
 		// Children render with agent + state under their phase.
 		assert.match(lines, /explorer/);

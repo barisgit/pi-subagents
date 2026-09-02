@@ -163,7 +163,7 @@ describe("inline nested live feed compact wiring", () => {
 		);
 
 		const text = widget.render(140).join("\n");
-		assert.match(text, /◇ subagent: fixer · live child · 1 tools · 1\.2kt/);
+		assert.match(text, /◈ subagent: fixer · live child · 1 tool · 1\.2kt · \d/);
 		assert.doesNotMatch(text, /← subagent: You are the nested SYNC child/);
 	});
 

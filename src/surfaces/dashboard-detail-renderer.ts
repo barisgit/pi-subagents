@@ -23,8 +23,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Markdown, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { type AsyncRunSummary, sortedWorkflowChildren, workflowPhaseLabel } from "../state/async-status.ts";
-import { readWorkflowScript } from "../workflow/workflow-group-state.ts";
+import {
+	type AsyncRunSummary,
+	readLeafRunViewCached,
+	sortedWorkflowChildren,
+	workflowPhaseLabel,
+} from "../state/async-status.ts";
+import { readWorkflowGroupRecord, readWorkflowScript } from "../workflow/workflow-group-state.ts";
 import { readRunTranscript, type RunMessageSession, type TranscriptLine } from "../state/run-transcript.ts";
 import { formatDuration, formatTokenCounter, shortenPath } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
@@ -39,6 +44,7 @@ import {
 } from "../shared/live-session-relay.ts";
 import { locateOutputBlockForDisplay, OUTPUT_OPEN } from "../protocol/output-contract.ts";
 import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
+import { formatWorkflowPhase } from "../state/workflow-display.ts";
 
 // Single ellipsis glyph for every dashboard truncation. pi-tui's
 // truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
@@ -59,7 +65,14 @@ function runDuration(run: LiveRun, now = Date.now()): number {
 }
 
 function runAgent(run: LiveRun): string {
-	return run.run.currentAgent ?? run.run.steps.find((step) => step.agent)?.agent ?? run.run.mode;
+	return (
+		run.run.currentAgent ??
+		run.run.steps.find((step) => step.agent)?.agent ??
+		(run.run.asyncDir
+			? readLeafRunViewCached(run.run.asyncDir)?.steps.find((step) => step.agent)?.agent
+			: undefined) ??
+		run.run.mode
+	);
 }
 
 function renderDetailStep(
@@ -69,7 +82,8 @@ function renderDetailStep(
 	options: { parallel?: boolean; pipelineStageCount?: number } = {},
 ): string {
 	const cells = cellsFromRunView(run.run, Date.now());
-	cells.name = tintAgentName(runAgent(run), colorForAgentName(runAgent(run)));
+	const agent = runAgent(run);
+	cells.name = tintAgentName(agent, colorForAgentName(agent));
 	delete cells.nameColor;
 	cells.depth = 0;
 	cells.parallel = options.parallel;
@@ -93,20 +107,6 @@ export function formatPersistedResult(text: string): string[] {
 	const lines = normalizePaneText(rendered).split("\n");
 	if (lines.length <= 40) return lines;
 	return [...lines.slice(0, 39), `${ELLIPSIS} +${lines.length - 39} lines · ⏎ open stage`];
-}
-
-export function readWorkflowGroupResult(dir: string): { text: string; json: boolean } | undefined {
-	try {
-		const parsed: unknown = JSON.parse(fs.readFileSync(path.join(dir, "workflow-group.json"), "utf8"));
-		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-		const result = Reflect.get(parsed, "result");
-		if (result === null || typeof result !== "object" || Array.isArray(result)) return undefined;
-		const text = Reflect.get(result, "text");
-		const json = Reflect.get(result, "json");
-		return typeof text === "string" && typeof json === "boolean" ? { text, json } : undefined;
-	} catch {
-		return undefined;
-	}
 }
 
 function pipelineItems(children: LiveRun[], pipelineId: string): PipelineItemView[] {
@@ -685,16 +685,12 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 		const title =
 			run.workflowMeta?.phases[phaseIndex - 1]?.title ??
 			children.find((child) => child.run.phaseIndex === phaseIndex)?.run.phaseTitle;
+		const phase = formatWorkflowPhase(run.workflowMeta, phaseIndex, title) ?? `Phase ${phaseIndex}`;
 		const states = phaseChildren.map(detailState);
 		const done = phaseChildren.filter((child) =>
 			["complete", "failed", "interrupted", "skipped"].includes(child.run.state),
 		).length;
-		out.push(
-			clip(
-				`Phase ${phaseIndex}${title ? `: ${title}` : ""} ${rowGlyph(theme, aggregateState(states))} ${done}/${phaseChildren.length}`,
-				width,
-			),
-		);
+		out.push(clip(`${phase} ${rowGlyph(theme, aggregateState(states))} ${done}/${phaseChildren.length}`, width));
 	}
 	const done = children.filter((child) =>
 		["complete", "failed", "interrupted", "skipped"].includes(child.run.state),
@@ -726,7 +722,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 			out.push(renderDetailStep(theme, live, width, { parallel: Boolean(child.parallelGroupId) }));
 		}
 	}
-	const result = run.asyncDir ? readWorkflowGroupResult(run.asyncDir) : undefined;
+	const result = run.asyncDir ? readWorkflowGroupRecord(run.asyncDir)?.result : undefined;
 	if (result) {
 		out.push("", theme.fg("accent", clip("─── Result", width)));
 		out.push(
@@ -1418,8 +1414,8 @@ function buildRunRightLines(
 				if (!isAsync) {
 					const child = findInlineChildRun(run.run.id, event.rawArgs, rightPaneUsed, event.ts);
 					if (child) {
-						const nested = renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed).map((line) =>
-							theme.fg("dim", clip(line, width)),
+						const nested = renderNestedChild(child.id, 1, event.rawArgs, rightPaneUsed, theme).map((line) =>
+							clip(line, width),
 						);
 						pushStepLines(step, "tool", nested);
 						continue;

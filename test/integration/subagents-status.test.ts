@@ -611,34 +611,32 @@ describe("SubagentsStatusComponent", () => {
 		);
 
 		try {
+			const selectedLeftRow = (lines: string[]): string | undefined =>
+				lines
+					.slice(1, -1)
+					.map(stripBorders)
+					.map((line) => line.split("│", 1)[0] ?? "")
+					.find((line) => line.startsWith(">"));
 			const initial = component.render(120).join("\n");
-			assert.match(initial, /> .*run-a-agent|> ◈ waiter/);
+			assert.match(initial, /> ◈ waiter/);
 
 			component.handleInput("j");
-			const afterDown = component.render(120);
-			const bodyAfterDown = afterDown.slice(1, -1).map(stripBorders);
-			const completeRow = bodyAfterDown.find((line) => line.includes("✓"));
-			assert.ok(
-				completeRow && completeRow.startsWith(">"),
-				`cursor should be on complete row after j; got: ${completeRow}`,
-			);
+			const completeRow = selectedLeftRow(component.render(120));
+			assert.ok(completeRow?.includes("✓"), `cursor should be on complete row after j; got: ${completeRow}`);
 
 			// j past the end should stay at the bottom.
 			component.handleInput("j");
-			const bodyAfterDown2 = component.render(120).slice(1, -1).map(stripBorders);
-			const completeRow2 = bodyAfterDown2.find((line) => line.includes("✓"));
-			assert.ok(completeRow2 && completeRow2.startsWith(">"), "selection bounded at last row");
+			const completeRow2 = selectedLeftRow(component.render(120));
+			assert.ok(completeRow2?.includes("✓"), "selection bounded at last row");
 
 			component.handleInput("k");
-			const bodyAfterUp = component.render(120).slice(1, -1).map(stripBorders);
-			const runningRow = bodyAfterUp.find((line) => line.includes("◈"));
-			assert.ok(runningRow && runningRow.startsWith(">"), "k moves selection up");
+			const runningRow = selectedLeftRow(component.render(120));
+			assert.ok(runningRow?.includes("◈"), "k moves selection up");
 
 			// k past the top should stay at row 0.
 			component.handleInput("k");
-			const bodyAfterUp2 = component.render(120).slice(1, -1).map(stripBorders);
-			const runningRow2 = bodyAfterUp2.find((line) => line.includes("◈"));
-			assert.ok(runningRow2 && runningRow2.startsWith(">"), "selection bounded at first row");
+			const runningRow2 = selectedLeftRow(component.render(120));
+			assert.ok(runningRow2?.includes("◈"), "selection bounded at first row");
 		} finally {
 			component.dispose();
 		}
