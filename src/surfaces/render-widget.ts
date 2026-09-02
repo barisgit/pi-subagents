@@ -6,7 +6,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { type AsyncJobState, MAX_WIDGET_JOBS, WIDGET_KEY } from "../protocol/types.ts";
-import { formatDuration } from "./formatters.ts";
 import { compareRunsForDisplay } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
 import { workflowDisplayName } from "../state/workflow-display.ts";
@@ -14,14 +13,13 @@ import { describeAgentLabel, formatShapeBadge } from "../state/run-shape.ts";
 import { colorForAgentName } from "../shared/agents.ts";
 import {
 	getTermWidth,
-	RUNNING_GLYPH,
 	themeBold,
 	tintAgentName,
 	truncLine,
 	getWidgetAnimationIntervalMs,
-	formatTokenStat,
 	type Theme,
 } from "./render-shared.ts";
+import { renderRowLine, type RowCells, type RowState } from "./row-line.ts";
 import type { UtilsClient } from "pi-extension-utils";
 
 let widgetTimer: ReturnType<typeof setInterval> | undefined;
@@ -40,22 +38,17 @@ function hasAnimatedWidgetJobs(jobs: AsyncJobState[]): boolean {
 	return jobs.some((job) => job.status === "running" && job.displayState !== "lost");
 }
 
-function widgetJobGlyph(job: AsyncJobState, theme: Theme): string {
+function widgetRowState(job: AsyncJobState): RowState {
 	// A stale runner heartbeat makes displayState 'lost' even while a frozen phase
 	// still lingers in status.json (e.g. a force-killed run stuck mid 'streaming_text').
 	// Honor displayState directly so a dead run stops rendering as a live spinner (f5).
-	if (job.status === "lost" || job.displayState === "lost") return theme.fg("error", "!");
-	if (job.displayState === "needs_attention" || job.activityState === "needs_attention")
-		return theme.fg("warning", "!");
-	if (job.status === "running") return theme.fg("accent", RUNNING_GLYPH);
-	if (job.status === "queued") return theme.fg("dim", "·");
-	if (job.status === "paused") return theme.fg("warning", "⏸");
-	if (job.status === "failed") return theme.fg("error", "×");
+	if (job.status === "lost" || job.displayState === "lost") return "lost";
+	if (job.displayState === "needs_attention" || job.activityState === "needs_attention") return "attention";
 	// Finished but the completion notification has not reached the host turn
 	// yet (rollup still open, or delivery raced an interrupt). Accent, not
 	// success, mirrors the dashboard's delivery-pending glyph.
-	if (job.pendingDelivery) return theme.fg("accent", "✓");
-	return theme.fg("success", "✓");
+	if (job.pendingDelivery) return "delivering";
+	return job.status;
 }
 
 function widgetJobName(job: AsyncJobState, theme: Theme): string {
@@ -68,11 +61,7 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 	if (job.kind === "workflow") {
 		// The workflow is ONE entity: one tinted name, with the current phase
 		// (mirrored into job.label by the tracker) as its label.
-		let base = theme.fg("toolTitle", themeBold(theme, workflowDisplayName(job.workflowMeta)));
-		if (job.label) {
-			base += ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(job.label, 30))}`;
-		}
-		return base;
+		return theme.fg("toolTitle", themeBold(theme, workflowDisplayName(job.workflowMeta)));
 	}
 	const agents = job.agents ?? [];
 	const fallbackName = job.currentAgent ?? job.agents?.[0] ?? "agent";
@@ -97,18 +86,16 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 	} else {
 		base = tint(desc.name, desc.color);
 	}
-	// Run-level label: shown for single runs and uniform-label parallel runs.
-	// Per-step labels surface in the dashboard right pane and in mixed-parallel
-	// widget rows where a single run-level label would be a lie.
-	if (job.label) {
-		const trimmed = truncLine(job.label, 30);
-		base += ` ${theme.fg("dim", "·")} ${theme.fg("muted", trimmed)}`;
-	}
 	return base;
 }
 
-function widgetJobStats(job: AsyncJobState, theme: Theme): string {
-	const parts: string[] = [];
+function widgetJobCells(job: AsyncJobState, theme: Theme, depth: number): RowCells {
+	const cells: RowCells = {
+		state: widgetRowState(job),
+		name: widgetJobName(job, theme),
+		depth: depth + 1,
+		...(job.label ? { label: truncLine(job.label, 30) } : {}),
+	};
 	if (job.kind === "workflow") {
 		// Group row: durable "X done · Y running · Z queued" tally. A workflow's
 		// child count N is unknowable up front (runtime fan-out), so there is no
@@ -121,15 +108,15 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 			if (c.done > 0) segs.push(`${c.done} done`);
 			if (c.running > 0) segs.push(`${c.running} running`);
 			if (c.queued > 0) segs.push(`${c.queued} queued`);
-			parts.push(segs.join(" · "));
+			cells.badge = segs.join(" · ");
 		}
-		if (job.pendingDelivery) parts.push(theme.fg("accent", "delivering…"));
-		if (job.startedAt) {
+		if (job.pendingDelivery) cells.phaseChip = "delivering…";
+		if (job.startedAt !== undefined) {
 			const isLive = job.status === "running" || job.status === "queued";
 			const endTs = isLive ? Date.now() : (job.updatedAt ?? Date.now());
-			parts.push(formatDuration(Math.max(0, endTs - job.startedAt)));
+			cells.durationMs = Math.max(0, endTs - job.startedAt);
 		}
-		return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
+		return cells;
 	}
 	const stepsTotal = job.stepsTotal ?? job.agents?.length ?? 1;
 	const completedParallelSteps = job.stepStatuses?.filter(
@@ -141,7 +128,7 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 		total: stepsTotal,
 		current: job.mode === "parallel" ? (completedParallelSteps ?? 0) : (job.currentStep ?? 0) + 1,
 	});
-	if (badge) parts.push(badge);
+	if (badge) cells.badge = badge;
 	// A queued job is blocked on a leaf permit and has not begun executing: render the
 	// lifecycle state explicitly (not the `quiet` activity discriminant) and skip the
 	// phase chip + running timer below, so it never shows a misleading ticking elapsed.
@@ -156,28 +143,30 @@ function widgetJobStats(job: AsyncJobState, theme: Theme): string {
 		job.status !== "lost" &&
 		job.displayState !== "lost";
 	const phaseLabel = phaseAllowed ? formatPhase(job.phase, job.phaseStartedAt, Date.now(), job.currentTool) : "";
-	if (isQueued) parts.push("queued");
-	else if (phaseLabel) parts.push(phaseLabel);
-	else if (job.status === "lost" || job.displayState === "lost") parts.push(theme.fg("error", "lost"));
-	else if (job.displayState === "tool_running" && job.currentTool) parts.push(`tool ${job.currentTool}`);
-	else if (job.displayState === "needs_attention") parts.push(theme.fg("warning", "needs attention"));
-	else if (job.displayState === "quiet") parts.push("quiet");
-	if (job.totalTokens?.total) parts.push(formatTokenStat(job.totalTokens.total));
+	const phases: string[] = [];
+	if (isQueued) phases.push("queued");
+	else if (phaseLabel) phases.push(phaseLabel);
+	else if (job.status === "lost" || job.displayState === "lost") phases.push("lost");
+	else if (job.displayState === "tool_running" && job.currentTool) phases.push(`tool ${job.currentTool}`);
+	else if (job.displayState === "needs_attention") phases.push("needs attention");
+	else if (job.displayState === "quiet") phases.push("quiet");
+	if (job.totalTokens?.total) cells.tokens = job.totalTokens.total;
 	// 'done, result not yet delivered to the host turn' was invisible when the
 	// only cue was the accent-vs-success checkmark tint; say it outright.
-	if (job.pendingDelivery) parts.push(theme.fg("accent", "delivering…"));
-	if ((job.resumeCount ?? 0) > 0) parts.push(`↻${job.resumeCount}`);
+	if (job.pendingDelivery) phases.push("delivering…");
+	if (phases.length > 0) cells.phaseChip = phases.join(" · ");
+	if ((job.resumeCount ?? 0) > 0) cells.resumeCount = job.resumeCount;
 	// Skip the elapsed timer entirely for a queued job: it has no execution-start
 	// instant yet, so `now - startedAt` would count queue-wait, not run time.
-	if (job.startedAt && !isQueued) {
+	if (job.startedAt !== undefined && !isQueued) {
 		// A 'lost' run is dead: freeze elapsed at its last known update instead of
 		// ticking live, even though job.status may still read 'running' on disk.
 		const isLive = job.status === "running" && job.displayState !== "lost";
 		const endTs = isLive ? Date.now() : (job.updatedAt ?? Date.now());
 		// Measure from the execution-start flip when known, else dispatch time.
-		parts.push(formatDuration(Math.max(0, endTs - (job.resumedAt ?? job.executionStartedAt ?? job.startedAt))));
+		cells.durationMs = Math.max(0, endTs - (job.resumedAt ?? job.executionStartedAt ?? job.startedAt));
 	}
-	return parts.length > 0 ? theme.fg("dim", parts.join(" · ")) : "";
+	return cells;
 }
 
 function orderWidgetJobsWithChildren(sorted: AsyncJobState[]): AsyncJobState[] {
@@ -264,16 +253,9 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 
 	for (let i = 0; i < visible.length; i++) {
 		const job = visible[i]!;
-		const isLast = i === visible.length - 1 && overflow === 0;
 		const depth = depthMap.get(job.asyncId) ?? 0;
-		const branchGlyph =
-			depth > 0 ? `${"  ".repeat(Math.max(0, depth - 1))}${isLast ? "└─" : "├─"}` : isLast ? "└─" : "├─";
-		const branch = theme.fg("dim", branchGlyph);
-		const glyph = widgetJobGlyph(job, theme);
-		const name = widgetJobName(job, theme);
-		const stats = widgetJobStats(job, theme);
-		const statsPart = stats ? ` ${theme.fg("dim", "·")} ${stats}` : "";
-		lines.push(truncLine(` ${branch} ${glyph} ${name}${statsPart}`, width));
+		const cells = widgetJobCells(job, theme, depth);
+		lines.push(` ${renderRowLine(theme, cells, Math.max(0, width - 1), "widget")}`);
 	}
 
 	if (overflow > 0) {

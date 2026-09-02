@@ -99,7 +99,8 @@ describe("multi compact inline nesting", () => {
 
 		const text = widget.render(140).join("\n");
 		// Running parent (A) keeps the expanded child card.
-		assert.match(text, /◇ subagent: fixer · child a/);
+		// Nested live rows inherit the canonical running glyph from row-line.
+		assert.match(text, /◈ subagent: fixer · child a/);
 		// Completed parent (B) shows the child tally in its header tail; the child
 		// card itself is no longer re-expanded.
 		assert.match(text, /parent-b · 1 tool use · 1\.0s · 1 subagent\b/);

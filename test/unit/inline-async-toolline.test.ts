@@ -9,13 +9,17 @@ const child = "a1b2c3d4ffff";
 afterEach(() => [parent, child].forEach(rmRun));
 
 describe("inline async child tool line", () => {
-	for (const state of ["running", "complete"] as const) {
-		it(`renders the same plain line while ${state}`, () => {
+	for (const [state, glyph] of [
+		["running", "◈"],
+		["complete", "✓"],
+	] as const) {
+		it(`renders the canonical ${state} row`, () => {
 			writeRun(parent);
 			writeRun(child, { parentRunId: parent, state, agent: "explorer", label: "find pattern" });
-			assert.equal(
-				renderInlineAsyncToolLine(parent, { async: true, agent: "explorer", label: "find pattern" }),
-				"└─ subagent (background): explorer · find pattern → a1b2c3d4",
+			// Async history now carries the same lifecycle glyph and duration columns as every compact row.
+			assert.match(
+				renderInlineAsyncToolLine(parent, { async: true, agent: "explorer", label: "find pattern" }) ?? "",
+				new RegExp(`^└─${glyph} subagent \\(background\\): explorer · find pattern → a1b2c3d4 · 1\\.[5-9]s$`),
 			);
 		});
 	}

@@ -9,18 +9,13 @@ import { statusToRunView, type AsyncRunSummary } from "../state/async-status.ts"
 import { formatPhase } from "../state/run-phase.ts";
 import { readRunTranscript, type TranscriptLine } from "../state/run-transcript.ts";
 import { readAllEntries } from "../state/runs-registry.ts";
-import { formatDuration, formatTokenCounter } from "./formatters.ts";
+import type { Theme } from "./render-shared.ts";
+import { cellsFromRunView, renderRowLine, type RowCells } from "./row-line.ts";
+
+const plainTheme: Theme = { fg: (_color, text) => text, bold: (text) => text };
 
 function isTerminalInlineState(state: AsyncRunSummary["state"]): boolean {
 	return state === "complete" || state === "failed" || state === "paused" || state === "lost";
-}
-
-function inlineStateGlyph(state: AsyncRunSummary["state"]): string {
-	if (state === "complete") return "✓";
-	if (state === "failed") return "×";
-	if (state === "lost") return "!";
-	if (state === "paused") return "‖";
-	return "◇";
 }
 
 function readInlineRun(runId: string): { summary: AsyncRunSummary; events: TranscriptLine[] } | undefined {
@@ -145,28 +140,6 @@ function inlineTokenCount(summary: AsyncRunSummary): number {
 	return summary.totalTokens?.total ?? summary.steps.reduce((sum, step) => sum + (step.tokens?.total ?? 0), 0);
 }
 
-function inlineDuration(summary: AsyncRunSummary): number {
-	const end = isTerminalInlineState(summary.state)
-		? (summary.endedAt ?? summary.lastUpdate ?? Date.now())
-		: Date.now();
-	// Measure from the queued->running flip when known so the elapsed reflects real
-	// execution time, not queue-wait; fall back to startedAt for older records.
-	return Math.max(0, end - (summary.executionStartedAt ?? summary.startedAt));
-}
-
-function inlineMeta(summary: AsyncRunSummary, events: TranscriptLine[]): string {
-	const tools = inlineToolCount(events);
-	const tokens = inlineTokenCount(summary);
-	// A queued child has not begun executing: omit the running timer (it would count
-	// queue-wait) and state `queued` plainly instead.
-	const tail = summary.state === "queued" ? "queued" : formatDuration(inlineDuration(summary));
-	return `${tools} tools · ${formatTokenCounter(tokens)} · ${tail}`;
-}
-
-function inlinePrefix(depth: number): string {
-	return `${"  ".repeat(Math.max(0, depth - 1))}└─`;
-}
-
 function countCollapsedNested(runId: string): { nested: number; tools: number } {
 	let nested = 0;
 	let tools = 0;
@@ -185,11 +158,16 @@ export function renderInlineAsyncToolLine(
 	parentRunId: string,
 	args: Record<string, unknown> | undefined,
 	used = new Set<string>(),
+	theme: Theme = plainTheme,
 ): string | undefined {
 	const child = findInlineChildRun(parentRunId, args, used);
 	if (!child) return undefined;
 	used.add(child.id);
-	return `${inlinePrefix(1)} subagent (background): ${inlineRunAgent(child, args)} · ${inlineRunLabel(child, args)} → ${child.id.slice(0, 8)}`;
+	const cells = cellsFromRunView(child, Date.now(), { depth: 1 });
+	cells.name = `subagent (background): ${inlineRunAgent(child, args)}`;
+	cells.nameColor = undefined;
+	cells.label = `${inlineRunLabel(child, args)} → ${child.id.slice(0, 8)}`;
+	return renderRowLine(theme, cells, Number.MAX_SAFE_INTEGER, "detailStep");
 }
 
 export function countLiveInlineAsyncChildren(
@@ -239,7 +217,7 @@ export function countInlineChildTally(
  * at most one level of nesting inline: the dispatched agent (level 0) keeps its full
  * card, but each subagent it spawns (level 1) collapses to a single rolled-up line —
  * for running and terminal children alike. Sub-subagents (level 2+) are never expanded
- * inline; their tools fold into this line's `inlineMeta` tool count and a `↳ K nested`
+ * inline; their tools fold into this line's tool count and a `↳ K nested`
  * hint points at the dashboard. This is structurally bounded (header + own tools +
  * one line per direct child) with no depth×breadth compounding.
  *
@@ -252,24 +230,25 @@ export function renderNestedChild(
 	depth = 1,
 	args?: Record<string, unknown>,
 	used = new Set<string>(),
+	theme: Theme = plainTheme,
 ): string[] {
 	const data = readInlineRun(runId);
 	if (!data) return [];
 	const { summary, events } = data;
 	used.add(runId);
 	const label = inlineRunLabel(summary, args);
-	const glyph = inlineStateGlyph(summary.state);
 	const kind = summary.workflow ? "workflow" : summary.mode === "parallel" ? "parallel" : "subagent";
-	const meta = inlineMeta(summary, events);
 	const nested = countCollapsedNested(runId);
-	const nestedHint = nested.nested > 0 ? ` · ↳ ${nested.nested} nested` : "";
-	if (isTerminalInlineState(summary.state)) {
-		return [`${inlinePrefix(depth)} ${glyph} ${kind}: ${label} · ${meta}${nestedHint}`];
+	const now = Date.now();
+	const cells: RowCells = cellsFromRunView(summary, now, { depth });
+	cells.name = `${kind}: ${inlineRunAgent(summary, args)}`;
+	cells.nameColor = undefined;
+	cells.label = nested.nested > 0 ? `${label} · ↳ ${nested.nested} nested` : label;
+	cells.tools = inlineToolCount(events);
+	cells.tokens = inlineTokenCount(summary);
+	if (!isTerminalInlineState(summary.state)) {
+		const phase = formatPhase(summary.phase, summary.phaseStartedAt, now, summary.currentTool);
+		if (phase) cells.phaseChip = phase;
 	}
-	// Running: show the agent and what it's doing now (phase chip), like the async widget.
-	const phase = formatPhase(summary.phase, summary.phaseStartedAt, Date.now(), summary.currentTool);
-	const phasePart = phase ? ` · ${phase}` : "";
-	return [
-		`${inlinePrefix(depth)} ${glyph} ${kind}: ${inlineRunAgent(summary, args)} · ${label} · ${meta}${phasePart}${nestedHint}`,
-	];
+	return [renderRowLine(theme, cells, Number.MAX_SAFE_INTEGER, "detailStep")];
 }

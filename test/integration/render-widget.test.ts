@@ -147,7 +147,8 @@ describe("subagent async widget rendering", () => {
 		assert.ok(lines[0]!.includes("Agents"), "header should include 'Agents'");
 		assert.match(lines[1]!, /scout/);
 		assert.match(lines[2]!, /planner/);
-		assert.match(lines[3]!, /reviewer/);
+		// Queued jobs now use the canonical hollow-circle glyph from the shared row grammar.
+		assert.match(lines[3]!, /○ .*reviewer/);
 		assert.equal(lines[4], "", "trailing newline");
 	});
 

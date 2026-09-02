@@ -4,8 +4,9 @@ import { Box, Container, Spacer, truncateToWidth, visibleWidth, type Component }
 import type { Details } from "../protocol/types.ts";
 import { getSlashRenderableSnapshot, type SlashMessageDetails } from "../state/slash-live-state.ts";
 import { renderSubagentResult, syncResultAnimation } from "./render-result.ts";
-import { formatDuration, shortenPath } from "./formatters.ts";
-import type { SubagentBatchNotifyDetails, SubagentNotifyDetails } from "./notify.ts";
+import { shortenPath } from "./formatters.ts";
+import { notificationRowState, type SubagentBatchNotifyDetails, type SubagentNotifyDetails } from "./notify.ts";
+import { renderRowLine } from "./row-line.ts";
 
 function isSlashResultRunning(result: { details?: Details }): boolean {
 	return (
@@ -127,7 +128,7 @@ export class SubagentNotifyNoticeComponent implements Component {
 			this.theme.fg("accent", `╭${headerText}`) + this.theme.fg("accent", `${borderChar.repeat(headerPadding)}╮`),
 		];
 
-		for (const line of this.bodyLines()) {
+		for (const line of this.bodyLines(bodyWidth)) {
 			const text = truncateToWidth(line, bodyWidth, "…");
 			const padding = Math.max(0, bodyWidth - visibleWidth(text));
 			lines.push(this.theme.fg("accent", `│${text}`) + " ".repeat(padding) + this.theme.fg("accent", "│"));
@@ -136,33 +137,36 @@ export class SubagentNotifyNoticeComponent implements Component {
 		return lines;
 	}
 
-	private bodyLines(): string[] {
+	private bodyLines(width: number): string[] {
 		if (this.details.kind === "batch") {
 			const lines = this.details.children.map((child) => {
-				const glyph =
-					child.state === "complete" || child.state === "completed"
-						? this.theme.fg("success", "✓")
-						: child.state === "paused" || child.state === "interrupted"
-							? this.theme.fg("warning", "■")
-							: this.theme.fg("error", "✗");
 				const name = child.label?.trim() || child.agent || child.runId.slice(0, 8);
-				return `${glyph} ${name} ${this.theme.fg("dim", `(${child.agent}) · ${child.state}`)}`;
+				return renderRowLine(
+					this.theme,
+					{
+						state: notificationRowState(child.state),
+						name,
+						label: `(${child.agent}) · ${child.state}`,
+					},
+					width,
+					"notice",
+				);
 			});
 			return lines.length > 0 ? lines : ["(no child results)"];
 		}
 
-		const icon =
-			this.details.status === "completed"
-				? this.theme.fg("success", "✓")
-				: this.details.status === "paused" || this.details.status === "interrupted"
-					? this.theme.fg("warning", "■")
-					: this.theme.fg("error", "✗");
-		const parts: string[] = [];
-		if (this.details.taskInfo) parts.push(this.details.taskInfo);
-		if (this.details.durationMs !== undefined) parts.push(formatDuration(this.details.durationMs));
-		let first = `${icon} ${this.theme.bold(this.details.agent)} ${this.theme.fg("dim", this.details.status)}`;
-		if (parts.length > 0)
-			first += ` ${this.theme.fg("dim", "·")} ${parts.map((part) => this.theme.fg("dim", part)).join(` ${this.theme.fg("dim", "·")} `)}`;
+		const first = renderRowLine(
+			this.theme,
+			{
+				state: notificationRowState(this.details.status),
+				name: this.theme.bold(this.details.agent),
+				label: this.details.status,
+				...(this.details.taskInfo ? { badge: this.details.taskInfo.trim() } : {}),
+				...(this.details.durationMs !== undefined ? { durationMs: this.details.durationMs } : {}),
+			},
+			width,
+			"notice",
+		);
 		const lines = [first];
 		const trimmedPreview = this.details.resultPreview.trim();
 		const previewLines = this.options.expanded
