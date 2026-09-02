@@ -333,7 +333,8 @@ describe("renderSubagentResult fork indicator", () => {
 		);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /^■ workflow/);
+		// The aggregate glyph treats a settled interrupted member as terminal while the member row keeps ■.
+		assert.match(text, /^✓ workflow/);
 		assert.match(text, /└─ Paused/);
 	});
 
@@ -420,7 +421,8 @@ describe("renderSubagentResult fork indicator", () => {
 		const lines = widget.render(120);
 		const pendingIndex = lines.findIndex((line) => /Step 2: b/.test(line));
 		assert.notEqual(pendingIndex, -1);
-		assert.match(lines[pendingIndex]!, /◦ Step 2: b · pending/);
+		// Pending result rows use the shared queued glyph.
+		assert.match(lines[pendingIndex]!, /○ Step 2: b · pending/);
 		assert.doesNotMatch(lines[pendingIndex]!, /0ms/);
 		assert.doesNotMatch(lines[pendingIndex + 1] ?? "", /Done \(no text output\)/);
 	});

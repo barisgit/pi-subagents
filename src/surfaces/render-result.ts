@@ -14,7 +14,6 @@ import { formatPhase } from "../state/run-phase.ts";
 import { workflowDisplayName } from "../state/workflow-display.ts";
 import { getDisplayItems, getSingleResultDisplayOutput } from "../shared/utils.ts";
 import {
-	RUNNING_GLYPH,
 	themeBold,
 	tintAgentName,
 	truncLine,
@@ -22,6 +21,14 @@ import {
 	formatTokenStat,
 	type Theme,
 } from "./render-shared.ts";
+import {
+	aggregateState,
+	cellsFromSingleResult,
+	groupByPipelineItem,
+	renderRowLine,
+	rowGlyph,
+	stateKey,
+} from "./row-line.ts";
 import {
 	argBoolean,
 	countInlineChildTally,
@@ -231,22 +238,6 @@ function resultStatusLine(result: Details["results"][number], output: string): s
 	return preview.length > RESULT_STATUS_LINE_PREVIEW_MAX
 		? `${preview.slice(0, RESULT_STATUS_LINE_PREVIEW_MAX - 1)}…`
 		: preview;
-}
-
-function resultGlyph(
-	result: Details["results"][number],
-	output: string,
-	theme: Theme,
-	running = result.progress?.status === "running",
-): string {
-	// Per-agent running glyph is static. The headline carries the single liveness
-	// indicator; per-row glyphs stay calm to avoid excess terminal repaints.
-	if (running) return theme.fg("accent", "◇");
-	if (result.detached) return theme.fg("warning", "■");
-	if (result.interrupted) return theme.fg("warning", "■");
-	if (result.exitCode !== 0) return theme.fg("error", "✗");
-	if (hasEmptyTextOutputWithoutOutputTarget(result.task, output)) return theme.fg("warning", "✓");
-	return theme.fg("success", "✓");
 }
 
 function compactCurrentActivity(progress: AgentProgress, width: number): string {
@@ -638,28 +629,13 @@ interface MultiRenderPlan {
 
 function buildMultiRenderPlan(d: Details): MultiRenderPlan {
 	const hasPipeline = d.workflow === true && d.results.some((result) => result.pipeline);
-	const pipelineOrder = new Map<string, number>();
-	for (const result of d.results) {
-		if (result.pipeline && !pipelineOrder.has(result.pipeline.id)) {
-			pipelineOrder.set(result.pipeline.id, pipelineOrder.size);
-		}
-	}
+	const pipelineItems = groupByPipelineItem(d.results, (result) => result.pipeline);
+	const pipelineMembers = new Set(pipelineItems.flatMap((item) => item.members));
 	const displayResults = hasPipeline
-		? [...d.results].sort((a, b) => {
-				const pipelineA = a.pipeline
-					? (pipelineOrder.get(a.pipeline.id) ?? Number.MAX_SAFE_INTEGER)
-					: Number.MAX_SAFE_INTEGER;
-				const pipelineB = b.pipeline
-					? (pipelineOrder.get(b.pipeline.id) ?? Number.MAX_SAFE_INTEGER)
-					: Number.MAX_SAFE_INTEGER;
-				if (pipelineA !== pipelineB) return pipelineA - pipelineB;
-				const itemA = a.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
-				const itemB = b.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
-				if (itemA !== itemB) return itemA - itemB;
-				const stageA = a.pipeline?.stageIndex ?? Number.MAX_SAFE_INTEGER;
-				const stageB = b.pipeline?.stageIndex ?? Number.MAX_SAFE_INTEGER;
-				return stageA - stageB;
-			})
+		? [
+				...pipelineItems.flatMap((item) => item.members),
+				...d.results.filter((result) => !pipelineMembers.has(result)),
+			]
 		: d.results;
 	const hasParallelInSequence = Boolean(d.agentGroups?.some((a: string) => a.startsWith("[")));
 	// When parallel groups are nested, results are flattened but agentGroups preserves
@@ -687,7 +663,7 @@ function buildMultiRenderPlan(d: Details): MultiRenderPlan {
 	const stepsToShow = useResultsDirectly ? displayResults.length : (d.agentGroups?.length ?? 0);
 	return {
 		hasPipeline,
-		pipelineCount: pipelineOrder.size,
+		pipelineCount: new Set(pipelineItems.map((item) => item.pipelineId)).size,
 		displayResults,
 		hasParallelInSequence,
 		sequenceStepLabels,
@@ -764,17 +740,18 @@ function inlineChildTail(
 	return total > 0 ? theme.fg("dim", ` · ${total} subagent${total === 1 ? "" : "s"}`) : "";
 }
 
-// Pipeline rows group by item: emit an accent item header the first time each
-// pipeline/item pair appears in display order. Returns the header label or undefined.
-function makePipelineItemHeaderTracker(hasPipeline: boolean): (r: Details["results"][number]) => string | undefined {
-	let lastPipelineItem: string | undefined;
-	return (r) => {
-		if (!hasPipeline || !r.pipeline) return undefined;
-		const pipelineItem = `${r.pipeline.id}:${r.pipeline.itemIndex}`;
-		if (pipelineItem === lastPipelineItem) return undefined;
-		lastPipelineItem = pipelineItem;
-		return r.pipeline.itemLabel || `Item ${r.pipeline.itemIndex + 1}`;
-	};
+// Pipeline rows group by item: return group metadata on each first member so
+// callers can render one aggregate-state item header in shared display order.
+function makePipelineItemHeaderTracker(items: Details["results"]) {
+	const firstMembers = new Map<
+		Details["results"][number],
+		{ pipelineId: string; itemIndex: number; label?: string; members: Details["results"] }
+	>();
+	for (const group of groupByPipelineItem(items, (result) => result.pipeline)) {
+		const first = group.members[0];
+		if (first) firstMembers.set(first, group);
+	}
+	return (result: Details["results"][number]) => firstMembers.get(result);
 }
 
 function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme, width: number): Component {
@@ -785,10 +762,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const stats = statJoin(theme, [formatTurnStat(r.usage?.turns), formatProgressStats(theme, progress)]);
 	const c = new Container();
 	const spark = rowSparkline(r.progress, isRunning, theme, width);
-	// Single-agent block has no parent headline above it, so the row glyph itself
-	// must carry the liveness signal -- use the accent running glyph instead of the
-	// static ◇ that resultGlyph returns for running multi-block rows.
-	const headGlyph = isRunning ? theme.fg("accent", RUNNING_GLYPH) : resultGlyph(r, output, theme, isRunning);
+	const headGlyph = rowGlyph(theme, cellsFromSingleResult(r).state);
 	const boldName = themeBold(theme, r.agent);
 	const tintedName = r.progress?.color ? tintAgentName(boldName, r.progress.color) : theme.fg("toolTitle", boldName);
 	const labelTail = r.label ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(r.label, 30))}` : "";
@@ -856,8 +830,6 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 			(r.progress?.status === "completed" ||
 				(r.exitCode === 0 && r.progress?.status !== "running" && r.progress?.status !== "pending")),
 	).length;
-	const failed = d.results.some((r) => r.exitCode !== 0 && r.progress?.status !== "running");
-	const paused = d.results.some((r) => (r.interrupted || r.detached) && r.progress?.status !== "running");
 	const totalTurns = d.results.reduce((sum, r) => sum + (r.usage?.turns || 0), 0);
 	const totalSummary = d.progressSummary || sumProgressTotals(d.results);
 	const {
@@ -916,13 +888,7 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 		? `${itemLabel} ${currentStep}/${totalCount}`
 		: `${itemLabel} ${headerOk}/${totalCount}`;
 	const stats = statJoin(theme, [stepInfo, formatTurnStat(totalTurns), formatProgressStats(theme, totalSummary)]);
-	const glyph = hasRunning
-		? theme.fg("accent", RUNNING_GLYPH)
-		: failed
-			? theme.fg("error", "✗")
-			: paused
-				? theme.fg("warning", "■")
-				: theme.fg("success", "✓");
+	const glyph = rowGlyph(theme, aggregateState(d.results.map((result) => cellsFromSingleResult(result).state)));
 	const contextBadge = forkContextBadge(theme, d.context);
 	const c = new Container();
 	// Progress bar: parent-step granularity already computed above as sequenceParentTotal/Ok.
@@ -977,7 +943,7 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 	}
 	const historyN = historyLinesForRunningCount(runningCount);
 
-	const nextPipelineItemHeader = makePipelineItemHeaderTracker(hasPipeline);
+	const nextPipelineItemHeader = makePipelineItemHeaderTracker(hasPipeline ? displayResults : []);
 	let currentPipelineId: string | undefined;
 	let pipelineNumber = 0;
 	for (let i = 0; i < stepsToShow; i++) {
@@ -999,9 +965,11 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 			}
 		}
 		const output = getSingleResultDisplayOutput(r);
-		const pipelineItemHeader = nextPipelineItemHeader(r);
-		if (pipelineItemHeader !== undefined) {
-			c.addChild(new Text(truncLine(theme.fg("accent", `  ${pipelineItemHeader}`), width), 0, 0));
+		const pipelineItem = nextPipelineItemHeader(r);
+		if (pipelineItem !== undefined) {
+			const itemState = aggregateState(pipelineItem.members.map((member) => cellsFromSingleResult(member).state));
+			const itemLabel = pipelineItem.label ?? `Item ${pipelineItem.itemIndex + 1}`;
+			c.addChild(new Text(truncLine(theme.fg(stateKey(itemState), `  ${itemLabel}`), width), 0, 0));
 		}
 
 		const { progressFromArray, rProg } = resolveRowProgress(d, r);
@@ -1017,7 +985,8 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 							? progressFromArray.index + 1
 							: i + 1));
 		const stepStats = statJoin(theme, [formatTurnStat(r.usage?.turns), formatProgressStats(theme, rProg)]);
-		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning);
+		const rowState = rPending ? "queued" : rRunning ? "running" : cellsFromSingleResult(r).state;
+		const glyph = rowGlyph(theme, rowState);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		// Sparkline source: prefer r.progress, fall back to progressFromArray (live updates put a full AgentProgress in d.progress).
 		const fullProgForSpark =
@@ -1232,13 +1201,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 		const r = d.results[0];
 		if (!expanded) return renderSingleCompact(d, r, theme, width);
 		const isRunning = r.progress?.status === "running";
-		const icon = isRunning
-			? theme.fg("warning", "running")
-			: r.detached
-				? theme.fg("warning", "detached")
-				: r.exitCode === 0
-					? theme.fg("success", "ok")
-					: theme.fg("error", "failed");
+		const icon = rowGlyph(theme, cellsFromSingleResult(r).state);
 		const contextBadge = forkContextBadge(theme, d.context);
 		const output = r.truncation?.text || getSingleResultDisplayOutput(r);
 
@@ -1342,19 +1305,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	const ok = d.results.filter(
 		(r) => r.progress?.status === "completed" || (r.exitCode === 0 && r.progress?.status !== "running"),
 	).length;
-	const hasEmptyWithoutTarget = d.results.some(
-		(r) =>
-			r.exitCode === 0 &&
-			r.progress?.status !== "running" &&
-			hasEmptyTextOutputWithoutOutputTarget(r.task, getSingleResultDisplayOutput(r)),
-	);
-	const icon = hasRunning
-		? theme.fg("warning", "running")
-		: hasEmptyWithoutTarget
-			? theme.fg("warning", "warning")
-			: ok === d.results.length
-				? theme.fg("success", "ok")
-				: theme.fg("error", "failed");
+	const icon = rowGlyph(theme, aggregateState(d.results.map((result) => cellsFromSingleResult(result).state)));
 
 	const totalSummary = d.progressSummary ||
 		sumProgressTotals(d.results) || { toolCount: 0, tokens: 0, durationMs: 0 };
@@ -1396,22 +1347,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 					const children = isParallel ? entry.slice(1, -1).split("+") : [entry];
 					const childPieces = children.map((agent: string) => {
 						const result = d.results[resultCursor++];
-						const isRunning = result?.progress?.status === "running";
-						const isFailed = result && result.exitCode !== 0 && !isRunning;
-						const isComplete = result && result.exitCode === 0 && !isRunning;
-						const isEmptyWithoutTarget =
-							Boolean(result) &&
-							Boolean(isComplete) &&
-							hasEmptyTextOutputWithoutOutputTarget(result!.task, getSingleResultDisplayOutput(result!));
-						const stepIcon = isFailed
-							? theme.fg("error", "failed")
-							: isEmptyWithoutTarget
-								? theme.fg("warning", "warning")
-								: isComplete
-									? theme.fg("success", "done")
-									: isRunning
-										? theme.fg("warning", "running")
-										: theme.fg("dim", "pending");
+						const stepIcon = rowGlyph(theme, result ? cellsFromSingleResult(result).state : "queued");
 						return `${stepIcon} ${agent}`;
 					});
 					return isParallel
@@ -1440,7 +1376,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 
 	c.addChild(new Spacer(1));
 
-	const nextPipelineItemHeader = makePipelineItemHeaderTracker(hasPipeline);
+	const nextPipelineItemHeader = makePipelineItemHeaderTracker(hasPipeline ? displayResults : []);
 	let currentPipelineId: string | undefined;
 	let pipelineNumber = 0;
 	for (let i = 0; i < stepsToShow; i++) {
@@ -1464,9 +1400,11 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			}
 		}
 
-		const pipelineItemHeader = nextPipelineItemHeader(r);
-		if (pipelineItemHeader !== undefined) {
-			c.addChild(new Text(fit(theme.fg("accent", `  ${pipelineItemHeader}`)), 0, 0));
+		const pipelineItem = nextPipelineItemHeader(r);
+		if (pipelineItem !== undefined) {
+			const itemState = aggregateState(pipelineItem.members.map((member) => cellsFromSingleResult(member).state));
+			const itemLabel = pipelineItem.label ?? `Item ${pipelineItem.itemIndex + 1}`;
+			c.addChild(new Text(fit(theme.fg(stateKey(itemState), `  ${itemLabel}`)), 0, 0));
 		}
 
 		const { rProg } = resolveRowProgress(d, r);
@@ -1476,21 +1414,10 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 				? r.pipeline.stageIndex + 1
 				: (sequenceStepLabels?.[i] ?? (typeof rProg?.index === "number" ? rProg.index + 1 : i + 1));
 
-		const resultOutput = getSingleResultDisplayOutput(r);
-		const statusIcon = rRunning
-			? theme.fg("warning", "running")
-			: r.exitCode !== 0
-				? theme.fg("error", "failed")
-				: hasEmptyTextOutputWithoutOutputTarget(r.task, resultOutput)
-					? theme.fg("warning", "warning")
-					: theme.fg("success", "done");
-		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
-		const modelDisplay = r.model ? theme.fg("dim", ` (${r.model})`) : "";
-		const stepHeader = rRunning
-			? `${statusIcon} ${itemTitle} ${stepNumber}: ${themeBold(theme, theme.fg("warning", r.agent))}${modelDisplay}${stats}`
-			: `${statusIcon} ${itemTitle} ${stepNumber}: ${themeBold(theme, r.agent)}${modelDisplay}${stats}`;
+		const stepBadge = `${itemTitle} ${stepNumber}${r.model ? ` (${r.model})` : ""}`;
+		const stepHeader = renderRowLine(theme, cellsFromSingleResult(r, { badge: stepBadge }), w, "detailStep");
 		const toolCallLines = getToolCallLines(r, expanded);
-		c.addChild(new Text(fit(stepHeader), 0, 0));
+		c.addChild(new Text(stepHeader, 0, 0));
 
 		const taskMaxLen = Math.max(20, w - 12);
 		const taskPreview =
