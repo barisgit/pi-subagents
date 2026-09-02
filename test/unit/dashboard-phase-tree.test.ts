@@ -75,6 +75,7 @@ interface SeedRun {
 	phaseIndex?: number;
 	phaseTitle?: string;
 	parallelGroupId?: string;
+	pipeline?: { id: string; itemIndex: number; stageIndex: number; itemLabel?: string };
 	startedAt: number;
 }
 
@@ -123,6 +124,14 @@ function seedRun(root: string, entry: SeedRun): void {
 		...(entry.phaseIndex !== undefined ? { phaseIndex: entry.phaseIndex } : {}),
 		...(entry.phaseTitle !== undefined ? { phaseTitle: entry.phaseTitle } : {}),
 		...(entry.parallelGroupId !== undefined ? { parallelGroupId: entry.parallelGroupId } : {}),
+		...(entry.pipeline
+			? {
+					pipelineId: entry.pipeline.id,
+					pipelineItemIndex: entry.pipeline.itemIndex,
+					pipelineStageIndex: entry.pipeline.stageIndex,
+					...(entry.pipeline.itemLabel ? { pipelineItemLabel: entry.pipeline.itemLabel } : {}),
+				}
+			: {}),
 		cwd: root,
 		startedAt: entry.startedAt,
 	} as RunsRegistryEntry);
@@ -470,6 +479,51 @@ describe("dashboard workflow phase tree", () => {
 			const body = renderRows(component).join("\n");
 			assert.doesNotMatch(body, /forged row/);
 			assert.match(body, /workflow/);
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("hoists phase-spanning pipeline items and leaves phase totals to loose runs", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "loose",
+			agentName: "loose-run",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Inspect",
+			startedAt: 1100,
+		});
+		seedRun(root, {
+			runId: "stage-one",
+			agentName: "stage-one",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Inspect",
+			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 0, itemLabel: "widget" },
+			startedAt: 1200,
+		});
+		seedRun(root, {
+			runId: "stage-two",
+			agentName: "stage-two",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 2,
+			phaseTitle: "Confirm",
+			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 1, itemLabel: "widget" },
+			startedAt: 1300,
+		});
+
+		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
+		try {
+			const lines = leftRows(component);
+			assert.equal(lines.filter((line) => /widget/.test(line)).length, 1);
+			assert.match(lines.join("\n"), /stage-two · P2 Confirm · stage 2\/2/);
+			assert.match(lines.join("\n"), /Phase 1: Inspect · 1\/1 · \+1 pipeline stages/);
+			assert.match(lines.join("\n"), /Phase 2: Confirm · 0\/0 · \+1 pipeline stages/);
 		} finally {
 			component.dispose();
 		}

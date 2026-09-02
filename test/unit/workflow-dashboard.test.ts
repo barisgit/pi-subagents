@@ -486,7 +486,17 @@ describe("workflow dashboard reader overlays", () => {
 			["inspect", "confirm"],
 		);
 		const pipelineTarget = detailTargetForRow(
-			{ kind: "pipeline", workflowId: "wf", pipelineId: "pipe", depth: 1, collapsed: false },
+			{
+				kind: "pipeline",
+				workflowId: "wf",
+				pipelineId: "pipe",
+				depth: 1,
+				itemCount: 1,
+				stageCount: 2,
+				done: 2,
+				total: 2,
+				collapsed: false,
+			},
 			runs,
 		);
 		assert.equal(pipelineTarget?.kind, "pipeline");
@@ -547,7 +557,7 @@ describe("workflow dashboard reader overlays", () => {
 				.map(stripBorders)
 				.map((line) => line.split("│")[0] ?? line)
 				.join("\n");
-			assert.match(collapsed, /▸ widget/);
+			assert.match(collapsed, /widget/);
 			assert.doesNotMatch(collapsed, /inspect-agent|confirm-agent/);
 		} finally {
 			component.dispose();
@@ -588,7 +598,7 @@ describe("workflow dashboard pipeline rows", () => {
 						? `run:${row.run.run.id}`
 						: row.kind,
 			),
-			["run:wf", "phase", "item:sync widget:2", "run:a", "run:b", "item:1:1", "run:c"],
+			["run:wf", "phase", "pipeline", "item:sync widget:2", "run:a", "run:b", "item:1:1", "run:c"],
 		);
 	});
 });

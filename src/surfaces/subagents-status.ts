@@ -103,6 +103,54 @@ function computeBodyHeight(tui?: TUI): number {
 	return Math.max(MIN_VIEWPORT_HEIGHT, rows - CHROME_ROWS);
 }
 
+function pipelineRuns(
+	runs: readonly LiveRun[],
+	row: Extract<DisplayRow, { kind: "pipeline" | "pipelineItem" }>,
+): LiveRun[] {
+	return runs.filter(
+		(child) =>
+			child.run.parentRunId === row.workflowId &&
+			child.run.pipeline?.id === row.pipelineId &&
+			(row.kind === "pipeline" || child.run.pipeline.itemIndex === row.itemIndex),
+	);
+}
+
+function pipelineDuration(runs: readonly LiveRun[], now: number): number | undefined {
+	if (runs.length === 0) return undefined;
+	const startedAt = Math.min(...runs.map((run) => run.run.executionStartedAt ?? run.run.startedAt));
+	const endedAt = Math.max(...runs.map((run) => run.run.endedAt ?? now));
+	return Math.max(0, endedAt - startedAt);
+}
+
+function buildPipelineLine(
+	theme: Theme,
+	row: Extract<DisplayRow, { kind: "pipeline" }>,
+	selected: boolean,
+	width: number,
+	children: readonly RowState[],
+): string {
+	const phaseChip =
+		row.phaseStart === undefined
+			? undefined
+			: row.phaseStart === row.phaseEnd
+				? `P${row.phaseStart}`
+				: `P${row.phaseStart}–P${row.phaseEnd}`;
+	return renderRowLine(
+		theme,
+		{
+			state: aggregateState(children),
+			name: `pipeline (${row.itemCount} items × ${row.stageCount} stages)`,
+			depth: row.depth,
+			selected,
+			marker: row.collapsed ? "collapsed" : "expanded",
+			...(phaseChip ? { phaseChip } : {}),
+			badge: `${row.done}/${row.total} stages`,
+		},
+		width,
+		"dashboard",
+	);
+}
+
 type ForegroundControl = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
 
 // charter VAL-RUNVIEW-TYPE: ForegroundRunSummary is now an alias of the canonical
@@ -571,21 +619,25 @@ function buildPhaseLine(
 		depth: row.depth,
 		selected,
 		...(row.expandable ? { marker: row.collapsed ? "collapsed" : "expanded" } : { stageStrip: [] }),
-		badge: !row.expandable && row.planState ? row.planState : `${row.done}/${row.total}`,
+		badge: `${!row.expandable && row.planState ? row.planState : `${row.done}/${row.total}`}${
+			row.pipelineStages > 0 ? ` · +${row.pipelineStages} pipeline stages` : ""
+		}`,
 	};
 	return renderRowLine(theme, cells, width, "dashboard");
 }
 
 function childRowStates(
 	runs: readonly LiveRun[],
-	row: Extract<DisplayRow, { kind: "phase" | "pipelineItem" }>,
+	row: Extract<DisplayRow, { kind: "phase" | "pipeline" | "pipelineItem" }>,
 ): RowState[] {
 	return runs
 		.filter((child) => {
 			if (child.run.parentRunId !== row.workflowId) return false;
+			if (row.kind === "pipeline") return child.run.pipeline?.id === row.pipelineId;
 			if (row.kind === "pipelineItem") {
 				return child.run.pipeline?.id === row.pipelineId && child.run.pipeline.itemIndex === row.itemIndex;
 			}
+			if (child.run.pipeline !== undefined) return false;
 			if (row.title !== undefined) {
 				return (
 					child.run.phaseTitle !== undefined &&
@@ -594,6 +646,9 @@ function childRowStates(
 			}
 			return child.run.phaseIndex === row.phaseIndex;
 		})
+		.sort((a, b) =>
+			row.kind === "pipelineItem" ? (a.run.pipeline?.stageIndex ?? 0) - (b.run.pipeline?.stageIndex ?? 0) : 0,
+		)
 		.map((child) => cellsFromRunView(child.run, Date.now()).state);
 }
 
@@ -603,14 +658,16 @@ function buildPipelineItemLine(
 	selected: boolean,
 	width: number,
 	children: readonly RowState[],
+	durationMs: number | undefined,
 ): string {
 	const cells: RowCells = {
 		state: aggregateState(children),
 		name: row.label || `Item ${row.itemIndex + 1}`,
 		depth: row.depth,
 		selected,
-		marker: row.collapsed ? "collapsed" : "expanded",
+		stageStrip: children,
 		badge: `${row.done}/${row.total}`,
+		...(durationMs !== undefined ? { durationMs } : {}),
 	};
 	return renderRowLine(theme, cells, width, "dashboard");
 }
@@ -627,6 +684,7 @@ export function buildLeftLine(
 	pendingDelivery = false,
 	suppressPhaseChip = false,
 	parallelMarker = false,
+	pipelineStageCount?: number,
 ): string {
 	// Container rows (workflow/parallel groups with visible children) carry a
 	// collapse marker instead of a state glyph; the marker's color carries state.
@@ -669,7 +727,11 @@ export function buildLeftLine(
 	cells.phaseChip = phase || activity || undefined;
 	// Containers have empty steps[] (state synthesized from children), so the
 	// shape badge is computed from the children instead: `2/3` done/total.
-	const badge = containerInfo ? `${containerInfo.done}/${containerInfo.total}` : runShapeBadge(run);
+	const badge = pipelineStageCount
+		? `stage ${(run.run.pipeline?.stageIndex ?? 0) + 1}/${pipelineStageCount}`
+		: containerInfo
+			? `${containerInfo.done}/${containerInfo.total}`
+			: runShapeBadge(run);
 	cells.badge = badge || undefined;
 	// Don't pre-truncate the label here — the final `truncateToWidth(text, width)`
 	// below clips the whole row once at the right edge. Pre-truncating produced
@@ -1012,9 +1074,18 @@ export class SubagentsStatusComponent implements Component {
 			return buildPhaseLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
 		}
 		if (row.kind === "pipelineItem") {
-			return buildPipelineItemLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
+			return buildPipelineItemLine(
+				this.theme,
+				row,
+				isSelected,
+				lineWidth,
+				childRowStates(this.runs, row),
+				pipelineDuration(pipelineRuns(this.runs, row), Date.now()),
+			);
 		}
-		if (row.kind === "pipeline") return "";
+		if (row.kind === "pipeline") {
+			return buildPipelineLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
+		}
 		const containerInfo = this.containerRowInfo(row.run);
 		return buildLeftLine(
 			this.theme,
@@ -1028,6 +1099,7 @@ export class SubagentsStatusComponent implements Component {
 			this.isPendingDelivery(row.run),
 			row.suppressPhaseChip,
 			row.parallelMarker,
+			row.pipelineStageCount,
 		);
 	}
 
