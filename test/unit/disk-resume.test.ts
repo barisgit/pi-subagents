@@ -257,6 +257,17 @@ describe("disk resume", () => {
 		const liveSession = {
 			messages: [] as string[],
 			deliveryOptions: [] as Array<{ deliverAs?: "steer" | "followUp" } | undefined>,
+			async prompt(
+				message: string,
+				options?: {
+					streamingBehavior?: "steer" | "followUp";
+					preflightResult?: (success: boolean) => void;
+				},
+			) {
+				this.messages.push(message);
+				this.deliveryOptions.push({ deliverAs: options?.streamingBehavior });
+				options?.preflightResult?.(true);
+			},
 			async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }) {
 				this.messages.push(message);
 				this.deliveryOptions.push(options);

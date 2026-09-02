@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { setRegistryPathForTests } from "../../src/state/runs-registry.ts";
-import { runWorkflowScript, WorkflowAgentError } from "../../src/workflow/workflow.ts";
+import { runWorkflowScript, type WorkflowDispatchTags, WorkflowAgentError } from "../../src/workflow/workflow.ts";
 import { makeAgent } from "../support/helpers.ts";
 
 describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
@@ -22,6 +22,18 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 		});
 
 		assert.deepEqual(value, { answer: 7 });
+	});
+
+	it("rejects an empty or non-string per-child cwd", async () => {
+		for (const cwd of ["''", "42", "null"]) {
+			await assert.rejects(
+				runWorkflowScript({
+					dispatch: async () => ({ result: "unused" }),
+					script: `return await agent('review', 'check', { cwd: ${cwd} });`,
+				}),
+				/agent\(role, task, \{ cwd \}\) expects a non-empty string/,
+			);
+		}
 	});
 
 	it("surfaces dispatch failure and does not return a masking fallback status:ok envelope", async () => {
@@ -100,6 +112,60 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 			}),
 			/plain JSON Schema object/,
 		);
+	});
+
+	it("threads per-child phase and label tags without changing the default phase", async () => {
+		const phases: string[] = [];
+		const calls: Array<{ task: string; tags?: WorkflowDispatchTags }> = [];
+		await runWorkflowScript({
+			dispatch: async (_role, task, tags) => {
+				calls.push({ task, tags });
+				return { result: task };
+			},
+			onPhase: (title) => phases.push(title),
+			script: [
+				"meta({ name: 'Audit', description: 'Compare', phases: ['Scope', 'Verify'] });",
+				"phase('Scope');",
+				"await agent('review', 'override', { phase: 'Phase 2: Verify', label: 'Verify physics branch', cwd: 'packages/physics' });",
+				"await agent('review', 'default');",
+			].join("\n"),
+		});
+
+		assert.deepEqual(phases, ["Scope"]);
+		assert.equal(calls[0]?.tags?.phaseIndex, 2);
+		assert.equal(calls[0]?.tags?.phaseTitle, "Verify");
+		assert.equal(calls[0]?.tags?.label, "Verify physics branch");
+		assert.equal(calls[0]?.tags?.cwd, "packages/physics");
+		assert.equal(calls[1]?.tags?.phaseIndex, undefined);
+		assert.equal(calls[1]?.tags?.phaseTitle, undefined);
+		assert.equal(calls[1]?.tags?.label, undefined);
+		assert.equal(calls[1]?.tags?.cwd, undefined);
+	});
+
+	it("rejects a per-child phase not declared by workflow metadata", async () => {
+		await assert.rejects(
+			runWorkflowScript({
+				dispatch: async () => ({ result: "unused" }),
+				script: [
+					"meta({ name: 'Audit', description: 'Compare', phases: ['Scope'] });",
+					"return await agent('review', 'check', { phase: 'Missing' });",
+				].join("\n"),
+			}),
+			/not declared in meta\.phases/,
+		);
+	});
+
+	it("uses branch as a semantic pipeline item label", async () => {
+		let seenTags: WorkflowDispatchTags | undefined;
+		await runWorkflowScript({
+			dispatch: async (_role, _task, tags) => {
+				seenTags = tags;
+				return { result: "done" };
+			},
+			script: "return await pipeline([{ branch: 'physics' }], (item) => agent('review', item.branch));",
+		});
+
+		assert.equal(seenTags?.pipeline?.itemLabel, "physics");
 	});
 });
 

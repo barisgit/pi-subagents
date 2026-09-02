@@ -10,13 +10,63 @@ interface ExecutorResult {
 	content: Array<{ type?: string; text?: string }>;
 }
 
+class DeferredIdleSession {
+	readonly prompts: Array<{
+		message: string;
+		options?: {
+			expandPromptTemplates?: boolean;
+			streamingBehavior?: "steer" | "followUp";
+			source?: string;
+			preflightResult?: (success: boolean) => void;
+		};
+	}> = [];
+	private completeTurn!: () => void;
+	private readonly turnCompleted = new Promise<void>((resolve) => {
+		this.completeTurn = resolve;
+	});
+
+	async prompt(
+		message: string,
+		options?: {
+			expandPromptTemplates?: boolean;
+			streamingBehavior?: "steer" | "followUp";
+			source?: string;
+			preflightResult?: (success: boolean) => void;
+		},
+	): Promise<void> {
+		this.prompts.push({ message, options });
+		options?.preflightResult?.(true);
+		await this.turnCompleted;
+	}
+
+	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
+		await this.prompt(message, {
+			expandPromptTemplates: false,
+			streamingBehavior: options?.deliverAs,
+			source: "extension",
+			preflightResult: () => {},
+		});
+	}
+
+	complete(): void {
+		this.completeTurn();
+	}
+}
+
 class FakeSession {
 	readonly messages: string[] = [];
 	readonly deliveryOptions: Array<{ deliverAs?: "steer" | "followUp" } | undefined> = [];
 
-	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
+	async prompt(
+		message: string,
+		options?: {
+			streamingBehavior?: "steer" | "followUp";
+			preflightResult?: (success: boolean) => void;
+		},
+	): Promise<void> {
 		this.messages.push(message);
-		this.deliveryOptions.push(options);
+		this.deliveryOptions.push({ deliverAs: options?.streamingBehavior });
+		options?.preflightResult?.(true);
 	}
 }
 
@@ -24,38 +74,33 @@ class BusySteerSession {
 	readonly steered: string[] = [];
 	promptCalls = 0;
 
-	prompt(): void {
+	async prompt(
+		message: string,
+		options?: {
+			streamingBehavior?: "steer" | "followUp";
+			preflightResult?: (success: boolean) => void;
+		},
+	): Promise<void> {
 		this.promptCalls += 1;
-		throw new Error(
-			"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-		);
+		if (options?.streamingBehavior !== "steer") {
+			options?.preflightResult?.(false);
+			throw new Error(
+				"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+			);
+		}
+		await this.steer(message);
+		options.preflightResult?.(true);
 	}
 
 	async steer(message: string): Promise<void> {
 		this.steered.push(message);
 	}
-
-	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
-		if (options?.deliverAs === "steer") {
-			await this.steer(message);
-			return;
-		}
-		this.prompt();
-	}
 }
 
 class ThrowingSession {
-	prompt(): void {
+	async prompt(_message?: string, options?: { preflightResult?: (success: boolean) => void }): Promise<void> {
+		options?.preflightResult?.(false);
 		throw new Error("prompt failed");
-	}
-
-	async steer(): Promise<void> {
-		throw new Error("steer failed");
-	}
-
-	async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }): Promise<void> {
-		if (options?.deliverAs === "steer") await this.steer();
-		else this.prompt();
 	}
 }
 
@@ -76,7 +121,7 @@ function makeState(cwd: string): SubagentState {
 	};
 }
 
-type ResumeSession = FakeSession | BusySteerSession | ThrowingSession;
+type ResumeSession = FakeSession | DeferredIdleSession | BusySteerSession | ThrowingSession;
 
 function registerHandle(registry: ChildAgentRegistry, runId: string, stepIndex: number): FakeSession;
 function registerHandle<T extends ResumeSession>(
@@ -150,6 +195,40 @@ function markAsync(
 }
 
 describe("resume action", () => {
+	it("live idle resume returns after prompt acceptance without waiting for turn completion", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			const session = new DeferredIdleSession();
+			registerHandle(harness.childRegistry, "run-idle", 0, session);
+			markAsync(harness.state, "run-idle", "running");
+
+			const execution = harness.execute({ action: "resume", id: "run-idle", message: "continue" });
+			const settledBeforeTurn = await Promise.race([
+				execution.then(() => true),
+				new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+			]);
+			session.complete();
+
+			assert.equal(settledBeforeTurn, true);
+			const result = await execution;
+			assert.equal(result.isError, undefined, text(result));
+			assert.deepEqual(session.prompts, [
+				{
+					message: "continue",
+					options: {
+						expandPromptTemplates: false,
+						streamingBehavior: "steer",
+						source: "extension",
+						preflightResult: session.prompts[0]?.options?.preflightResult,
+					},
+				},
+			]);
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
 	it("resume-action posts message to a live run", async () => {
 		const tempDir = createTempDir("pi-subagent-resume-action-");
 		try {
@@ -198,7 +277,7 @@ describe("resume action", () => {
 		}
 	});
 
-	it("live resume uses steering delivery instead of busy prompt", async () => {
+	it("live resume queues steering while the session is busy", async () => {
 		const tempDir = createTempDir("pi-subagent-resume-action-");
 		try {
 			const harness = makeHarness(tempDir);
@@ -210,7 +289,7 @@ describe("resume action", () => {
 
 			assert.equal(result.isError, undefined, text(result));
 			assert.deepEqual(session.steered, ["steer me"]);
-			assert.equal(session.promptCalls, 0);
+			assert.equal(session.promptCalls, 1);
 		} finally {
 			removeTempDir(tempDir);
 		}
@@ -226,7 +305,7 @@ describe("resume action", () => {
 			const result = await harness.execute({ action: "resume", id: "run-fail", message: "fail me" });
 
 			assert.equal(result.isError, true);
-			assert.match(text(result), /Failed to resume run run-fail: steer failed/);
+			assert.match(text(result), /Failed to resume run run-fail: prompt failed/);
 			assert.doesNotMatch(text(result), /Resume message sent/);
 		} finally {
 			removeTempDir(tempDir);

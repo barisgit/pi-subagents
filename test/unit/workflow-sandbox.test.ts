@@ -121,7 +121,13 @@ describe("workflow vm sandbox hardening (VAL-WORKFLOW-SANDBOX)", () => {
 			runWorkflowScript({ dispatch, script: `${declaration}\n${declaration}` }),
 			/meta\(\) may only be called once/,
 		);
-		for (const operation of ["phase('Scope');", "agent('role', 'task');", "parallel([]);", "pipeline([]);"]) {
+		for (const operation of [
+			"phase('Scope');",
+			"agent('role', 'task');",
+			"parallel([]);",
+			"parallelSettled([]);",
+			"pipeline([]);",
+		]) {
 			await assert.rejects(
 				runWorkflowScript({ dispatch, script: `${operation}\n${declaration}` }),
 				/meta\(\) must be called before/,

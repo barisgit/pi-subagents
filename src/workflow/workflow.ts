@@ -29,8 +29,27 @@ export interface WorkflowDispatchOutcome {
 	interrupted?: boolean;
 }
 
+function workflowRejectionMessage(error: unknown): string {
+	try {
+		if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+			return error.message;
+		}
+	} catch {
+		// A rejected value may expose a throwing message getter.
+	}
+	try {
+		return String(error);
+	} catch {
+		return "Unknown error";
+	}
+}
+
 export type WorkflowDispatchResult = SubmitResultEnvelope | WorkflowDispatchOutcome;
 export interface WorkflowDispatchTags {
+	phaseIndex?: number;
+	phaseTitle?: string;
+	label?: string;
+	cwd?: string;
 	parallelGroupId?: string;
 	pendingGroupId?: string;
 	pipeline?: PipelineMetadata;
@@ -57,6 +76,8 @@ export interface WorkflowGroupHandle {
 		index: number;
 		phaseIndex?: number;
 		phaseTitle?: string;
+		label?: string;
+		cwd?: string;
 		parallelGroupId?: string;
 		pipeline?: PipelineMetadata;
 		resultSchema?: TSchema;
@@ -250,12 +271,7 @@ async function agentGlobal(
 	);
 }
 
-async function parallelGlobal<T>(thunks: Array<() => Promise<T>>): Promise<T[]> {
-	if (!Array.isArray(thunks)) throw new TypeError("parallel(thunks) expects an array");
-	return Promise.all(thunks.map((thunk) => thunk()));
-}
-
-type WorkflowPipelineStage = (value: unknown, index: number) => unknown | Promise<unknown>;
+type WorkflowPipelineStage = (value: unknown, originalItem: unknown, index: number) => unknown | Promise<unknown>;
 
 function compactPipelineItemLabel(value: unknown): string | undefined {
 	if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
@@ -269,7 +285,7 @@ function pipelineItemLabel(item: unknown): string | undefined {
 	if (direct) return direct;
 	if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
 	const record = item as Record<string, unknown>;
-	for (const key of ["file", "path", "name", "title", "id"] as const) {
+	for (const key of ["file", "path", "name", "title", "id", "label", "branch", "key", "slug"] as const) {
 		const label = compactPipelineItemLabel(record[key]);
 		if (label) return label;
 	}
@@ -310,6 +326,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	const pipelineAdmission = new ConcurrencySemaphore(pipelineLimit);
 	let metadataDeclared = false;
 	let orchestrationStarted = false;
+	let workflowMeta: WorkflowMeta | undefined;
 	registry.issuedTokens.add(runState.token);
 	class TrackingPromise<T> extends Promise<T> {
 		static get [Symbol.species]() {
@@ -348,12 +365,27 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	const meta = (value: unknown) => {
 		if (metadataDeclared) throw new Error("meta() may only be called once");
 		if (orchestrationStarted) {
-			throw new Error("meta() must be called before phase(), agent(), parallel(), or pipeline()");
+			throw new Error(
+				"meta() must be called before phase(), agent(), parallel(), parallelSettled(), or pipeline()",
+			);
 		}
 		metadataDeclared = true;
 		const parsed = parseWorkflowMeta(value);
 		if (!parsed.ok) throw new TypeError(parsed.reason);
+		workflowMeta = parsed.value;
 		options.onMeta?.(parsed.value);
+	};
+	const resolveAgentPhaseTitle = (value: unknown): string => {
+		if (typeof value !== "string") throw new TypeError("phase title must be a string");
+		const title = canonicalWorkflowPhaseTitle(value);
+		if (
+			workflowMeta &&
+			workflowMeta.phases.length > 0 &&
+			!workflowMeta.phases.some((phase) => phase.title === title)
+		) {
+			throw new Error(`phase title '${title}' is not declared in meta.phases`);
+		}
+		return title;
 	};
 
 	const parallelGroupStore = new AsyncLocalStorage<{
@@ -373,12 +405,32 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		}
 		return Type.Unsafe(schema as Record<string, unknown>);
 	};
-	const agent = (role: string, task: string, opts?: { schema?: unknown }) => {
+	const agent = (
+		role: string,
+		task: string,
+		opts?: { schema?: unknown; phase?: unknown; label?: unknown; cwd?: unknown },
+	) => {
 		orchestrationStarted = true;
 		const group = parallelGroupStore.getStore();
 		const resultSchema = opts?.schema !== undefined ? toResultSchema(opts.schema) : undefined;
+		const phaseTitle = opts?.phase !== undefined ? resolveAgentPhaseTitle(opts.phase) : undefined;
+		const declaredPhaseIndex = phaseTitle
+			? workflowMeta?.phases.findIndex((phase) => phase.title === phaseTitle)
+			: undefined;
+		if (opts?.label !== undefined && typeof opts.label !== "string") {
+			throw new TypeError("agent(role, task, { label }) expects a string");
+		}
+		if (opts?.cwd !== undefined && (typeof opts.cwd !== "string" || opts.cwd.trim().length === 0)) {
+			throw new TypeError("agent(role, task, { cwd }) expects a non-empty string");
+		}
 		return track(
 			agentGlobal(options.dispatch, role, task, {
+				...(declaredPhaseIndex !== undefined && declaredPhaseIndex >= 0
+					? { phaseIndex: declaredPhaseIndex + 1 }
+					: {}),
+				...(phaseTitle ? { phaseTitle } : {}),
+				...(opts?.label ? { label: opts.label } : {}),
+				...(opts?.cwd ? { cwd: opts.cwd } : {}),
 				...(group?.pendingGroupId ? { pendingGroupId: group.pendingGroupId } : {}),
 				...(group?.parallelGroupId ? { parallelGroupId: group.parallelGroupId } : {}),
 				...(group?.pipeline ? { pipeline: group.pipeline } : {}),
@@ -386,9 +438,15 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 			}),
 		);
 	};
-	const parallel = <T>(thunks: Array<() => Promise<T>>) => {
+	const runParallel = <T, R>(
+		name: "parallel" | "parallelSettled",
+		thunks: Array<() => Promise<T>>,
+		collect: (members: Array<Promise<T>>) => Promise<R[]>,
+	): Promise<R[]> => {
 		orchestrationStarted = true;
-		if (!Array.isArray(thunks)) return track(parallelGlobal(thunks));
+		if (!Array.isArray(thunks)) {
+			return track(Promise.reject(new TypeError(`${name}(thunks) expects an array`)));
+		}
 		const groupId = randomUUID();
 		const size = thunks.length;
 		const sized = size > 1;
@@ -411,7 +469,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 				...(outerGroup?.pipeline ? { pipeline: outerGroup.pipeline } : {}),
 			},
 			() => {
-				const members: Array<Promise<unknown>> = [];
+				const members: Array<Promise<T>> = [];
 				for (let index = 0; index < size; index += 1) {
 					try {
 						const thunk = thunks[index];
@@ -423,7 +481,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 				return members;
 			},
 		);
-		const work = Promise.all(memberPromises);
+		const work = collect(memberPromises);
 		if (sized) {
 			// Reap any phantom pending slot once the whole group settles. Driven by
 			// allSettled (NOT `work`, which rejects on the FIRST rejection) so a slow
@@ -447,6 +505,20 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		}
 		return track(work);
 	};
+	const parallel = <T>(thunks: Array<() => Promise<T>>) =>
+		runParallel("parallel", thunks, (members) => Promise.all(members));
+	type ParallelSettledResult<T> = { ok: true; value: T } | { ok: false; error: string };
+	const parallelSettled = <T>(thunks: Array<() => Promise<T>>) =>
+		runParallel<T, ParallelSettledResult<T>>("parallelSettled", thunks, (members) =>
+			Promise.all(
+				members.map((member) =>
+					member.then<ParallelSettledResult<T>, ParallelSettledResult<T>>(
+						(value) => ({ ok: true, value }),
+						(error: unknown) => ({ ok: false, error: workflowRejectionMessage(error) }),
+					),
+				),
+			),
+		);
 	const pipeline = (items: unknown[], ...stages: WorkflowPipelineStage[]) => {
 		orchestrationStarted = true;
 		if (!Array.isArray(items)) {
@@ -471,7 +543,12 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) groupIds.push(randomUUID());
 		const announced = new Set<number>();
 		const sized = items.length > 1;
-		const runStage = (stageIndex: number, value: unknown, itemIndex: number): Promise<unknown> => {
+		const runStage = (
+			stageIndex: number,
+			value: unknown,
+			originalItem: unknown,
+			itemIndex: number,
+		): Promise<unknown> => {
 			const groupId = groupIds[stageIndex];
 			const stage = stages[stageIndex];
 			if (!groupId || !stage) {
@@ -491,7 +568,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 						...(itemLabels[itemIndex] ? { itemLabel: itemLabels[itemIndex] } : {}),
 					},
 				},
-				() => Promise.resolve(stage(value, itemIndex)),
+				() => Promise.resolve(stage(value, originalItem, itemIndex)),
 			);
 		};
 		const itemPromises: Array<Promise<unknown>> = [];
@@ -503,7 +580,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 					try {
 						let value = initial;
 						for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
-							value = await runStage(stageIndex, value, itemIndex);
+							value = await runStage(stageIndex, value, initial, itemIndex);
 						}
 						return value;
 					} finally {
@@ -542,13 +619,16 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 	const sandbox = Object.assign(Object.create(null) as Record<string, unknown>, {
 		agent,
 		parallel,
+		parallelSettled,
 		pipeline,
 		phase,
 		meta,
 	});
 	// Host callables otherwise retain Function.prototype, which exposes the host
 	// Function constructor even when the global object itself has no prototype.
-	for (const callable of [agent, parallel, pipeline, phase, meta]) Object.setPrototypeOf(callable, null);
+	for (const callable of [agent, parallel, parallelSettled, pipeline, phase, meta]) {
+		Object.setPrototypeOf(callable, null);
+	}
 	const ctx = vm.createContext(sandbox, {
 		codeGeneration: { strings: false, wasm: false },
 	});
@@ -597,6 +677,7 @@ export interface WorkflowToolDispatchContext {
 	onUpdate?: (partialResult: SubagentToolResult) => void;
 	ctx: ExtensionContext;
 	requestedAsync?: boolean;
+	tags?: WorkflowDispatchTags;
 }
 
 export interface CreateWorkflowToolOptions {
@@ -611,7 +692,14 @@ type WorkflowPhaseEmitter = WorkflowPhaseEmit & {
 		role: string,
 		task: string,
 		index: number,
-		meta?: { phaseIndex?: number; parallelGroupId?: string; pendingGroupId?: string; pipeline?: PipelineMetadata },
+		meta?: {
+			phaseIndex?: number;
+			phaseTitle?: string;
+			label?: string;
+			parallelGroupId?: string;
+			pendingGroupId?: string;
+			pipeline?: PipelineMetadata;
+		},
 	): void;
 	childSettled(result: SingleResult, index: number): void;
 	// Live progress for a running child: replaces the running placeholder's
@@ -663,7 +751,13 @@ export function createWorkflowPhaseEmitter(
 	const results = new Map<number, SingleResult>();
 	const childPhases = new Map<
 		number,
-		{ phaseIndex: number; phaseTitle?: string; parallelGroupId?: string; pipeline?: PipelineMetadata }
+		{
+			phaseIndex: number;
+			phaseTitle?: string;
+			label?: string;
+			parallelGroupId?: string;
+			pipeline?: PipelineMetadata;
+		}
 	>();
 	let phaseIndex = 0;
 	let phaseTitle = "";
@@ -761,14 +855,15 @@ export function createWorkflowPhaseEmitter(
 			}
 		}
 		const childPhaseIndex = meta?.phaseIndex ?? phaseIndex;
-		const childPhaseTitle = phaseTitle || undefined;
+		const childPhaseTitle = (meta?.phaseTitle ?? phaseTitle) || undefined;
 		childPhases.set(index, {
 			phaseIndex: childPhaseIndex,
 			...(childPhaseTitle ? { phaseTitle: childPhaseTitle } : {}),
+			...(meta?.label ? { label: meta.label } : {}),
 			...(meta?.parallelGroupId ? { parallelGroupId: meta.parallelGroupId } : {}),
 			...(meta?.pipeline ? { pipeline: meta.pipeline } : {}),
 		});
-		const label = childPhaseTitle ? `Phase ${childPhaseIndex}: ${childPhaseTitle}` : undefined;
+		const label = meta?.label ?? (childPhaseTitle ? `Phase ${childPhaseIndex}: ${childPhaseTitle}` : undefined);
 		results.set(index, {
 			agent: role,
 			task,
@@ -788,7 +883,9 @@ export function createWorkflowPhaseEmitter(
 			...(result.error ? { error: result.error } : {}),
 		};
 		const childPhase = childPhases.get(index);
-		const label = childPhase?.phaseTitle ? `Phase ${childPhase.phaseIndex}: ${childPhase.phaseTitle}` : undefined;
+		const label =
+			childPhase?.label ??
+			(childPhase?.phaseTitle ? `Phase ${childPhase.phaseIndex}: ${childPhase.phaseTitle}` : undefined);
 		results.set(index, {
 			...result,
 			...(childPhase?.pipeline && !result.pipeline ? { pipeline: childPhase.pipeline } : {}),
@@ -837,7 +934,7 @@ Scaling and composition:
 - pipeline() streams at most config workflow.maxPipelineItemsInFlight item chains at once (default 8); parallel() is a barrier. Both compose in nested loops and branches.
 
 Worked examples—not templates or limits (replace role placeholders with configured roles):
-- Discovery-driven fan-out: a child's structured result sets the topology. Do not pre-author a work-list a child could discover at runtime. Build one self-contained brief; each branch gets a distinct focus.
+- Discovery fan-out: let a structured child result set the topology; give each branch one self-contained brief and distinct focus.
     const areas = await agent("<investigation-role>", "List the distinct areas this audit must cover. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
     const brief = "Read-only audit of <repo and key paths>. Cite file and line evidence for every claim. Expected output: a findings list. Area: ";
     const reports = await parallel(areas.map((a) => () => agent("<investigation-role>", brief + a)));
@@ -852,20 +949,23 @@ Worked examples—not templates or limits (replace role placeholders with config
       await parallel(gaps.map((gap) => () => agent("<investigation-role>", "Close this gap: " + gap)));
       gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
     }
-These are ingredients, not canonical recipes; larger structures—queues, tournaments, judge panels, staged escalation, self-repair, convergence gates—are ordinary JavaScript over the same primitives. Do not settle for a flat one-barrier fan-out out of caution: the sandbox is full JavaScript, so any coordination strategy you can state you can implement. Design the harness the task deserves.
+These are ingredients, not canonical recipes. Queues, panels, repair loops, and convergence gates are ordinary JavaScript over the same primitives; design the harness the task deserves.
 
-The script runs in a sandbox with five globals:
+The script runs in a sandbox with six globals:
 - meta({ name, description, phases }) — call once before other globals. phases: ["Recon"] or [{ title: "Recon" }]; objects may add detail; titles are non-empty and unique.
-- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object) to FORCE result into that exact shape: the runtime validates it and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
-- parallel(thunks) -> Promise<results[]> — run thunks concurrently; maxConcurrentAgents bounds direct-child admission and active leaves. It is a FAIL-FAST Promise.all barrier. Catch inside each thunk when partial results are acceptable.
-- pipeline(items, ...stages) -> Promise<results[]> — stream each item through stages with at most workflow.maxPipelineItemsInFlight item chains active; results preserve input order. It is fail-fast like Promise.all.
-- phase(title) — label the current stage for live status displays.
+- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. opts may contain schema, phase, label, and cwd. opts.phase selects this child's phase without changing the default and must match metadata when phases are declared; opts.label is its persisted display label; a relative opts.cwd resolves from the caller/session cwd. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object): the runtime validates and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
+- parallel(thunks) -> Promise<results[]> — run thunks concurrently; maxConcurrentAgents bounds direct-child admission and active leaves. It is a FAIL-FAST Promise.all barrier.
+- parallelSettled(thunks) -> Promise<Array<{ ok: true, value } | { ok: false, error: string }>> — use instead of per-thunk try/catch when partial results are acceptable; results preserve input order.
+- pipeline(items, ...stages) -> Promise<results[]> — stream each item through stages with at most workflow.maxPipelineItemsInFlight item chains active; results preserve input order. Each stage receives (previousResult, originalItem, index); the first receives (item, item, index). It is fail-fast like Promise.all.
+- phase(title) — set the default phase for subsequent dispatches. opts.phase overrides one call and is the right tool inside pipeline/parallel callbacks.
 
-Top-level await is supported. Return a value from the script; it becomes the workflow result. Set async:true to run the whole workflow in the background — the tool returns immediately with an id and Pi notifies you on completion; do not poll. Child-session Workflow calls run synchronously despite async/default unless nested async is explicitly enabled in extension config; when enabled, completion starts a new turn in the immediate parent session.
+Use one pipeline with N stages for dependent per-item work; attribute later stages via opts.phase inside the stage callback. Never split dependent stages into separate pipeline() calls with a phase() barrier between them.
 
-Rules: always await every agent()/parallel()/pipeline() call — a failed agent surfaces only when its promise is awaited. For concurrency use parallel() or pipeline(), not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.
+Top-level await is supported; the script's return value is the workflow result. Set async:true to run in the background — the tool returns an id and Pi notifies you on completion; do not poll. Child-session Workflow calls run synchronously despite async/default unless nested async is explicitly enabled in extension config; when enabled, completion starts a new turn in the immediate parent session.
 
-Task strings: each child starts with no conversation context — the script sees the whole picture, the child sees only its task string. Make every task self-contained (relevant paths, constraints, observed behavior, exact expected output) and state whether it is read-only research or includes implementation. Have verification stages check actual files and command results, not an earlier child's summary of its own work.`,
+Rules: always await every agent()/parallel()/parallelSettled()/pipeline() call — failures surface only when promises are awaited. Use these concurrency primitives, not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.
+
+Each child starts with no conversation context. Make tasks self-contained with paths, constraints, observed behavior, expected output, and whether work is read-only or includes implementation. Verification stages check actual files and commands, not an earlier child's summary.`,
 		parameters: WorkflowParams,
 		async execute(id, params, signal, onUpdate, ctx) {
 			// Declared outside the try so the catch can record a synthetic failed child
@@ -901,8 +1001,13 @@ Task strings: each child starts with no conversation context — the script sees
 						dispatch: async (role, task, tags) => {
 							if (group) {
 								const index = childIndex++;
+								const childPhaseIndex = tags?.phaseIndex ?? emitter!.phaseIndex();
+								const childPhaseTitle = tags?.phaseTitle ?? emitter!.phaseTitle();
 								emitter!.childStarted(role, task, index, {
-									phaseIndex: emitter!.phaseIndex(),
+									phaseIndex: childPhaseIndex,
+									...(childPhaseTitle ? { phaseTitle: childPhaseTitle } : {}),
+									...(tags?.label ? { label: tags.label } : {}),
+									...(tags?.cwd ? { cwd: tags.cwd } : {}),
 									...(tags?.pendingGroupId ? { pendingGroupId: tags.pendingGroupId } : {}),
 									...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
 									...(tags?.pipeline ? { pipeline: tags.pipeline } : {}),
@@ -911,8 +1016,10 @@ Task strings: each child starts with no conversation context — the script sees
 									role,
 									task,
 									index,
-									phaseIndex: emitter!.phaseIndex(),
-									...(emitter!.phaseTitle() ? { phaseTitle: emitter!.phaseTitle() } : {}),
+									phaseIndex: childPhaseIndex,
+									...(childPhaseTitle ? { phaseTitle: childPhaseTitle } : {}),
+									...(tags?.label ? { label: tags.label } : {}),
+									...(tags?.cwd ? { cwd: tags.cwd } : {}),
 									...(tags?.parallelGroupId ? { parallelGroupId: tags.parallelGroupId } : {}),
 									...(tags?.pipeline ? { pipeline: tags.pipeline } : {}),
 									...(tags?.resultSchema ? { resultSchema: tags.resultSchema } : {}),
@@ -929,7 +1036,7 @@ Task strings: each child starts with no conversation context — the script sees
 								};
 							}
 							if (!options.dispatch) throw new Error("workflow dispatch is not configured");
-							return options.dispatch(role, task, workflowContext);
+							return options.dispatch(role, task, { ...workflowContext, ...(tags ? { tags } : {}) });
 						},
 						onPhase: (title) => {
 							emitter!(title);

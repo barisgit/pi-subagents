@@ -627,6 +627,7 @@ export function stopResultAnimations(): void {
  */
 interface MultiRenderPlan {
 	hasPipeline: boolean;
+	pipelineCount: number;
 	displayResults: Details["results"];
 	hasParallelInSequence: boolean;
 	sequenceStepLabels: string[] | undefined;
@@ -637,8 +638,21 @@ interface MultiRenderPlan {
 
 function buildMultiRenderPlan(d: Details): MultiRenderPlan {
 	const hasPipeline = d.workflow === true && d.results.some((result) => result.pipeline);
+	const pipelineOrder = new Map<string, number>();
+	for (const result of d.results) {
+		if (result.pipeline && !pipelineOrder.has(result.pipeline.id)) {
+			pipelineOrder.set(result.pipeline.id, pipelineOrder.size);
+		}
+	}
 	const displayResults = hasPipeline
 		? [...d.results].sort((a, b) => {
+				const pipelineA = a.pipeline
+					? (pipelineOrder.get(a.pipeline.id) ?? Number.MAX_SAFE_INTEGER)
+					: Number.MAX_SAFE_INTEGER;
+				const pipelineB = b.pipeline
+					? (pipelineOrder.get(b.pipeline.id) ?? Number.MAX_SAFE_INTEGER)
+					: Number.MAX_SAFE_INTEGER;
+				if (pipelineA !== pipelineB) return pipelineA - pipelineB;
 				const itemA = a.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
 				const itemB = b.pipeline?.itemIndex ?? Number.MAX_SAFE_INTEGER;
 				if (itemA !== itemB) return itemA - itemB;
@@ -673,6 +687,7 @@ function buildMultiRenderPlan(d: Details): MultiRenderPlan {
 	const stepsToShow = useResultsDirectly ? displayResults.length : (d.agentGroups?.length ?? 0);
 	return {
 		hasPipeline,
+		pipelineCount: pipelineOrder.size,
 		displayResults,
 		hasParallelInSequence,
 		sequenceStepLabels,
@@ -750,12 +765,14 @@ function inlineChildTail(
 }
 
 // Pipeline rows group by item: emit an accent item header the first time each
-// itemIndex appears in display order. Returns the header label or undefined.
+// pipeline/item pair appears in display order. Returns the header label or undefined.
 function makePipelineItemHeaderTracker(hasPipeline: boolean): (r: Details["results"][number]) => string | undefined {
-	let lastPipelineItem: number | undefined;
+	let lastPipelineItem: string | undefined;
 	return (r) => {
-		if (!hasPipeline || !r.pipeline || r.pipeline.itemIndex === lastPipelineItem) return undefined;
-		lastPipelineItem = r.pipeline.itemIndex;
+		if (!hasPipeline || !r.pipeline) return undefined;
+		const pipelineItem = `${r.pipeline.id}:${r.pipeline.itemIndex}`;
+		if (pipelineItem === lastPipelineItem) return undefined;
+		lastPipelineItem = pipelineItem;
 		return r.pipeline.itemLabel || `Item ${r.pipeline.itemIndex + 1}`;
 	};
 }
@@ -845,6 +862,7 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 	const totalSummary = d.progressSummary || sumProgressTotals(d.results);
 	const {
 		hasPipeline,
+		pipelineCount,
 		displayResults,
 		hasParallelInSequence,
 		sequenceStepLabels,
@@ -960,6 +978,8 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 	const historyN = historyLinesForRunningCount(runningCount);
 
 	const nextPipelineItemHeader = makePipelineItemHeaderTracker(hasPipeline);
+	let currentPipelineId: string | undefined;
+	let pipelineNumber = 0;
 	for (let i = 0; i < stepsToShow; i++) {
 		const r = displayResults[i];
 		const agentName = useResultsDirectly
@@ -970,6 +990,13 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 				new Text(truncLine(theme.fg("dim", `  ◦ ${itemTitle} ${i + 1}: ${agentName} · pending`), width), 0, 0),
 			);
 			continue;
+		}
+		if (r.pipeline && r.pipeline.id !== currentPipelineId) {
+			currentPipelineId = r.pipeline.id;
+			pipelineNumber++;
+			if (pipelineCount > 1 && pipelineNumber > 1) {
+				c.addChild(new Text(truncLine(theme.fg("dim", `  pipeline ${pipelineNumber}`), width), 0, 0));
+			}
 		}
 		const output = getSingleResultDisplayOutput(r);
 		const pipelineItemHeader = nextPipelineItemHeader(r);
@@ -1343,6 +1370,7 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	const contextBadge = forkContextBadge(theme, d.context);
 	const {
 		hasPipeline,
+		pipelineCount,
 		displayResults,
 		hasParallelInSequence,
 		sequenceStepLabels,
@@ -1413,6 +1441,8 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 	c.addChild(new Spacer(1));
 
 	const nextPipelineItemHeader = makePipelineItemHeaderTracker(hasPipeline);
+	let currentPipelineId: string | undefined;
+	let pipelineNumber = 0;
 	for (let i = 0; i < stepsToShow; i++) {
 		const r = displayResults[i];
 		const agentName = useResultsDirectly
@@ -1425,6 +1455,13 @@ function renderDetailsBody(d: Details, options: { expanded: boolean }, theme: Th
 			c.addChild(new Text(theme.fg("dim", `    status: pending`), 0, 0));
 			c.addChild(new Spacer(1));
 			continue;
+		}
+		if (r.pipeline && r.pipeline.id !== currentPipelineId) {
+			currentPipelineId = r.pipeline.id;
+			pipelineNumber++;
+			if (pipelineCount > 1 && pipelineNumber > 1) {
+				c.addChild(new Text(fit(theme.fg("dim", `  pipeline ${pipelineNumber}`)), 0, 0));
+			}
 		}
 
 		const pipelineItemHeader = nextPipelineItemHeader(r);

@@ -20,7 +20,6 @@ import { createForegroundRunController } from "./foreground-run-controller.ts";
 import { registerRunController, releaseRunController } from "./layer0-runs.ts";
 import { registerNestedAsyncCancellation } from "./nested-async-coordinator.ts";
 import {
-	type Details,
 	type SingleResult,
 	type SubagentState,
 	type TokenUsage,
@@ -182,13 +181,53 @@ async function postResumeMessage(
 	runId: string,
 	message: string,
 ): Promise<SubagentToolResult | null> {
+	let reportPreflight!: (success: boolean) => void;
+	const preflight = new Promise<boolean>((resolve) => {
+		reportPreflight = resolve;
+	});
+	const prompt: (
+		text: string,
+		options: {
+			expandPromptTemplates: boolean;
+			streamingBehavior: "steer";
+			source: "extension";
+			preflightResult: (success: boolean) => void;
+		},
+	) => Promise<void> = handle.session.prompt.bind(handle.session);
+	let turn: Promise<void>;
 	try {
-		await handle.session.sendUserMessage(message, { deliverAs: "steer" });
-		return null;
+		turn = prompt(message, {
+			expandPromptTemplates: false,
+			streamingBehavior: "steer",
+			source: "extension",
+			preflightResult: reportPreflight,
+		});
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
 	}
+	const observedTurn = turn.then(
+		() => ({ ok: true as const }),
+		(error: unknown) => ({ ok: false as const, error }),
+	);
+	if (!(await preflight)) {
+		const outcome = await observedTurn;
+		const errorMessage = outcome.ok
+			? "prompt preflight rejected the message"
+			: outcome.error instanceof Error
+				? outcome.error.message
+				: String(outcome.error);
+		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
+	}
+	void observedTurn.then((outcome) => {
+		if (outcome.ok) return;
+		logger.error(
+			"Live resume turn failed after prompt acceptance",
+			outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error)),
+			{ runId },
+		);
+	});
+	return null;
 }
 
 async function resumeRun(

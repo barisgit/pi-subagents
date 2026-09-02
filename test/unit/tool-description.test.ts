@@ -75,6 +75,15 @@ describe("registered workflow tool description", () => {
 		assert.match(description, /meta\(\{ name, description, phases \}\)/i);
 		assert.match(description, /phases: \["Recon"\] or \[\{ title: "Recon" \}\]/i);
 		assert.match(description, /call once before other globals/i);
+		assert.match(description, /six globals/i);
+		assert.match(description, /opts may contain schema, phase, label, and cwd/i);
+		assert.match(description, /relative opts\.cwd resolves from the caller\/session cwd/i);
+		assert.match(description, /parallelSettled\(thunks\)/i);
+		assert.match(description, /each stage receives \(previousResult, originalItem, index\)/i);
+		assert.match(description, /phase\(title\).*default phase for subsequent dispatches/i);
+		assert.match(description, /opts\.phase overrides one call/i);
+		assert.match(description, /use one pipeline with n stages for dependent per-item work/i);
+		assert.match(description, /never split dependent stages into separate pipeline\(\) calls/i);
 		assert.match(
 			description,
 			/child-session Workflow calls run synchronously despite async\/default unless nested async is explicitly enabled/i,

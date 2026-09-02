@@ -66,6 +66,27 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		);
 	});
 
+	it("returns ordered mixed results from parallelSettled() without failing the workflow", async () => {
+		const result = await executeWorkflow(
+			[
+				"return await parallelSettled([",
+				"  async () => 'first',",
+				"  async () => { throw new Error('broken branch'); },",
+				"  async () => 'third',",
+				"  async () => { throw { get message() { throw new Error('bad getter'); }, toString() { throw new Error('bad stringify'); } }; },",
+				"]);",
+			].join("\n"),
+		);
+
+		assert.equal(result?.isError, undefined);
+		assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), [
+			{ ok: true, value: "first" },
+			{ ok: false, error: "broken branch" },
+			{ ok: true, value: "third" },
+			{ ok: false, error: "Unknown error" },
+		]);
+	});
+
 	it("runs the script inside the required async IIFE and returns the resolved value", async () => {
 		const result = await executeWorkflow("const value = await Promise.resolve(42);\nreturn { value };");
 
@@ -112,6 +133,23 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.equal(result?.isError, undefined);
 		assert.equal((result.content[0] as { text?: string } | undefined)?.text, '[\n  "stage2-1",\n  "stage2-2"\n]');
 		assert.deepEqual(calls, ["stage1-1", "stage1-2", "stage2-2", "stage2-1"]);
+	});
+
+	it("passes the original item and index to every pipeline stage", async () => {
+		const result = await executeWorkflow(
+			[
+				"return await pipeline([{ branch: 'physics' }, { branch: 'biology' }],",
+				"  (item, original, index) => item.branch + ':' + original.branch + ':' + index,",
+				"  (previous, original, index) => previous + '>' + original.branch + ':' + index",
+				");",
+			].join("\n"),
+		);
+
+		assert.equal(result?.isError, undefined);
+		assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), [
+			"physics:physics:0>physics:0",
+			"biology:biology:1>biology:1",
+		]);
 	});
 
 	it("pipeline() validates arguments and preserves an empty/no-stage result", async () => {

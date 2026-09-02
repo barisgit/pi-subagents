@@ -21,48 +21,66 @@ Delegation invoked from a child session runs synchronously, even when `async:tru
 
 ## Workflow
 
-Workflow is the highest-power orchestration surface in this harness: a programmable JavaScript control plane, not a preset parallel or pipeline mode. Its primitives are:
+Choose the shape from the dependency pattern:
 
-- `agent(role, task, opts?)` for child work and optional workflow-authored structured results.
-- `parallel(thunks)` for a barrier over concurrently started branches.
-- `pipeline(items, ...stages)` for independently streaming each item through stages.
-- `phase(title)` for visible progress grouping.
+- Use `pipeline(items, ...stages)` by default for per-item multi-stage work. A stage receives `(previousResult, originalItem, index)`; the first receives `(item, item, index)`.
+- Use a `parallel()` barrier only when the next section needs the whole result set, such as deduplicating across results or exiting early when the set is empty.
+- Use `parallel()` when any failure should abort. Use `parallelSettled()` when partial results are acceptable instead of adding `try/catch` to every thunk.
+- Call `phase(title)` only between top-level sections to set the default for subsequent dispatches. Inside pipeline or parallel callbacks, use `opts.phase` to attribute each child without introducing a barrier; it must match metadata when phases are declared.
+- Set `opts.label` for readable status rows and `opts.cwd` for per-item working directories; relative paths resolve from the caller/session cwd.
+- Define `opts.schema` when later code must filter, compare, or vote on child output. The workflow owns that result contract.
 
-Ordinary JavaScript supplies the larger grammar: functions, arrays, objects, conditions, loops, try/catch, and in-memory state. The primitives can be nested and composed to create runtime-discovered and multi-level fan-out, pipelines inside branches, fan-in across levels, queues, voting panels, selective retries, feedback and repair cycles, convergence gates, repeat-until-pass or loop-until-dry behavior, staged escalation, tournaments, and structures invented for the task.
+Keep dependent stages in one N-stage pipeline. Never split them into separate `pipeline()` calls with a `phase()` barrier between them.
 
-Composition sketches (placeholders stand for configured roles):
+Canonical two-stage form (placeholders stand for configured roles):
 
 ```js
-// Discovery-driven fan-out: a structured child result sets the topology —
-// do not pre-author a work-list a child could discover at runtime.
-// One self-contained brief; each branch gets a distinct focus.
-const areas = await agent("<investigation-role>", "List the distinct areas this audit must cover. Return only the list.",
-  { schema: { type: "array", items: { type: "string" } } });
-const brief = "Read-only audit of <repo and key paths>. Cite file:line evidence for every claim. Expected output: a findings list. Area: ";
-const reports = await parallel(areas.map((a) => () => agent("<investigation-role>", brief + a)));
+meta({
+  name: "Branch updates",
+  description: "Investigate each branch, then implement and verify actionable findings",
+  phases: ["Investigate", "Implement and verify"],
+});
 
-// Explore → verify → synthesize: per-item pipeline stages keep each child's
-// context bounded instead of pasting all reports into one prompt.
-const verified = await pipeline(areas,
-  (a) => agent("<investigation-role>", "Audit area: " + a),
-  (report) => agent("<review-role>", "Re-check each claim against the actual files it cites; drop claims you cannot reproduce:\n" + report));
-return await agent("<review-role>", "Synthesize a decision-ready report:\n" + verified.join("\n---\n"));
+const items = [
+  { branch: "physics", cwd: "packages/physics" },
+  { branch: "biology", cwd: "packages/biology" },
+];
 
-// Gate loop: requeue only what has not passed, under an attempt bound.
-let gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.",
-  { schema: { type: "array", items: { type: "string" } } });
-for (let round = 0; round < 3 && gaps.length > 0; round++) {
-  await parallel(gaps.map((gap) => () => agent("<investigation-role>", "Close this gap: " + gap)));
-  gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.",
-    { schema: { type: "array", items: { type: "string" } } });
-}
+phase("Investigate");
+const outcomes = await pipeline(
+  items,
+  (item, originalItem, index) =>
+    agent("<investigation-role>", "Investigate " + originalItem.branch + " at index " + index, {
+      phase: "Investigate",
+      label: "Investigate " + item.branch,
+      cwd: item.cwd,
+      schema: {
+        type: "object",
+        properties: {
+          finding: { type: "string" },
+          actionable: { type: "boolean" },
+        },
+        required: ["finding", "actionable"],
+        additionalProperties: false,
+      },
+    }),
+  (finding, item) => {
+    if (!finding.actionable) return { skipped: true, branch: item.branch };
+    return agent(
+      "<implementation-role>",
+      "Implement and verify " + item.branch + ": " + finding.finding,
+      {
+        phase: "Implement and verify",
+        label: "Implement " + item.branch,
+        cwd: item.cwd,
+      },
+    );
+  },
+);
+return outcomes;
 ```
 
-Pure parallel work is valid in either a subagent batch/swarm or Workflow. Workflow's distinctive power appears when outputs shape later work, but that is not an artificial minimum-complexity requirement. The named patterns are a floor, not a ceiling; compose novel harnesses whenever richer coordination improves the result. Do not settle for a flat one-barrier fan-out out of caution: any coordination strategy you can state in JavaScript you can implement. Design the harness the task deserves.
-
-Mechanical boundaries remain small: every orchestration call is awaited; partial-failure handling lives inside the relevant thunk or stage; configured role names replace placeholders; the workflow author owns result schemas; and the sandbox itself has no I/O—the children do the real work.
-
-Each child starts with no conversation context: the script sees the whole picture, but a child sees only its task string. Write every task self-contained—relevant paths, constraints, observed behavior, and the exact expected output—and state whether it is read-only research or includes implementation. Give concurrent branches distinct focuses rather than one shared vague prompt. Verification stages must check actual files and command results, not an earlier child's summary of its own work.
+Every orchestration call must be awaited. The sandbox has no I/O; children do the real work. Each child starts with no conversation context, so make every task self-contained with relevant paths, constraints, observed behavior, and expected output. Verification work must check actual files and command results, not an earlier child's summary.
 
 ## Load on demand
 

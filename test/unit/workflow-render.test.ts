@@ -342,12 +342,59 @@ describe("workflow inline render details (VAL-INLINE-RENDER)", () => {
 			],
 		};
 
-		const text = renderText(details, false);
-		assert.match(text, /sync widget/);
-		assert.match(text, /dashboard left pane/);
-		assert.doesNotMatch(text, /Item 1/);
-		assert.match(text, /Stage 1: A/);
-		assert.match(text, /Stage 2: B/);
+		for (const expanded of [false, true]) {
+			const text = renderText(details, expanded);
+			assert.match(text, /sync widget/);
+			assert.match(text, /dashboard left pane/);
+			assert.doesNotMatch(text, /Item 1/);
+			assert.match(text, /Stage 1: A/);
+			assert.match(text, /Stage 2: B/);
+			assert.doesNotMatch(text, /pipeline 2/);
+		}
+	});
+
+	it("groups equal-length pipelines in dispatch order with separate item headers", () => {
+		const details: Details = {
+			mode: "parallel",
+			workflow: true,
+			totalSteps: 4,
+			results: [
+				{
+					...result("A", "inspect computer science", 0, 0),
+					pipeline: { id: "first", itemIndex: 0, stageIndex: 0, itemLabel: "computer-science" },
+				},
+				{
+					...result("A", "inspect biology", 0, 1),
+					pipeline: { id: "first", itemIndex: 1, stageIndex: 0, itemLabel: "biology" },
+				},
+				{
+					...result("B", "fix computer science", 0, 2),
+					pipeline: { id: "second", itemIndex: 0, stageIndex: 0, itemLabel: "computer-science" },
+				},
+				{
+					...result("B", "fix biology", 0, 3),
+					pipeline: { id: "second", itemIndex: 1, stageIndex: 0, itemLabel: "biology" },
+				},
+			],
+		};
+
+		for (const expanded of [false, true]) {
+			const text = renderText(details, expanded);
+			const pipelineHeaders = text
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line === "computer-science" || line === "biology" || line === "pipeline 2");
+			assert.deepEqual(pipelineHeaders, [
+				"computer-science",
+				"biology",
+				"pipeline 2",
+				"computer-science",
+				"biology",
+			]);
+			assert.equal(text.match(/Stage 1: A/g)?.length, 2);
+			assert.equal(text.match(/Stage 1: B/g)?.length, 2);
+			assert.doesNotMatch(text, /Stage [234]: [AB]/);
+		}
 	});
 
 	it("does not render pipeline stages as parallel bracket groups", async () => {
