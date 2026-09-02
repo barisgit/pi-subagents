@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatAsyncRunList, readRunViewForEntry } from "../../src/state/async-status.ts";
 import { buildRightLines, buildWorkflowRightLines } from "../../src/surfaces/dashboard-detail-renderer.ts";
-import { deriveDisplayRows } from "../../src/surfaces/dashboard-row-model.ts";
+import { deriveDisplayRows, detailTargetForRow, rowKey } from "../../src/surfaces/dashboard-row-model.ts";
 import {
 	SubagentsStatusComponent,
 	runViewFromRegistryEntry,
@@ -93,6 +93,7 @@ function appendWorkflowChild(
 		phaseIndex: number;
 		phaseTitle: string;
 		parallelGroupId?: string;
+		pipeline?: { id: string; itemIndex: number; stageIndex: number; itemLabel?: string };
 	},
 ): RunsRegistryEntry {
 	const runRecordDir = path.join(root, "runs", entry.runId);
@@ -133,6 +134,14 @@ function appendWorkflowChild(
 		phaseIndex: entry.phaseIndex,
 		phaseTitle: entry.phaseTitle,
 		...(entry.parallelGroupId ? { parallelGroupId: entry.parallelGroupId } : {}),
+		...(entry.pipeline
+			? {
+					pipelineId: entry.pipeline.id,
+					pipelineItemIndex: entry.pipeline.itemIndex,
+					pipelineStageIndex: entry.pipeline.stageIndex,
+					...(entry.pipeline.itemLabel ? { pipelineItemLabel: entry.pipeline.itemLabel } : {}),
+				}
+			: {}),
 	};
 	appendRunEntry(registryEntry);
 	return registryEntry;
@@ -301,8 +310,8 @@ describe("workflow dashboard reader overlays", () => {
 			assert.match(leftText, /explorer/);
 			assert.match(leftText, /review/);
 			assert.match(leftText, /fixer/);
-			assert.doesNotMatch(text, /P1 inspect/);
-			assert.doesNotMatch(text, /P2 patch/);
+			assert.doesNotMatch(leftText, /P1 inspect/);
+			assert.doesNotMatch(leftText, /P2 patch/);
 		} finally {
 			component.dispose();
 		}
@@ -369,26 +378,24 @@ describe("workflow dashboard reader overlays", () => {
 
 		assert.match(lines, /Parity audit/);
 		assert.match(lines, /Compare behavior/);
-		assert.match(lines, /1\. inspect · completed — Discover areas/);
-		assert.match(lines, /2\. patch · completed/);
-		assert.match(lines, /3\. report · completed/);
-		assert.match(lines, /─ Script ─/);
+		assert.match(lines, /Phase 1: inspect .*2\/2/);
+		assert.match(lines, /Phase 2: patch .*1\/1/);
+		assert.match(lines, /Phase 3: report .*0\/0/);
+		assert.match(lines, /─── Script/);
 		assert.match(lines, /const a = await agent\("explorer", "inspect"\);/);
 		assert.match(lines, /return a\.summary;/);
-		assert.match(lines, /─ Steps ─/);
-		// Phase headers appear once per phase, children grouped beneath.
+		assert.match(lines, /─── Loose runs/);
 		assert.match(lines, /Phase 1: inspect/);
 		assert.match(lines, /Phase 2: patch/);
-		const scriptIdx = lines.indexOf("─ Script ─");
-		const stepsIdx = lines.indexOf("─ Steps ─");
-		assert.ok(scriptIdx !== -1 && stepsIdx !== -1 && scriptIdx < stepsIdx, "script section renders before steps");
+		const scriptIdx = lines.indexOf("─── Script");
+		const runsIdx = lines.indexOf("─── Loose runs");
+		assert.ok(runsIdx !== -1 && scriptIdx !== -1 && runsIdx < scriptIdx, "script section renders last");
 		const p1 = lines.indexOf("Phase 1: inspect");
 		const p2 = lines.indexOf("Phase 2: patch");
 		assert.ok(p1 < p2, "phases render in order");
 		// Children render with agent + state under their phase.
 		assert.match(lines, /explorer/);
 		assert.match(lines, /fixer/);
-		assert.match(lines, /complete/);
 		// Parallel children carry the compact parallel marker; the solo phase-2 child does not.
 		assert.match(lines, /∥ .*explorer/);
 		assert.doesNotMatch(lines, /∥ .*fixer/);
@@ -405,8 +412,8 @@ describe("workflow dashboard reader overlays", () => {
 		const lines = buildRightLines(createTestTheme(), { ownership: "foreign", run: groupSummary }, 120, runs).join(
 			"\n",
 		);
-		assert.match(lines, /─ Script ─/, "mutant: buildRightLines must route workflow groups to the workflow pane");
-		assert.match(lines, /─ Steps ─/);
+		assert.match(lines, /─── Script/, "mutant: buildRightLines must route workflow groups to the workflow pane");
+		assert.match(lines, /─── Loose runs/);
 	});
 
 	it("workflow right pane renders the whole script without truncation", () => {
@@ -431,9 +438,128 @@ describe("workflow dashboard reader overlays", () => {
 			run: runViewFromRegistryEntry(entry, entries),
 		}));
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, runs).join("\n");
-		assert.doesNotMatch(lines, /─ Script ─/);
-		assert.match(lines, /─ Steps ─/);
+		assert.doesNotMatch(lines, /─── Script/);
+		assert.match(lines, /─── Loose runs/);
 		assert.match(lines, /Phase 1: inspect/);
+	});
+
+	it("gives every phase-spanning pipeline row one unique namespaced key and target", () => {
+		const workflow: LiveRun = {
+			ownership: "foreign",
+			run: { id: "wf", workflow: true, mode: "parallel", state: "running", startedAt: 1, steps: [] },
+		};
+		const stage = (id: string, phaseIndex: number, stageIndex: number): LiveRun => ({
+			ownership: "foreign",
+			run: {
+				id,
+				parentRunId: "wf",
+				mode: "single",
+				state: "complete",
+				startedAt: 10 + stageIndex,
+				phaseIndex,
+				phaseTitle: phaseIndex === 1 ? "Inspect" : "Confirm",
+				pipeline: { id: "pipe", itemIndex: 0, stageIndex, itemLabel: "widget" },
+				steps: [{ index: 0, agent: `agent-${stageIndex}`, status: "complete" }],
+			},
+		});
+		const runs = [workflow, stage("inspect", 1, 0), stage("confirm", 2, 1)];
+		const rows = deriveDisplayRows(runs, new Set());
+		const keys = rows.map(rowKey);
+		assert.equal(new Set(keys).size, keys.length);
+		assert.equal(keys.filter((key) => key === "wf:wf:pipe:pipe:item:0").length, 1);
+
+		const runRow = rows.find((row) => row.kind === "run" && row.run.run.id === "inspect");
+		const phaseRow = rows.find((row) => row.kind === "phase" && row.phaseIndex === 1);
+		const itemRow = rows.find((row) => row.kind === "pipelineItem");
+		assert.equal(runRow && detailTargetForRow(runRow, runs)?.kind, "run");
+		const phaseTarget = phaseRow && detailTargetForRow(phaseRow, runs);
+		assert.equal(phaseTarget?.kind, "phase");
+		assert.deepEqual(phaseTarget?.kind === "phase" ? phaseTarget.children.map((child) => child.run.id) : [], [
+			"inspect",
+		]);
+		const itemTarget = itemRow && detailTargetForRow(itemRow, runs);
+		assert.equal(itemTarget?.kind, "pipelineItem");
+		assert.deepEqual(
+			itemTarget?.kind === "pipelineItem" ? itemTarget.item.stages.map((child) => child.run.id) : [],
+			["inspect", "confirm"],
+		);
+		const pipelineTarget = detailTargetForRow(
+			{
+				kind: "pipeline",
+				workflowId: "wf",
+				pipelineId: "pipe",
+				depth: 1,
+				itemCount: 1,
+				stageCount: 2,
+				done: 2,
+				total: 2,
+				collapsed: false,
+			},
+			runs,
+		);
+		assert.equal(pipelineTarget?.kind, "pipeline");
+		assert.equal(pipelineTarget?.kind === "pipeline" ? pipelineTarget.items.length : 0, 1);
+	});
+
+	it("selects one phase-spanning pipeline item and preserves its namespaced collapse key across reload", () => {
+		const root = tmpRegistry();
+		const group = appendWorkflowGroup(root);
+		appendWorkflowChild(root, {
+			runId: "inspect-stage",
+			parentRunId: group.runId,
+			agentName: "inspect-agent",
+			startedAt: 2000,
+			phaseIndex: 1,
+			phaseTitle: "Inspect",
+			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 0, itemLabel: "widget" },
+		});
+		appendWorkflowChild(root, {
+			runId: "confirm-stage",
+			parentRunId: group.runId,
+			agentName: "confirm-agent",
+			startedAt: 3000,
+			phaseIndex: 2,
+			phaseTitle: "Confirm",
+			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 1, itemLabel: "widget" },
+		});
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				refreshMs: 0,
+			},
+		);
+		try {
+			for (let index = 0; index < 5; index++) {
+				const selected = component
+					.render(180)
+					.map(stripBorders)
+					.map((line) => line.split("│")[0] ?? line)
+					.filter((line) => line.trimStart().startsWith(">"));
+				if (selected.some((line) => line.includes("widget"))) break;
+				component.handleInput("j");
+			}
+			const selected = component
+				.render(180)
+				.map(stripBorders)
+				.map((line) => line.split("│")[0] ?? line)
+				.filter((line) => line.trimStart().startsWith(">"));
+			assert.equal(selected.length, 1);
+			assert.match(selected[0] ?? "", /widget/);
+
+			component.handleInput("\r");
+			component.setShowAllSessions(false);
+			const collapsed = component
+				.render(180)
+				.map(stripBorders)
+				.map((line) => line.split("│")[0] ?? line)
+				.join("\n");
+			assert.match(collapsed, /widget/);
+			assert.doesNotMatch(collapsed, /inspect-agent|confirm-agent/);
+		} finally {
+			component.dispose();
+		}
 	});
 });
 
@@ -470,7 +596,7 @@ describe("workflow dashboard pipeline rows", () => {
 						? `run:${row.run.run.id}`
 						: row.kind,
 			),
-			["run:wf", "phase", "item:sync widget:2", "run:a", "run:b", "item:1:1", "run:c"],
+			["run:wf", "phase", "pipeline", "item:sync widget:2", "run:a", "run:b", "item:1:1", "run:c"],
 		);
 	});
 });

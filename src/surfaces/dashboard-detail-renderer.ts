@@ -6,6 +6,8 @@
  * SubagentsStatusComponent owns selection/scroll and feeds the selected run in.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { colorForAgentName } from "../shared/agents.ts";
 import {
 	AssistantMessageComponent,
@@ -27,16 +29,16 @@ import { readRunTranscript, type RunMessageSession, type TranscriptLine } from "
 import { formatDuration, formatTokenCounter, shortenPath } from "./formatters.ts";
 import { findInlineChildRun, renderNestedChild } from "./render-inline.ts";
 import { RUNNING_GLYPH, tintAgentName } from "./render-shared.ts";
-import { cellsFromRunView, rowGlyph } from "./row-line.ts";
-import { parentRunIdOf } from "./dashboard-row-model.ts";
+import { aggregateState, cellsFromRunView, renderRowLine, rowGlyph, type RowState } from "./row-line.ts";
+import { parentRunIdOf, type DetailTarget, type PipelineItemView } from "./dashboard-row-model.ts";
 import type { LiveRun } from "../state/run-view.ts";
-import { shapeWorkflowPhasePlan } from "../state/workflow-display.ts";
 import {
 	dashboardPartialResult,
 	type LiveToolProgress,
 	type LiveToolProgressBySession,
 } from "../shared/live-session-relay.ts";
 import { locateOutputBlockForDisplay, OUTPUT_OPEN } from "../protocol/output-contract.ts";
+import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
 
 // Single ellipsis glyph for every dashboard truncation. pi-tui's
 // truncateToWidth defaults to a three-dot "..."; the rest of the surfaces use
@@ -46,6 +48,271 @@ const TAB_WIDTH = 4;
 
 function normalizePaneText(text: string): string {
 	return text.replace(/\t/g, " ".repeat(TAB_WIDTH));
+}
+
+function detailState(run: LiveRun): RowState {
+	return cellsFromRunView(run.run, Date.now()).state;
+}
+
+function runDuration(run: LiveRun, now = Date.now()): number {
+	return Math.max(0, (run.run.endedAt ?? now) - (run.run.executionStartedAt ?? run.run.startedAt));
+}
+
+function runAgent(run: LiveRun): string {
+	return run.run.currentAgent ?? run.run.steps.find((step) => step.agent)?.agent ?? run.run.mode;
+}
+
+function renderDetailStep(
+	theme: Theme,
+	run: LiveRun,
+	width: number,
+	options: { parallel?: boolean; pipelineStageCount?: number } = {},
+): string {
+	const cells = cellsFromRunView(run.run, Date.now());
+	cells.name = tintAgentName(runAgent(run), colorForAgentName(runAgent(run)));
+	delete cells.nameColor;
+	cells.depth = 0;
+	cells.parallel = options.parallel;
+	if (run.run.phaseIndex !== undefined) {
+		const title = run.run.phaseTitle ? ` ${canonicalWorkflowPhaseTitle(run.run.phaseTitle)}` : "";
+		cells.phaseChip = `P${run.run.phaseIndex}${title}`;
+	}
+	if (options.pipelineStageCount && run.run.pipeline) {
+		cells.badge = `stage ${run.run.pipeline.stageIndex + 1}/${options.pipelineStageCount}`;
+	}
+	return renderRowLine(theme, cells, width, "detailStep");
+}
+
+export function formatPersistedResult(text: string): string[] {
+	let rendered = text;
+	try {
+		rendered = JSON.stringify(JSON.parse(text), null, 2);
+	} catch {
+		// Plain returned strings remain markdown source.
+	}
+	const lines = normalizePaneText(rendered).split("\n");
+	if (lines.length <= 40) return lines;
+	return [...lines.slice(0, 39), `${ELLIPSIS} +${lines.length - 39} lines · ⏎ open stage`];
+}
+
+export function readWorkflowGroupResult(dir: string): { text: string; json: boolean } | undefined {
+	try {
+		const parsed: unknown = JSON.parse(fs.readFileSync(path.join(dir, "workflow-group.json"), "utf8"));
+		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+		const result = Reflect.get(parsed, "result");
+		if (result === null || typeof result !== "object" || Array.isArray(result)) return undefined;
+		const text = Reflect.get(result, "text");
+		const json = Reflect.get(result, "json");
+		return typeof text === "string" && typeof json === "boolean" ? { text, json } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function pipelineItems(children: LiveRun[], pipelineId: string): PipelineItemView[] {
+	const itemIndexes = Array.from(
+		new Set(
+			children
+				.filter((child) => child.run.pipeline?.id === pipelineId)
+				.map((child) => child.run.pipeline!.itemIndex),
+		),
+	).sort((a, b) => a - b);
+	return itemIndexes.map((itemIndex) => {
+		const stages = children
+			.filter((child) => child.run.pipeline?.id === pipelineId && child.run.pipeline.itemIndex === itemIndex)
+			.sort((a, b) => (a.run.pipeline?.stageIndex ?? 0) - (b.run.pipeline?.stageIndex ?? 0));
+		const label = stages.find((stage) => stage.run.pipeline?.itemLabel)?.run.pipeline?.itemLabel;
+		return { pipelineId, itemIndex, ...(label ? { label } : {}), stages };
+	});
+}
+
+function pipelineGrid(theme: Theme, items: PipelineItemView[], width: number): string[] {
+	if (items.length === 0) return [];
+	const stageCount = Math.max(
+		0,
+		...items.flatMap((item) => item.stages.map((stage) => stage.run.pipeline!.stageIndex + 1)),
+	);
+	const columns = Array.from({ length: stageCount }, (_, stageIndex) => {
+		const stage = items
+			.flatMap((item) => item.stages)
+			.find((candidate) => candidate.run.pipeline?.stageIndex === stageIndex);
+		return stage
+			? `P${stage.run.phaseIndex ?? stageIndex + 1}${stage.run.phaseTitle ? ` ${canonicalWorkflowPhaseTitle(stage.run.phaseTitle)}` : ""}`
+			: `stage ${stageIndex + 1}`;
+	});
+	const out = [theme.fg("muted", clip(`item · ${columns.join(" · ")} · progress · duration`, width))];
+	for (const item of items) {
+		const byIndex = new Map(item.stages.map((stage) => [stage.run.pipeline?.stageIndex ?? 0, stage]));
+		const glyphs = columns.map((_, index) => {
+			const stage = byIndex.get(index);
+			return stage ? rowGlyph(theme, detailState(stage)) : " ";
+		});
+		const done = item.stages.filter((stage) =>
+			["complete", "failed", "interrupted", "skipped"].includes(stage.run.state),
+		).length;
+		const duration =
+			item.stages.length > 0
+				? Math.max(...item.stages.map((stage) => stage.run.endedAt ?? Date.now())) -
+					Math.min(...item.stages.map((stage) => stage.run.executionStartedAt ?? stage.run.startedAt))
+				: 0;
+		out.push(
+			clip(
+				`${item.label ?? `Item ${item.itemIndex + 1}`} · ${glyphs.join(" · ")} · ${done}/${item.stages.length} · ${formatDuration(Math.max(0, duration))}`,
+				width,
+			),
+		);
+	}
+	return out;
+}
+
+function buildPhaseTargetLines(
+	theme: Theme,
+	target: Extract<DetailTarget, { kind: "phase" }>,
+	width: number,
+	runs: LiveRun[],
+): string[] {
+	const stages = target.children.filter((child) => child.run.pipeline !== undefined);
+	const loose = target.children.filter((child) => child.run.pipeline === undefined);
+	const tokens = target.children.reduce((sum, child) => sum + childTokenTotal(child.run), 0);
+	const title = `Phase ${target.phaseIndex}${target.title ? `: ${target.title}` : ""}`;
+	const lines = [
+		`${rowGlyph(theme, aggregateState(target.children.map(detailState)))} ${title}`,
+		theme.fg(
+			"muted",
+			`spans ${stages.length} pipeline stages · ${loose.length} loose runs · ${formatTokenCounter(tokens)} tokens`,
+		),
+	];
+	for (const stage of stages.sort((a, b) => (a.run.pipeline?.stageIndex ?? 0) - (b.run.pipeline?.stageIndex ?? 0))) {
+		const stageCount = Math.max(
+			1,
+			...runs
+				.filter(
+					(child) =>
+						child.run.parentRunId === target.workflow.run.id &&
+						child.run.pipeline?.id === stage.run.pipeline?.id,
+				)
+				.map((child) => (child.run.pipeline?.stageIndex ?? 0) + 1),
+		);
+		lines.push(renderDetailStep(theme, stage, width, { pipelineStageCount: stageCount }));
+	}
+	for (const child of loose) {
+		lines.push(renderDetailStep(theme, child, width, { parallel: Boolean(child.run.parallelGroupId) }));
+	}
+	return lines.map((line) => clip(line, width));
+}
+
+function buildPipelineTargetLines(
+	theme: Theme,
+	target: Extract<DetailTarget, { kind: "pipeline" }>,
+	width: number,
+): string[] {
+	const stages = target.items.flatMap((item) => item.stages);
+	const stageCount = Math.max(0, ...stages.map((stage) => (stage.run.pipeline?.stageIndex ?? 0) + 1));
+	return [
+		clip(
+			`${rowGlyph(theme, aggregateState(stages.map(detailState)))} pipeline · ${target.items.length} items × ${stageCount} stages`,
+			width,
+		),
+		"",
+		theme.fg("accent", clip("─── Pipeline: stages", width)),
+		...pipelineGrid(theme, target.items, width),
+	];
+}
+
+function buildPipelineItemTargetLines(
+	theme: Theme,
+	target: Extract<DetailTarget, { kind: "pipelineItem" }>,
+	width: number,
+	runs: LiveRun[],
+): string[] {
+	const item = target.item;
+	const done = item.stages.filter((stage) =>
+		["complete", "failed", "interrupted", "skipped"].includes(stage.run.state),
+	).length;
+	const itemCount = Math.max(
+		item.itemIndex + 1,
+		...runs
+			.filter(
+				(stage) =>
+					stage.run.parentRunId === target.workflow.run.id && stage.run.pipeline?.id === item.pipelineId,
+			)
+			.map((stage) => (stage.run.pipeline?.itemIndex ?? 0) + 1),
+	);
+	const lines = [
+		clip(
+			`${item.label ?? `Item ${item.itemIndex + 1}`}   pipeline · item ${item.itemIndex + 1}/${itemCount} · ${done}/${item.stages.length}`,
+			width,
+		),
+	];
+	for (const stage of item.stages) {
+		const stageIndex = stage.run.pipeline?.stageIndex ?? 0;
+		const phase =
+			stage.run.phaseIndex === undefined
+				? `stage ${stageIndex + 1}`
+				: `P${stage.run.phaseIndex}${stage.run.phaseTitle ? ` ${canonicalWorkflowPhaseTitle(stage.run.phaseTitle)}` : ""}`;
+		const toolCount = stage.run.recentTools?.length ?? (stage.run.currentTool ? 1 : 0);
+		const tools = toolCount > 0 ? ` · ${toolCount} ${toolCount === 1 ? "tool" : "tools"}` : "";
+		lines.push(
+			"",
+			theme.fg(
+				"accent",
+				clip(
+					`${phase} · stage ${stageIndex + 1} ─── ${rowGlyph(theme, detailState(stage))}${tools} · ${formatDuration(runDuration(stage))}`,
+					width,
+				),
+			),
+		);
+		const tokens = childTokenTotal(stage.run);
+		lines.push(theme.fg("muted", clip(`${runAgent(stage)} · ${formatTokenCounter(tokens)} tokens`, width)));
+		if (stage.run.state === "running" && stage.run.currentTool) {
+			lines.push(clip(`→ ${stage.run.currentTool}`, width));
+		}
+		if (stage.run.finalOutput !== undefined) {
+			lines.push(...renderMarkdownLines(formatPersistedResult(stage.run.finalOutput).join("\n"), width));
+		}
+		lines.push(theme.fg("dim", clip("⏎ open stage transcript", width)));
+	}
+	return lines;
+}
+
+function buildRunHeader(theme: Theme, run: LiveRun, width: number, runs: LiveRun[]): string[] {
+	let pipelineLine: string | undefined;
+	const pipeline = run.run.pipeline;
+	if (pipeline) {
+		const stages = runs.filter(
+			(candidate) =>
+				candidate.run.parentRunId === run.run.parentRunId &&
+				candidate.run.pipeline?.id === pipeline.id &&
+				candidate.run.pipeline.itemIndex === pipeline.itemIndex,
+		);
+		const stageCount = Math.max(1, ...stages.map((stage) => (stage.run.pipeline?.stageIndex ?? 0) + 1));
+		pipelineLine = `pipeline · item "${pipeline.itemLabel ?? pipeline.itemIndex + 1}" · stage ${pipeline.stageIndex + 1}/${stageCount}`;
+	}
+	const tokens = childTokenTotal(run.run);
+	return [
+		renderDetailStep(theme, run, width),
+		theme.fg("muted", clip(pipelineLine ?? `${run.run.mode} · ${formatTokenCounter(tokens)} tokens`, width)),
+	];
+}
+
+export function buildRightLines(
+	theme: Theme,
+	targetOrRun: DetailTarget | LiveRun | undefined,
+	width: number,
+	runs: LiveRun[] = [],
+	live?: Parameters<typeof buildRunRightLines>[4],
+	historical?: Parameters<typeof buildRunRightLines>[5],
+): string[] {
+	if (!targetOrRun) return [theme.fg("dim", "(no events yet)")];
+	const target: DetailTarget = "ownership" in targetOrRun ? { kind: "run", run: targetOrRun } : targetOrRun;
+	if (target.kind === "phase") return buildPhaseTargetLines(theme, target, width, runs);
+	if (target.kind === "pipeline") return buildPipelineTargetLines(theme, target, width);
+	if (target.kind === "pipelineItem") return buildPipelineItemTargetLines(theme, target, width, runs);
+	if (target.run.run.workflow) return buildWorkflowRightLines(theme, target.run.run, width, runs);
+	return [
+		...buildRunHeader(theme, target.run, width, runs),
+		...buildRunRightLines(theme, target.run, width, runs, live, historical),
+	];
 }
 
 function outputPanelContent(content: string): { kind: "json" | "markdown"; text: string } {
@@ -399,76 +666,82 @@ function childTokenTotal(child: AsyncRunSummary): number {
 // useless for groups (the container has no session of its own).
 export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, width: number, runs: LiveRun[]): string[] {
 	const out: string[] = [];
-	if (run.workflowMeta) {
-		out.push(theme.fg("accent", clip(run.workflowMeta.name, width)));
+	const children = runs.filter((candidate) => candidate.run.parentRunId === run.id);
+	const header = cellsFromRunView(run, Date.now());
+	header.name = run.workflowMeta?.name ?? "workflow";
+	out.push(renderRowLine(theme, header, width, "detailStep"));
+	if (run.workflowMeta?.description) {
 		for (const line of wrapTextWithAnsi(run.workflowMeta.description, width)) out.push(theme.fg("muted", line));
-		if (run.workflowMeta.phases.length > 0) {
-			out.push("");
-			out.push(theme.fg("accent", clip("─── Phase plan ───", width)));
-			const children = sortedWorkflowChildren(
-				runs.filter((candidate) => candidate.run.parentRunId === run.id).map((candidate) => candidate.run),
-			);
-			const reachedTitles = [
-				...(run.reachedPhaseTitles ?? []),
-				...children.map((child) => child.phaseTitle).filter((title): title is string => title !== undefined),
-			];
-			for (const [index, phase] of shapeWorkflowPhasePlan(
-				run.workflowMeta,
-				reachedTitles,
-				run.state === "running" || run.state === "queued",
-				run.phaseTitle,
-			).entries()) {
-				const detail = phase.detail ? ` — ${phase.detail}` : "";
-				out.push(clip(`${index + 1}. ${phase.title} · ${phase.state}${detail}`, width));
-			}
+	}
+	out.push("", theme.fg("accent", clip("─── Progress", width)));
+	const phaseIndexes = Array.from(
+		new Set([
+			...(run.workflowMeta?.phases.map((_, index) => index + 1) ?? []),
+			...children.map((child) => child.run.phaseIndex).filter((index): index is number => index !== undefined),
+		]),
+	).sort((a, b) => a - b);
+	for (const phaseIndex of phaseIndexes) {
+		const phaseChildren = children.filter((child) => child.run.phaseIndex === phaseIndex && !child.run.pipeline);
+		const title =
+			run.workflowMeta?.phases[phaseIndex - 1]?.title ??
+			children.find((child) => child.run.phaseIndex === phaseIndex)?.run.phaseTitle;
+		const states = phaseChildren.map(detailState);
+		const done = phaseChildren.filter((child) =>
+			["complete", "failed", "interrupted", "skipped"].includes(child.run.state),
+		).length;
+		out.push(
+			clip(
+				`Phase ${phaseIndex}${title ? `: ${title}` : ""} ${rowGlyph(theme, aggregateState(states))} ${done}/${phaseChildren.length}`,
+				width,
+			),
+		);
+	}
+	const done = children.filter((child) =>
+		["complete", "failed", "interrupted", "skipped"].includes(child.run.state),
+	).length;
+	const running = children.filter((child) => child.run.state === "running").length;
+	const queued = children.filter((child) => child.run.state === "queued").length;
+	const tokens = children.reduce((sum, child) => sum + childTokenTotal(child.run), 0);
+	out.push(
+		theme.fg(
+			"muted",
+			clip(
+				`${children.length} children · ${done} done · ${running} running · ${queued} queued · ${formatTokenCounter(tokens)} tokens`,
+				width,
+			),
+		),
+	);
+	const pipelineIds = Array.from(
+		new Set(children.map((child) => child.run.pipeline?.id).filter((id): id is string => id !== undefined)),
+	);
+	for (const pipelineId of pipelineIds) {
+		out.push("", theme.fg("accent", clip("─── Pipeline: stages", width)));
+		out.push(...pipelineGrid(theme, pipelineItems(children, pipelineId), width));
+	}
+	const loose = children.filter((child) => child.run.pipeline === undefined);
+	if (loose.length > 0) {
+		out.push("", theme.fg("accent", clip("─── Loose runs", width)));
+		for (const child of sortedWorkflowChildren(loose.map((candidate) => candidate.run))) {
+			const live = loose.find((candidate) => candidate.run.id === child.id)!;
+			out.push(renderDetailStep(theme, live, width, { parallel: Boolean(child.parallelGroupId) }));
 		}
-		out.push("");
+	}
+	const result = run.asyncDir ? readWorkflowGroupResult(run.asyncDir) : undefined;
+	if (result) {
+		out.push("", theme.fg("accent", clip("─── Result", width)));
+		out.push(
+			...(result.json ? fitAnsiLines(result.text.split("\n"), width) : renderMarkdownLines(result.text, width)),
+		);
 	}
 	const script = run.asyncDir ? readWorkflowScript(run.asyncDir) : undefined;
 	if (script) {
-		out.push(theme.fg("accent", clip("─── Script ───", width)));
+		out.push("", theme.fg("accent", clip("─── Script", width)));
 		const scriptLines = normalizePaneText(script).split("\n");
-		// Trim leading/trailing blank lines but keep interior structure verbatim:
-		// code must not be word-wrap reflowed.
 		while (scriptLines.length > 0 && scriptLines[0]?.trim() === "") scriptLines.shift();
 		while (scriptLines.length > 0 && scriptLines[scriptLines.length - 1]?.trim() === "") scriptLines.pop();
-		// Whole script, syntax-highlighted; long lines wrap (ANSI-aware) instead of
-		// truncating so no code is hidden. No line cap: the script is the workflow's
-		// identity and the pane scrolls.
 		for (const line of highlightCode(scriptLines.join("\n"), "ts")) {
 			if (visibleWidth(line) <= width) out.push(line);
-			else for (const wrapped of wrapTextWithAnsi(line, width)) out.push(wrapped);
-		}
-	}
-	// Children are selected by structural parent linkage (parentRunId), NOT
-	// provenance: an owned-async run's children (now ownership:'live') must still
-	// appear in the right-pane Steps list.
-	const children = runs.filter((candidate) => candidate.run.parentRunId === run.id).map((candidate) => candidate.run);
-	if (children.length > 0) {
-		if (out.length > 0) out.push("");
-		out.push(theme.fg("accent", clip("─── Steps ───", width)));
-		let lastPhaseKey: number | undefined;
-		let shownPhaseHeader = false;
-		for (const child of sortedWorkflowChildren(children)) {
-			if (child.phaseIndex !== lastPhaseKey || !shownPhaseHeader) {
-				lastPhaseKey = child.phaseIndex;
-				shownPhaseHeader = true;
-				const label = child.phaseIndex === undefined && !child.phaseTitle ? "" : workflowPhaseLabel(child);
-				if (label) out.push(theme.fg("muted", clip(label, width)));
-			}
-			const agent = child.steps.find((step) => step.agent)?.agent ?? child.mode;
-			const glyph = rowGlyph(theme, cellsFromRunView(child, Date.now()).state);
-			// parallelGroupId is a raw UUID; render a compact marker instead of the id.
-			const parallelTag = child.parallelGroupId ? theme.fg("dim", "∥ ") : "";
-			const stats: string[] = [child.state];
-			const end = child.endedAt ?? Date.now();
-			stats.push(formatDuration(Math.max(0, end - child.startedAt)));
-			const tokens = childTokenTotal(child);
-			if (tokens > 0) stats.push(formatTokenCounter(tokens));
-			if (child.state === "running" && child.currentTool) stats.push(`→ ${child.currentTool}`);
-			const labelPart = child.label ? ` — ${child.label}` : "";
-			const line = `  ${glyph} ${parallelTag}${tintAgentName(agent, colorForAgentName(agent))} · ${stats.join(" · ")}${labelPart}`;
-			out.push(clip(line, width));
+			else out.push(...wrapTextWithAnsi(line, width));
 		}
 	}
 	return out;
@@ -1005,7 +1278,7 @@ function buildLiveRightLines<TSession extends DashboardMessageSession>(
 	return lines;
 }
 
-export function buildRightLines(
+function buildRunRightLines(
 	theme: Theme,
 	run: LiveRun | undefined,
 	width: number,

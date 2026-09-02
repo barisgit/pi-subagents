@@ -23,10 +23,13 @@ import {
 import {
 	buildSelectedRunStatusBox,
 	type LiveRun,
+	runViewFromRegistryEntry,
 	SubagentsStatusComponent,
 } from "../../src/surfaces/subagents-status.ts";
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
+import type { DetailTarget } from "../../src/surfaces/dashboard-row-model.ts";
+import type { RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 // The final-text and narration blocks render through pi-tui Markdown, whose
 // heading styles read the pi theme singleton; initialize it once for the suite.
@@ -49,6 +52,162 @@ function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+describe("dashboard detail targets", () => {
+	it("renders workflow, phase, pipeline, item, and stage bodies from their targets", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-targets-${randomUUID()}-`));
+		try {
+			fs.writeFileSync(
+				path.join(dir, "workflow-group.json"),
+				JSON.stringify({ result: { text: "final workflow result", json: false, endedAt: 4000 } }),
+			);
+			fs.writeFileSync(path.join(dir, "workflow-script.json"), JSON.stringify({ script: "return 'reference';" }));
+			const workflow: LiveRun = {
+				ownership: "foreign",
+				run: {
+					id: "wf",
+					asyncDir: dir,
+					workflow: true,
+					mode: "parallel",
+					state: "complete",
+					startedAt: 1000,
+					endedAt: 4000,
+					workflowMeta: {
+						name: "Audit flow",
+						description: "Inspect then confirm",
+						phases: [{ title: "Inspect" }, { title: "Confirm" }],
+					},
+					steps: [],
+				},
+			};
+			const stage = (id: string, phaseIndex: number, stageIndex: number, finalOutput: string): LiveRun => ({
+				ownership: "foreign",
+				run: {
+					id,
+					parentRunId: "wf",
+					mode: "single",
+					state: "complete",
+					startedAt: 1100 + stageIndex * 1000,
+					endedAt: 1900 + stageIndex * 1000,
+					phaseIndex,
+					phaseTitle: phaseIndex === 1 ? "Inspect" : "Confirm",
+					pipeline: { id: "pipe", itemIndex: 0, stageIndex, itemLabel: "widget" },
+					finalOutput,
+					steps: [{ index: 0, agent: `stage-${stageIndex + 1}`, status: "complete" }],
+				},
+			});
+			const first = stage("first", 1, 0, "first returned value");
+			const second = stage("second", 2, 1, '{"answer":42}');
+			const loose: LiveRun = {
+				ownership: "foreign",
+				run: {
+					id: "loose",
+					parentRunId: "wf",
+					mode: "single",
+					state: "complete",
+					startedAt: 1200,
+					endedAt: 1800,
+					phaseIndex: 1,
+					phaseTitle: "Inspect",
+					parallelGroupId: "parallel",
+					steps: [{ index: 0, agent: "loose-run", status: "complete" }],
+				},
+			};
+			const runs = [workflow, first, second, loose];
+			const item = { pipelineId: "pipe", itemIndex: 0, label: "widget", stages: [first, second] };
+			const targets: Record<string, DetailTarget> = {
+				workflow: { kind: "run", run: workflow },
+				phase: { kind: "phase", workflow, phaseIndex: 1, title: "Inspect", children: [first, loose] },
+				pipeline: { kind: "pipeline", workflow, pipelineId: "pipe", items: [item] },
+				item: { kind: "pipelineItem", workflow, item },
+				stage: { kind: "run", run: second },
+			};
+			const rendered = Object.fromEntries(
+				Object.entries(targets).map(([kind, target]) => [
+					kind,
+					buildRightLines(theme, target, 120, runs).join("\n"),
+				]),
+			);
+			assert.match(rendered.workflow ?? "", /─── Progress/);
+			assert.match(rendered.workflow ?? "", /─── Pipeline: stages/);
+			assert.match(rendered.workflow ?? "", /─── Loose runs/);
+			assert.match(rendered.workflow ?? "", /─── Result/);
+			assert.match(rendered.workflow ?? "", /final workflow result/);
+			assert.ok(
+				(rendered.workflow ?? "").indexOf("─── Result") < (rendered.workflow ?? "").indexOf("─── Script"),
+			);
+			assert.match(rendered.phase ?? "", /spans 1 pipeline stages · 1 loose runs/);
+			assert.match(rendered.pipeline ?? "", /pipeline · 1 items × 2 stages/);
+			assert.match(rendered.item ?? "", /first returned value/);
+			assert.match(rendered.item ?? "", /"answer": 42/);
+			assert.match(rendered.stage ?? "", /pipeline · item "widget" · stage 2\/2/);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("renders pipeline stage outputs after rebuilding every target run from disk", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), `detail-reload-${randomUUID()}-`));
+		try {
+			const firstDir = path.join(root, "first");
+			const secondDir = path.join(root, "second");
+			fs.mkdirSync(firstDir, { recursive: true });
+			fs.mkdirSync(secondDir, { recursive: true });
+			writeStatus(firstDir, "first", { outputText: "persisted markdown" });
+			writeStatus(secondDir, "second", { outputText: '{"persisted":true}' });
+			const workflowEntry: RunsRegistryEntry = {
+				runId: "wf",
+				runRecordDir: path.join(root, "wf"),
+				mode: "parallel",
+				source: "async",
+				kind: "workflow",
+				cwd: root,
+				startedAt: 900,
+			};
+			const child = (
+				runId: string,
+				runRecordDir: string,
+				phaseIndex: number,
+				stageIndex: number,
+			): RunsRegistryEntry => ({
+				runId,
+				runRecordDir,
+				mode: "single",
+				source: "async",
+				agentName: `stage-${stageIndex + 1}`,
+				parentRunId: "wf",
+				rootRunId: "wf",
+				phaseIndex,
+				phaseTitle: phaseIndex === 1 ? "Inspect" : "Confirm",
+				pipelineId: "pipe",
+				pipelineItemIndex: 0,
+				pipelineStageIndex: stageIndex,
+				pipelineItemLabel: "widget",
+				cwd: root,
+				startedAt: 1000 + stageIndex,
+			});
+			const entries = [workflowEntry, child("first", firstDir, 1, 0), child("second", secondDir, 2, 1)];
+			const workflow: LiveRun = {
+				ownership: "foreign",
+				run: runViewFromRegistryEntry(workflowEntry, entries),
+			};
+			const stages = entries.slice(1).map((entry) => ({
+				ownership: "foreign" as const,
+				run: runViewFromRegistryEntry(entry, entries),
+			}));
+			const target: DetailTarget = {
+				kind: "pipelineItem",
+				workflow,
+				item: { pipelineId: "pipe", itemIndex: 0, label: "widget", stages },
+			};
+			const output = buildRightLines(theme, target, 120, [workflow, ...stages]).join("\n");
+			assert.match(output, /persisted markdown/);
+			assert.match(output, /"persisted": true/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
 function makeRun(id: string, asyncDir: string, label?: string): AsyncRunSummary {
 	return {
 		id,
@@ -64,7 +223,7 @@ function makeRun(id: string, asyncDir: string, label?: string): AsyncRunSummary 
 function writeStatus(
 	dir: string,
 	runId: string,
-	options: { label?: string; stepLabel?: string; tokens?: number; durationMs?: number } = {},
+	options: { label?: string; stepLabel?: string; tokens?: number; durationMs?: number; outputText?: string } = {},
 ): void {
 	const totalTokens = options.tokens ?? 300;
 	const durationMs = options.durationMs ?? 4000;
@@ -76,6 +235,7 @@ function writeStatus(
 		startedAt: 1000,
 		endedAt: 1000 + durationMs,
 		lastUpdate: 1000 + durationMs,
+		...(options.outputText !== undefined ? { outputText: options.outputText } : {}),
 		steps: [
 			{
 				agent: "fixer",
