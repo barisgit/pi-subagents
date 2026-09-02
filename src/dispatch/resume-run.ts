@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { PromptOptions } from "@earendil-works/pi-coding-agent";
 import type { PersistedRunStatus, PersistedRunStep } from "../protocol/status-types.ts";
 import {
 	type ChildAgentHandle,
@@ -181,46 +182,46 @@ async function postResumeMessage(
 	runId: string,
 	message: string,
 ): Promise<SubagentToolResult | null> {
-	let reportPreflight!: (success: boolean) => void;
-	const preflight = new Promise<boolean>((resolve) => {
-		reportPreflight = resolve;
+	type PromptOutcome =
+		| { kind: "preflight"; success: boolean }
+		| { kind: "turn"; ok: true }
+		| { kind: "turn"; ok: false; error: unknown };
+	let resolvePreflight!: (outcome: PromptOutcome) => void;
+	const preflight = new Promise<PromptOutcome>((resolve) => {
+		resolvePreflight = resolve;
 	});
-	const prompt: (
-		text: string,
-		options: {
-			expandPromptTemplates: boolean;
-			streamingBehavior: "steer";
-			source: "extension";
-			preflightResult: (success: boolean) => void;
-		},
-	) => Promise<void> = handle.session.prompt.bind(handle.session);
+	const reportPreflight = (success: boolean): void => {
+		resolvePreflight({ kind: "preflight", success });
+	};
 	let turn: Promise<void>;
 	try {
-		turn = prompt(message, {
+		const session = handle.session;
+		const options = {
 			expandPromptTemplates: false,
 			streamingBehavior: "steer",
 			source: "extension",
 			preflightResult: reportPreflight,
-		});
+		} satisfies PromptOptions;
+		turn = session.prompt(message, options);
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
 	}
-	const observedTurn = turn.then(
-		() => ({ ok: true as const }),
-		(error: unknown) => ({ ok: false as const, error }),
+	const observedTurn: Promise<PromptOutcome> = turn.then(
+		() => ({ kind: "turn", ok: true }),
+		(error: unknown) => ({ kind: "turn", ok: false, error }),
 	);
-	if (!(await preflight)) {
-		const outcome = await observedTurn;
-		const errorMessage = outcome.ok
-			? "prompt preflight rejected the message"
-			: outcome.error instanceof Error
-				? outcome.error.message
-				: String(outcome.error);
+	const outcome = await Promise.race([preflight, observedTurn]);
+	if (outcome.kind === "turn" && !outcome.ok) {
+		const errorMessage = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
 		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
 	}
+	if (outcome.kind === "preflight" && !outcome.success) {
+		return validationError(`Failed to resume run ${runId}: prompt preflight rejected the message`);
+	}
+	if (outcome.kind === "turn") return null;
 	void observedTurn.then((outcome) => {
-		if (outcome.ok) return;
+		if (outcome.kind !== "turn" || outcome.ok) return;
 		logger.error(
 			"Live resume turn failed after prompt acceptance",
 			outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error)),

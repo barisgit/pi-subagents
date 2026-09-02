@@ -10,6 +10,10 @@ interface ExecutorResult {
 	content: Array<{ type?: string; text?: string }>;
 }
 
+class NoPreflightSession {
+	async prompt(): Promise<void> {}
+}
+
 class DeferredIdleSession {
 	readonly prompts: Array<{
 		message: string;
@@ -20,6 +24,7 @@ class DeferredIdleSession {
 			preflightResult?: (success: boolean) => void;
 		};
 	}> = [];
+	preflightCalls = 0;
 	private completeTurn!: () => void;
 	private readonly turnCompleted = new Promise<void>((resolve) => {
 		this.completeTurn = resolve;
@@ -35,6 +40,7 @@ class DeferredIdleSession {
 		},
 	): Promise<void> {
 		this.prompts.push({ message, options });
+		this.preflightCalls += 1;
 		options?.preflightResult?.(true);
 		await this.turnCompleted;
 	}
@@ -121,7 +127,7 @@ function makeState(cwd: string): SubagentState {
 	};
 }
 
-type ResumeSession = FakeSession | DeferredIdleSession | BusySteerSession | ThrowingSession;
+type ResumeSession = FakeSession | DeferredIdleSession | BusySteerSession | ThrowingSession | NoPreflightSession;
 
 function registerHandle(registry: ChildAgentRegistry, runId: string, stepIndex: number): FakeSession;
 function registerHandle<T extends ResumeSession>(
@@ -213,17 +219,59 @@ describe("resume action", () => {
 			assert.equal(settledBeforeTurn, true);
 			const result = await execution;
 			assert.equal(result.isError, undefined, text(result));
-			assert.deepEqual(session.prompts, [
-				{
-					message: "continue",
-					options: {
-						expandPromptTemplates: false,
-						streamingBehavior: "steer",
-						source: "extension",
-						preflightResult: session.prompts[0]?.options?.preflightResult,
-					},
-				},
+			assert.equal(session.prompts.length, 1);
+			assert.equal(session.prompts[0]?.message, "continue");
+			assert.equal(session.prompts[0]?.options?.expandPromptTemplates, false);
+			assert.equal(session.prompts[0]?.options?.streamingBehavior, "steer");
+			assert.equal(session.prompts[0]?.options?.source, "extension");
+			assert.equal(typeof session.prompts[0]?.options?.preflightResult, "function");
+			assert.equal(session.preflightCalls, 1);
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
+	it("live resume succeeds when prompt resolves without reporting preflight", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			registerHandle(harness.childRegistry, "run-no-preflight", 0, new NoPreflightSession());
+			markAsync(harness.state, "run-no-preflight", "running");
+
+			const execution = harness.execute({ action: "resume", id: "run-no-preflight", message: "continue" });
+			const settled = await Promise.race([
+				execution.then(() => true),
+				new Promise<false>((resolve) => setImmediate(() => resolve(false))),
 			]);
+
+			assert.equal(settled, true);
+			const result = await execution;
+			assert.equal(result.isError, undefined, text(result));
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
+	it("live resume reports a not-ready registered session as a validation error", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			const handle: ChildAgentHandle = {
+				runId: "run-not-ready",
+				stepIndex: 0,
+				get session(): ChildAgentHandle["session"] {
+					throw new Error("session for run run-not-ready step 0 is not ready yet");
+				},
+				completed: new Promise(() => {}) as never,
+				abort: async () => {},
+			};
+			harness.childRegistry.register(handle);
+			markAsync(harness.state, "run-not-ready", "running");
+
+			const result = await harness.execute({ action: "resume", id: "run-not-ready", message: "continue" });
+
+			assert.equal(result.isError, true);
+			assert.match(text(result), /Failed to resume run run-not-ready: session .* is not ready yet/);
 		} finally {
 			removeTempDir(tempDir);
 		}
@@ -305,7 +353,7 @@ describe("resume action", () => {
 			const result = await harness.execute({ action: "resume", id: "run-fail", message: "fail me" });
 
 			assert.equal(result.isError, true);
-			assert.match(text(result), /Failed to resume run run-fail: prompt failed/);
+			assert.match(text(result), /Failed to resume run run-fail: prompt preflight rejected the message/);
 			assert.doesNotMatch(text(result), /Resume message sent/);
 		} finally {
 			removeTempDir(tempDir);
