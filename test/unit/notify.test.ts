@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
-import registerSubagentNotify from "../../src/surfaces/notify.ts";
+import registerSubagentNotify, { notificationRowState } from "../../src/surfaces/notify.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
 import {
@@ -76,6 +76,13 @@ function asChildSession<T>(fn: () => T): T {
 }
 
 describe("registerSubagentNotify", () => {
+	it("maps completion payload states into the shared row grammar", () => {
+		// Notice payload aliases normalize before both markdown and rendered notice rows choose a glyph.
+		assert.equal(notificationRowState("completed"), "complete");
+		assert.equal(notificationRowState("paused"), "paused");
+		assert.equal(notificationRowState("interrupted"), "interrupted");
+		assert.equal(notificationRowState("failed"), "failed");
+	});
 	it("clears parent activity when an immediate-parent completion send throws", () => {
 		const parentRunId = "parent-send-failure";
 		const { inner, bus } = createBus();

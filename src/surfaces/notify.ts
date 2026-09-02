@@ -8,11 +8,15 @@ import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "../state/
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { logger } from "../shared/logger.ts";
 import { isInsideChildSession } from "../shared/child-session-context.ts";
+import type { Theme } from "./render-shared.ts";
+import { rowGlyph, type RowState } from "./row-line.ts";
 import {
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
 	SUBAGENT_NOTIFY_DELIVERED_EVENT,
 } from "../protocol/types.ts";
+
+const plainTheme: Theme = { fg: (_color, text) => text, bold: (text) => text };
 
 interface ChildStepResult {
 	agent: string;
@@ -151,7 +155,7 @@ function batchNotificationContent(result: SubagentResult, children: ChildStepRes
 		const name = child.label?.trim() || agent || shortRunId(childRunId);
 		const output = batchChildDisplayOutput(child);
 		return [
-			`- ${stateGlyph(state)} ${name} (${agent}): ${state}`,
+			`- ${rowGlyph(plainTheme, notificationRowState(state))} ${name} (${agent}): ${state}`,
 			...output.split("\n").map((line) => `  ${line}`),
 		];
 	});
@@ -172,10 +176,17 @@ function shortRunId(runId: string): string {
 	return runId.length > 8 ? runId.slice(0, 8) : runId;
 }
 
-function stateGlyph(state: string): string {
-	if (state === "complete" || state === "completed") return "✓";
-	if (state === "paused" || state === "interrupted") return "■";
-	return "✗";
+export function notificationRowState(state: string): RowState {
+	if (state === "complete" || state === "completed") return "complete";
+	if (state === "queued") return "queued";
+	if (state === "running") return "running";
+	if (state === "paused") return "paused";
+	if (state === "interrupted") return "interrupted";
+	if (state === "skipped") return "skipped";
+	if (state === "lost") return "lost";
+	if (state === "attention" || state === "needs_attention") return "attention";
+	if (state === "delivering") return "delivering";
+	return "failed";
 }
 
 function batchNotificationDetails(result: SubagentResult, children: ChildStepResult[]): SubagentBatchNotifyDetails {

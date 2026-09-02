@@ -5,8 +5,8 @@ import { rmRun, tool, writeRun } from "./inline-nested-helpers.ts";
 
 const cases = [
 	["complete", "✓"],
-	["failed", "×"],
-	["paused", "‖"],
+	["failed", "✗"],
+	["paused", "⏸"],
 ] as const;
 const ids = cases.map(([state]) => `inline-collapse-${state}`);
 
@@ -25,8 +25,9 @@ describe("inline child collapse", () => {
 				tokens: 2048,
 				events: [tool("read", { path: "/a" }), tool("bash", { command: "echo hi" }, 1200)],
 			});
+			// Terminal children use the canonical glyph and keep agent identity in the shared name column.
 			assert.deepEqual(renderNestedChild(id, 1), [
-				`└─ ${glyph} subagent: ${state} work · 2 tools · 2.0kt · 1.5s`,
+				`└─${glyph} subagent: fixer · ${state} work · 2 tools · 2.0kt · 1.5s`,
 			]);
 		});
 	}

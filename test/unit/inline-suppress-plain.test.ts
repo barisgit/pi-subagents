@@ -65,7 +65,8 @@ describe("inline sync subagent history suppression", () => {
 		);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /◇ subagent: fixer · nested sync/);
+		// Replaced history lines now render as canonical running rows.
+		assert.match(text, /◈ subagent: fixer · nested sync/);
 		assert.doesNotMatch(text, /← subagent: You are the nested SYNC child/);
 	});
 });

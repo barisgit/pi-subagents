@@ -90,7 +90,7 @@ describe("resume leg duration display", () => {
 		assert.match(line, /resumed 1×/);
 	});
 
-	it("keeps never-resumed widget row strings byte-identical while adding a resumed glyph only for resumed jobs", () => {
+	it("keeps never-resumed widget rows byte-identical while adding the shared resumed column", () => {
 		const never = buildWidgetLines(
 			[
 				{
@@ -140,7 +140,8 @@ describe("resume leg duration display", () => {
 			theme as never,
 			200,
 		);
-		assert.match(resumed.join("\n"), /↻2/);
+		// Widget rows now use row-line's canonical resumed-count wording.
+		assert.match(resumed.join("\n"), /resumed 2×/);
 		assert.match(resumed.join("\n"), /12\.0s/);
 	});
 });
