@@ -420,7 +420,9 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 				"marker is finalized from the children (one failed child => failed)",
 			);
 
-			// Metadata-backed workflows restore a terminal widget row with their persisted identity.
+			// A group already terminal on disk stays out of the widget on later
+			// rehydrations (host reloads), mirroring terminal leaves: otherwise every
+			// finished workflow would reappear for one retention window per reload.
 			writeWorkflowScript(groupDir, "phase('Verify');");
 			writeWorkflowMeta(groupDir, {
 				name: "Parity audit",
@@ -428,11 +430,8 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 				phases: [{ title: "Verify" }, { title: "Review" }],
 			});
 			const secondCount = tracker.rehydrateFromRegistry(createHostContext(hostSessionId) as never);
-			assert.equal(secondCount, 1);
-			const restored = state.asyncJobs.get("wf-group");
-			assert.equal(restored?.status, "failed");
-			assert.equal(restored?.workflowMeta?.name, "Parity audit");
-			assert.equal(restored?.label, "Phase 2/2: Review");
+			assert.equal(secondCount, 0);
+			assert.equal(state.asyncJobs.has("wf-group"), false, "terminal-on-disk group is not re-announced");
 		} finally {
 			setRegistryPathForTests(null);
 			removeTempDir(asyncRoot);

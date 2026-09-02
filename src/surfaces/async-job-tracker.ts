@@ -678,6 +678,10 @@ export function createAsyncJobTracker(
 			if (entry.kind === "workflow") {
 				let lifecycle = readWorkflowGroupState(entry.runRecordDir);
 				const childEntries = registryEntries.filter((child) => child.parentRunId === entry.runId);
+				// Already terminal on disk before this sweep: nothing to reclaim or
+				// announce (mirrors the terminal-leaf skip below). Only a group whose
+				// stale 'running' marker is finalized here gets one retention window.
+				const finalizedHere = lifecycle === "running";
 				if (lifecycle === "running") {
 					const childStates = childEntries.map(
 						(child) => readLeafRunViewCached(child.runRecordDir)?.state ?? "complete",
@@ -686,7 +690,7 @@ export function createAsyncJobTracker(
 					writeWorkflowGroupState(entry.runRecordDir, lifecycle);
 				}
 				const workflowMeta = readWorkflowMeta(entry.runRecordDir);
-				if (!workflowMeta || (lifecycle !== "complete" && lifecycle !== "failed")) continue;
+				if (!workflowMeta || !finalizedHere || (lifecycle !== "complete" && lifecycle !== "failed")) continue;
 				const childCounts = countWorkflowChildren(entry.runId, [], registryEntries);
 				const latestPhase = childEntries
 					.filter((child) => child.phaseTitle)
