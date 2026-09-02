@@ -9,6 +9,7 @@ import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../sr
 import { readRunViewForEntry } from "../../src/state/async-status.ts";
 import { appendRunEntry, readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
+import { readStatus } from "../../src/shared/utils.ts";
 import {
 	readWorkflowGroupPhase,
 	readWorkflowMeta,
@@ -23,6 +24,7 @@ let restoreRuntime: (() => void) | undefined;
 let previousHome: string | undefined;
 let promptImpl: ((task: string) => Promise<void>) | undefined;
 let abortImpl: (() => void) | undefined;
+const loadedCwds: string[] = [];
 
 function deferred() {
 	let resolve!: () => void;
@@ -33,6 +35,9 @@ function deferred() {
 }
 
 class FakeResourceLoader {
+	constructor(options: { cwd: string }) {
+		loadedCwds.push(options.cwd);
+	}
 	async reload(): Promise<void> {}
 }
 class FakeSession {
@@ -115,6 +120,7 @@ function setup(prefix: string, config: Record<string, unknown> = {}) {
 afterEach(() => {
 	promptImpl = undefined;
 	abortImpl = undefined;
+	loadedCwds.length = 0;
 	restoreRuntime?.();
 	restoreRuntime = undefined;
 	setRegistryPathForTests(null);
@@ -131,7 +137,7 @@ describe("workflow group Layer-0 wiring (VAL-GROUP-CHILDREN)", () => {
 			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
 		});
 
-		await tool.execute?.(
+		const result = await tool.execute?.(
 			"wf",
 			{
 				script: `
@@ -149,6 +155,15 @@ return await parallel([
 		const entries = readAllEntries();
 		const group = entries.find((entry) => entry.kind === "workflow")!;
 		assert.equal(entries.filter((entry) => entry.parentRunId === group.runId).length, 2);
+		const details = result?.details;
+		assert.ok(details && typeof details === "object" && "results" in details && Array.isArray(details.results));
+		assert.ok(
+			details.results.every(
+				(child: unknown) =>
+					child !== null && typeof child === "object" && Reflect.get(child, "messages") === undefined,
+			),
+			"settled workflow results must not retain full child message arrays",
+		);
 	});
 
 	it("aborts admission waiters without creating queued child records", async () => {
@@ -387,6 +402,50 @@ return await pipeline(
 			"failed",
 			"mutant: subagents-status running override must not mask a failed child",
 		);
+	});
+
+	it("persists per-child phase overrides, labels, and cwd without changing the workflow phase", async () => {
+		const { root, executor, ctx } = setup("workflow-group-child-options-");
+		const tool = createWorkflowTool({
+			openWorkflowGroup: (workflowContext) => executor.openWorkflowGroup(workflowContext),
+		});
+
+		await tool.execute?.(
+			"wf",
+			{
+				script: [
+					"meta({ name: 'Audit', description: 'Compare', phases: ['Scope', 'Verify'] });",
+					"phase('Scope');",
+					"await agent('A', 'override', { phase: 'Verify', label: 'Verify physics branch', cwd: 'packages/physics' });",
+					"await agent('B', 'default');",
+				].join("\n"),
+			},
+			new AbortController().signal,
+			undefined,
+			ctx as never,
+		);
+
+		const entries = readAllEntries();
+		const group = entries.find((entry) => entry.kind === "workflow")!;
+		const children = entries.filter((entry) => entry.parentRunId === group.runId);
+		const override = children.find((entry) => entry.label === "Verify physics branch")!;
+		const defaultChild = children.find((entry) => entry.runId !== override.runId)!;
+		const childCwd = path.join(root, "packages", "physics");
+		assert.deepEqual(readWorkflowGroupPhase(group.runRecordDir), {
+			phaseIndex: 1,
+			phaseTitle: "Scope",
+			reachedPhaseTitles: ["Scope"],
+		});
+		assert.equal(override.phaseIndex, 2);
+		assert.equal(override.phaseTitle, "Verify");
+		assert.equal(readStatus(override.runRecordDir)?.label, "Verify physics branch");
+		assert.equal(readRunViewForEntry(override, entries)?.label, "Verify physics branch");
+		assert.equal(override.cwd, childCwd);
+		assert.equal(readStatus(override.runRecordDir)?.cwd, childCwd);
+		assert.equal(readRunViewForEntry(override, entries)?.cwd, childCwd);
+		assert.equal(loadedCwds.includes(childCwd), true);
+		assert.equal(defaultChild.phaseIndex, 1);
+		assert.equal(defaultChild.phaseTitle, "Scope");
 	});
 
 	it("opens one statusless group and nests agent children under it", async () => {

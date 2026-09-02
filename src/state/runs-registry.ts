@@ -52,8 +52,18 @@ const DEFAULT_REGISTRY_PATH = path.join(getAgentDir(), "pi-subagents", "runs-ind
 
 let registryPathOverride: string | null = null;
 
+interface RegistryReadCache {
+	filePath: string;
+	mtimeMs: number;
+	size: number;
+	entries: RunsRegistryEntry[];
+}
+
+let readCache: RegistryReadCache | undefined;
+
 export function setRegistryPathForTests(p: string | null): void {
 	registryPathOverride = p;
+	readCache = undefined;
 }
 
 function getRegistryPath(): string {
@@ -163,6 +173,19 @@ export function parseRunsRegistryEntryLine(line: string): RunsRegistryEntry | un
 }
 
 function parseEntriesFromFile(filePath: string, opts: ReadOptions): RunsRegistryEntry[] {
+	let stats: fs.Stats;
+	try {
+		stats = fs.statSync(filePath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			if (readCache?.filePath === filePath) readCache = undefined;
+			return [];
+		}
+		throw error;
+	}
+	if (readCache?.filePath === filePath && readCache.mtimeMs === stats.mtimeMs && readCache.size === stats.size) {
+		return opts.limit !== undefined ? readCache.entries.slice(0, opts.limit) : [...readCache.entries];
+	}
 	let raw: string;
 	try {
 		raw = fs.readFileSync(filePath, "utf8");
@@ -185,7 +208,8 @@ function parseEntriesFromFile(filePath: string, opts: ReadOptions): RunsRegistry
 		seen.add(entry.runId);
 		return true;
 	});
-	return opts.limit !== undefined ? deduped.slice(0, opts.limit) : deduped;
+	readCache = { filePath, mtimeMs: stats.mtimeMs, size: stats.size, entries: deduped };
+	return opts.limit !== undefined ? deduped.slice(0, opts.limit) : [...deduped];
 }
 
 export function readAllEntries(opts: ReadOptions = {}): RunsRegistryEntry[] {

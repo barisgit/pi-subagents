@@ -40,10 +40,29 @@ interface CacheFileStat {
 interface CacheEntry {
 	files: CacheFileStat[];
 	lines: TranscriptLine[];
+	sourceBytes: number;
 }
 
 const cache = new Map<string, CacheEntry>();
+const TRANSCRIPT_CACHE_MAX_ENTRIES = 32;
+const TRANSCRIPT_CACHE_MAX_SOURCE_BYTES = 32 * 1024 * 1024;
 const ARGS_PREVIEW_MAX = 60;
+
+function cacheTranscript(runRecordDir: string, entry: CacheEntry): void {
+	cache.delete(runRecordDir);
+	cache.set(runRecordDir, entry);
+	let sourceBytes = [...cache.values()].reduce((total, cached) => total + cached.sourceBytes, 0);
+	while (
+		cache.size > 1 &&
+		(cache.size > TRANSCRIPT_CACHE_MAX_ENTRIES || sourceBytes > TRANSCRIPT_CACHE_MAX_SOURCE_BYTES)
+	) {
+		const oldest = cache.keys().next().value;
+		if (oldest === undefined) break;
+		const evicted = cache.get(oldest);
+		cache.delete(oldest);
+		sourceBytes -= evicted?.sourceBytes ?? 0;
+	}
+}
 
 export interface RunMessageSession {
 	stepIndex: number;
@@ -525,9 +544,16 @@ export function readRunTranscript(runRecordDir: string): TranscriptLine[] {
 		return [];
 	}
 	const cached = cache.get(runRecordDir);
-	if (cached && sameFileStats(cached.files, stats)) return cached.lines;
+	if (cached && sameFileStats(cached.files, stats)) {
+		cacheTranscript(runRecordDir, cached);
+		return cached.lines;
+	}
 
 	const lines = sessionFiles.flatMap((session) => parseSessionFile({ ...session, status }));
-	cache.set(runRecordDir, { files: stats, lines });
+	cacheTranscript(runRecordDir, {
+		files: stats,
+		lines,
+		sourceBytes: stats.reduce((total, stat) => total + stat.size, 0),
+	});
 	return lines;
 }

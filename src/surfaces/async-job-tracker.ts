@@ -24,7 +24,7 @@ import {
 } from "../protocol/types.ts";
 import type { IdleTracker } from "./idle-tracker.ts";
 import { readStatus } from "../shared/utils.ts";
-import { readAllEntries } from "../state/runs-registry.ts";
+import { readAllEntries, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { readLeafRunViewCached } from "../state/async-status.ts";
 import {
 	readWorkflowGroupPhase,
@@ -78,6 +78,7 @@ function asyncAgentName(job: AsyncJobState): string {
 function countWorkflowChildren(
 	groupRunId: string,
 	liveChildren: AsyncJobState[],
+	registryEntries: RunsRegistryEntry[],
 ): { done: number; running: number; queued: number } {
 	const liveById = new Map(liveChildren.map((child) => [child.asyncId, child]));
 	const counts = { done: 0, running: 0, queued: 0 };
@@ -87,7 +88,7 @@ function countWorkflowChildren(
 		else if (status === "queued") counts.queued++;
 		else counts.running++;
 	};
-	for (const entry of readAllEntries()) {
+	for (const entry of registryEntries) {
 		if (entry.parentRunId !== groupRunId || seen.has(entry.runId)) continue;
 		seen.add(entry.runId);
 		const live = liveById.get(entry.runId);
@@ -257,6 +258,7 @@ export function createAsyncJobTracker(
 				return;
 			}
 
+			let registryEntries: RunsRegistryEntry[] | undefined;
 			for (const job of state.asyncJobs.values()) {
 				try {
 					const previousStatus = job.status;
@@ -266,6 +268,7 @@ export function createAsyncJobTracker(
 					// heartbeat and mark the group 'lost' while its children run fine.
 					// Synthesize the row from the lifecycle marker + child jobs instead.
 					if (job.kind === "workflow") {
+						registryEntries ??= readAllEntries();
 						const workflowMeta = readWorkflowMeta(job.asyncDir);
 						if (workflowMeta) job.workflowMeta = workflowMeta;
 						if (previousStatusWasTerminal) continue;
@@ -296,7 +299,7 @@ export function createAsyncJobTracker(
 						// resolved via status.json). The live asyncJobs map is NOT a reliable
 						// source: completed children are cleaned out after completionRetentionMs,
 						// so a live-only "done" collapses toward 0 while the run is still going.
-						job.childCounts = countWorkflowChildren(job.asyncId, children);
+						job.childCounts = countWorkflowChildren(job.asyncId, children, registryEntries);
 						// Keep currentStep as the durable done count for activity-notice indexing;
 						// drop the meaningless stepsTotal fraction (N is unknowable for workflows).
 						job.currentStep = job.childCounts.done;
@@ -312,7 +315,7 @@ export function createAsyncJobTracker(
 						if (durablePhase) job.reachedPhaseTitles = durablePhase.reachedPhaseTitles;
 						const latestEntry = durablePhase
 							? undefined
-							: readAllEntries()
+							: registryEntries
 									.filter((entry) => entry.parentRunId === job.asyncId && entry.phaseTitle)
 									.sort((left, right) => right.startedAt - left.startedAt)[0];
 						const phaseLabel = formatWorkflowPhase(
@@ -581,9 +584,9 @@ export function createAsyncJobTracker(
 		if (runIds.length === 0) return;
 		let changed = false;
 		for (const runId of runIds) {
-			deliveredRunIds.add(runId);
 			const job = state.asyncJobs.get(runId);
 			if (!job) continue;
+			deliveredRunIds.add(runId);
 			if (job.pendingDelivery) {
 				job.pendingDelivery = false;
 				changed = true;
@@ -639,7 +642,8 @@ export function createAsyncJobTracker(
 		const hostSessionId = ctx?.sessionManager?.getSessionId?.();
 		if (!hostSessionId) return 0;
 		let added = 0;
-		for (const entry of readAllEntries()) {
+		const registryEntries = readAllEntries();
+		for (const entry of registryEntries) {
 			if ((entry.rootSessionId ?? entry.parentSessionId) !== hostSessionId) continue;
 			// Persist a stale orphan (sync OR async) whose owning activation died, BEFORE
 			// the async-only reclaim guard so sync foreground singles get reaped too. The
@@ -673,7 +677,7 @@ export function createAsyncJobTracker(
 			// the symmetric counterpart to the hard-dead leaf finalize below.
 			if (entry.kind === "workflow") {
 				let lifecycle = readWorkflowGroupState(entry.runRecordDir);
-				const childEntries = readAllEntries().filter((child) => child.parentRunId === entry.runId);
+				const childEntries = registryEntries.filter((child) => child.parentRunId === entry.runId);
 				if (lifecycle === "running") {
 					const childStates = childEntries.map(
 						(child) => readLeafRunViewCached(child.runRecordDir)?.state ?? "complete",
@@ -683,7 +687,7 @@ export function createAsyncJobTracker(
 				}
 				const workflowMeta = readWorkflowMeta(entry.runRecordDir);
 				if (!workflowMeta || (lifecycle !== "complete" && lifecycle !== "failed")) continue;
-				const childCounts = countWorkflowChildren(entry.runId, []);
+				const childCounts = countWorkflowChildren(entry.runId, [], registryEntries);
 				const latestPhase = childEntries
 					.filter((child) => child.phaseTitle)
 					.sort((left, right) => right.startedAt - left.startedAt)[0];

@@ -57,6 +57,31 @@ describe("runs registry", () => {
 		assert.deepEqual(readAllEntries(), [first]);
 	});
 
+	it("reuses parsed entries while the registry file is unchanged", () => {
+		tmpRegistry();
+		appendRunEntry(entry("run-a", 100));
+
+		const firstRead = readAllEntries();
+		const secondRead = readAllEntries();
+
+		assert.equal(secondRead[0], firstRead[0]);
+	});
+
+	it("invalidates cached entries when the registry file grows", () => {
+		tmpRegistry();
+		appendRunEntry(entry("run-a", 100));
+		const firstRead = readAllEntries();
+
+		appendRunEntry(entry("run-b", 200));
+		const updatedRead = readAllEntries();
+
+		assert.deepEqual(
+			updatedRead.map((item) => item.runId),
+			["run-b", "run-a"],
+		);
+		assert.notEqual(updatedRead[1], firstRead[0]);
+	});
+
 	it("returns multiple entries newest-first", () => {
 		tmpRegistry();
 		const older = entry("older", 100);

@@ -130,6 +130,16 @@ function appendProgressOutput(progress: AgentProgress, text: string): void {
 	if (progress.recentOutput.length > 50) progress.recentOutput.splice(0, progress.recentOutput.length - 50);
 }
 
+const MAX_TOKEN_SAMPLES = 120;
+
+export function appendTokenSample(
+	samples: Array<{ ts: number; tokens: number }>,
+	sample: { ts: number; tokens: number },
+): void {
+	samples.push(sample);
+	if (samples.length > MAX_TOKEN_SAMPLES) samples.splice(0, samples.length - MAX_TOKEN_SAMPLES);
+}
+
 function snapshotProgress(progress: AgentProgress): AgentProgress {
 	return {
 		...progress,
@@ -438,7 +448,8 @@ export async function runInProcessChildStep(input: {
 							usage.cacheWrite = (usage.cacheWrite ?? 0) + (u.cacheWrite || 0);
 							usage.cost = (usage.cost ?? 0) + (u.cost?.total || 0);
 							progress.tokens = totalUsageTokens(usage);
-							progress.tokenSamples?.push({ ts: now, tokens: progress.tokens });
+							if (progress.tokenSamples)
+								appendTokenSample(progress.tokenSamples, { ts: now, tokens: progress.tokens });
 							// Persist live token usage to this child's status.json so nested-child
 							// readers (which only see the on-disk status, not in-memory progress)
 							// show running token counts instead of ~0 until finalize.

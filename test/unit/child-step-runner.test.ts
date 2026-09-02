@@ -2,10 +2,24 @@ import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import { describe, it } from "node:test";
 import {
+	appendTokenSample,
 	childResultToSingleResult,
 	combineOptionalSignals,
 	createProgressUpdateCoalescer,
 } from "../../src/dispatch/child-step-runner.ts";
+
+describe("appendTokenSample", () => {
+	it("keeps only the latest 120 samples", () => {
+		const samples: Array<{ ts: number; tokens: number }> = [];
+		for (let index = 0; index < 150; index++) {
+			appendTokenSample(samples, { ts: index, tokens: index * 10 });
+		}
+
+		assert.equal(samples.length, 120);
+		assert.deepEqual(samples[0], { ts: 30, tokens: 300 });
+		assert.deepEqual(samples.at(-1), { ts: 149, tokens: 1490 });
+	});
+});
 
 describe("createProgressUpdateCoalescer", () => {
 	it("bounds a burst to leading and trailing updates", () => {

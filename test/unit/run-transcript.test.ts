@@ -53,6 +53,22 @@ function user(timestamp: string, content: unknown[]): Record<string, unknown> {
 }
 
 describe("readRunTranscript", () => {
+	it("evicts old parsed transcripts after 32 runs", () => {
+		const dirs = Array.from({ length: 33 }, () => makeRunDir());
+		try {
+			for (const [index, dir] of dirs.entries()) {
+				writeStatus(dir, { runId: `run-${index}` });
+				writeSession(dir, 0, [assistant("2026-05-20T00:00:01.000Z", [{ type: "text", text: `run ${index}` }])]);
+			}
+			const firstRead = readRunTranscript(dirs[0]!);
+			for (const dir of dirs.slice(1)) readRunTranscript(dir);
+
+			assert.notEqual(readRunTranscript(dirs[0]!), firstRead);
+		} finally {
+			for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("returns [] when no canonical session transcript exists", () => {
 		const dir = makeRunDir();
 		try {

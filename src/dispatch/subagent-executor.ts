@@ -31,7 +31,7 @@ import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessi
 import { resolveControlConfig } from "./subagent-control.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import type { StatusWriter } from "../state/status-writer.ts";
-import { getSingleResultOutput } from "../shared/utils.ts";
+import { compactForegroundResult, getSingleResultOutput, resolveChildCwd } from "../shared/utils.ts";
 import { tokenUsageFromUsage } from "../state/usage-totals.ts";
 import { inspectSubagentStatus } from "../state/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
@@ -95,7 +95,7 @@ import { runSinglePath } from "./run-single-path.ts";
 export { validateSubagentToolInput };
 
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
-	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
+	return resolveChildCwd(runtimeCwd, requestedCwd);
 }
 
 export function createSubagentExecutor(deps: ExecutorDeps): {
@@ -833,11 +833,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					index,
 					phaseIndex,
 					phaseTitle,
+					label,
+					cwd,
 					parallelGroupId,
 					pipeline,
 					resultSchema,
 					onChildProgress,
 				}) => {
+					const childCwd = resolveChildCwd(effectiveCwd, cwd);
 					const admissionPermit = await workflowAdmission.acquire(data.signal);
 					if (!admissionPermit) {
 						throw data.signal.reason instanceof Error ? data.signal.reason : new Error("Workflow aborted");
@@ -854,7 +857,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						const agentConfig = agents.find((agent) => agent.name === role);
 						let result: SingleResult | undefined;
 						const handle = spawnRun(
-							{ agentName: role, task, cwd: effectiveCwd },
+							{ agentName: role, task, cwd: childCwd, ...(label ? { label } : {}) },
 							{
 								parentRunId: group.runId,
 								rootRunId: groupRootRunId,
@@ -892,6 +895,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 										result = {
 											agent: role,
 											task,
+											...(label ? { label } : {}),
 											exitCode: 1,
 											messages: [],
 											usage: emptyUsage(),
@@ -927,8 +931,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 										agentConfig,
 										task,
 										cleanTask: task,
+										...(label ? { label } : {}),
 										stepIndex: index,
-										cwd: effectiveCwd,
+										cwd: childCwd,
 										interruptSignal: layer0Ctx.abortSignal,
 										maxSubagentDepth: resolveChildMaxSubagentDepth(
 											resolveCurrentMaxSubagentDepth(
@@ -973,7 +978,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 														controlConfig,
 														agent: role,
 														task: task.slice(0, 50),
-														cwd: effectiveCwd,
+														cwd: childCwd,
 														asyncDir: event.runRecordDir,
 														parentRunId: group.runId,
 													},
@@ -1015,8 +1020,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						);
 						await awaitRun(handle);
 						if (!result) throw new Error(`Child agent did not produce a result for ${handle.runId}`);
-						childResults.push({ runId: handle.runId, result, index });
-						return result;
+						const compactResult = compactForegroundResult(result);
+						childResults.push({ runId: handle.runId, result: compactResult, index });
+						return compactResult;
 					} finally {
 						admissionPermit.release();
 					}
