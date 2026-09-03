@@ -61,9 +61,10 @@ export class ChildAgentRegistry {
 		string,
 		{ parentSessionId?: string; rootSessionId?: string; asyncDir?: string }
 	>();
-	/** Terminal-stamp clock per runId; drives the lazy retention sweep. */
+	/** Terminal-stamp clock per runId; drives the bounded retention timer. */
 	private readonly terminalAt = new Map<string, number>();
 	private readonly retentionMs: number;
+	private retentionTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(opts: { retentionMs?: number } = {}) {
 		this.retentionMs = opts.retentionMs ?? 10000;
@@ -179,7 +180,8 @@ export class ChildAgentRegistry {
 		const s = this.statuses.get(patch.runId);
 		if (!s) return;
 		applyPatchToStatus(s, patch);
-		if (isTerminalState(s.state)) this.terminalAt.set(patch.runId, Date.now());
+		if (isTerminalState(s.state)) this.markTerminal(patch.runId);
+		else this.clearTerminal(patch.runId);
 	}
 
 	/**
@@ -194,7 +196,18 @@ export class ChildAgentRegistry {
 		s.state = result.state;
 		s.outputText = result.outputText;
 		s.endedAt ??= result.endedAt ?? Date.now();
-		this.terminalAt.set(runId, Date.now());
+		this.markTerminal(runId);
+	}
+
+	dispose(): void {
+		if (this.retentionTimer) clearTimeout(this.retentionTimer);
+		this.retentionTimer = undefined;
+		this.handles.clear();
+		this.handleStates.clear();
+		this.controllers.clear();
+		this.statuses.clear();
+		this.viewMeta.clear();
+		this.terminalAt.clear();
 	}
 
 	/** Project a run's in-memory status onto the canonical RunView. Memory-only. */
@@ -205,18 +218,52 @@ export class ChildAgentRegistry {
 	}
 
 	/**
-	 * Project all live runs onto RunView, lazily sweeping any whose retention
-	 * window has elapsed.
+	 * Project all live runs onto RunView, also sweeping against an injected clock
+	 * for callers and tests that need an immediate current snapshot.
 	 */
 	listRunViews(now = Date.now()): RunView[] {
-		for (const [id, t] of this.terminalAt) {
-			if (now - t > this.retentionMs) {
-				this.statuses.delete(id);
-				this.viewMeta.delete(id);
-				this.terminalAt.delete(id);
-			}
-		}
+		this.evictExpired(now);
+		this.scheduleRetention();
 		return [...this.statuses.entries()].map(([id, s]) => this.toRunView(id, s));
+	}
+
+	private markTerminal(runId: string): void {
+		this.terminalAt.set(runId, Date.now());
+		this.scheduleRetention();
+	}
+
+	private clearTerminal(runId: string): void {
+		if (!this.terminalAt.delete(runId)) return;
+		this.scheduleRetention();
+	}
+
+	private evictExpired(now = Date.now()): void {
+		for (const [runId, terminalAt] of this.terminalAt) {
+			if (now - terminalAt < this.retentionMs) continue;
+			this.statuses.delete(runId);
+			this.viewMeta.delete(runId);
+			this.terminalAt.delete(runId);
+		}
+	}
+
+	private scheduleRetention(): void {
+		if (this.retentionTimer) clearTimeout(this.retentionTimer);
+		this.retentionTimer = undefined;
+		let nextDeadline: number | undefined;
+		for (const terminalAt of this.terminalAt.values()) {
+			const deadline = terminalAt + this.retentionMs;
+			if (nextDeadline === undefined || deadline < nextDeadline) nextDeadline = deadline;
+		}
+		if (nextDeadline === undefined) return;
+		this.retentionTimer = setTimeout(
+			() => {
+				this.retentionTimer = undefined;
+				this.evictExpired();
+				this.scheduleRetention();
+			},
+			Math.max(0, nextDeadline - Date.now()),
+		);
+		this.retentionTimer.unref?.();
 	}
 
 	private toRunView(runId: string, s: PersistedRunStatus & { steps: PersistedRunStep[] }): RunView {

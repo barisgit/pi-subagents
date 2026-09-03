@@ -146,7 +146,8 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		assert.equal(step.tokens?.total, 150);
 	});
 
-	it("retains terminal result metadata through the window, then sweeps", () => {
+	it("evicts terminal result metadata after the retention window without listing views", (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
 		const registry = new ChildAgentRegistry({ retentionMs: 5_000 });
 		registry.seedRunView(RUN_ID, makeSeed());
 		registry.applyStatusPatch({ runId: RUN_ID, stepIndex: 0, state: "running" });
@@ -179,15 +180,52 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		assert.equal(beforeWindow.finalOutput, "done");
 		assert.equal(beforeWindow.totalTokens?.total, 300);
 
-		// Sweep happens lazily in listRunViews once retention elapses. terminalAt is
-		// stamped at real wall-clock time inside finalizeView, so advance from now.
-		const swept = registry.listRunViews(Date.now() + 5_001);
-		assert.equal(
-			swept.find((v) => v.id === RUN_ID),
-			undefined,
-			"run swept after retention window",
-		);
-		assert.equal(registry.getRunView(RUN_ID), undefined, "view gone after sweep");
+		t.mock.timers.tick(4_999);
+		assert.ok(registry.getRunView(RUN_ID), "view retained within the window");
+
+		t.mock.timers.tick(1);
+		assert.equal(registry.getRunView(RUN_ID), undefined, "view evicted without listing views");
+	});
+
+	it("resets retention when a terminal run receives a later terminal update", (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
+		const registry = new ChildAgentRegistry({ retentionMs: 5_000 });
+		registry.seedRunView(RUN_ID, makeSeed());
+		registry.applyStatusPatch({ runId: RUN_ID, stepIndex: 0, state: "complete" });
+
+		t.mock.timers.tick(4_000);
+		registry.applyStatusPatch({ runId: RUN_ID, stepIndex: 0, state: "complete", endedAt: 14_000 });
+		t.mock.timers.tick(1_000);
+		assert.ok(registry.getRunView(RUN_ID), "old deadline does not evict the updated run");
+
+		t.mock.timers.tick(4_000);
+		assert.equal(registry.getRunView(RUN_ID), undefined, "run evicted at the reset deadline");
+	});
+
+	it("cancels terminal retention when a run resumes", (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
+		const registry = new ChildAgentRegistry({ retentionMs: 5_000 });
+		registry.seedRunView(RUN_ID, makeSeed());
+		registry.applyStatusPatch({ runId: RUN_ID, stepIndex: 0, state: "complete" });
+
+		t.mock.timers.tick(4_000);
+		registry.applyStatusPatch({ runId: RUN_ID, stepIndex: 0, state: "running" });
+		t.mock.timers.tick(5_000);
+
+		assert.equal(registry.getRunView(RUN_ID)?.state, "running", "resumed run survives the old deadline");
+	});
+
+	it("disposes registry retention idempotently", (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
+		const registry = new ChildAgentRegistry({ retentionMs: 5_000 });
+		registry.seedRunView(RUN_ID, makeSeed());
+		registry.applyStatusPatch({ runId: RUN_ID, stepIndex: 0, state: "complete" });
+
+		registry.dispose();
+		registry.dispose();
+		t.mock.timers.tick(5_000);
+
+		assert.equal(registry.getRunView(RUN_ID), undefined);
 	});
 
 	it("keeps the RunView alive after its handle is deleted", () => {

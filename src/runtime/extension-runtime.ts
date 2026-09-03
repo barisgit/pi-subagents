@@ -205,6 +205,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		createAsyncJobTracker(pi, state, { idleTracker, getWidgetClient, onRunTerminal: controlRunTerminalHandler });
 	const runtimeCleanup = () => {
 		void childRegistry.abortQueued("activation replaced");
+		childRegistry.dispose();
 		shutdown();
 		liveSessionDirectory?.dispose();
 		liveToolComponents?.dispose();
@@ -463,6 +464,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		// Cancel this activation's children before a replacement activation can
 		// rehydrate and resume one of its queued semaphore waiters.
 		await childRegistry.abortQueued("session shutdown");
+		childRegistry.dispose();
 		// Reload/session replacement can tear down the runtime before the executor
 		// reaches its own finally; release is idempotent across both cleanup paths.
 		const parentRunId = currentParentRunId;
