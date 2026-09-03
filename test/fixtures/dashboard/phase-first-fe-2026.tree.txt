@@ -1,0 +1,16 @@
+> ▾ Frontend Feature FE-2026 · Phase 3/3: Validacija · 6/8 · 0ms
+  └─▾ Phase 1: Raziskava · 3/3 · 3.0s
+    └─▾ ⋮ Osnutki · Raziskava 1/2 · 2/2 items
+      └─✓ Prijava · explorer · 1.0s
+      └─✓ Profil · explorer · 1.0s
+    └─✓ fixer · 1.0s
+  └─▾ Phase 2: Implementacija · 1/2 · 1.0s
+    └─▾ ⋮ Osnutki · Osnutek 2/2 · 1/2 items
+      └─✓ Prijava · fixer · 1.0s
+      └─◈ Profil · fixer · 0ms
+  └─▾ Phase 3: Validacija · 2/3 · 11.0s
+    └─▾ ⋮ Preverjanje · Testi 1/2 · 1/2 items
+      └─✓ Prijava · operator · 1.0s
+      └─◈ Profil · operator · 0ms
+    └─▾ ⋮ Preverjanje · Pregled 2/2 · 1/2 items · 1 waiting · failed
+      └─✗ Prijava · reviewer · 1.0s

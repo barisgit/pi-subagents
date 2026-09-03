@@ -1,0 +1,10 @@
+◈ Profil · Osnutki · 2 stages · 1.0s
+
+── Raziskava 1/2 ──── ✓ explorer · 0 tools · 100t tokens · 1.0s
+Raziskava za profil je končana.
+⏎ open transcript for this stage
+
+── Osnutek 2/2 ──── ◈ fixer · 1 tool · 100t tokens · 0ms
+← read: src/profile.ts
+waiting 0ms
+⏎ open transcript for this stage

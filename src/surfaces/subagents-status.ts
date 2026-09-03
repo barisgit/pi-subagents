@@ -133,15 +133,16 @@ function buildPipelineGroupLine(
 	width: number,
 	children: readonly RowState[],
 ): string {
+	const state = aggregateState(children);
 	return renderRowLine(
 		theme,
 		{
-			state: aggregateState(children),
+			state,
 			name: `⋮ ${row.name} · ${row.stageTitle ?? "stage"} ${row.stageIndex + 1}/${row.stageCount}`,
 			depth: row.depth,
 			selected,
 			marker: row.collapsed ? "collapsed" : "expanded",
-			badge: `${row.done}/${row.total} items${row.waiting > 0 ? ` · ${row.waiting} waiting` : ""}`,
+			badge: `${row.done}/${row.total} items${row.waiting > 0 ? ` · ${row.waiting} waiting` : ""}${state === "failed" ? " · failed" : ""}`,
 		},
 		width,
 		"dashboard",
