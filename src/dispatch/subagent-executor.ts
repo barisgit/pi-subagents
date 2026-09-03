@@ -586,6 +586,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						variant: "sync-foreground",
 						initialize: {
 							mode: foregroundMode,
+							controlConfig,
 							startedAt: foregroundControl.startedAt,
 							runnerHeartbeatAt: foregroundControl.startedAt,
 							cwd: effectiveCwd,
@@ -860,6 +861,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							{ agentName: role, task, cwd: childCwd, ...(label ? { label } : {}) },
 							{
 								parentRunId: group.runId,
+								controlConfig,
 								rootRunId: groupRootRunId,
 								notifyPolicy: "each",
 								parentSessionFile,
@@ -1043,6 +1045,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						{ agentName: "workflow", task: message, cwd: effectiveCwd },
 						{
 							parentRunId: group.runId,
+							controlConfig,
 							rootRunId: groupRootRunId,
 							notifyPolicy: "each",
 							parentSessionFile,

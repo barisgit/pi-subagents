@@ -48,6 +48,12 @@ function seedRunningRun(root: string, runId: string, rootSessionId: string): voi
 			mode: "single",
 			state: "running",
 			startedAt: Date.now() - 1000,
+			controlConfig: {
+				enabled: true,
+				needsAttentionAfterMs: 123,
+				notifyOn: ["needs_attention"],
+				notifyChannels: ["event"],
+			},
 			lastUpdate: Date.now(),
 			runnerHeartbeatAt: Date.now(),
 			cwd: root,
@@ -99,6 +105,7 @@ describe("rehydrate re-announce", () => {
 			const added = tracker.rehydrateFromRegistry(ctx as never);
 			assert.equal(added, 1);
 			assert.ok(state.asyncJobs.has("reclaimed-run"));
+			assert.equal(state.asyncJobs.get("reclaimed-run")?.controlConfig?.needsAttentionAfterMs, 123);
 
 			const started = emitted.filter((e) => e.channel === SUBAGENT_ASYNC_STARTED_EVENT);
 			assert.equal(started.length, 1);

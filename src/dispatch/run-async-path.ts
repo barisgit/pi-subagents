@@ -195,6 +195,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 				},
 				{
 					parentRunId: groupRunId,
+					controlConfig,
 					rootRunId: groupRootRunId,
 					notifyPolicy: "each",
 					parentSessionFile: ctx.sessionManager.getSessionFile() ?? null,
@@ -444,6 +445,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 	const asyncRootSessionId = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 	const initializeMeta = {
 		mode,
+		controlConfig,
 		startedAt,
 		cwd: effectiveCwd,
 		...(runLabel ? { label: runLabel } : {}),

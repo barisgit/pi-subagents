@@ -96,6 +96,26 @@ describe("parsePersistedRunStatus", () => {
 			ok: false,
 			reason: "invalid-shape",
 		});
+
+		it("accepts a resolved control config and rejects malformed policy fields", () => {
+			const base = { runId: "x", mode: "single", state: "running", startedAt: 1 };
+			const controlConfig = {
+				enabled: true,
+				needsAttentionAfterMs: 123,
+				notifyOn: ["needs_attention"],
+				notifyChannels: ["event", "async"],
+			};
+			assert.deepEqual(parsePersistedRunStatus(JSON.stringify({ ...base, controlConfig })), {
+				ok: true,
+				value: { ...base, controlConfig },
+			});
+			assert.deepEqual(
+				parsePersistedRunStatus(
+					JSON.stringify({ ...base, controlConfig: { ...controlConfig, needsAttentionAfterMs: "soon" } }),
+				),
+				{ ok: true, value: base },
+			);
+		});
 	});
 });
 

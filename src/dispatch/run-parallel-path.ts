@@ -86,6 +86,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				},
 				{
 					parentRunId: input.runId,
+					controlConfig: input.data.controlConfig,
 					rootRunId: input.rootRunId,
 					notifyPolicy: "each",
 					parentSessionFile: input.ctx.sessionManager.getSessionFile() ?? null,

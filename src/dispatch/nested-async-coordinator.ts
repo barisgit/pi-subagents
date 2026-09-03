@@ -73,6 +73,12 @@ export function markNestedAsyncFinished(parentRunId: string, childRunId: string)
 	changed(state);
 }
 
+export function markNestedAsyncProgress(childRunId: string): void {
+	for (const state of registry().parents.values()) {
+		if (state.activeAsyncIds.has(childRunId)) changed(state);
+	}
+}
+
 export function markNestedParentTurn(parentRunId: string, inFlight: boolean): void {
 	const state = registry().parents.get(parentRunId);
 	if (!state) return;

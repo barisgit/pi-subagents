@@ -7,7 +7,13 @@
 // Types-only leaf: no fs imports, no IO. The view's field types mirror the
 // former AsyncRunSummary exactly; the trailing block holds foreground-only
 // optionals (absent on disk-derived views).
-import type { ActivityState, PipelineMetadata, RunDisplayState, TokenUsage } from "../protocol/types.ts";
+import type {
+	ActivityState,
+	PipelineMetadata,
+	ResolvedControlConfig,
+	RunDisplayState,
+	TokenUsage,
+} from "../protocol/types.ts";
 import type { WorkflowMeta } from "../protocol/workflow-meta.ts";
 import type { RunPhase } from "./run-phase.ts";
 
@@ -71,6 +77,7 @@ export interface RunView {
 	runnerHeartbeatAt?: number;
 	resumedAt?: number;
 	resumeCount?: number;
+	controlConfig?: ResolvedControlConfig;
 	/** Current execution phase mirrored from status.json. */
 	phase?: RunPhase;
 	/** Milliseconds since epoch when the current phase was entered. */

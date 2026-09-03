@@ -1,5 +1,12 @@
 import type { SubmitResultEnvelope } from "./output-contract.ts";
-import type { ActivityState, ModelAttempt, RunDisplayState, TokenUsage, Usage } from "./types.ts";
+import type {
+	ActivityState,
+	ModelAttempt,
+	ResolvedControlConfig,
+	RunDisplayState,
+	TokenUsage,
+	Usage,
+} from "./types.ts";
 
 /** Observable execution phase for a child agent run. */
 export type RunPhase =
@@ -161,6 +168,8 @@ export interface PersistedRunStatus {
 	 */
 	runnerPid?: number;
 	runnerToken?: string;
+	/** Resolved notification policy used to rehydrate activity after reload. */
+	controlConfig?: ResolvedControlConfig;
 	resumedAt?: number;
 	resumeCount?: number;
 	/** Current execution phase, written by status-writer on every patch. */
@@ -219,6 +228,7 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 	// a present wrong-typed value is a malformed file and fails closed.
 	if (o.runnerPid !== undefined && !isFiniteNumber(o.runnerPid)) return { ok: false, reason: "invalid-shape" };
 	if (o.runnerToken !== undefined && typeof o.runnerToken !== "string") return { ok: false, reason: "invalid-shape" };
+	if (o.controlConfig !== undefined && !isResolvedControlConfig(o.controlConfig)) delete o.controlConfig;
 	if (
 		o.steps !== undefined &&
 		(!Array.isArray(o.steps) ||
@@ -252,6 +262,20 @@ const OPTIONAL_LIVENESS_NUMBER_FIELDS = [
 
 function isFiniteNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
+}
+
+function isResolvedControlConfig(value: unknown): value is ResolvedControlConfig {
+	if (value === null || typeof value !== "object") return false;
+	const config = value as Record<string, unknown>;
+	return (
+		typeof config.enabled === "boolean" &&
+		isFiniteNumber(config.needsAttentionAfterMs) &&
+		config.needsAttentionAfterMs > 0 &&
+		Array.isArray(config.notifyOn) &&
+		config.notifyOn.every((event) => event === "needs_attention") &&
+		Array.isArray(config.notifyChannels) &&
+		config.notifyChannels.every((channel) => channel === "event" || channel === "async" || channel === "intercom")
+	);
 }
 
 export interface StatusPatch {

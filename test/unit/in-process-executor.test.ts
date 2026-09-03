@@ -26,6 +26,7 @@ import {
 	flushNestedCompletionReprompts,
 	holdNestedAsyncRollup,
 	markNestedAsyncFinished,
+	markNestedAsyncProgress,
 	markNestedAsyncStarted,
 	markNestedParentTurn,
 	nestedAsyncParentSnapshot,
@@ -300,6 +301,44 @@ it("retains an idle parent, parks its leaf permit, and disposes after its nested
 	assert.equal(parentSession.disposeCalls, 1);
 	assert.equal(cancelCalls, 1);
 	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
+});
+
+it("refreshes retained parent activity when an active async descendant progresses", async () => {
+	leafConcurrencyLimit(1);
+	const parentRunId = "run-progress-parent";
+	const descendantRunId = "run-progress-descendant";
+	let parentPromptSettled!: () => void;
+	const promptSettled = new Promise<void>((resolve) => {
+		parentPromptSettled = resolve;
+	});
+	const parentSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		markNestedAsyncStarted(parentRunId, descendantRunId);
+		self.lastAssistantText = "<output>waiting</output>";
+		parentPromptSettled();
+	});
+	const siblingSession = new FakeAgentSession(async (self) => {
+		self.lastAssistantText = "<output>sibling</output>";
+	});
+	installFakeRuntime([parentSession, siblingSession]);
+	const patches: Array<{ activity?: { updatedAt?: number } }> = [];
+
+	const parent = runChildAgent(
+		makeStep({ runId: parentRunId }),
+		makeContext({ onStatusUpdate: (patch) => patches.push(patch) }),
+	);
+	await promptSettled;
+	assert.equal((await runChildAgent(makeStep({ runId: "run-progress-sibling" }), makeContext())).state, "complete");
+	const beforeProgress = patches.length;
+	const versionBefore = nestedAsyncParentSnapshot(parentRunId)?.version;
+	markNestedAsyncProgress(descendantRunId);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId)?.version, (versionBefore ?? 0) + 1);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+
+	assert.equal(patches.length, beforeProgress + 1);
+	assert.equal(typeof patches.at(-1)?.activity?.updatedAt, "number");
+	markNestedAsyncFinished(parentRunId, descendantRunId);
+	assert.equal((await parent).state, "complete");
 });
 
 it("binds extensions before prompting so nested async activation retains the parent", async () => {
@@ -1040,6 +1079,53 @@ describe("runChildAgent", () => {
 			2,
 		);
 		assert.equal(patches.filter((patch) => (patch as { toolErrorDelta?: number }).toolErrorDelta === 1).length, 1);
+		const completedToolPatch = patches.find(
+			(patch) => (patch as { toolResultDelta?: number }).toolResultDelta === 1,
+		) as { activity?: { state?: string; toolName?: string; updatedAt?: number }; phase?: string } | undefined;
+		assert.equal(completedToolPatch?.phase, "idle");
+		assert.deepEqual(completedToolPatch?.activity, {
+			state: "running",
+			updatedAt: completedToolPatch?.activity?.updatedAt,
+		});
+	});
+
+	it("persists activity and live text from nested assistant streaming events", async () => {
+		const session = new FakeAgentSession(async (self) => {
+			self.emit({
+				type: "message_update",
+				assistantMessageEvent: { type: "thinking_delta", delta: "reasoning" },
+			});
+			self.emit({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: "streamed" },
+			});
+			self.emit({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_end", content: "streamed output" },
+			});
+			self.lastAssistantText = "<output>done</output>";
+		});
+		installFakeRuntime([session]);
+		const patches: unknown[] = [];
+
+		await runChildAgent(
+			makeStep(),
+			makeContext({
+				onStatusUpdate: (patch) => patches.push(patch),
+			}),
+		);
+
+		const thinkingPatch = patches.find((patch) => (patch as { phase?: string }).phase === "thinking") as
+			| { activity?: { state?: string } }
+			| undefined;
+		assert.equal(thinkingPatch?.activity?.state, "running");
+		const streamingPatch = patches.find((patch) => (patch as { liveText?: string }).liveText === "streamed") as
+			| { activity?: { state?: string; updatedAt?: number }; phase?: string }
+			| undefined;
+		assert.equal(streamingPatch?.phase, "streaming_text");
+		assert.equal(streamingPatch?.activity?.state, "running");
+		assert.equal(typeof streamingPatch?.activity?.updatedAt, "number");
+		assert.ok(patches.some((patch) => (patch as { liveText?: string }).liveText === "streamed output"));
 	});
 
 	it("aborts the session and returns interrupted when abortSignal fires", async () => {

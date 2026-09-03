@@ -66,6 +66,7 @@ import { addUsageInto, nestedSubagentUsageFromToolEvent } from "./executor-helpe
 import { acquireLeafPermit, parkLeafPermit } from "./leaf-concurrency.ts";
 import {
 	flushNestedCompletionReprompts,
+	markNestedAsyncProgress,
 	nestedAsyncParentSnapshot,
 	releaseNestedAsyncParent,
 	waitForNestedAsyncParentChange,
@@ -326,7 +327,12 @@ export function dispatchAsyncChild(step: ChildAgentStep, ctx: ChildAgentContext)
 	return startChildAgent(step, ctx);
 }
 
-async function settleNestedAsyncParent(runId: string, signal: AbortSignal): Promise<void> {
+async function settleNestedAsyncParent(
+	runId: string,
+	stepIndex: number,
+	signal: AbortSignal,
+	onStatusUpdate?: (patch: StatusPatch) => void,
+): Promise<void> {
 	while (!signal.aborted) {
 		const snapshot = nestedAsyncParentSnapshot(runId);
 		if (!snapshot) return;
@@ -338,6 +344,13 @@ async function settleNestedAsyncParent(runId: string, signal: AbortSignal): Prom
 		const wait = () => waitForNestedAsyncParentChange(runId, snapshot.version, signal);
 		if (snapshot.active && !snapshot.agentInFlight) await parkLeafPermit(runId, wait, signal);
 		else await wait();
+		if (nestedAsyncParentSnapshot(runId)?.active) {
+			onStatusUpdate?.({
+				runId,
+				stepIndex,
+				activity: { state: "running", updatedAt: Date.now() },
+			});
+		}
 	}
 }
 
@@ -367,6 +380,7 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 		onStatusUpdate: (patch: StatusPatch) => {
 			ctx.registry.applyStatusPatch(patch);
 			ctx.onStatusUpdate?.(patch);
+			if (patch.activity?.updatedAt !== undefined) markNestedAsyncProgress(step.runId);
 		},
 	};
 
@@ -693,7 +707,7 @@ async function executeChildAgent(
 			return result;
 		}
 
-		await settleNestedAsyncParent(step.runId, signal);
+		await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate);
 
 		if (!outputText.trim()) {
 			outputText = activeSession().getLastAssistantText?.() ?? "";
@@ -783,7 +797,7 @@ async function executeChildAgent(
 
 		// Completion can race the output-contract reprompt above. Drain any new
 		// descendant completion turn before the parent can become terminal.
-		await settleNestedAsyncParent(step.runId, signal);
+		await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate);
 
 		// Detect provider-level failures that the SDK swallows.
 		//
@@ -1081,6 +1095,11 @@ function handleSessionEvent(
 	ctx.onEvent?.(step.stepIndex, event);
 	const record = event as Record<string, unknown>;
 	const type = typeof record.type === "string" ? record.type : undefined;
+	const assistantEvent =
+		type === "message_update" && record.assistantMessageEvent && typeof record.assistantMessageEvent === "object"
+			? (record.assistantMessageEvent as Record<string, unknown>)
+			: undefined;
+	const assistantType = typeof assistantEvent?.type === "string" ? assistantEvent.type : undefined;
 	const now = Date.now();
 	let patchBody: StatusPatchBody | undefined;
 
@@ -1126,6 +1145,18 @@ function handleSessionEvent(
 			liveText: record.content,
 			activity: { state: "running", updatedAt: now },
 		};
+	} else if (assistantType === "text_delta" && typeof assistantEvent?.delta === "string") {
+		patchBody = {
+			liveText: counters.appendOutput(assistantEvent.delta),
+			activity: { state: "running", updatedAt: now },
+		};
+	} else if (assistantType === "text_end" && typeof assistantEvent?.content === "string") {
+		patchBody = {
+			liveText: assistantEvent.content,
+			activity: { state: "running", updatedAt: now },
+		};
+	} else if (assistantType === "thinking_delta") {
+		patchBody = { activity: { state: "running", updatedAt: now } };
 	} else if (type === "tool_execution_start") {
 		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
 		counters.incrementToolCall();
@@ -1134,14 +1165,13 @@ function handleSessionEvent(
 			activity: { state: "tool_running", toolName, updatedAt: now },
 		};
 	} else if (type === "tool_execution_end") {
-		const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
 		counters.incrementToolResult();
 		const isError = record.isError === true;
 		if (isError) counters.incrementToolError();
 		patchBody = {
 			toolResultDelta: 1,
 			...(isError ? { toolErrorDelta: 1 } : {}),
-			activity: { state: "running", toolName, updatedAt: now },
+			activity: { state: "running", updatedAt: now },
 		};
 	}
 

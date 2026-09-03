@@ -8,7 +8,7 @@ import {
 	type StatusPatch,
 	parsePersistedRunStatus,
 } from "../protocol/status-types.ts";
-import type { TokenUsage, Usage } from "../protocol/types.ts";
+import type { ResolvedControlConfig, TokenUsage, Usage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 import { applyPatchToStatus } from "./status-patch.ts";
 import { STALE_MTIME_THRESHOLD_MS } from "../shared/utils.ts";
@@ -52,6 +52,7 @@ export interface StatusMeta {
 	runnerHeartbeatAt?: number;
 	resumedAt?: number;
 	resumeCount?: number;
+	controlConfig?: ResolvedControlConfig;
 	totalUsage?: Usage;
 	totalTokens?: TokenUsage;
 }
@@ -80,6 +81,15 @@ export function statusFromMeta(runId: string, meta: StatusMeta): PersistedRunSta
 		...(meta.runnerHeartbeatAt !== undefined ? { runnerHeartbeatAt: meta.runnerHeartbeatAt } : {}),
 		...(meta.resumedAt !== undefined ? { resumedAt: meta.resumedAt } : {}),
 		...(meta.resumeCount !== undefined ? { resumeCount: meta.resumeCount } : {}),
+		...(meta.controlConfig
+			? {
+					controlConfig: {
+						...meta.controlConfig,
+						notifyOn: [...meta.controlConfig.notifyOn],
+						notifyChannels: [...meta.controlConfig.notifyChannels],
+					},
+				}
+			: {}),
 		...(meta.totalUsage ? { totalUsage: { ...meta.totalUsage } } : {}),
 		...(meta.totalTokens ? { totalTokens: { ...meta.totalTokens } } : {}),
 		steps: meta.steps

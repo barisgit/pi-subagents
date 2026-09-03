@@ -378,6 +378,7 @@ async function resumeRun(
 		runnerHeartbeatAt: resumedAt,
 		resumedAt,
 		resumeCount,
+		...(target.status.controlConfig ? { controlConfig: target.status.controlConfig } : {}),
 		...(target.status.totalUsage || resumeBaseline.totalTokens ? { totalUsage: resumeBaseline.totalUsage } : {}),
 		...(resumeBaseline.totalTokens ? { totalTokens: resumeBaseline.totalTokens } : {}),
 		cwd: target.cwd,

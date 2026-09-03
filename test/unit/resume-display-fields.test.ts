@@ -127,7 +127,13 @@ function seedRun(root: string, startedAt = 4444, extra: Record<string, unknown> 
 describe("resume display fields", () => {
 	it("persists resumeCount and resumedAt on accepted resume while preserving startedAt", async () => {
 		const h = setup();
-		const run = seedRun(tempDir!, 9_876);
+		const controlConfig = {
+			enabled: true,
+			needsAttentionAfterMs: 123,
+			notifyOn: ["needs_attention"],
+			notifyChannels: ["event"],
+		};
+		const run = seedRun(tempDir!, 9_876, { controlConfig });
 		const writes: Array<Record<string, any>> = [];
 		const restore = __setStatusWriterWriteJsonForTest((filePath, payload) => {
 			if (filePath.includes(run.runId)) writes.push(JSON.parse(JSON.stringify(payload)));
@@ -146,9 +152,11 @@ describe("resume display fields", () => {
 		assert.equal(typeof init!.resumedAt, "number");
 		assert.ok(init!.resumedAt >= before);
 		assert.equal(init!.startedAt, run.startedAt);
+		assert.deepEqual(init!.controlConfig, controlConfig);
 		const finalStatus = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
 		assert.equal(finalStatus.resumeCount, 1);
 		assert.equal(finalStatus.startedAt, run.startedAt);
+		assert.deepEqual(finalStatus.controlConfig, controlConfig);
 	});
 
 	it("increments resumeCount by one and overwrites resumedAt on each accepted resume", async () => {

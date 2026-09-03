@@ -88,7 +88,7 @@ function deriveAsyncActivityState(
 		activityState:
 			status.activityState ??
 			deriveActivityState({
-				config: DEFAULT_CONTROL_CONFIG,
+				config: status.controlConfig ?? DEFAULT_CONTROL_CONFIG,
 				startedAt: status.startedAt,
 				lastActivityAt,
 				phase: status.phase,
@@ -133,6 +133,7 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 		runnerHeartbeatAt: status.runnerHeartbeatAt,
 		...(status.resumedAt !== undefined ? { resumedAt: status.resumedAt } : {}),
 		resumeCount: status.resumeCount ?? 0,
+		...(status.controlConfig ? { controlConfig: status.controlConfig } : {}),
 		...(status.phase !== undefined ? { phase: status.phase } : {}),
 		...(status.phaseStartedAt !== undefined ? { phaseStartedAt: status.phaseStartedAt } : {}),
 		currentStep: status.currentStep,

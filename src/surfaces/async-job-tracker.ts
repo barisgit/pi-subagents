@@ -524,7 +524,7 @@ export function createAsyncJobTracker(
 			updatedAt: status?.lastUpdate ?? now,
 			resumedAt: status?.resumedAt,
 			resumeCount: status?.resumeCount ?? 0,
-			controlConfig: info.controlConfig,
+			controlConfig: info.controlConfig ?? status?.controlConfig,
 		});
 		ensurePoller();
 		if (state.lastUiContext) {
@@ -621,7 +621,13 @@ export function createAsyncJobTracker(
 	// and the bus are notified; state.asyncJobs is still populated by the caller
 	// (this tracker's own handleStarted listener tolerates the self-emitted
 	// event — it overwrites the same runId key and the poller corrects status).
-	const announceReclaimed = (runId: string, asyncDir: string, agent?: string, parentRunId?: string): void => {
+	const announceReclaimed = (
+		runId: string,
+		asyncDir: string,
+		agent?: string,
+		parentRunId?: string,
+		controlConfig?: ResolvedControlConfig,
+	): void => {
 		idleTracker?.onAsyncStarted(runId);
 		try {
 			pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
@@ -631,6 +637,7 @@ export function createAsyncJobTracker(
 				reclaimed: true,
 				...(agent ? { agent } : {}),
 				...(parentRunId ? { parentRunId } : {}),
+				...(controlConfig ? { controlConfig } : {}),
 			});
 		} catch {
 			// Bus listeners must not break session rehydration.
@@ -746,7 +753,13 @@ export function createAsyncJobTracker(
 				continue;
 			}
 			const agents = entry.agentNames ?? (entry.agentName ? [entry.agentName] : undefined);
-			announceReclaimed(entry.runId, entry.runRecordDir, agents?.[0], entry.parentRunId ?? status.parentRunId);
+			announceReclaimed(
+				entry.runId,
+				entry.runRecordDir,
+				agents?.[0],
+				entry.parentRunId ?? status.parentRunId,
+				status.controlConfig,
+			);
 			state.asyncJobs.set(entry.runId, {
 				asyncId: entry.runId,
 				asyncDir: entry.runRecordDir,
@@ -762,7 +775,7 @@ export function createAsyncJobTracker(
 				runnerHeartbeatAt: status.runnerHeartbeatAt,
 				resumedAt: status.resumedAt,
 				resumeCount: status.resumeCount ?? 0,
-				controlConfig: undefined,
+				controlConfig: status.controlConfig,
 			});
 			added++;
 		}

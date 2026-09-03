@@ -6,7 +6,7 @@ import { readStatus } from "../shared/utils.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import { StatusWriter, type StatusMeta } from "../state/status-writer.ts";
 import type { ChildAgentResult, PersistedRunStatus, PersistedRunStep } from "../protocol/status-types.ts";
-import type { PipelineMetadata, TokenUsage, Usage } from "../protocol/types.ts";
+import type { PipelineMetadata, ResolvedControlConfig, TokenUsage, Usage } from "../protocol/types.ts";
 import { computeGroupStatus, type Layer0ChildStatus, type Layer0GroupStatus } from "../state/group-status.ts";
 import { processGlobal } from "../shared/process-global.ts";
 
@@ -64,6 +64,7 @@ export interface SpawnRunOpts {
 	parallelGroupId?: string;
 	pipeline?: PipelineMetadata;
 	source?: "sync" | "async";
+	controlConfig?: ResolvedControlConfig;
 	onLifecycle?: RunLifecycleSink;
 }
 
@@ -318,6 +319,7 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 		variant: "group-child",
 		initialize: {
 			mode: "single",
+			...(opts.controlConfig ? { controlConfig: opts.controlConfig } : {}),
 			cwd: step.cwd,
 			startedAt: Date.now(),
 			currentStep: 0,

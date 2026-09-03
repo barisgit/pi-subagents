@@ -98,6 +98,30 @@ function stopSubagentStateTimers(state: SubagentState): void {
 }
 
 describe("StatusWriter", () => {
+	it("rehydrates activity with the persisted custom control threshold", async () => {
+		const { statusToRunView } = await import("../../src/state/async-status.ts");
+		const dir = tempDir("pi-status-control-config-");
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-custom-control" });
+		const lastActivityAt = Date.now() - 200;
+		writer.initialize({
+			mode: "single",
+			state: "running",
+			startedAt: lastActivityAt,
+			lastActivityAt,
+			controlConfig: {
+				enabled: true,
+				needsAttentionAfterMs: 100,
+				notifyOn: ["needs_attention"],
+				notifyChannels: ["event"],
+			},
+			steps: [{ agent: "fixer", status: "running", lastActivityAt }],
+		});
+
+		const status = readStatus(dir) as unknown as PersistedRunStatus;
+		assert.equal(status.controlConfig?.needsAttentionAfterMs, 100);
+		assert.equal(statusToRunView(dir, status).activityState, "needs_attention");
+	});
+
 	it("coalesces three fast enqueue calls into one debounced disk write", async () => {
 		const dir = tempDir("pi-status-writer-debounce-");
 		const writes = countStatusWrites();
