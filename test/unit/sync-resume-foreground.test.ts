@@ -104,12 +104,13 @@ class FakeSession {
 	abort() {
 		this.resolvePrompt?.();
 	}
-	prompt(message: string) {
+	prompt(message: string, options?: { preflightResult?: (success: boolean) => void }) {
 		this.prompts.push(message);
 		for (const event of this.eventsToEmit.splice(0)) this.emit(event);
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
+		options?.preflightResult?.(true);
 		return this.promptPromise;
 	}
 }
@@ -555,18 +556,19 @@ describe("sync resume foreground", () => {
 		assert.deepEqual(status.steps[0], before.steps[0]);
 	});
 
-	it("foreground concurrent guard rejects same run and runId:0 alias while pending", async () => {
+	it("foreground concurrent resumes steer the same ready session", async () => {
 		const h = setup({ pending: true });
 		writeCompleteRun(tempDir!);
 		const first = h.execute({ action: "resume", id: "resume-run", message: "one", async: false });
 		await waitFor(() => h.session.prompts.length === 1);
 
 		const second = await h.execute({ action: "resume", id: "resume-run", message: "two", async: false });
+		assert.equal(h.childRegistry.list().length, 1);
 		const alias = await h.execute({ action: "resume", id: "resume-run:0", message: "three", async: false });
-		assert.equal(second.isError, true);
-		assert.match(second.content[0]?.text ?? "", /already in progress/);
+		assert.equal(second.isError, undefined, second.content[0]?.text);
 		assert.equal(alias.isError, true);
-		assert.match(alias.content[0]?.text ?? "", /already in progress/);
+		assert.match(alias.content[0]?.text ?? "", /No resumable run found/);
+		assert.deepEqual(h.session.prompts, ["one", "two"]);
 
 		h.session.resolvePrompt?.();
 		await first;

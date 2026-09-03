@@ -5,6 +5,7 @@ import { afterEach, describe, it } from "node:test";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
+import { interruptRun } from "../../src/dispatch/layer0-runs.ts";
 import { buildLeftLine } from "../../src/surfaces/subagents-status.ts";
 import { __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
@@ -39,7 +40,7 @@ function state(cwd: string): SubagentState {
 class BlockingSession {
 	async bindExtensions(): Promise<void> {}
 	resolvePrompt: (() => void) | undefined;
-	messages: unknown[] = [];
+	messages: string[] = [];
 	subscribe() {
 		return () => {};
 	}
@@ -51,14 +52,19 @@ class BlockingSession {
 	async abort() {
 		this.resolvePrompt?.();
 	}
-	async prompt() {
+	async prompt(message: string, options?: { preflightResult?: (success: boolean) => void }) {
+		this.messages.push(message);
+		if (options?.preflightResult) {
+			options.preflightResult(true);
+			return;
+		}
 		await new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
 	}
 }
 
-function setup(session: BlockingSession) {
+function setup(session: BlockingSession, waitBeforeSession?: Promise<void>) {
 	tempDir = createTempDir("pi-subagent-resume-display-edge-");
 	setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	const events: Array<{ channel: string; data: any }> = [];
@@ -69,22 +75,28 @@ function setup(session: BlockingSession) {
 		getAllTools: () => [],
 	};
 	setCurrentPi(pi as never);
+	let sessionOpenCount = 0;
 	restoreDeps = __setChildAgentExecutorDepsForTest({
 		SessionManager: { open: () => ({ getSessionId: () => "same-session" }) } as never,
 		DefaultResourceLoader: class {
 			async reload() {}
 		} as never,
 		getAgentDir: () => tempDir!,
-		createAgentSession: async () => ({ session }) as never,
+		createAgentSession: async () => {
+			sessionOpenCount += 1;
+			await waitBeforeSession;
+			return { session } as never;
+		},
 	});
 	const s = state(tempDir);
+	const childRegistry = new ChildAgentRegistry();
 	const executor = createSubagentExecutor({
 		pi,
 		state: s,
 		config: {},
 		asyncByDefault: false,
 		tempArtifactsDir: tempDir,
-		childRegistry: new ChildAgentRegistry(),
+		childRegistry,
 		expandTilde: (v: string) => v,
 		discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }),
 	} as never);
@@ -97,7 +109,7 @@ function setup(session: BlockingSession) {
 			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
 			model: { provider: "mock" },
 		} as never) as Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
-	return { execute, events, state: s };
+	return { execute, events, state: s, childRegistry, sessionOpenCount: () => sessionOpenCount };
 }
 
 function seedRun(root: string, runId = "edge-run", startedAt = 1_000, extra: Record<string, unknown> = {}) {
@@ -136,7 +148,7 @@ function seedRun(root: string, runId = "edge-run", startedAt = 1_000, extra: Rec
 const theme = { fg: (_name: string, text: string) => text, bold: (text: string) => text };
 
 describe("resume display edge cases", () => {
-	it("rejects a double resume in flight without a second resumeCount increment", async () => {
+	it("steers an in-flight resumed session without reopening it", async () => {
 		const session = new BlockingSession();
 		const h = setup(session);
 		const run = seedRun(tempDir!);
@@ -150,8 +162,10 @@ describe("resume display edge cases", () => {
 			const first = h.execute({ action: "resume", id: run.runId, message: "first", async: false });
 			await new Promise((resolve) => setImmediate(resolve));
 			const second = await h.execute({ action: "resume", id: run.runId, message: "second", async: false });
-			assert.equal(second.isError, true);
-			assert.match(second.content[0]?.text ?? "", /Resume already in progress/);
+			assert.equal(second.isError, undefined);
+			assert.match(second.content[0]?.text ?? "", /Resume message sent/);
+			assert.deepEqual(session.messages, ["first", "second"]);
+			assert.equal(h.sessionOpenCount(), 1);
 			session.resolvePrompt?.();
 			await first;
 		} finally {
@@ -162,6 +176,61 @@ describe("resume display edge cases", () => {
 		assert.equal(runningWrites[0]!.resumeCount, 1);
 		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
 		assert.equal(status.resumeCount, 1);
+	});
+
+	it("rejects a duplicate disk resume while the live session is not ready", async () => {
+		const session = new BlockingSession();
+		let releaseSession!: () => void;
+		const waitBeforeSession = new Promise<void>((resolve) => {
+			releaseSession = resolve;
+		});
+		const h = setup(session, waitBeforeSession);
+		const run = seedRun(tempDir!);
+		const first = await h.execute({ action: "resume", id: run.runId, message: "first", async: true });
+		try {
+			assert.equal(first.isError, undefined);
+			const second = await h.execute({ action: "resume", id: run.runId, message: "second", async: false });
+			assert.equal(second.isError, true);
+			assert.match(second.content[0]?.text ?? "", /Resume already in progress/);
+			assert.equal(h.sessionOpenCount(), 0);
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			assert.equal(status.resumeCount, 1);
+		} finally {
+			releaseSession();
+			for (let attempt = 0; attempt < 10 && !session.resolvePrompt; attempt += 1) {
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+			session.resolvePrompt?.();
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+	});
+
+	it("releases async resume setup ownership when handle registration throws", async () => {
+		const session = new BlockingSession();
+		const h = setup(session);
+		const run = seedRun(tempDir!);
+		const register = h.childRegistry.register.bind(h.childRegistry);
+		h.childRegistry.register = () => {
+			throw new Error("injected registration failure");
+		};
+
+		await assert.rejects(
+			h.execute({ action: "resume", id: run.runId, message: "first", async: true }),
+			/injected registration failure/,
+		);
+		assert.deepEqual(interruptRun(run.runId, { cascade: false }).interruptedRunIds, []);
+		const failedStatus = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(failedStatus.state, "failed");
+
+		h.childRegistry.register = register;
+		const retry = await h.execute({ action: "resume", id: run.runId, message: "retry", async: true });
+		assert.equal(retry.isError, undefined);
+		assert.doesNotMatch(retry.content[0]?.text ?? "", /Resume already in progress/);
+		for (let attempt = 0; attempt < 10 && !session.resolvePrompt; attempt += 1) {
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+		session.resolvePrompt?.();
+		await new Promise((resolve) => setImmediate(resolve));
 	});
 
 	it("reconstructs resumed display from runs registry and status json after reload", () => {

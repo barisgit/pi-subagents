@@ -50,11 +50,12 @@ class FakeSession {
 	abort() {
 		this.resolvePrompt?.();
 	}
-	prompt(message: string) {
+	prompt(message: string, options?: { preflightResult?: (success: boolean) => void }) {
 		this.prompts.push(message);
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
+		options?.preflightResult?.(true);
 		return this.promptPromise;
 	}
 }
@@ -124,6 +125,21 @@ function setup(opts: { pending?: boolean } = {}) {
 		},
 		state,
 	};
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	assert.equal(predicate(), true, "timed out waiting for condition");
+}
+
+async function settleResume(harness: ReturnType<typeof setup>): Promise<void> {
+	const handle = harness.childRegistry.get("resume-run");
+	harness.session.resolvePrompt?.();
+	if (handle) await handle.completed;
+	await new Promise((resolve) => setImmediate(resolve));
 }
 
 function readSessionId(sessionFile: string): string {
@@ -295,26 +311,31 @@ describe("disk resume", () => {
 		assert.deepEqual(liveSession.deliveryOptions, [{ deliverAs: "steer" }]);
 	});
 
-	it("concurrent resume rejects a second opener for the same run", async () => {
+	it("routes a concurrent resume to the ready live session", async () => {
 		const h = setup({ pending: true });
 		writeCompleteRun(tempDir!);
 		const first = await h.execute({ action: "resume", id: "resume-run", message: "one", async: true });
+		await waitFor(() => h.session.prompts.length === 1);
 		const second = await h.execute({ action: "resume", id: "resume-run", message: "two", async: true });
 		assert.equal(first.isError, undefined, first.content[0]?.text);
-		assert.equal(second.isError, true);
-		assert.match(second.content[0]?.text ?? "", /already in progress/);
-		h.session.resolvePrompt?.();
+		assert.equal(second.isError, undefined, second.content[0]?.text);
+		assert.deepEqual(h.session.prompts, ["one", "two"]);
+		assert.equal(h.childRegistry.list().length, 1);
+		await settleResume(h);
 	});
 
-	it("concurrent resume guard collides across runId aliases (runId vs runId:0)", async () => {
+	it("keeps the single-run step alias invalid while a session is live", async () => {
 		const h = setup({ pending: true });
 		writeCompleteRun(tempDir!);
 		const first = await h.execute({ action: "resume", id: "resume-run", message: "one", async: true });
+		await waitFor(() => h.session.prompts.length === 1);
 		const second = await h.execute({ action: "resume", id: "resume-run:0", message: "two", async: true });
 		assert.equal(first.isError, undefined, first.content[0]?.text);
 		assert.equal(second.isError, true);
-		assert.match(second.content[0]?.text ?? "", /already in progress/);
-		h.session.resolvePrompt?.();
+		assert.match(second.content[0]?.text ?? "", /No resumable run found/);
+		assert.deepEqual(h.session.prompts, ["one"]);
+		assert.equal(h.childRegistry.list().length, 1);
+		await settleResume(h);
 	});
 
 	it("async handle returns immediately for disk continuation", async () => {
@@ -323,6 +344,7 @@ describe("disk resume", () => {
 		const result = await h.execute({ action: "resume", id: "resume-run", message: "continue", async: true });
 		assert.equal(result.isError, undefined, result.content[0]?.text);
 		assert.match(result.content[0]?.text ?? "", /Async resume/);
-		h.session.resolvePrompt?.();
+		await waitFor(() => h.session.prompts.length === 1);
+		await settleResume(h);
 	});
 });

@@ -277,7 +277,6 @@ async function resumeRun(
 	// Key the in-flight guard by the canonical target (dispatchRunId + step), not the raw caller
 	// id, so aliases like `runId` and `runId:0` cannot bypass the guard and double-open the session.
 	const resumeKey = `${parsed.dispatchRunId}:${parsed.stepIndex ?? 0}`;
-	if (resumeInFlight.has(resumeKey)) return validationError(`Resume already in progress for run ${runId}.`);
 	const handles = childRegistry.list().filter((handle) => handle.runId === parsed.dispatchRunId);
 	if (parsed.stepIndex === undefined) {
 		if (
@@ -297,6 +296,13 @@ async function resumeRun(
 		parsed.stepIndex === undefined
 			? handles[0]
 			: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
+	if (handle && resumeInFlight.has(resumeKey)) {
+		try {
+			handle.session;
+		} catch {
+			return validationError(`Resume already in progress for run ${runId}.`);
+		}
+	}
 	if (handle) {
 		const liveView = childRegistry.getRunView(parsed.dispatchRunId);
 		if (liveView?.rootSessionId && liveView.rootSessionId !== requestingRootSessionId) {
@@ -319,6 +325,7 @@ async function resumeRun(
 			details: { mode: "management", results: [] },
 		};
 	}
+	if (resumeInFlight.has(resumeKey)) return validationError(`Resume already in progress for run ${runId}.`);
 	let target: ResumeTarget;
 	try {
 		target = resolveResumeTarget(parsed.dispatchRunId, parsed.stepIndex ?? 0, requestingRootSessionId);
@@ -411,7 +418,6 @@ async function resumeRun(
 			},
 		],
 	});
-	resumeInFlight.add(resumeKey);
 	evictCompletionDedupeForRunId(target.runId);
 	if (effectiveAsyncMode === false) {
 		const interruptController = new AbortController();
@@ -518,6 +524,7 @@ async function resumeRun(
 		};
 		let result: SingleResult | undefined;
 		let failureMessage: string | undefined;
+		resumeInFlight.add(resumeKey);
 		try {
 			emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
 			result = await runInProcessChildStep({
@@ -629,10 +636,6 @@ async function resumeRun(
 		}
 	}
 	const detachedAbort = new AbortController();
-	// Same invariant as the async dispatch paths: this resume does not go
-	// through spawnRun, so its detached controller must live in the shared
-	// layer0 map or the resumed run is uninterruptible after a reload.
-	registerRunController(target.runId, detachedAbort);
 	const asyncCtx = {
 		extensionCtx: effectiveData.ctx,
 		abortSignal: detachedAbort.signal,
@@ -653,10 +656,52 @@ async function resumeRun(
 		registry: deps.childRegistry,
 		pi: deps.pi,
 	};
-	const childHandle = dispatchAsyncChild(step, asyncCtx);
-	const unregisterNestedCancellation = nestedParentRunId
-		? registerNestedAsyncCancellation(nestedParentRunId, () => childHandle.abort("parent session ended"))
-		: () => {};
+	let childHandle: ChildAgentHandle;
+	let unregisterNestedCancellation = () => {};
+	let controllerRegistered = false;
+	resumeInFlight.add(resumeKey);
+	try {
+		// Same invariant as the async dispatch paths: this resume does not go
+		// through spawnRun, so its detached controller must live in the shared
+		// layer0 map or the resumed run is uninterruptible after a reload.
+		registerRunController(target.runId, detachedAbort);
+		controllerRegistered = true;
+		childHandle = dispatchAsyncChild(step, asyncCtx);
+		unregisterNestedCancellation = nestedParentRunId
+			? registerNestedAsyncCancellation(nestedParentRunId, () => childHandle.abort("parent session ended"))
+			: () => {};
+	} catch (error) {
+		detachedAbort.abort(error);
+		if (controllerRegistered) releaseRunController(target.runId);
+		const failureMessage = error instanceof Error ? error.message : String(error);
+		try {
+			childRegistry.applyStatusPatch({
+				runId: target.runId,
+				stepIndex: step.stepIndex,
+				state: "failed",
+				endedAt: Date.now(),
+			});
+			statusWriter.finalizeTerminal({
+				state: "failed",
+				error: failureMessage,
+				sessionFile: target.sessionFile,
+				steps: target.status.steps?.map((existingStep, index) =>
+					index === step.stepIndex
+						? { ...existingStep, status: "failed", error: failureMessage }
+						: existingStep,
+				),
+			});
+		} catch (cleanupError) {
+			logger.debug("Failed to persist async resume setup failure", {
+				runId: target.runId,
+				error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+			});
+		} finally {
+			statusWriter.dispose();
+			resumeInFlight.delete(resumeKey);
+		}
+		throw error;
+	}
 	const finalize = async () => {
 		let result: ChildAgentResult | undefined;
 		try {
