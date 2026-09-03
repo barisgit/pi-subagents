@@ -14,6 +14,7 @@ import {
 import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
 import { parseWorkflowMeta, type WorkflowMeta } from "../protocol/workflow-meta.ts";
 import { processGlobal } from "../shared/process-global.ts";
+import { compactForegroundResult } from "../shared/utils.ts";
 import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
 import { formatWorkflowPhase } from "../state/workflow-display.ts";
 import type { AgentProgress, Details, PipelineMetadata, SingleResult, SubagentToolResult } from "../protocol/types.ts";
@@ -891,12 +892,15 @@ export function createWorkflowPhaseEmitter(
 		const label =
 			childPhase?.label ??
 			(childPhase?.phaseTitle ? `Phase ${childPhase.phaseIndex}: ${childPhase.phaseTitle}` : undefined);
-		results.set(index, {
-			...result,
-			...(childPhase?.pipeline && !result.pipeline ? { pipeline: childPhase.pipeline } : {}),
-			...(label && !result.label ? { label } : {}),
-			progress,
-		});
+		results.set(
+			index,
+			compactForegroundResult({
+				...result,
+				...(childPhase?.pipeline && !result.pipeline ? { pipeline: childPhase.pipeline } : {}),
+				...(label && !result.label ? { label } : {}),
+				progress,
+			}),
+		);
 		emit(phaseTitle || `${result.agent} ${status}`);
 	};
 	phase.childProgress = (index, progress) => {
