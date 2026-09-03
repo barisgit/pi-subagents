@@ -90,7 +90,16 @@ describe("dashboard detail targets", () => {
 					endedAt: 1900 + stageIndex * 1000,
 					phaseIndex,
 					phaseTitle: phaseIndex === 1 ? "Inspect" : "Confirm",
-					pipeline: { id: "pipe", itemIndex: 0, stageIndex, itemLabel: "widget" },
+					pipeline: {
+						id: "pipe",
+						name: "Review pipeline",
+						itemIndex: 0,
+						stageIndex,
+						itemLabel: "widget",
+						stageTitle: stageIndex === 0 ? "Inspect" : "Confirm",
+						stageCount: 2,
+						itemCount: 1,
+					},
 					finalOutput,
 					steps: [{ index: 0, agent: `stage-${stageIndex + 1}`, status: "complete" }],
 				},
@@ -113,12 +122,17 @@ describe("dashboard detail targets", () => {
 				},
 			};
 			const runs = [workflow, first, second, loose];
-			const item = { pipelineId: "pipe", itemIndex: 0, label: "widget", stages: [first, second] };
 			const targets: Record<string, DetailTarget> = {
 				workflow: { kind: "run", run: workflow },
 				phase: { kind: "phase", workflow, phaseIndex: 1, title: "Inspect", children: [first, loose] },
-				pipeline: { kind: "pipeline", workflow, pipelineId: "pipe", items: [item] },
-				item: { kind: "pipelineItem", workflow, item },
+				pipelineGroup: {
+					kind: "pipelineGroup",
+					workflow,
+					pipelineId: "pipe",
+					stageIndex: 0,
+					phaseIndex: 1,
+					runs: [first],
+				},
 				stage: { kind: "run", run: second },
 			};
 			const rendered = Object.fromEntries(
@@ -127,19 +141,18 @@ describe("dashboard detail targets", () => {
 					buildRightLines(theme, target, 120, runs).join("\n"),
 				]),
 			);
-			assert.match(rendered.workflow ?? "", /─── Progress/);
-			assert.match(rendered.workflow ?? "", /─── Pipeline: stages/);
-			assert.match(rendered.workflow ?? "", /─── Loose runs/);
-			assert.match(rendered.workflow ?? "", /─── Result/);
+			assert.match(rendered.workflow ?? "", /── Phases/);
+			assert.match(rendered.workflow ?? "", /── Review pipeline \(1 items × 2 stages\)/);
+			assert.match(rendered.workflow ?? "", /── Loose runs/);
+			assert.match(rendered.workflow ?? "", /── Result/);
 			assert.match(rendered.workflow ?? "", /final workflow result/);
-			assert.ok(
-				(rendered.workflow ?? "").indexOf("─── Result") < (rendered.workflow ?? "").indexOf("─── Script"),
-			);
-			assert.match(rendered.phase ?? "", /spans 1 pipeline stages · 1 loose runs/);
-			assert.match(rendered.pipeline ?? "", /pipeline · 1 items × 2 stages/);
-			assert.match(rendered.item ?? "", /first returned value/);
-			assert.match(rendered.item ?? "", /"answer": 42/);
-			assert.match(rendered.stage ?? "", /pipeline · item "widget" · stage 2\/2/);
+			assert.ok((rendered.workflow ?? "").indexOf("── Script") < (rendered.workflow ?? "").indexOf("── Phases"));
+			assert.match(rendered.phase ?? "", /2 runs/);
+			assert.match(rendered.pipelineGroup ?? "", /Review pipeline · Inspect/);
+			assert.match(rendered.pipelineGroup ?? "", /widget/);
+			assert.match(rendered.stage ?? "", /first returned value/);
+			assert.match(rendered.stage ?? "", /"answer": 42/);
+			assert.match(rendered.stage ?? "", /widget · Review pipeline · 2 stages/);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -194,11 +207,7 @@ describe("dashboard detail targets", () => {
 				ownership: "foreign" as const,
 				run: runViewFromRegistryEntry(entry, entries),
 			}));
-			const target: DetailTarget = {
-				kind: "pipelineItem",
-				workflow,
-				item: { pipelineId: "pipe", itemIndex: 0, label: "widget", stages },
-			};
+			const target: DetailTarget = { kind: "run", run: stages[0]! };
 			const output = buildRightLines(theme, target, 120, [workflow, ...stages]).join("\n");
 			assert.match(output, /persisted markdown/);
 			assert.match(output, /"persisted": true/);

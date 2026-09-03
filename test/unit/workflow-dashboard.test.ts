@@ -381,16 +381,16 @@ describe("workflow dashboard reader overlays", () => {
 		// Root progress reuses the canonical phase label, including the declared phase count.
 		assert.match(lines, /Phase 1\/3: inspect .*2\/2/);
 		assert.match(lines, /Phase 2\/3: patch .*1\/1/);
-		assert.match(lines, /Phase 3\/3: report .*0\/0/);
-		assert.match(lines, /─── Script/);
+		assert.match(lines, /Phase 3\/3: report –/);
+		assert.match(lines, /── Script/);
 		assert.match(lines, /const a = await agent\("explorer", "inspect"\);/);
 		assert.match(lines, /return a\.summary;/);
-		assert.match(lines, /─── Loose runs/);
+		assert.match(lines, /── Loose runs/);
 		assert.match(lines, /Phase 1\/3: inspect/);
 		assert.match(lines, /Phase 2\/3: patch/);
-		const scriptIdx = lines.indexOf("─── Script");
-		const runsIdx = lines.indexOf("─── Loose runs");
-		assert.ok(runsIdx !== -1 && scriptIdx !== -1 && runsIdx < scriptIdx, "script section renders last");
+		const scriptIdx = lines.indexOf("── Script");
+		const runsIdx = lines.indexOf("── Loose runs");
+		assert.ok(runsIdx !== -1 && scriptIdx !== -1 && scriptIdx < runsIdx, "script section renders first");
 		const p1 = lines.indexOf("Phase 1/3: inspect");
 		const p2 = lines.indexOf("Phase 2/3: patch");
 		assert.ok(p1 < p2, "phases render in order");
@@ -413,8 +413,8 @@ describe("workflow dashboard reader overlays", () => {
 		const lines = buildRightLines(createTestTheme(), { ownership: "foreign", run: groupSummary }, 120, runs).join(
 			"\n",
 		);
-		assert.match(lines, /─── Script/, "mutant: buildRightLines must route workflow groups to the workflow pane");
-		assert.match(lines, /─── Loose runs/);
+		assert.match(lines, /── Script/, "mutant: buildRightLines must route workflow groups to the workflow pane");
+		assert.match(lines, /── Loose runs/);
 	});
 
 	it("workflow right pane renders the whole script without truncation", () => {
@@ -439,8 +439,8 @@ describe("workflow dashboard reader overlays", () => {
 			run: runViewFromRegistryEntry(entry, entries),
 		}));
 		const lines = buildWorkflowRightLines(createTestTheme(), groupSummary, 120, runs).join("\n");
-		assert.doesNotMatch(lines, /─── Script/);
-		assert.match(lines, /─── Loose runs/);
+		assert.doesNotMatch(lines, /── Script/);
+		assert.match(lines, /── Loose runs/);
 		assert.match(lines, /Phase 1: inspect/);
 	});
 
@@ -467,42 +467,26 @@ describe("workflow dashboard reader overlays", () => {
 		const rows = deriveDisplayRows(runs, new Set());
 		const keys = rows.map(rowKey);
 		assert.equal(new Set(keys).size, keys.length);
-		assert.equal(keys.filter((key) => key === "wf:wf:pipe:pipe:item:0").length, 1);
+		assert.equal(keys.filter((key) => key === "wf:wf:phase:1:pipe:pipe:stage:0").length, 1);
+		assert.equal(keys.filter((key) => key === "wf:wf:phase:2:pipe:pipe:stage:1").length, 1);
 
 		const runRow = rows.find((row) => row.kind === "run" && row.run.run.id === "inspect");
 		const phaseRow = rows.find((row) => row.kind === "phase" && row.phaseIndex === 1);
-		const itemRow = rows.find((row) => row.kind === "pipelineItem");
+		const groupRow = rows.find((row) => row.kind === "pipelineGroup" && row.stageIndex === 0);
 		assert.equal(runRow && detailTargetForRow(runRow, runs)?.kind, "run");
 		const phaseTarget = phaseRow && detailTargetForRow(phaseRow, runs);
 		assert.equal(phaseTarget?.kind, "phase");
 		assert.deepEqual(phaseTarget?.kind === "phase" ? phaseTarget.children.map((child) => child.run.id) : [], [
 			"inspect",
 		]);
-		const itemTarget = itemRow && detailTargetForRow(itemRow, runs);
-		assert.equal(itemTarget?.kind, "pipelineItem");
-		assert.deepEqual(
-			itemTarget?.kind === "pipelineItem" ? itemTarget.item.stages.map((child) => child.run.id) : [],
-			["inspect", "confirm"],
-		);
-		const pipelineTarget = detailTargetForRow(
-			{
-				kind: "pipeline",
-				workflowId: "wf",
-				pipelineId: "pipe",
-				depth: 1,
-				itemCount: 1,
-				stageCount: 2,
-				done: 2,
-				total: 2,
-				collapsed: false,
-			},
-			runs,
-		);
-		assert.equal(pipelineTarget?.kind, "pipeline");
-		assert.equal(pipelineTarget?.kind === "pipeline" ? pipelineTarget.items.length : 0, 1);
+		const groupTarget = groupRow && detailTargetForRow(groupRow, runs);
+		assert.equal(groupTarget?.kind, "pipelineGroup");
+		assert.deepEqual(groupTarget?.kind === "pipelineGroup" ? groupTarget.runs.map((child) => child.run.id) : [], [
+			"inspect",
+		]);
 	});
 
-	it("selects one phase-spanning pipeline item and preserves its namespaced collapse key across reload", () => {
+	it("collapses one pipeline stage group without hiding another phase", () => {
 		const root = tmpRegistry();
 		const group = appendWorkflowGroup(root);
 		appendWorkflowChild(root, {
@@ -538,7 +522,7 @@ describe("workflow dashboard reader overlays", () => {
 					.map(stripBorders)
 					.map((line) => line.split("│")[0] ?? line)
 					.filter((line) => line.trimStart().startsWith(">"));
-				if (selected.some((line) => line.includes("widget"))) break;
+				if (selected.some((line) => line.includes("⋮ pipeline"))) break;
 				component.handleInput("j");
 			}
 			const selected = component
@@ -547,7 +531,7 @@ describe("workflow dashboard reader overlays", () => {
 				.map((line) => line.split("│")[0] ?? line)
 				.filter((line) => line.trimStart().startsWith(">"));
 			assert.equal(selected.length, 1);
-			assert.match(selected[0] ?? "", /widget/);
+			assert.match(selected[0] ?? "", /⋮ pipeline/);
 
 			component.handleInput("\r");
 			component.setShowAllSessions(false);
@@ -556,8 +540,8 @@ describe("workflow dashboard reader overlays", () => {
 				.map(stripBorders)
 				.map((line) => line.split("│")[0] ?? line)
 				.join("\n");
-			assert.match(collapsed, /widget/);
-			assert.doesNotMatch(collapsed, /inspect-agent|confirm-agent/);
+			assert.doesNotMatch(collapsed, /inspect-agent/);
+			assert.match(collapsed, /confirm-agent/);
 		} finally {
 			component.dispose();
 		}
@@ -565,7 +549,7 @@ describe("workflow dashboard reader overlays", () => {
 });
 
 describe("workflow dashboard pipeline rows", () => {
-	it("groups pipeline children under item rows", () => {
+	it("groups pipeline children by stage inside the phase", () => {
 		const workflow: LiveRun = {
 			ownership: "foreign",
 			run: { id: "wf", workflow: true, mode: "parallel", state: "running", startedAt: 1, steps: [] },
@@ -591,13 +575,13 @@ describe("workflow dashboard pipeline rows", () => {
 		);
 		assert.deepEqual(
 			rows.map((row) =>
-				row.kind === "pipelineItem"
-					? `item:${row.label ?? row.itemIndex}:${row.total}`
+				row.kind === "pipelineGroup"
+					? `pipeline:${row.stageIndex}:${row.total}`
 					: row.kind === "run"
 						? `run:${row.run.run.id}`
 						: row.kind,
 			),
-			["run:wf", "phase", "pipeline", "item:sync widget:2", "run:a", "run:b", "item:1:1", "run:c"],
+			["run:wf", "phase", "pipeline:0:2", "run:a", "run:c", "pipeline:1:2", "run:b"],
 		);
 	});
 });

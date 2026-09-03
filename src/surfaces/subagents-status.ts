@@ -103,16 +103,20 @@ function computeBodyHeight(tui?: TUI): number {
 	return Math.max(MIN_VIEWPORT_HEIGHT, rows - CHROME_ROWS);
 }
 
-function pipelineRuns(
-	runs: readonly LiveRun[],
-	row: Extract<DisplayRow, { kind: "pipeline" | "pipelineItem" }>,
-): LiveRun[] {
-	return runs.filter(
-		(child) =>
-			child.run.parentRunId === row.workflowId &&
-			child.run.pipeline?.id === row.pipelineId &&
-			(row.kind === "pipeline" || child.run.pipeline.itemIndex === row.itemIndex),
-	);
+function buildPipelineLeafLine(
+	theme: Theme,
+	row: Extract<DisplayRow, { kind: "run" }>,
+	selected: boolean,
+	now: number,
+	width: number,
+): string {
+	const cells = cellsFromRunView(row.run.run, now, { depth: row.depth, selected });
+	const agent = cells.name;
+	cells.name = row.run.run.pipeline?.itemLabel ?? `item ${(row.run.run.pipeline?.itemIndex ?? 0) + 1}`;
+	cells.label = agent;
+	delete cells.phaseChip;
+	delete cells.badge;
+	return renderRowLine(theme, cells, width, "dashboard");
 }
 
 function pipelineDuration(runs: readonly LiveRun[], now: number): number | undefined {
@@ -122,29 +126,22 @@ function pipelineDuration(runs: readonly LiveRun[], now: number): number | undef
 	return Math.max(0, endedAt - startedAt);
 }
 
-function buildPipelineLine(
+function buildPipelineGroupLine(
 	theme: Theme,
-	row: Extract<DisplayRow, { kind: "pipeline" }>,
+	row: Extract<DisplayRow, { kind: "pipelineGroup" }>,
 	selected: boolean,
 	width: number,
 	children: readonly RowState[],
 ): string {
-	const phaseChip =
-		row.phaseStart === undefined
-			? undefined
-			: row.phaseStart === row.phaseEnd
-				? `P${row.phaseStart}`
-				: `P${row.phaseStart}–P${row.phaseEnd}`;
 	return renderRowLine(
 		theme,
 		{
 			state: aggregateState(children),
-			name: `pipeline (${row.itemCount} items × ${row.stageCount} stages)`,
+			name: `⋮ ${row.name} · ${row.stageTitle ?? "stage"} ${row.stageIndex + 1}/${row.stageCount}`,
 			depth: row.depth,
 			selected,
 			marker: row.collapsed ? "collapsed" : "expanded",
-			...(phaseChip ? { phaseChip } : {}),
-			badge: `${row.done}/${row.total} stages`,
+			badge: `${row.done}/${row.total} items${row.waiting > 0 ? ` · ${row.waiting} waiting` : ""}`,
 		},
 		width,
 		"dashboard",
@@ -233,6 +230,10 @@ function registryWorkflowFields(
 						itemIndex: entry.pipelineItemIndex,
 						stageIndex: entry.pipelineStageIndex,
 						...(entry.pipelineItemLabel ? { itemLabel: entry.pipelineItemLabel } : {}),
+						...(entry.pipelineName ? { name: entry.pipelineName } : {}),
+						...(entry.pipelineStageTitle ? { stageTitle: entry.pipelineStageTitle } : {}),
+						...(entry.pipelineStageCount !== undefined ? { stageCount: entry.pipelineStageCount } : {}),
+						...(entry.pipelineItemCount !== undefined ? { itemCount: entry.pipelineItemCount } : {}),
 					},
 				}
 			: {}),
@@ -611,6 +612,7 @@ function buildPhaseLine(
 	selected: boolean,
 	width: number,
 	children: readonly RowState[],
+	durationMs: number | undefined,
 ): string {
 	const label = row.title ? `Phase ${row.phaseIndex}: ${row.title}` : `Phase ${row.phaseIndex}`;
 	const cells: RowCells = {
@@ -618,26 +620,27 @@ function buildPhaseLine(
 		name: label,
 		depth: row.depth,
 		selected,
-		...(row.expandable ? { marker: row.collapsed ? "collapsed" : "expanded" } : { stageStrip: [] }),
-		badge: `${!row.expandable && row.planState ? row.planState : `${row.done}/${row.total}`}${
-			row.pipelineStages > 0 ? ` · +${row.pipelineStages} pipeline stages` : ""
-		}`,
+		...(row.expandable ? { marker: row.collapsed ? "collapsed" : "expanded" } : {}),
+		badge: !row.expandable && row.planState ? row.planState : `${row.done}/${row.total}`,
+		...(durationMs !== undefined ? { durationMs } : {}),
 	};
 	return renderRowLine(theme, cells, width, "dashboard");
 }
 
 function childRowStates(
 	runs: readonly LiveRun[],
-	row: Extract<DisplayRow, { kind: "phase" | "pipeline" | "pipelineItem" }>,
+	row: Extract<DisplayRow, { kind: "phase" | "pipelineGroup" }>,
 ): RowState[] {
 	return runs
 		.filter((child) => {
 			if (child.run.parentRunId !== row.workflowId) return false;
-			if (row.kind === "pipeline") return child.run.pipeline?.id === row.pipelineId;
-			if (row.kind === "pipelineItem") {
-				return child.run.pipeline?.id === row.pipelineId && child.run.pipeline.itemIndex === row.itemIndex;
+			if (row.kind === "pipelineGroup") {
+				return (
+					child.run.pipeline?.id === row.pipelineId &&
+					child.run.pipeline.stageIndex === row.stageIndex &&
+					child.run.phaseIndex === row.phaseIndex
+				);
 			}
-			if (child.run.pipeline !== undefined) return false;
 			if (row.title !== undefined) {
 				return (
 					child.run.phaseTitle !== undefined &&
@@ -646,30 +649,7 @@ function childRowStates(
 			}
 			return child.run.phaseIndex === row.phaseIndex;
 		})
-		.sort((a, b) =>
-			row.kind === "pipelineItem" ? (a.run.pipeline?.stageIndex ?? 0) - (b.run.pipeline?.stageIndex ?? 0) : 0,
-		)
 		.map((child) => cellsFromRunView(child.run, Date.now()).state);
-}
-
-function buildPipelineItemLine(
-	theme: Theme,
-	row: Extract<DisplayRow, { kind: "pipelineItem" }>,
-	selected: boolean,
-	width: number,
-	children: readonly RowState[],
-	durationMs: number | undefined,
-): string {
-	const cells: RowCells = {
-		state: aggregateState(children),
-		name: row.label || `Item ${row.itemIndex + 1}`,
-		depth: row.depth,
-		selected,
-		stageStrip: children,
-		badge: `${row.done}/${row.total}`,
-		...(durationMs !== undefined ? { durationMs } : {}),
-	};
-	return renderRowLine(theme, cells, width, "dashboard");
 }
 
 export function buildLeftLine(
@@ -684,7 +664,6 @@ export function buildLeftLine(
 	pendingDelivery = false,
 	suppressPhaseChip = false,
 	parallelMarker = false,
-	pipelineStageCount?: number,
 ): string {
 	// Container rows (workflow/parallel groups with visible children) carry a
 	// collapse marker instead of a state glyph; the marker's color carries state.
@@ -727,11 +706,7 @@ export function buildLeftLine(
 	cells.phaseChip = phase || activity || undefined;
 	// Containers have empty steps[] (state synthesized from children), so the
 	// shape badge is computed from the children instead: `2/3` done/total.
-	const badge = pipelineStageCount
-		? `stage ${(run.run.pipeline?.stageIndex ?? 0) + 1}/${pipelineStageCount}`
-		: containerInfo
-			? `${containerInfo.done}/${containerInfo.total}`
-			: runShapeBadge(run);
+	const badge = containerInfo ? `${containerInfo.done}/${containerInfo.total}` : runShapeBadge(run);
 	cells.badge = badge || undefined;
 	// Don't pre-truncate the label here — the final `truncateToWidth(text, width)`
 	// below clips the whole row once at the right edge. Pre-truncating produced
@@ -1071,21 +1046,21 @@ export class SubagentsStatusComponent implements Component {
 		// and went stale after a resize (the same defect fixed for the detail pane).
 		const lineWidth = Math.max(20, ctx.primary.width || this.lastLeftWidth || 80);
 		if (row.kind === "phase") {
-			return buildPhaseLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
-		}
-		if (row.kind === "pipelineItem") {
-			return buildPipelineItemLine(
+			const target = detailTargetForRow(row, this.runs);
+			const phaseRuns = target?.kind === "phase" ? target.children : [];
+			return buildPhaseLine(
 				this.theme,
 				row,
 				isSelected,
 				lineWidth,
 				childRowStates(this.runs, row),
-				pipelineDuration(pipelineRuns(this.runs, row), Date.now()),
+				pipelineDuration(phaseRuns, Date.now()),
 			);
 		}
-		if (row.kind === "pipeline") {
-			return buildPipelineLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
+		if (row.kind === "pipelineGroup") {
+			return buildPipelineGroupLine(this.theme, row, isSelected, lineWidth, childRowStates(this.runs, row));
 		}
+		if (row.run.run.pipeline) return buildPipelineLeafLine(this.theme, row, isSelected, Date.now(), lineWidth);
 		const containerInfo = this.containerRowInfo(row.run);
 		return buildLeftLine(
 			this.theme,
@@ -1099,7 +1074,6 @@ export class SubagentsStatusComponent implements Component {
 			this.isPendingDelivery(row.run),
 			row.suppressPhaseChip,
 			row.parallelMarker,
-			row.pipelineStageCount,
 		);
 	}
 
@@ -1246,7 +1220,7 @@ export class SubagentsStatusComponent implements Component {
 		if (row.kind === "phase") {
 			if (!row.expandable) return;
 			id = dashboardRowKey(row);
-		} else if (row.kind === "pipeline" || row.kind === "pipelineItem") id = dashboardRowKey(row);
+		} else if (row.kind === "pipelineGroup") id = dashboardRowKey(row);
 		else if (row.run.run.workflow === true && deriveIsGroupContainerRow(this.runs, row.run)) {
 			id = dashboardRowKey(row);
 		}

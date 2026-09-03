@@ -75,7 +75,16 @@ interface SeedRun {
 	phaseIndex?: number;
 	phaseTitle?: string;
 	parallelGroupId?: string;
-	pipeline?: { id: string; itemIndex: number; stageIndex: number; itemLabel?: string };
+	pipeline?: {
+		id: string;
+		name?: string;
+		itemIndex: number;
+		stageIndex: number;
+		itemLabel?: string;
+		stageTitle?: string;
+		stageCount?: number;
+		itemCount?: number;
+	};
 	startedAt: number;
 }
 
@@ -99,6 +108,7 @@ function seedRun(root: string, entry: SeedRun): void {
 				currentStep: 0,
 				...(entry.label ? { label: entry.label } : {}),
 				...(entry.parentRunId ? { parentRunId: entry.parentRunId } : {}),
+				...(entry.pipeline ? { pipeline: entry.pipeline } : {}),
 				steps: [
 					{
 						agent: entry.agentName,
@@ -130,6 +140,12 @@ function seedRun(root: string, entry: SeedRun): void {
 					pipelineItemIndex: entry.pipeline.itemIndex,
 					pipelineStageIndex: entry.pipeline.stageIndex,
 					...(entry.pipeline.itemLabel ? { pipelineItemLabel: entry.pipeline.itemLabel } : {}),
+					...(entry.pipeline.name ? { pipelineName: entry.pipeline.name } : {}),
+					...(entry.pipeline.stageTitle ? { pipelineStageTitle: entry.pipeline.stageTitle } : {}),
+					...(entry.pipeline.stageCount !== undefined
+						? { pipelineStageCount: entry.pipeline.stageCount }
+						: {}),
+					...(entry.pipeline.itemCount !== undefined ? { pipelineItemCount: entry.pipeline.itemCount } : {}),
 				}
 			: {}),
 		cwd: root,
@@ -484,7 +500,7 @@ describe("dashboard workflow phase tree", () => {
 		}
 	});
 
-	it("hoists phase-spanning pipeline items and leaves phase totals to loose runs", () => {
+	it("groups each pipeline stage under its phase and counts every stage run in phase totals", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
 		seedRun(root, {
@@ -499,12 +515,41 @@ describe("dashboard workflow phase tree", () => {
 		seedRun(root, {
 			runId: "stage-one",
 			agentName: "stage-one",
+			state: "running",
 			parentRunId: "wf",
 			rootRunId: "wf",
 			phaseIndex: 1,
 			phaseTitle: "Inspect",
-			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 0, itemLabel: "widget" },
+			pipeline: {
+				id: "pipe",
+				name: "Osnutki",
+				itemIndex: 0,
+				stageIndex: 0,
+				itemLabel: "widget",
+				stageTitle: "osnutek",
+				stageCount: 2,
+				itemCount: 2,
+			},
 			startedAt: 1200,
+		});
+		seedRun(root, {
+			runId: "stage-one-b",
+			agentName: "stage-one",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 1,
+			phaseTitle: "Inspect",
+			pipeline: {
+				id: "pipe",
+				name: "Osnutki",
+				itemIndex: 1,
+				stageIndex: 0,
+				itemLabel: "gadget",
+				stageTitle: "osnutek",
+				stageCount: 2,
+				itemCount: 2,
+			},
+			startedAt: 1250,
 		});
 		seedRun(root, {
 			runId: "stage-two",
@@ -513,19 +558,65 @@ describe("dashboard workflow phase tree", () => {
 			rootRunId: "wf",
 			phaseIndex: 2,
 			phaseTitle: "Confirm",
-			pipeline: { id: "pipe", itemIndex: 0, stageIndex: 1, itemLabel: "widget" },
+			pipeline: {
+				id: "pipe",
+				name: "Osnutki",
+				itemIndex: 1,
+				stageIndex: 1,
+				itemLabel: "gadget",
+				stageTitle: "verifikacija",
+				stageCount: 2,
+				itemCount: 2,
+			},
 			startedAt: 1300,
 		});
 
 		const component = new SubagentsStatusComponent(createTestTui(), createTestTheme(), () => {}, { refreshMs: 0 });
 		try {
 			const lines = leftRows(component);
+			const body = lines.join("\n");
+			assert.match(body, /Phase 1: Inspect · 2\/3/);
+			assert.match(body, /⋮ Osnutki · osnutek 1\/2 · 1\/2 items/);
+			assert.match(body, /Phase 2: Confirm · 1\/1/);
+			assert.match(body, /⋮ Osnutki · verifikacija 2\/2 · 1\/2 items · 1 waiting/);
 			assert.equal(lines.filter((line) => /widget/.test(line)).length, 1);
-			assert.match(lines.join("\n"), /stage-two · P2 Confirm · stage 2\/2/);
-			assert.match(lines.join("\n"), /Phase 1: Inspect · 1\/1 · \+1 pipeline stages/);
-			assert.match(lines.join("\n"), /Phase 2: Confirm · 0\/0 · \+1 pipeline stages/);
+			assert.equal(lines.filter((line) => /gadget/.test(line)).length, 2);
+			assert.doesNotMatch(body, /\+\d+ pipeline stages|\[\d+\]|✓◈/);
 		} finally {
 			component.dispose();
 		}
+	});
+
+	it("emits distinct pipeline groups with unique keys when two pipelines share a phase", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		for (const [index, pipelineId] of ["alpha", "beta"].entries()) {
+			seedRun(root, {
+				runId: `${pipelineId}-run`,
+				agentName: "review",
+				parentRunId: "wf",
+				rootRunId: "wf",
+				phaseIndex: 1,
+				phaseTitle: "Inspect",
+				pipeline: { id: pipelineId, itemIndex: 0, stageIndex: 0, stageCount: 1, itemCount: 1 },
+				startedAt: 1100 + index,
+			});
+		}
+		const entries = readAllEntries();
+		const rows = deriveDisplayRows(
+			entries.map((entry) => ({ ownership: "foreign", run: runViewFromRegistryEntry(entry, entries) })),
+			new Set(),
+		);
+		const groups = rows.filter((row) => row.kind === "pipelineGroup");
+		assert.equal(groups.length, 2);
+		assert.equal(new Set(rows.map((row) => `${row.kind}:${JSON.stringify(row)}`)).size > 0, true);
+		const keys = rows.map((row) =>
+			row.kind === "run"
+				? `run:${row.run.run.id}`
+				: row.kind === "phase"
+					? `wf:${row.workflowId}:phase:${row.phaseIndex}`
+					: `wf:${row.workflowId}:phase:${row.phaseIndex}:pipe:${row.pipelineId}:stage:${row.stageIndex}`,
+		);
+		assert.equal(new Set(keys).size, keys.length, "every dashboard row key stays unique");
 	});
 });

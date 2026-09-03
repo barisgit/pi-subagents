@@ -257,7 +257,7 @@ function isToolPhase(phase: AgentProgress["phase"]): boolean {
  * Priority: needs_attention warning → currently-executing tool → thinking timer → coarse child label.
  * Returns { text, tone } so callers can apply the right color.
  */
-function buildLiveCurrentLine(
+export function buildLiveCurrentLine(
 	progress: AgentProgress,
 	availableWidth: number,
 	coarseLabel?: string,
@@ -293,7 +293,7 @@ function buildLiveCurrentLine(
  * Build N history breadcrumb lines from progress.recentTools (most-recent first).
  * Returns plain strings (no theming) suitable for dim styling at the call site.
  */
-function buildLiveHistoryLines(progress: AgentProgress, count: number, availableWidth: number): string[] {
+export function buildLiveHistoryLines(progress: AgentProgress, count: number, availableWidth: number): string[] {
 	if (count <= 0 || !progress.recentTools?.length) return [];
 	// Chronological order: oldest first, newest last. The renderer places this above
 	// the current-activity line so the freshest event sits adjacent to "now".
