@@ -331,12 +331,12 @@ async function settleNestedAsyncParent(runId: string, signal: AbortSignal): Prom
 		const snapshot = nestedAsyncParentSnapshot(runId);
 		if (!snapshot) return;
 		if (snapshot.pendingReprompts > 0) {
-			flushNestedCompletionReprompts(runId);
+			await flushNestedCompletionReprompts(runId);
 			continue;
 		}
 		if (!snapshot.active && !snapshot.agentInFlight) return;
 		const wait = () => waitForNestedAsyncParentChange(runId, snapshot.version, signal);
-		if (snapshot.active && !snapshot.agentInFlight) await parkLeafPermit(runId, wait);
+		if (snapshot.active && !snapshot.agentInFlight) await parkLeafPermit(runId, wait, signal);
 		else await wait();
 	}
 }
@@ -557,15 +557,23 @@ async function executeChildAgent(
 			});
 			cloneRunTranscriptPreview(step.forkReuse.sessionFile, step.sessionFile, step.stepIndex);
 		}
-		const created = await runInChildSessionContext(() =>
-			createSessionWithFallback(step, ctx, {
-				models,
-				onAttempt: (model) => {
-					currentModel = model;
-					recordAttemptedModels([model]);
-				},
-			}),
+		let createdSession: AgentSession | undefined;
+		const created = await runInChildSessionContext(
+			() =>
+				createSessionWithFallback(step, ctx, {
+					models,
+					onAttempt: (model) => {
+						currentModel = model;
+						recordAttemptedModels([model]);
+					},
+				}),
+			(message, options) => {
+				if (!createdSession)
+					return Promise.reject(new Error("Child agent session is not ready for message delivery"));
+				return createdSession.sendCustomMessage(message, options);
+			},
 		);
+		createdSession = created.session;
 		currentModel = created.model;
 		modelIndex = created.modelIndex;
 		recordAttemptedModels(created.attemptedModels);
@@ -627,17 +635,25 @@ async function executeChildAgent(
 				unsubscribe = undefined;
 				session = undefined;
 				await disposeChildSession(promptSession);
-				const reopened = await runInChildSessionContext(() =>
-					createSessionWithFallback(step, ctx, {
-						models,
-						startIndex: modelIndex + 1,
-						bindLineage: false,
-						onAttempt: (model) => {
-							currentModel = model;
-							recordAttemptedModels([model]);
-						},
-					}),
+				let reopenedSession: AgentSession | undefined;
+				const reopened = await runInChildSessionContext(
+					() =>
+						createSessionWithFallback(step, ctx, {
+							models,
+							startIndex: modelIndex + 1,
+							bindLineage: false,
+							onAttempt: (model) => {
+								currentModel = model;
+								recordAttemptedModels([model]);
+							},
+						}),
+					(message, options) => {
+						if (!reopenedSession)
+							return Promise.reject(new Error("Child agent session is not ready for message delivery"));
+						return reopenedSession.sendCustomMessage(message, options);
+					},
 				);
+				reopenedSession = reopened.session;
 				currentModel = reopened.model;
 				modelIndex = reopened.modelIndex;
 				networkRetryAttempt = 0;

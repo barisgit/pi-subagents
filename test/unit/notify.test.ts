@@ -3,11 +3,12 @@ import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify, { notificationRowState } from "../../src/surfaces/notify.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
-import { runInChildSessionContext } from "../../src/shared/child-session-context.ts";
+import { type ChildSessionMessageDelivery, runInChildSessionContext } from "../../src/shared/child-session-context.ts";
 import {
 	flushNestedCompletionReprompts,
 	nestedAsyncParentSnapshot,
 	registerNestedAsyncParent,
+	markNestedParentTurn,
 	releaseNestedAsyncParent,
 } from "../../src/dispatch/nested-async-coordinator.ts";
 import {
@@ -71,8 +72,8 @@ function createPi() {
 	return { events: inner, bus, sent, fire };
 }
 
-function asChildSession<T>(fn: () => T): T {
-	return runInChildSessionContext(fn);
+function asChildSession<T>(fn: () => T, deliverMessage?: ChildSessionMessageDelivery): T {
+	return runInChildSessionContext(fn, deliverMessage);
 }
 
 describe("registerSubagentNotify", () => {
@@ -83,18 +84,25 @@ describe("registerSubagentNotify", () => {
 		assert.equal(notificationRowState("interrupted"), "interrupted");
 		assert.equal(notificationRowState("failed"), "failed");
 	});
-	it("clears parent activity when an immediate-parent completion send throws", () => {
+	it("observes immediate-parent delivery rejection even though ExtensionAPI.sendMessage returns void", async () => {
 		const parentRunId = "parent-send-failure";
 		const { inner, bus } = createBus();
+		let extensionSendCalls = 0;
 		const childPi = {
 			events: bus,
 			on() {},
-			sendMessage() {
-				throw new Error("parent session unavailable");
+			sendMessage(): void {
+				extensionSendCalls++;
+				void Promise.reject(new Error("swallowed by ExtensionAPI")).catch(() => {});
 			},
 		};
 		registerNestedAsyncParent(parentRunId);
-		asChildSession(() => registerSubagentNotify(childPi as never, () => parentRunId));
+		asChildSession(
+			() => registerSubagentNotify(childPi as never, () => parentRunId),
+			async () => {
+				throw new Error("parent turn rejected before agent_start");
+			},
+		);
 		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
 			id: "failed-send-completion",
 			runId: "failed-send-completion",
@@ -105,7 +113,61 @@ describe("registerSubagentNotify", () => {
 			timestamp: 123,
 		});
 
-		flushNestedCompletionReprompts(parentRunId);
+		await flushNestedCompletionReprompts(parentRunId);
+		assert.equal(extensionSendCalls, 0);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, false);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 0);
+		releaseNestedAsyncParent(parentRunId);
+	});
+
+	it("awaits the immediate-parent turn lifecycle after successful delivery", async () => {
+		const parentRunId = "parent-successful-send";
+		const { inner, bus } = createBus();
+		const delivered: Array<{ message: unknown; options: unknown }> = [];
+		let finishTurn!: () => void;
+		const turnFinished = new Promise<void>((resolve) => {
+			finishTurn = resolve;
+		});
+		const childPi = {
+			events: bus,
+			on() {},
+			sendMessage(): void {},
+		};
+		registerNestedAsyncParent(parentRunId);
+		asChildSession(
+			() => registerSubagentNotify(childPi as never, () => parentRunId),
+			async (message, options) => {
+				delivered.push({ message, options });
+				markNestedParentTurn(parentRunId, true);
+				await turnFinished;
+				markNestedParentTurn(parentRunId, false);
+			},
+		);
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "successful-send-completion",
+			runId: "successful-send-completion",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 123,
+		});
+
+		const flush = flushNestedCompletionReprompts(parentRunId);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, true);
+		finishTurn();
+		await flush;
+		assert.deepEqual(delivered, [
+			{
+				message: {
+					customType: "subagent-notify",
+					content: "Background task completed: **worker**\n\nDone",
+					display: true,
+				},
+				options: { triggerTurn: true },
+			},
+		]);
 		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, false);
 		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 0);
 		releaseNestedAsyncParent(parentRunId);
@@ -229,7 +291,7 @@ describe("registerSubagentNotify", () => {
 		);
 	});
 
-	it("routes child completion to the immediate parent without waking the host", () => {
+	it("routes child completion to the immediate parent without waking the host", async () => {
 		// A child session subscribing to async-complete on its own ephemeral bus
 		// must NOT also pick up host-bus events. Otherwise every async would be
 		// notified twice (once by host pi, once by every alive child pi).
@@ -240,13 +302,16 @@ describe("registerSubagentNotify", () => {
 		const childPi = {
 			events: childBus,
 			on() {},
-			sendMessage(message: unknown, options: unknown) {
-				childSent.push({ message, options });
-			},
+			sendMessage(): void {},
 		};
 		const parentRunId = "immediate-parent-run";
 		registerNestedAsyncParent(parentRunId);
-		asChildSession(() => registerSubagentNotify(childPi as never, () => parentRunId));
+		asChildSession(
+			() => registerSubagentNotify(childPi as never, () => parentRunId),
+			async (message, options) => {
+				childSent.push({ message, options });
+			},
+		);
 		let hostDelivered = 0;
 		let childDelivered = 0;
 		host.events.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, () => hostDelivered++);
@@ -280,7 +345,7 @@ describe("registerSubagentNotify", () => {
 		assert.equal(hostDelivered, 1);
 		assert.equal(childDelivered, 1);
 
-		flushNestedCompletionReprompts(parentRunId);
+		await flushNestedCompletionReprompts(parentRunId);
 		assert.equal(childSent.length, 1);
 		assert.equal(host.sent.length, 1);
 		releaseNestedAsyncParent(parentRunId);

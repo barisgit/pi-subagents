@@ -104,12 +104,16 @@ export async function acquireLeafPermit(runId: string, signal?: AbortSignal): Pr
  * occupy a leaf slot while blocked. If `parentRunId` holds no permit (e.g. a
  * top-level dispatch from the host), `fn` simply runs without parking.
  */
-export async function parkLeafPermit<T>(parentRunId: string | undefined, fn: () => Promise<T> | T): Promise<T> {
+export async function parkLeafPermit<T>(
+	parentRunId: string | undefined,
+	fn: () => Promise<T> | T,
+	signal?: AbortSignal,
+): Promise<T> {
 	if (!parentRunId) return await fn();
 	const reg = getRegistry();
 	const permit = reg.permitsByRunId.get(parentRunId);
 	if (!permit) return await fn();
-	return await permit.runWhileParked(fn);
+	return await permit.runWhileParked(fn, signal);
 }
 
 /** Test-only: clear the process registry so each test starts from a fresh pool. */

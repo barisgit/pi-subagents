@@ -7,7 +7,7 @@ import { enqueueNestedCompletionReprompt } from "../dispatch/nested-async-coordi
 import { buildCompletionKey, getGlobalSeenMap, markSeenWithTtl } from "../state/completion-dedupe.ts";
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { logger } from "../shared/logger.ts";
-import { isInsideChildSession } from "../shared/child-session-context.ts";
+import { getChildSessionMessageDelivery, isInsideChildSession } from "../shared/child-session-context.ts";
 import type { Theme } from "./render-shared.ts";
 import { rowGlyph, type RowState } from "./row-line.ts";
 import {
@@ -17,7 +17,6 @@ import {
 } from "../protocol/types.ts";
 
 const plainTheme: Theme = { fg: (_color, text) => text, bold: (text) => text };
-
 interface ChildStepResult {
 	agent: string;
 	label?: string;
@@ -243,6 +242,7 @@ export default function registerSubagentNotify(
 	const unsubscribeStoreKey = "__pi_subagents_notify_unsubscribe__";
 	const globalStore = globalThis as Record<string, unknown>;
 	const isChildSession = isInsideChildSession();
+	const childSessionMessageDelivery = getChildSessionMessageDelivery();
 
 	// CHILD sessions must NEVER touch the host's notify slot. The host owns the
 	// reload-resilient subscription on the user's pi.events bus; a child's
@@ -304,29 +304,34 @@ export default function registerSubagentNotify(
 		// registered this handler may have been replaced by ctx.reload()/fork()/
 		// newSession()/switchSession(), invalidating that pi. We must resolve the
 		// CURRENT pi at call time.
-		const send = () => {
+		const send = async () => {
 			try {
-				const currentPi = notificationPi();
-				logger.info("notify.handleComplete: calling sendMessage", { id: idLabel, hasPi: !!currentPi });
-				currentPi.sendMessage(
-					{
-						customType: "subagent-notify",
-						content,
-						display: true,
-						...(details ? { details } : {}),
-					},
-					{ triggerTurn: true },
-				);
-				if (agentStreaming) {
+				const message = {
+					customType: "subagent-notify",
+					content,
+					display: true,
+					...(details ? { details } : {}),
+				};
+				const wasStreaming = agentStreaming;
+				logger.info("notify.handleComplete: delivering notification", { id: idLabel, isChildSession });
+				let delivery: Promise<void> | undefined;
+				if (isChildSession) {
+					if (!childSessionMessageDelivery) throw new Error("Child session message delivery is unavailable");
+					delivery = childSessionMessageDelivery(message, { triggerTurn: true });
+				} else {
+					notificationPi().sendMessage(message, { triggerTurn: true });
+				}
+				if (wasStreaming) {
 					unconfirmedSends.push({ idLabel, content, details });
 					if (unconfirmedSends.length > UNCONFIRMED_CAP)
 						unconfirmedSends.splice(0, unconfirmedSends.length - UNCONFIRMED_CAP);
 				}
-				logger.info("notify.handleComplete: sendMessage returned", { id: idLabel });
+				await delivery;
+				logger.info("notify.handleComplete: notification delivered", { id: idLabel });
 				return true;
 			} catch (err) {
 				logger.error(
-					"notify.handleComplete: sendMessage threw",
+					"notify.handleComplete: notification delivery failed",
 					err instanceof Error ? err : new Error(String(err)),
 					{ id: idLabel },
 				);
@@ -335,7 +340,7 @@ export default function registerSubagentNotify(
 		};
 		const parentRunId = isChildSession ? getParentRunId() : null;
 		if (parentRunId) enqueueNestedCompletionReprompt(parentRunId, send);
-		else send();
+		else void send();
 	};
 
 	const sendOnce = (result: SubagentResult, now: number) => {
@@ -514,17 +519,26 @@ export default function registerSubagentNotify(
 		if (!aborted || unconfirmedSends.length === 0) return;
 		const resend = unconfirmedSends.splice(0, unconfirmedSends.length);
 		for (const entry of resend) {
+			const message = {
+				customType: "subagent-notify",
+				content: entry.content,
+				display: true,
+				...(entry.details ? { details: entry.details } : {}),
+			};
 			try {
 				logger.info("notify: resending interrupt-dropped notification as nextTurn", { id: entry.idLabel });
-				notificationPi().sendMessage(
-					{
-						customType: "subagent-notify",
-						content: entry.content,
-						display: true,
-						...(entry.details ? { details: entry.details } : {}),
-					},
-					{ deliverAs: "nextTurn" },
-				);
+				if (isChildSession) {
+					if (!childSessionMessageDelivery) throw new Error("Child session message delivery is unavailable");
+					void childSessionMessageDelivery(message, { deliverAs: "nextTurn" }).catch((err) => {
+						logger.error(
+							"notify: nextTurn resend failed",
+							err instanceof Error ? err : new Error(String(err)),
+							{ id: entry.idLabel },
+						);
+					});
+				} else {
+					notificationPi().sendMessage(message, { deliverAs: "nextTurn" });
+				}
 			} catch (err) {
 				logger.error("notify: nextTurn resend threw", err instanceof Error ? err : new Error(String(err)), {
 					id: entry.idLabel,

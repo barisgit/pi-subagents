@@ -14,7 +14,11 @@ import {
 	type ChildAgentStep,
 } from "../../src/dispatch/in-process-executor.ts";
 import { claimPendingChildLineage, getLineageForSession, setHostLineage } from "../../src/state/lineage.ts";
-import { isInsideChildSession } from "../../src/shared/child-session-context.ts";
+import {
+	type ChildSessionMessageDelivery,
+	getChildSessionMessageDelivery,
+	isInsideChildSession,
+} from "../../src/shared/child-session-context.ts";
 import { LiveSessionDirectory } from "../../src/shared/live-session-relay.ts";
 import { readRunTranscriptPreview } from "../../src/state/run-transcript-preview.ts";
 import {
@@ -49,29 +53,49 @@ afterEach(() => {
 	__resetLeafConcurrencyForTest();
 });
 
-it("reaches quiescence and releases the leaf permit after a failed completion send", async () => {
+it("reaches quiescence and releases the leaf permit when parent-session delivery rejects before agent_start", async () => {
 	leafConcurrencyLimit(1);
 	const parentRunId = "run-failed-send-parent";
 	let promptSettled!: () => void;
 	const settled = new Promise<void>((resolve) => {
 		promptSettled = resolve;
 	});
+	let deliverMessage: ChildSessionMessageDelivery | undefined;
 	const parentSession = new FakeAgentSession(async (self) => {
 		registerNestedAsyncParent(parentRunId);
 		markNestedAsyncStarted(parentRunId, "run-failed-send-child");
 		self.lastAssistantText = "<output>waiting</output>";
 		promptSettled();
 	});
+	parentSession.sendCustomMessageImpl = async () => {
+		throw new Error("before_agent_start rejected");
+	};
 	const nextSession = new FakeAgentSession(async (self) => {
 		self.lastAssistantText = "<output>next</output>";
 	});
-	installFakeRuntime([parentSession, nextSession]);
+	installFakeRuntime([parentSession, nextSession], () => {
+		deliverMessage = getChildSessionMessageDelivery();
+	});
 	const parent = runChildAgent(makeStep({ runId: parentRunId }), makeContext());
 	await settled;
 	markNestedAsyncFinished(parentRunId, "run-failed-send-child");
-	enqueueNestedCompletionReprompt(parentRunId, () => false);
+	enqueueNestedCompletionReprompt(parentRunId, async () => {
+		assert.ok(deliverMessage);
+		await deliverMessage(
+			{ customType: "subagent-notify", content: "Done", display: true, details: { runId: "child" } },
+			{ triggerTurn: true },
+		);
+		return true;
+	});
 
 	assert.equal((await parent).state, "complete");
+	assert.deepEqual(parentSession.sendCustomMessageCalls, [
+		{
+			message: { customType: "subagent-notify", content: "Done", display: true, details: { runId: "child" } },
+			options: { triggerTurn: true },
+		},
+	]);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
 	assert.equal(parentSession.disposeCalls, 1);
 	assert.equal((await runChildAgent(makeStep({ runId: "run-after-failed-send" }), makeContext())).state, "complete");
 });
@@ -101,6 +125,60 @@ it("releases nested coordinator state when an active parent child is aborted", a
 	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
 });
 
+it("aborts a parked nested parent while a sibling holds the saturated leaf permit", async () => {
+	leafConcurrencyLimit(1);
+	const parentRunId = "run-aborted-parked-parent";
+	let parentPromptSettled!: () => void;
+	const parentSettled = new Promise<void>((resolve) => {
+		parentPromptSettled = resolve;
+	});
+	let siblingPromptStarted!: () => void;
+	const siblingStarted = new Promise<void>((resolve) => {
+		siblingPromptStarted = resolve;
+	});
+	let releaseSibling!: () => void;
+	const siblingGate = new Promise<void>((resolve) => {
+		releaseSibling = resolve;
+	});
+	const parentSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		markNestedAsyncStarted(parentRunId, "run-parked-descendant");
+		self.lastAssistantText = "<output>waiting</output>";
+		parentPromptSettled();
+	});
+	const siblingSession = new FakeAgentSession(async (self) => {
+		siblingPromptStarted();
+		await siblingGate;
+		self.lastAssistantText = "<output>sibling</output>";
+	});
+	let nextPromptStarted = false;
+	const nextSession = new FakeAgentSession(async (self) => {
+		nextPromptStarted = true;
+		self.lastAssistantText = "<output>next</output>";
+	});
+	installFakeRuntime([parentSession, siblingSession, nextSession]);
+
+	const parent = dispatchAsyncChild(makeStep({ runId: parentRunId }), makeContext());
+	await parentSettled;
+	const sibling = runChildAgent(makeStep({ runId: "run-saturated-sibling" }), makeContext());
+	await siblingStarted;
+
+	await parent.abort("test abort");
+	const abortedPromptly = await Promise.race([
+		parent.completed.then(() => true),
+		new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+	]);
+	const next = runChildAgent(makeStep({ runId: "run-after-aborted-parent" }), makeContext());
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(nextPromptStarted, false, "aborted parked parent must not leak a leaf permit");
+	releaseSibling();
+	await Promise.all([sibling, next]);
+
+	assert.equal(abortedPromptly, true);
+	assert.equal((await parent.completed).state, "interrupted");
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
+});
+
 it("keeps a nested batch parent active between its last leaf and rollup enqueue", () => {
 	const parentRunId = "run-batch-parent";
 	const groupRunId = "run-batch-group";
@@ -117,18 +195,41 @@ it("keeps a nested batch parent active between its last leaf and rollup enqueue"
 	releaseNestedAsyncParent(parentRunId);
 });
 
-it("clears speculative parent activity when a completion reprompt cannot be queued", () => {
+it("clears speculative parent activity when a completion reprompt cannot be queued", async () => {
 	const parentRunId = "run-failed-reprompt";
 	registerNestedAsyncParent(parentRunId);
 	enqueueNestedCompletionReprompt(parentRunId, () => false);
 
-	flushNestedCompletionReprompts(parentRunId);
+	await flushNestedCompletionReprompts(parentRunId);
 	assert.deepEqual(nestedAsyncParentSnapshot(parentRunId), {
 		active: false,
 		agentInFlight: false,
 		pendingReprompts: 0,
 		version: 2,
 	});
+	releaseNestedAsyncParent(parentRunId);
+});
+
+it("clears a failed completion reprompt when a descendant finishes during delivery", async () => {
+	const parentRunId = "run-failed-reprompt-with-descendant";
+	let finishDelivery!: () => void;
+	const deliveryGate = new Promise<void>((resolve) => {
+		finishDelivery = resolve;
+	});
+	registerNestedAsyncParent(parentRunId);
+	markNestedAsyncStarted(parentRunId, "run-finishing-descendant");
+	enqueueNestedCompletionReprompt(parentRunId, async () => {
+		await deliveryGate;
+		return false;
+	});
+
+	const flush = flushNestedCompletionReprompts(parentRunId);
+	markNestedAsyncFinished(parentRunId, "run-finishing-descendant");
+	finishDelivery();
+	await flush;
+
+	assert.equal(nestedAsyncParentSnapshot(parentRunId)?.active, false);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, false);
 	releaseNestedAsyncParent(parentRunId);
 });
 
@@ -146,6 +247,17 @@ it("cancels nested descendants and drops pending reprompts when the parent is re
 	releaseNestedAsyncParent(parentRunId);
 	assert.equal(cancelCalls, 1);
 	assert.equal(repromptCalls, 0);
+});
+
+it("ignores late nested completion and parent turn events after release", () => {
+	const parentRunId = "run-released-nested-parent";
+	registerNestedAsyncParent(parentRunId);
+	releaseNestedAsyncParent(parentRunId);
+
+	markNestedAsyncFinished(parentRunId, "run-late-child");
+	markNestedParentTurn(parentRunId, true);
+
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
 });
 
 it("retains an idle parent, parks its leaf permit, and disposes after its nested completion turn", async () => {
@@ -378,6 +490,11 @@ class FakeAgentSession {
 	disposeCalls = 0;
 	bindExtensionsCalls = 0;
 	promptCalls = 0;
+	sendCustomMessageCalls: Array<{
+		message: Parameters<ChildSessionMessageDelivery>[0];
+		options: Parameters<ChildSessionMessageDelivery>[1];
+	}> = [];
+	sendCustomMessageImpl?: ChildSessionMessageDelivery;
 	setModelCalls: Array<{ provider: string; id: string }> = [];
 	messages: unknown[] = [];
 	lastAssistantText = "";
@@ -420,6 +537,14 @@ class FakeAgentSession {
 	async prompt(_text: string, _options: Record<string, unknown>): Promise<void> {
 		this.promptCalls++;
 		await this.promptImpl(this);
+	}
+
+	async sendCustomMessage(
+		message: Parameters<ChildSessionMessageDelivery>[0],
+		options?: Parameters<ChildSessionMessageDelivery>[1],
+	): Promise<void> {
+		this.sendCustomMessageCalls.push({ message, options });
+		await this.sendCustomMessageImpl?.(message, options);
 	}
 
 	async setModel(model: { provider: string; id: string }): Promise<void> {

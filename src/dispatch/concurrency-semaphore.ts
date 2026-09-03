@@ -1,6 +1,6 @@
 export interface ConcurrencyPermit {
 	release(): void;
-	runWhileParked<T>(fn: () => Promise<T> | T): Promise<T>;
+	runWhileParked<T>(fn: () => Promise<T> | T, signal?: AbortSignal): Promise<T>;
 }
 
 interface Waiter {
@@ -65,9 +65,7 @@ export class ConcurrencySemaphore {
 	private createPermit(): SemaphorePermit {
 		return new SemaphorePermit(
 			() => this.releasePermitSlot(),
-			async (permit) => {
-				await this.reacquirePermit(permit);
-			},
+			(permit, signal) => this.reacquirePermit(permit, signal),
 		);
 	}
 
@@ -119,8 +117,10 @@ export class ConcurrencySemaphore {
 		}
 	}
 
-	private async reacquirePermit(permit: SemaphorePermit): Promise<void> {
+	private async reacquirePermit(permit: SemaphorePermit, signal?: AbortSignal): Promise<boolean> {
+		if (signal) return (await this.acquirePermit(permit, signal)) !== undefined;
 		await this.acquirePermit(permit);
+		return true;
 	}
 
 	static create(maxPermits: number): ConcurrencySemaphore {
@@ -130,28 +130,35 @@ export class ConcurrencySemaphore {
 
 class SemaphorePermit implements ConcurrencyPermit {
 	private readonly releaseSlot: () => void;
-	private readonly reacquire: (permit: SemaphorePermit) => Promise<void>;
-	private state: "pending" | "held" | "parked" | "released" = "pending";
+	private readonly reacquire: (permit: SemaphorePermit, signal?: AbortSignal) => Promise<boolean>;
+	private state: "pending" | "held" | "parked" | "cancelled" | "released" = "pending";
 
-	constructor(releaseSlot: () => void, reacquire: (permit: SemaphorePermit) => Promise<void>) {
+	constructor(
+		releaseSlot: () => void,
+		reacquire: (permit: SemaphorePermit, signal?: AbortSignal) => Promise<boolean>,
+	) {
 		this.releaseSlot = releaseSlot;
 		this.reacquire = reacquire;
 	}
 
 	release(): void {
+		if (this.state === "cancelled") {
+			this.state = "released";
+			return;
+		}
 		if (this.state !== "held") throw new Error(`Cannot release semaphore permit while ${this.state}`);
 		this.state = "released";
 		this.releaseSlot();
 	}
 
-	async runWhileParked<T>(fn: () => Promise<T> | T): Promise<T> {
+	async runWhileParked<T>(fn: () => Promise<T> | T, signal?: AbortSignal): Promise<T> {
 		if (this.state !== "held") throw new Error(`Cannot park semaphore permit while ${this.state}`);
 		this.state = "parked";
 		this.releaseSlot();
 		try {
 			return await fn();
 		} finally {
-			await this.reacquire(this);
+			if (!(await this.reacquire(this, signal))) this.state = "cancelled";
 		}
 	}
 
