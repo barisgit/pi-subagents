@@ -943,7 +943,12 @@ export class LiveSessionRenderCache {
 	clear(session: DashboardMessageSession): void {
 		session = session.cacheKey ?? session;
 		this.entries.delete(session);
-		if (!this.liveToolComponents) this.clearPendingTools(session);
+		if (this.liveToolComponents) {
+			this.liveToolComponents.releaseSession(session);
+			this.pendingSessions.delete(session);
+		} else {
+			this.clearPendingTools(session);
+		}
 	}
 
 	private clearPendingTools(session: DashboardMessageSession): void {
@@ -959,8 +964,11 @@ export class LiveSessionRenderCache {
 	}
 
 	dispose(): void {
-		if (this.liveToolComponents) return;
-		for (const session of [...this.pendingSessions]) this.clearPendingTools(session);
+		for (const session of [...this.pendingSessions]) {
+			if (this.liveToolComponents) this.liveToolComponents.releaseSession(session);
+			else this.clearPendingTools(session);
+		}
+		this.pendingSessions.clear();
 	}
 
 	invalidate(session: DashboardMessageSession, event?: AgentSessionEvent): void {
@@ -1027,11 +1035,16 @@ export class LiveSessionRenderCache {
 			renderedGroups.push({ messages, lines: renderGroup(messages, pendingTools) });
 		}
 		const lines = renderedGroups.flatMap((group) => group.lines);
+		if (this.liveToolComponents) {
+			for (const [toolCallId, pending] of pendingTools) {
+				if (pending.completed) pendingTools.delete(toolCallId);
+			}
+		}
 		if (this.liveToolComponents && pendingTools.size === 0) this.liveToolComponents.releaseSession(cacheSession);
-		if (!this.liveToolComponents && pendingTools.size > 0) {
+		if (pendingTools.size > 0) {
 			this.pendingSessions.add(cacheSession);
-		} else if (!this.liveToolComponents) {
-			if (pendingTools.size === 0) this.pendingTools.delete(cacheSession);
+		} else {
+			if (!this.liveToolComponents) this.pendingTools.delete(cacheSession);
 			this.pendingSessions.delete(cacheSession);
 		}
 		this.entries.set(cacheSession, { width, revision, groups: renderedGroups, lines });

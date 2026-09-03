@@ -536,7 +536,6 @@ describe("dashboard detail pane redesign", () => {
 
 		try {
 			assert.match(render(), /pending progress call/);
-			const rendersBeforeClosedFinal = resultRenders;
 			emit({
 				type: "tool_execution_start",
 				toolCallId: "call-progress",
@@ -604,12 +603,30 @@ describe("dashboard detail pane redesign", () => {
 			assert.deepEqual(directory.toolProgress(session as never).get("call-progress")?.partialResult?.details, {
 				marker: "closed",
 			});
-			assert.ok(resultRenders > rendersBeforeClosedUpdate, "closed updates reach the retained component");
+			assert.equal(
+				resultRenders,
+				rendersBeforeClosedUpdate,
+				"closed updates do not reach the released component",
+			);
 			assert.ok(rendererStates.length > 1);
 			assert.ok(
 				rendererStates.every((state) => state === rendererStates[0]),
-				"closed updates keep renderer state",
+				"release finalizes the original renderer state",
 			);
+			component = new SubagentsStatusComponent(
+				{ requestRender: () => renderRequests++, terminal: { rows: 32 } } as never,
+				theme,
+				() => {},
+				{
+					listRunsForOverlay: () => ({ active: [run, otherRun], recent: [] }),
+					getOwnedRunViews: () => new Map(),
+					getLiveSessions: (runId) => (runId === run.id ? [session] : [otherSession]),
+					getLiveToolProgress: (liveSession) => directory.toolProgress(liveSession as never),
+					liveToolComponents,
+					refreshMs: 60000,
+				},
+			);
+			assert.match(render(), /partial closed closed text/);
 
 			messages.push({
 				role: "toolResult",
@@ -627,24 +644,6 @@ describe("dashboard detail pane redesign", () => {
 				result: { content: [{ type: "text", text: "final text" }], details: { marker: "persisted" } },
 				isError: false,
 			});
-			assert.ok(resultRenders > rendersBeforeClosedFinal, "closed completion finalizes the component");
-			assert.ok(
-				rendererStates.every((state) => state === rendererStates[0]),
-				"closed finalization uses renderer state",
-			);
-			component = new SubagentsStatusComponent(
-				{ requestRender: () => renderRequests++, terminal: { rows: 32 } } as never,
-				theme,
-				() => {},
-				{
-					listRunsForOverlay: () => ({ active: [run, otherRun], recent: [] }),
-					getOwnedRunViews: () => new Map(),
-					getLiveSessions: (runId) => (runId === run.id ? [session] : [otherSession]),
-					getLiveToolProgress: (liveSession) => directory.toolProgress(liveSession as never),
-					liveToolComponents,
-					refreshMs: 60000,
-				},
-			);
 			const finalOutput = render();
 			assert.match(finalOutput, /final persisted final text/);
 			assert.doesNotMatch(finalOutput, /partial second/);
@@ -654,6 +653,143 @@ describe("dashboard detail pane redesign", () => {
 			directory.dispose();
 			liveToolComponents.dispose();
 		}
+	});
+
+	it("releases shared tool sessions when the render cache is cleared or disposed", () => {
+		const run: LiveRun = { ownership: "foreign", run: makeRun("run-cache-release", "/missing/cache-release") };
+		let resultRenders = 0;
+		const toolDefinition: ToolDefinition = {
+			name: "release_tool",
+			label: "Release tool",
+			description: "Test shared tool release",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderResult: (result) => {
+				resultRenders++;
+				return new Text(result.content.find((content) => content.type === "text")?.text ?? "", 0, 0);
+			},
+		};
+		const makeSession = (id: string): LiveDashboardSession => ({
+			messages: [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id, name: "release_tool", arguments: {} }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
+			],
+			getToolDefinition: () => toolDefinition,
+			subscribe: () => () => {},
+		});
+		const liveToolComponents = new LiveToolComponentStore();
+		const cache = new LiveSessionRenderCache(liveToolComponents);
+		const render = (session: LiveDashboardSession) =>
+			buildRightLines(theme, run, 100, [], {
+				sessions: [session],
+				tui: { requestRender: () => {} } as never,
+				cache,
+			});
+		const emitUpdate = (session: LiveDashboardSession, toolCallId: string) =>
+			liveToolComponents.handleSessionEvent(session as never, {
+				type: "tool_execution_update",
+				toolCallId,
+				toolName: "release_tool",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "late update" }] },
+			});
+
+		const cleared = makeSession("call-clear");
+		render(cleared);
+		cache.clear(cleared);
+		const rendersAfterClear = resultRenders;
+		emitUpdate(cleared, "call-clear");
+		assert.equal(resultRenders, rendersAfterClear, "clear releases the shared pending component");
+
+		const disposed = makeSession("call-dispose");
+		render(disposed);
+		cache.dispose();
+		const rendersAfterDispose = resultRenders;
+		emitUpdate(disposed, "call-dispose");
+		assert.equal(resultRenders, rendersAfterDispose, "dispose releases every shared pending component");
+	});
+
+	it("does not retain completed tool pairs in the shared component store", () => {
+		const run: LiveRun = { ownership: "foreign", run: makeRun("run-completed-release", "/missing/completed") };
+		let resultRenders = 0;
+		const toolDefinition: ToolDefinition = {
+			name: "completed_tool",
+			label: "Completed tool",
+			description: "Test completed tool release",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+			renderResult: (result) => {
+				resultRenders++;
+				return new Text(result.content.find((content) => content.type === "text")?.text ?? "", 0, 0);
+			},
+		};
+		const session: LiveDashboardSession = {
+			messages: [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call-complete", name: "completed_tool", arguments: {} }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-complete",
+					toolName: "completed_tool",
+					content: [{ type: "text", text: "final result" }],
+					isError: false,
+					timestamp: 2,
+				},
+			],
+			getToolDefinition: () => toolDefinition,
+			subscribe: () => () => {},
+		};
+		const liveToolComponents = new LiveToolComponentStore();
+		const cache = new LiveSessionRenderCache(liveToolComponents);
+
+		const output = stripAnsi(
+			buildRightLines(theme, run, 100, [], {
+				sessions: [session],
+				tui: { requestRender: () => {} } as never,
+				cache,
+			}).join("\n"),
+		);
+		assert.match(output, /final result/);
+		assert.equal(resultRenders, 1);
+
+		liveToolComponents.handleSessionEvent(session as never, {
+			type: "tool_execution_update",
+			toolCallId: "call-complete",
+			toolName: "completed_tool",
+			args: {},
+			partialResult: { content: [{ type: "text", text: "stale update" }] },
+		});
+		assert.equal(resultRenders, 1, "a completed pair is no longer reachable through the shared store");
 	});
 
 	it("reconciles listed live-session subscriptions without listener churn", () => {
@@ -921,7 +1057,7 @@ describe("dashboard detail pane redesign", () => {
 		assert.match(render(), /settled preview/);
 	});
 
-	it("preserves builtin bash elapsed time and clears its interval on completion", () => {
+	it("recreates a pending builtin bash card after cache disposal and clears its interval on completion", () => {
 		const originalDateNow = Date.now;
 		const originalSetInterval = globalThis.setInterval;
 		const originalClearInterval = globalThis.clearInterval;
@@ -1007,7 +1143,8 @@ describe("dashboard detail pane redesign", () => {
 				args: { command: "sleep 5" },
 				partialResult: progress.get("bash-call")!.partialResult!,
 			});
-			assert.match(render(), /Elapsed 5\.0s/);
+			assert.match(render(), /still working/);
+			assert.match(render(), /Elapsed 0\.0s/);
 			assert.equal(activeTimers.size, 1);
 
 			progress.delete("bash-call");
@@ -1026,7 +1163,7 @@ describe("dashboard detail pane redesign", () => {
 				result: messages[1],
 				isError: false,
 			});
-			assert.match(render(), /Took 5\.0s/);
+			assert.match(render(), /Took 0\.0s/);
 			assert.equal(activeTimers.size, 0);
 			const firstAssistant = messages[0];
 			assert.equal(firstAssistant?.role, "assistant");
