@@ -16,7 +16,16 @@ interface AsyncJobTrackerModule {
 	createAsyncJobTracker(
 		pi: { events: { emit(channel: string, data: unknown): void } },
 		state: Record<string, unknown>,
-		options?: { completionRetentionMs?: number; pollIntervalMs?: number },
+		options?: {
+			completionRetentionMs?: number;
+			pollIntervalMs?: number;
+			getWidgetClient?: (ctx: unknown) => {
+				widgets: {
+					set(place: string, key: string, factory: unknown): void;
+					remove(place: string, key: string): void;
+				};
+			};
+		},
 	): {
 		resetJobs(ctx?: unknown): void;
 		shutdown(): void;
@@ -195,6 +204,77 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			const accessesAfterStop = contextAccesses;
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			assert.equal(contextAccesses, accessesAfterStop);
+		} finally {
+			tracker.shutdown();
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("does not re-register the widget for unchanged polls but does for a display change", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		const runDir = path.join(asyncRoot, "run-poll-display");
+		const now = Date.now();
+		writeStatus(runDir, {
+			runId: "run-poll-display",
+			mode: "single",
+			state: "running",
+			startedAt: now - 1000,
+			executionStartedAt: now - 1000,
+			lastUpdate: now,
+			runnerHeartbeatAt: now,
+		});
+		let widgetSets = 0;
+		const client = {
+			widgets: {
+				set: () => {
+					widgetSets += 1;
+				},
+				remove: () => {},
+			},
+		};
+		const state = createState();
+		const tracker = trackerMod!.createAsyncJobTracker(createEventRecorder().pi, state as never, {
+			pollIntervalMs: 10,
+			getWidgetClient: () => client,
+		});
+		try {
+			tracker.resetJobs(createUiContext().ctx as never);
+			tracker.handleStarted({ id: "run-poll-display", asyncDir: runDir, agent: "worker" });
+			await new Promise((resolve) => setTimeout(resolve, 35));
+			const setsAfterInitialStatus = widgetSets;
+			assert.equal(setsAfterInitialStatus, 2, "the initial queued-to-running change must re-register the widget");
+
+			await new Promise((resolve) => setTimeout(resolve, 35));
+			assert.equal(widgetSets, setsAfterInitialStatus, "unchanged poll cycles must not re-register the widget");
+
+			writeStatus(runDir, {
+				runId: "run-poll-display",
+				mode: "single",
+				state: "running",
+				startedAt: now - 1000,
+				executionStartedAt: now - 1000,
+				lastUpdate: now + 1,
+				runnerHeartbeatAt: now + 1,
+				currentTool: "bash",
+			});
+			await new Promise((resolve) => setTimeout(resolve, 35));
+			assert.equal(widgetSets, setsAfterInitialStatus + 1, "a current-tool change must re-register the widget");
+
+			writeStatus(runDir, {
+				runId: "run-poll-display",
+				mode: "single",
+				state: "complete",
+				startedAt: now - 1000,
+				executionStartedAt: now - 1000,
+				lastUpdate: now + 2,
+				runnerHeartbeatAt: now + 2,
+			});
+			await new Promise((resolve) => setTimeout(resolve, 35));
+			assert.equal(
+				widgetSets,
+				setsAfterInitialStatus + 2,
+				"a terminal delivery-pending transition must re-register the widget",
+			);
 		} finally {
 			tracker.shutdown();
 			removeTempDir(asyncRoot);

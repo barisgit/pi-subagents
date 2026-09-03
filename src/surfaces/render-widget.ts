@@ -90,6 +90,8 @@ function widgetJobName(job: AsyncJobState, theme: Theme): string {
 }
 
 function widgetJobCells(job: AsyncJobState, theme: Theme, depth: number): RowCells {
+	// Keep every job field read on this render path represented in
+	// async-job-tracker.ts:widgetDisplaySnapshot so polling can skip no-op mounts.
 	const cells: RowCells = {
 		state: widgetRowState(job),
 		name: widgetJobName(job, theme),

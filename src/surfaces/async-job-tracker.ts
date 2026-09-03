@@ -69,6 +69,42 @@ function asyncAgentName(job: AsyncJobState): string {
 	return job.currentAgent ?? job.agents?.[job.currentStep ?? 0] ?? job.agents?.[0] ?? "unknown";
 }
 
+// Polling still refreshes all state at full cadence; only widget-visible changes
+// re-register it. Live elapsed text is refreshed by render-widget's 1s timer.
+function widgetDisplaySnapshot(jobs: Iterable<AsyncJobState>): string {
+	return JSON.stringify(
+		Array.from(jobs, (job) => [
+			job.asyncId,
+			job.parentRunId,
+			job.status,
+			job.pendingDelivery,
+			job.kind,
+			job.workflowMeta?.name,
+			job.childCounts,
+			job.activityState,
+			job.displayState,
+			job.currentTool,
+			job.mode,
+			job.agents,
+			job.label,
+			job.stepStatuses,
+			job.currentStep,
+			job.stepsTotal,
+			job.startedAt,
+			job.executionStartedAt,
+			job.status === "running" || job.status === "queued" ? undefined : job.updatedAt,
+			job.resumedAt,
+			job.resumeCount,
+			job.phase,
+			job.phaseStartedAt,
+			job.totalTokens?.total,
+			job.currentAgent,
+			job.agentColor,
+			job.agentColors,
+		]),
+	);
+}
+
 // Durable done/running/queued tally for a workflow group. The runs registry
 // holds EVERY child (append-only by parentRunId) and survives the 10s live-map
 // cleanup, so it is the authoritative denominator-free source. Live children
@@ -258,6 +294,7 @@ export function createAsyncJobTracker(
 				return;
 			}
 
+			const displayBeforePoll = widgetDisplaySnapshot(state.asyncJobs.values());
 			let registryEntries: RunsRegistryEntry[] | undefined;
 			for (const job of state.asyncJobs.values()) {
 				try {
@@ -470,7 +507,7 @@ export function createAsyncJobTracker(
 				}
 			}
 
-			rerenderDelayed();
+			if (widgetDisplaySnapshot(state.asyncJobs.values()) !== displayBeforePoll) rerenderDelayed();
 		}, pollIntervalMs);
 		state.poller.unref?.();
 	};
