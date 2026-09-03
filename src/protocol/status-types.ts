@@ -2,6 +2,7 @@ import type { SubmitResultEnvelope } from "./output-contract.ts";
 import type {
 	ActivityState,
 	ModelAttempt,
+	PipelineMetadata,
 	ResolvedControlConfig,
 	RunDisplayState,
 	TokenUsage,
@@ -31,6 +32,21 @@ export interface ChildUsage {
 	cacheWrite: number;
 	cost: number;
 	turns: number;
+}
+
+function isPipelineMetadata(value: unknown): value is PipelineMetadata {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+	const metadata = value as Record<string, unknown>;
+	return (
+		typeof metadata.id === "string" &&
+		isFiniteNumber(metadata.itemIndex) &&
+		isFiniteNumber(metadata.stageIndex) &&
+		(metadata.name === undefined || typeof metadata.name === "string") &&
+		(metadata.itemLabel === undefined || typeof metadata.itemLabel === "string") &&
+		(metadata.stageTitle === undefined || typeof metadata.stageTitle === "string") &&
+		(metadata.stageCount === undefined || isFiniteNumber(metadata.stageCount)) &&
+		(metadata.itemCount === undefined || isFiniteNumber(metadata.itemCount))
+	);
 }
 
 export interface ChildAgentResult {
@@ -193,6 +209,7 @@ export interface PersistedRunStatus {
 	 */
 	totalUsage?: Usage;
 	sessionFile?: string;
+	pipeline?: PipelineMetadata;
 }
 
 export type PersistedRunStatusParseResult =
@@ -235,6 +252,7 @@ export function parsePersistedRunStatus(raw: string): PersistedRunStatusParseRes
 			o.steps.some((step) => step === null || typeof step !== "object" || typeof step.status !== "string"))
 	)
 		return { ok: false, reason: "invalid-shape" };
+	if (o.pipeline !== undefined && !isPipelineMetadata(o.pipeline)) return { ok: false, reason: "invalid-shape" };
 	if (o.mode === "chain") o.mode = "parallel";
 	// Liveness/progress timestamps drive stale + hard-dead arithmetic in
 	// run-liveness.ts; a malformed value would make every comparison NaN-false

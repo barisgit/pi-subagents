@@ -16,6 +16,17 @@ describe("parsePersistedRunStatus", () => {
 		assert.deepEqual(result, { ok: true, value });
 	});
 
+	it("parses legacy pipeline metadata without declared counts", () => {
+		const value = {
+			runId: "x",
+			mode: "single",
+			state: "complete",
+			startedAt: 1,
+			pipeline: { id: "pipe-1", itemIndex: 0, stageIndex: 0, itemLabel: "physics" },
+		};
+		assert.deepEqual(parsePersistedRunStatus(JSON.stringify(value)), { ok: true, value });
+	});
+
 	it("normalizes a legacy chain status to parallel", () => {
 		const value = { runId: "x", mode: "chain", state: "complete", startedAt: 1, steps: [] };
 		const result = parsePersistedRunStatus(JSON.stringify(value));

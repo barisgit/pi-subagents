@@ -8,7 +8,7 @@ import {
 	type StatusPatch,
 	parsePersistedRunStatus,
 } from "../protocol/status-types.ts";
-import type { ResolvedControlConfig, TokenUsage, Usage } from "../protocol/types.ts";
+import type { PipelineMetadata, ResolvedControlConfig, TokenUsage, Usage } from "../protocol/types.ts";
 import { tokenUsageFromUsage } from "./usage-totals.ts";
 import { applyPatchToStatus } from "./status-patch.ts";
 import { STALE_MTIME_THRESHOLD_MS } from "../shared/utils.ts";
@@ -55,6 +55,7 @@ export interface StatusMeta {
 	controlConfig?: ResolvedControlConfig;
 	totalUsage?: Usage;
 	totalTokens?: TokenUsage;
+	pipeline?: PipelineMetadata;
 }
 
 /**
@@ -102,6 +103,7 @@ export function statusFromMeta(runId: string, meta: StatusMeta): PersistedRunSta
 		...(meta.sessionFile ? { sessionFile: meta.sessionFile } : {}),
 		...(meta.outputFile ? { outputFile: meta.outputFile } : {}),
 		...(meta.sessionDir ? { sessionDir: meta.sessionDir } : {}),
+		...(meta.pipeline ? { pipeline: { ...meta.pipeline } } : {}),
 	};
 }
 

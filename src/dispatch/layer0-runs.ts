@@ -231,6 +231,12 @@ export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): Ope
 						pipelineItemIndex: opts.pipeline.itemIndex,
 						pipelineStageIndex: opts.pipeline.stageIndex,
 						...(opts.pipeline.itemLabel ? { pipelineItemLabel: opts.pipeline.itemLabel } : {}),
+						...(opts.pipeline.name ? { pipelineName: opts.pipeline.name } : {}),
+						...(opts.pipeline.stageTitle ? { pipelineStageTitle: opts.pipeline.stageTitle } : {}),
+						...(opts.pipeline.stageCount !== undefined
+							? { pipelineStageCount: opts.pipeline.stageCount }
+							: {}),
+						...(opts.pipeline.itemCount !== undefined ? { pipelineItemCount: opts.pipeline.itemCount } : {}),
 					}
 				: {}),
 			...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
@@ -325,6 +331,7 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 			currentStep: 0,
 			...(step.label ? { label: step.label } : {}),
 			...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
+			...(opts.pipeline ? { pipeline: opts.pipeline } : {}),
 			steps: [],
 		},
 	});

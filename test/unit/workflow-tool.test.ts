@@ -170,6 +170,24 @@ describe("workflow tool (VAL-WORKFLOW-TOOL)", () => {
 		assert.match((badStage.content[0] as { text?: string } | undefined)?.text ?? "", /expects every stage/);
 	});
 
+	it("pipeline() rejects malformed names and named stages", async () => {
+		for (const script of [
+			"return await pipeline({ name: '', items: [] });",
+			"return await pipeline({ name: 'bad\\nname', items: [] });",
+			"return await pipeline({ name: 'ok', items: 'nope' });",
+			"return await pipeline({ name: 'ok', items: [] }, { title: '', run: (x) => x });",
+			"return await pipeline({ name: 'ok', items: [] }, { title: 'stage', run: 'nope' });",
+		]) {
+			const result = await executeWorkflow(script);
+			assert.equal(result?.isError, true, script);
+			assert.match(
+				(result.content[0] as { text?: string } | undefined)?.text ?? "",
+				/pipeline name|pipeline items|stage title|stage run/,
+				script,
+			);
+		}
+	});
+
 	it("surfaces a throwing script as an error result without crashing the host", async () => {
 		const result = await executeWorkflow("throw new Error('boom');");
 

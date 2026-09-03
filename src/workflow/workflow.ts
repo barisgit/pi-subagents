@@ -12,7 +12,7 @@ import {
 	writeWorkflowScript,
 } from "./workflow-group-state.ts";
 import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
-import { parseWorkflowMeta, type WorkflowMeta } from "../protocol/workflow-meta.ts";
+import { displayString, parseWorkflowMeta, type WorkflowMeta } from "../protocol/workflow-meta.ts";
 import { processGlobal } from "../shared/process-global.ts";
 import { compactForegroundResult } from "../shared/utils.ts";
 import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
@@ -277,7 +277,13 @@ async function agentGlobal(
 	);
 }
 
-type WorkflowPipelineStage = (value: unknown, originalItem: unknown, index: number) => unknown | Promise<unknown>;
+type WorkflowPipelineStageRun = (value: unknown, originalItem: unknown, index: number) => unknown | Promise<unknown>;
+type WorkflowPipelineStage = WorkflowPipelineStageRun | { title: unknown; run: unknown };
+
+interface ParsedWorkflowPipelineStage {
+	title?: string;
+	run: WorkflowPipelineStageRun;
+}
 
 function compactPipelineItemLabel(value: unknown): string | undefined {
 	if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
@@ -525,19 +531,45 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 				),
 			),
 		);
-	const pipeline = (items: unknown[], ...stages: WorkflowPipelineStage[]) => {
+	const pipeline = (input: unknown, ...stages: WorkflowPipelineStage[]) => {
 		orchestrationStarted = true;
-		if (!Array.isArray(items)) {
+		let name: string | undefined;
+		let items: unknown[];
+		if (Array.isArray(input)) {
+			items = input;
+		} else if (input !== null && typeof input === "object") {
+			const parsedName = displayString(Reflect.get(input, "name"), "pipeline name");
+			if (!parsedName.ok) return track(Promise.reject(new TypeError(parsedName.reason)));
+			name = parsedName.value;
+			const configuredItems = Reflect.get(input, "items");
+			if (!Array.isArray(configuredItems)) {
+				return track(Promise.reject(new TypeError("pipeline items must be an array")));
+			}
+			items = configuredItems;
+		} else {
 			return track(Promise.reject(new TypeError("pipeline(items, ...stages) expects an array")));
 		}
+		const parsedStages: ParsedWorkflowPipelineStage[] = [];
 		for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
-			if (typeof stages[stageIndex] !== "function") {
+			const stage = stages[stageIndex];
+			if (typeof stage === "function") {
+				parsedStages.push({ run: stage });
+				continue;
+			}
+			if (stage === null || typeof stage !== "object" || Array.isArray(stage)) {
 				return track(
 					Promise.reject(new TypeError("pipeline(items, ...stages) expects every stage to be a function")),
 				);
 			}
+			const parsedTitle = displayString(Reflect.get(stage, "title"), "pipeline stage title");
+			if (!parsedTitle.ok) return track(Promise.reject(new TypeError(parsedTitle.reason)));
+			const run = Reflect.get(stage, "run");
+			if (typeof run !== "function") {
+				return track(Promise.reject(new TypeError("pipeline stage run must be a function")));
+			}
+			parsedStages.push({ title: parsedTitle.value, run: run as WorkflowPipelineStageRun });
 		}
-		if (stages.length === 0) {
+		if (parsedStages.length === 0) {
 			const copy: unknown[] = [];
 			for (let index = 0; index < items.length; index += 1) copy.push(items[index]);
 			return track(Promise.resolve(copy));
@@ -546,7 +578,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 		const pipelineId = randomUUID();
 		const itemLabels = items.map((item) => pipelineItemLabel(item));
 		const groupIds: string[] = [];
-		for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) groupIds.push(randomUUID());
+		for (let stageIndex = 0; stageIndex < parsedStages.length; stageIndex += 1) groupIds.push(randomUUID());
 		const announced = new Set<number>();
 		const sized = items.length > 1;
 		const runStage = (
@@ -556,7 +588,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 			itemIndex: number,
 		): Promise<unknown> => {
 			const groupId = groupIds[stageIndex];
-			const stage = stages[stageIndex];
+			const stage = parsedStages[stageIndex];
 			if (!groupId || !stage) {
 				return Promise.reject(new TypeError("pipeline(items, ...stages) expects every stage to be a function"));
 			}
@@ -569,12 +601,16 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 					pendingGroupId: groupId,
 					pipeline: {
 						id: pipelineId,
+						...(name ? { name } : {}),
 						itemIndex,
 						stageIndex,
 						...(itemLabels[itemIndex] ? { itemLabel: itemLabels[itemIndex] } : {}),
+						...(stage.title ? { stageTitle: stage.title } : {}),
+						stageCount: parsedStages.length,
+						itemCount: items.length,
 					},
 				},
-				() => Promise.resolve(stage(value, originalItem, itemIndex)),
+				() => Promise.resolve(stage.run(value, originalItem, itemIndex)),
 			);
 		};
 		const itemPromises: Array<Promise<unknown>> = [];
@@ -585,7 +621,7 @@ export async function runWorkflowScript(options: WorkflowRuntimeOptions): Promis
 					const permit = await pipelineAdmission.acquire();
 					try {
 						let value = initial;
-						for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
+						for (let stageIndex = 0; stageIndex < parsedStages.length; stageIndex += 1) {
 							value = await runStage(stageIndex, value, initial, itemIndex);
 						}
 						return value;
@@ -947,10 +983,10 @@ Worked examples—not templates or limits (replace role placeholders with config
     const areas = await agent("<investigation-role>", "List the distinct areas this audit must cover. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
     const brief = "Read-only audit of <repo and key paths>. Cite file and line evidence for every claim. Expected output: a findings list. Area: ";
     const reports = await parallel(areas.map((a) => () => agent("<investigation-role>", brief + a)));
-- Explore → verify → synthesize: per-item pipeline stages keep every child's context bounded instead of pasting all reports into one prompt.
-    const verified = await pipeline(areas,
-      (a) => agent("<investigation-role>", "Audit area: " + a),
-      (report) => agent("<review-role>", "Re-check each claim against the actual files and commands it cites; drop claims you cannot reproduce, keep the rest verbatim:\\n" + report));
+- Explore → verify → synthesize: a named pipeline with named stages keeps every child's context bounded and makes progress legible.
+    const verified = await pipeline({ name: "Area audit", items: areas },
+      { title: "Explore", run: (a) => agent("<investigation-role>", "Audit area: " + a, { phase: "Explore" }) },
+      { title: "Verify", run: (report) => agent("<review-role>", "Re-check each claim against the actual files and commands it cites; drop claims you cannot reproduce, keep the rest verbatim:\\n" + report, { phase: "Verify" }) });
     return await agent("<review-role>", "Synthesize a decision-ready report from these verified area reports:\\n" + verified.join("\\n---\\n"));
 - Gate loop: requeue only what has not passed, under an attempt bound.
     let gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
@@ -958,14 +994,14 @@ Worked examples—not templates or limits (replace role placeholders with config
       await parallel(gaps.map((gap) => () => agent("<investigation-role>", "Close this gap: " + gap)));
       gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
     }
-These are ingredients, not canonical recipes. Queues, panels, repair loops, and convergence gates are ordinary JavaScript over the same primitives; design the harness the task deserves.
+These are not canonical recipes; requeue gates are ordinary JavaScript.
 
 The script runs in a sandbox with six globals:
 - meta({ name, description, phases }) — call once before other globals. phases: ["Recon"] or [{ title: "Recon" }]; objects may add detail; titles are non-empty and unique.
-- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. opts may contain schema, phase, label, and cwd. opts.phase selects this child's phase without changing the default and must match metadata when phases are declared; opts.label is its persisted display label; a relative opts.cwd resolves from the caller/session cwd. By default result is a STRING (the child's text output). Rejects if the child fails, so failures propagate unless you catch them. To branch on structured fields, pass opts.schema (a plain JSON Schema object): the runtime validates and reprompts a non-compliant child, so result is guaranteed to match. The workflow authors the schema; the child never decides its own shape.
+- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. opts may contain schema, phase, label, and cwd. opts.phase selects this child's phase without changing the default and must match metadata when phases are declared; opts.label is its persisted display label; a relative opts.cwd resolves from the caller/session cwd. Results are strings by default. Child failures reject. opts.schema validates structured output; the workflow owns that contract.
 - parallel(thunks) -> Promise<results[]> — run thunks concurrently; maxConcurrentAgents bounds direct-child admission and active leaves. It is a FAIL-FAST Promise.all barrier.
 - parallelSettled(thunks) -> Promise<Array<{ ok: true, value } | { ok: false, error: string }>> — use instead of per-thunk try/catch when partial results are acceptable; results preserve input order.
-- pipeline(items, ...stages) -> Promise<results[]> — stream each item through stages with at most workflow.maxPipelineItemsInFlight item chains active; results preserve input order. Each stage receives (previousResult, originalItem, index); the first receives (item, item, index). It is fail-fast like Promise.all.
+- pipeline(items, ...stages) or pipeline({ name, items }, ...stages) -> Promise<results[]> — stream each item through stages with at most workflow.maxPipelineItemsInFlight item chains active; results preserve input order. A stage is a function or { title, run }. Each stage receives (previousResult, originalItem, index); the first receives (item, item, index). It is fail-fast like Promise.all.
 - phase(title) — set the default phase for subsequent dispatches. opts.phase overrides one call and is the right tool inside pipeline/parallel callbacks.
 
 Use one pipeline with N stages for dependent per-item work; attribute later stages via opts.phase inside the stage callback. Never split dependent stages into separate pipeline() calls with a phase() barrier between them.

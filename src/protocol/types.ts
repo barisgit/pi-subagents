@@ -266,9 +266,15 @@ export interface ModelAttempt {
 
 export interface PipelineMetadata {
 	id: string;
+	name?: string;
 	itemIndex: number;
 	stageIndex: number;
 	itemLabel?: string;
+	stageTitle?: string;
+	/** Present on all new writes; optional so pre-field status records remain readable. */
+	stageCount?: number;
+	/** Present on all new writes; optional so pre-field status records remain readable. */
+	itemCount?: number;
 }
 
 export interface SingleResult {

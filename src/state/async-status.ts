@@ -185,6 +185,7 @@ export function statusToRunView(asyncDir: string, status: PersistedRunStatus & {
 		...(status.outputText !== undefined ? { finalOutput: status.outputText } : {}),
 		...(status.totalTokens ? { totalTokens: status.totalTokens } : {}),
 		...(status.sessionFile ? { sessionFile: status.sessionFile } : {}),
+		...(status.pipeline ? { pipeline: status.pipeline } : {}),
 	};
 }
 
@@ -347,6 +348,10 @@ function registryWorkflowFields(
 						itemIndex: entry.pipelineItemIndex,
 						stageIndex: entry.pipelineStageIndex,
 						...(entry.pipelineItemLabel ? { itemLabel: entry.pipelineItemLabel } : {}),
+						...(entry.pipelineName ? { name: entry.pipelineName } : {}),
+						...(entry.pipelineStageTitle ? { stageTitle: entry.pipelineStageTitle } : {}),
+						...(entry.pipelineStageCount !== undefined ? { stageCount: entry.pipelineStageCount } : {}),
+						...(entry.pipelineItemCount !== undefined ? { itemCount: entry.pipelineItemCount } : {}),
 					},
 				}
 			: {}),

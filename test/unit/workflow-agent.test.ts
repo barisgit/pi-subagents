@@ -167,6 +167,44 @@ describe("workflow agent global (VAL-AGENT-GLOBAL)", () => {
 
 		assert.equal(seenTags?.pipeline?.itemLabel, "physics");
 	});
+
+	it("threads named pipeline and stage metadata to every child", async () => {
+		const seen: WorkflowDispatchTags[] = [];
+		await runWorkflowScript({
+			dispatch: async (_role, task, tags) => {
+				if (tags) seen.push(tags);
+				return { result: task };
+			},
+			script: [
+				"return await pipeline({ name: 'Osnutki', items: [{ branch: 'physics' }] },",
+				"  { title: 'osnutek', run: (item) => agent('review', item.branch) },",
+				"  { title: 'verifikacija', run: (value) => agent('review', value) },",
+				");",
+			].join("\n"),
+		});
+
+		assert.equal(seen.length, 2);
+		assert.deepEqual(seen[0]?.pipeline, {
+			id: seen[0]?.pipeline?.id,
+			name: "Osnutki",
+			itemIndex: 0,
+			itemLabel: "physics",
+			stageIndex: 0,
+			stageTitle: "osnutek",
+			stageCount: 2,
+			itemCount: 1,
+		});
+		assert.deepEqual(seen[1]?.pipeline, {
+			id: seen[0]?.pipeline?.id,
+			name: "Osnutki",
+			itemIndex: 0,
+			itemLabel: "physics",
+			stageIndex: 1,
+			stageTitle: "verifikacija",
+			stageCount: 2,
+			itemCount: 1,
+		});
+	});
 });
 
 describe("workflow agent Layer-0 child prep (VAL-CHILD-PREP)", () => {

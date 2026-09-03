@@ -23,7 +23,7 @@ Delegation invoked from a child session runs synchronously, even when `async:tru
 
 Choose the shape from the dependency pattern:
 
-- Use `pipeline(items, ...stages)` by default for per-item multi-stage work. A stage receives `(previousResult, originalItem, index)`; the first receives `(item, item, index)`.
+- Use `pipeline({ name, items }, ...stages)` for named per-item multi-stage work. A stage may be `{ title, run }`; `run` receives `(previousResult, originalItem, index)` and the first receives `(item, item, index)`. The unnamed function forms remain supported.
 - Use a `parallel()` barrier only when the next section needs the whole result set, such as deduplicating across results or exiting early when the set is empty.
 - Use `parallel()` when any failure should abort. Use `parallelSettled()` when partial results are acceptable instead of adding `try/catch` to every thunk.
 - Call `phase(title)` only between top-level sections to set the default for subsequent dispatches. Inside pipeline or parallel callbacks, use `opts.phase` to attribute each child without introducing a barrier; it must match metadata when phases are declared.
@@ -48,33 +48,39 @@ const items = [
 
 phase("Investigate");
 const outcomes = await pipeline(
-  items,
-  (item, originalItem, index) =>
-    agent("<investigation-role>", "Investigate " + originalItem.branch + " at index " + index, {
-      phase: "Investigate",
-      label: "Investigate " + item.branch,
-      cwd: item.cwd,
-      schema: {
-        type: "object",
-        properties: {
-          finding: { type: "string" },
-          actionable: { type: "boolean" },
-        },
-        required: ["finding", "actionable"],
-        additionalProperties: false,
-      },
-    }),
-  (finding, item) => {
-    if (!finding.actionable) return { skipped: true, branch: item.branch };
-    return agent(
-      "<implementation-role>",
-      "Implement and verify " + item.branch + ": " + finding.finding,
-      {
-        phase: "Implement and verify",
-        label: "Implement " + item.branch,
+  { name: "Branch updates", items },
+  {
+    title: "Investigate",
+    run: (item, originalItem, index) =>
+      agent("<investigation-role>", "Investigate " + originalItem.branch + " at index " + index, {
+        phase: "Investigate",
+        label: "Investigate " + item.branch,
         cwd: item.cwd,
-      },
-    );
+        schema: {
+          type: "object",
+          properties: {
+            finding: { type: "string" },
+            actionable: { type: "boolean" },
+          },
+          required: ["finding", "actionable"],
+          additionalProperties: false,
+        },
+      }),
+  },
+  {
+    title: "Implement and verify",
+    run: (finding, item) => {
+      if (!finding.actionable) return { skipped: true, branch: item.branch };
+      return agent(
+        "<implementation-role>",
+        "Implement and verify " + item.branch + ": " + finding.finding,
+        {
+          phase: "Implement and verify",
+          label: "Implement " + item.branch,
+          cwd: item.cwd,
+        },
+      );
+    },
   },
 );
 return outcomes;

@@ -17,7 +17,10 @@ export interface WorkflowMeta {
 
 export type WorkflowMetaParseResult = { ok: true; value: WorkflowMeta } | { ok: false; reason: string };
 
-function displayString(value: unknown, field: string): { ok: true; value: string } | { ok: false; reason: string } {
+export function displayString(
+	value: unknown,
+	field: string,
+): { ok: true; value: string } | { ok: false; reason: string } {
 	if (typeof value !== "string") {
 		return { ok: false, reason: `${field} must be a non-empty string` };
 	}

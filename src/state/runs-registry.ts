@@ -30,6 +30,10 @@ export interface RunsRegistryEntry {
 	pipelineItemIndex?: number;
 	pipelineStageIndex?: number;
 	pipelineItemLabel?: string;
+	pipelineName?: string;
+	pipelineStageTitle?: string;
+	pipelineStageCount?: number;
+	pipelineItemCount?: number;
 	label?: string;
 	// Immediate dispatcher session (parent subagent for nested runs, user
 	// session for top-level runs).
@@ -154,6 +158,10 @@ function isRunsRegistryEntry(value: unknown): value is RunsRegistryEntry {
 		hasOptionalFiniteNumber(value, "pipelineItemIndex") &&
 		hasOptionalFiniteNumber(value, "pipelineStageIndex") &&
 		hasOptionalString(value, "pipelineItemLabel") &&
+		hasOptionalString(value, "pipelineName") &&
+		hasOptionalString(value, "pipelineStageTitle") &&
+		hasOptionalFiniteNumber(value, "pipelineStageCount") &&
+		hasOptionalFiniteNumber(value, "pipelineItemCount") &&
 		hasOptionalString(value, "label") &&
 		hasOptionalString(value, "parentSessionId") &&
 		hasOptionalString(value, "rootSessionId") &&
