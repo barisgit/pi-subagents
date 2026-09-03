@@ -5,7 +5,7 @@ import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts"
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import { interruptRun, registerRunController, releaseRunController } from "../../src/dispatch/layer0-runs.ts";
 import { __resetLeafConcurrencyForTest, leafConcurrencyLimit } from "../../src/dispatch/leaf-concurrency.ts";
-import { setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { readStatus } from "../../src/shared/utils.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
@@ -281,6 +281,48 @@ describe("async-path shared controller registration", () => {
 		assert.equal(sessions.length, 0, "exactly one queued child should create the remaining session");
 	});
 
+	it("activation shutdown cancels a queued waiter before a replacement activation proceeds", async () => {
+		leafConcurrencyLimit(1);
+		const startedTasks: string[] = [];
+		restoreRuntime = installFakeRuntime([
+			new FakeAgentSession(async (task) => {
+				startedTasks.push(task);
+				await new Promise<void>(() => {});
+			}),
+			new FakeAgentSession(async (task, session) => {
+				startedTasks.push(task);
+				session.emit(assistantMessage("<output>replacement done</output>"));
+			}),
+		]);
+		const oldActivation = makeHarness(tempDir);
+
+		const holder = await oldActivation.execute({ async: true, run: [{ agent: "A", task: "old holder" }] });
+		assert.ok(holder.details?.runId);
+		await waitFor(() => startedTasks.length === 1, "old holder never acquired its permit");
+		const queued = await oldActivation.execute({ async: true, run: [{ agent: "A", task: "old queued" }] });
+		assert.ok(queued.details?.runId);
+		await delay(20);
+
+		void oldActivation.childRegistry.abortQueued("activation replaced");
+		const explicitlyInterrupted = interruptRun(holder.details.runId, { cascade: true });
+		assert.ok(explicitlyInterrupted.interruptedRunIds.includes(holder.details.runId));
+		const replacementActivation = makeHarness(tempDir);
+		const replacement = await replacementActivation.execute({
+			async: true,
+			run: [{ agent: "A", task: "replacement" }],
+		});
+		assert.ok(replacement.details?.runId);
+
+		await waitFor(
+			() => replacementActivation.completionEvents.some((event) => event.runId === replacement.details?.runId),
+			"replacement activation did not complete",
+		);
+		assert.equal(startedTasks[0], "old holder");
+		assert.equal(startedTasks[1], "replacement");
+		assert.equal(startedTasks.includes("old queued"), false);
+		assert.equal(readStatus(queued.details!.asyncDir!)?.state, "interrupted");
+	});
+
 	it("interruptAsyncRun succeeds when only the target is aborted via the layer0 fallback", async () => {
 		// Post-reload shape: the per-activation childRegistry is empty (no handle,
 		// no descendants), but the target's controller survives in the shared map.
@@ -303,6 +345,32 @@ describe("async-path shared controller registration", () => {
 			assert.equal(controller.signal.aborted, true, "layer0 fallback must abort the target controller");
 			const tracked = harness.state.asyncJobs.get(runId);
 			assert.ok(tracked && (tracked.updatedAt ?? 0) > 1, "tracked job entry must be updated for the target");
+		} finally {
+			releaseRunController(runId);
+		}
+	});
+
+	it("does not interrupt a run owned by another root session", async () => {
+		const harness = makeHarness(tempDir);
+		const runId = "run-foreign-root";
+		appendRunEntry({
+			runId,
+			runRecordDir: path.join(tempDir, runId),
+			mode: "single",
+			source: "async",
+			agentName: "A",
+			rootSessionId: "session-other",
+			cwd: tempDir,
+			startedAt: Date.now(),
+		});
+		const controller = new AbortController();
+		registerRunController(runId, controller);
+		try {
+			const result = await harness.execute({ action: "interrupt", id: runId });
+
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /belongs to root session session-other/);
+			assert.equal(controller.signal.aborted, false);
 		} finally {
 			releaseRunController(runId);
 		}

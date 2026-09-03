@@ -145,6 +145,20 @@ describe("inspectSubagentStatus no-id list scoping", () => {
 });
 
 describe("inspectSubagentStatus ID lookup", () => {
+	it("keeps explicit ID lookup global when a session scope is present", () => {
+		const root = tmpRegistry();
+		makeEntry(root, "lookup-foreign", {
+			withStatus: { state: "complete" },
+			rootSessionId: "sess-other",
+		});
+
+		const result = inspectSubagentStatus({ id: "lookup-foreign", sessionId: "sess-current" });
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		assert.equal(result.isError, undefined);
+		assert.match(text, /^Run: lookup-foreign$/m);
+	});
+
 	it("prefers an exact ID over a newer prefix match", () => {
 		const root = tmpRegistry();
 		const now = Date.now();

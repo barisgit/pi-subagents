@@ -464,14 +464,15 @@ function stampTerminalScalars(
  * status.json is still pinned at state:'running' so it becomes resumable.
  *
  * Also persists a stale QUEUED orphan (a child blocked on a leaf permit when its
- * owning per-activation registry died) to terminal-lost. A queued record never
+ * owning process died) to terminal-lost. A queued record never
  * advances its heartbeat — the ticker only starts after the permit is acquired —
  * so queued reaping keys on the SAME mtime-staleness ceiling the read path
  * ({@link readStatus}) already uses to derive such records to lost: only a queued
  * record whose status.json mtime is older than {@link STALE_MTIME_THRESHOLD_MS}
- * had zero progress and a dead owner. A live queued run (fresh mtime, still
- * waiting for a permit) is returned unchanged with NO write. The 'running' path is
- * unconditional (callers gate it on a hard-dead heartbeat) and stays byte-stable.
+ * and is not owned by the current process had zero progress and a dead owner. A
+ * current-process queued handle remains explicitly owned by its activation and
+ * is returned unchanged with NO write. The 'running' path is unconditional
+ * (callers gate it on a hard-dead heartbeat) and stays byte-stable.
  */
 export function reconcileRunToTerminalOnDisk(
 	runRecordDir: string,
@@ -491,6 +492,9 @@ export function reconcileRunToTerminalOnDisk(
 	if (!parsed.ok) return null;
 	const status = parsed.value;
 	if (status.state !== "running" && status.state !== "queued") return status;
+	if (status.state === "queued" && status.runnerPid === process.pid && status.runnerToken === currentRunnerToken()) {
+		return status;
+	}
 	// A queued record is only reaped once its mtime is stale past the shared ceiling;
 	// a fresh queued run is a live permit-waiter and must never be written. Running is
 	// reaped unconditionally here (the call site gates it on a hard-dead heartbeat).

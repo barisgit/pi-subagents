@@ -196,7 +196,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						details: { mode: "management", results: [] },
 					};
 				}
-				const asyncInterruptResult = await interruptAsyncRun(deps.state, deps.childRegistry, targetRunId);
+				const asyncInterruptResult = await interruptAsyncRun(
+					deps.state,
+					deps.childRegistry,
+					targetRunId,
+					resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined),
+				);
 				if (asyncInterruptResult) return asyncInterruptResult;
 				return {
 					content: [{ type: "text", text: "No interrupt-capable run found in this session." }],
@@ -525,9 +530,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					startedAt: Date.now(),
 					updatedAt: Date.now(),
 					...(foregroundRunLabel ? { label: foregroundRunLabel } : {}),
-					...(foregroundAgentLabels && foregroundAgentLabels.some((l) => l)
-						? { agentLabels: foregroundAgentLabels }
-						: {}),
+					...(foregroundAgentLabels?.some((l) => l) ? { agentLabels: foregroundAgentLabels } : {}),
 					currentAgent: undefined,
 					currentIndex: undefined,
 					currentActivityState: undefined,

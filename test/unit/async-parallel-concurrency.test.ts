@@ -28,9 +28,15 @@ function deferred<T = void>() {
 	return { promise, resolve };
 }
 
-function waitForEvent(events: EventEmitter, channel: string, predicate: (payload: any) => boolean = () => true) {
-	return new Promise<any>((resolve) => {
-		const handler = (payload: any) => {
+interface AsyncCompleteEvent {
+	total: number;
+	completed: number;
+	children: Array<{ state: string }>;
+}
+
+function waitForEvent<T>(events: EventEmitter, channel: string, predicate: (payload: T) => boolean = () => true) {
+	return new Promise<T>((resolve) => {
+		const handler = (payload: T) => {
 			if (!predicate(payload)) return;
 			events.off(channel, handler);
 			resolve(payload);
@@ -54,7 +60,7 @@ function setup(prefix: string, concurrency: number) {
 	process.env.HOME = root;
 	setRegistryPathForTests(path.join(root, ".pi", "agent", "pi-subagents", "runs-index.jsonl"));
 
-	const tracker = { inFlight: 0, peak: 0 };
+	const tracker = { inFlight: 0, peak: 0, startedTasks: [] as string[] };
 	const gate = deferred();
 	const filledFirstWave = deferred();
 
@@ -65,6 +71,7 @@ function setup(prefix: string, concurrency: number) {
 			return () => {};
 		}
 		async prompt(task: string): Promise<void> {
+			tracker.startedTasks.push(task);
 			tracker.inFlight++;
 			tracker.peak = Math.max(tracker.peak, tracker.inFlight);
 			if (tracker.inFlight === concurrency) filledFirstWave.resolve();
@@ -107,6 +114,7 @@ function setup(prefix: string, concurrency: number) {
 	};
 	setCurrentPi(pi as never);
 
+	const childRegistry = new ChildAgentRegistry();
 	const executor = createSubagentExecutor({
 		pi,
 		state: {
@@ -122,7 +130,7 @@ function setup(prefix: string, concurrency: number) {
 		config: { maxConcurrentAgents: concurrency },
 		asyncByDefault: false,
 		tempArtifactsDir: root,
-		childRegistry: new ChildAgentRegistry(),
+		childRegistry,
 		expandTilde: (value: string) => value,
 		discoverAgents: () => ({
 			agents: Array.from({ length: 16 }, (_, i) => makeAgent(`A${i}`, { model: "mock/test-model" })),
@@ -138,7 +146,15 @@ function setup(prefix: string, concurrency: number) {
 		model: { provider: "mock" },
 	};
 
-	return { executor, ctx, events, tracker, release: () => gate.resolve(), filledFirstWave: filledFirstWave.promise };
+	return {
+		executor,
+		ctx,
+		events,
+		tracker,
+		childRegistry,
+		release: () => gate.resolve(),
+		filledFirstWave: filledFirstWave.promise,
+	};
 }
 
 afterEach(() => {
@@ -157,7 +173,7 @@ describe("async parallel concurrency gate", () => {
 		const concurrency = 4;
 		const total = 8;
 		const harness = setup("async-parallel-conc-", concurrency);
-		const completePromise = waitForEvent(harness.events, SUBAGENT_ASYNC_COMPLETE_EVENT);
+		const completePromise = waitForEvent<AsyncCompleteEvent>(harness.events, SUBAGENT_ASYNC_COMPLETE_EVENT);
 
 		const run = Array.from({ length: total }, (_, i) => ({ agent: `A${i}`, task: `t${i}` }));
 		const result = await harness.executor.execute(
@@ -168,7 +184,7 @@ describe("async parallel concurrency gate", () => {
 			harness.ctx as never,
 		);
 		// Async returns immediately with the parallel group handle.
-		assert.equal((result?.details as any).mode, "parallel");
+		assert.equal((result?.details as { mode?: string } | undefined)?.mode, "parallel");
 
 		// The first `concurrency` children fill prompt and park on the gate; the
 		// remaining children are blocked on a permit and cannot enter prompt.
@@ -189,6 +205,40 @@ describe("async parallel concurrency gate", () => {
 		assert.ok(
 			harness.tracker.peak <= concurrency,
 			`peak concurrency ${harness.tracker.peak} must never exceed limit ${concurrency}`,
+		);
+	});
+
+	it("shutdown aborts an unseeded queued sibling without aborting the running child", async () => {
+		const harness = setup("async-parallel-shutdown-", 1);
+		const completePromise = waitForEvent<AsyncCompleteEvent>(harness.events, SUBAGENT_ASYNC_COMPLETE_EVENT);
+
+		await harness.executor.execute(
+			"id",
+			{
+				run: [
+					{ agent: "A0", task: "running child" },
+					{ agent: "A1", task: "queued child" },
+				],
+				async: true,
+			} as never,
+			new AbortController().signal,
+			undefined,
+			harness.ctx as never,
+		);
+		await harness.filledFirstWave;
+		assert.deepEqual(harness.tracker.startedTasks, ["running child"]);
+		assert.equal(harness.childRegistry.listRunViews().length, 0, "parallel children are intentionally unseeded");
+
+		await harness.childRegistry.abortQueued("activation replaced");
+		assert.equal(harness.tracker.inFlight, 1, "the running sibling keeps its permit");
+		harness.release();
+
+		const complete = await completePromise;
+		assert.deepEqual(harness.tracker.startedTasks, ["running child"], "the queued child never starts or restarts");
+		assert.equal(complete.completed, 1);
+		assert.deepEqual(
+			complete.children.map((child: { state: string }) => child.state),
+			["complete", "interrupted"],
 		);
 	});
 });

@@ -170,11 +170,11 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		};
 		registry.finalizeView(RUN_ID, result);
 
-		// finalizeView lands the terminal result metadata NOT carried in the patch
-		// stream (output, final usage, and endedAt). Run-level state flip stays a producer
-		// concern (deferred): the terminal STEP patch deliberately does not flip it.
+		// finalizeView lands terminal result metadata not carried in the patch stream,
+		// including the canonical run-level state.
 		const beforeWindow = registry.getRunView(RUN_ID);
 		assert.ok(beforeWindow, "view retained before window elapses");
+		assert.equal(beforeWindow.state, "complete");
 		assert.equal(beforeWindow.endedAt, terminalAt);
 		assert.equal(beforeWindow.finalOutput, "done");
 		assert.equal(beforeWindow.totalTokens?.total, 300);
@@ -217,6 +217,53 @@ describe("ChildAgentRegistry RunView mirror", () => {
 		}
 
 		assert.deepEqual(registry.sessionsForRun(RUN_ID), sessions);
+	});
+
+	it("aborts only queued handles during activation cleanup", async () => {
+		const registry = new ChildAgentRegistry();
+		const calls: string[] = [];
+		for (const runId of ["queued-run", "running-run"]) {
+			registry.register({
+				runId,
+				stepIndex: 0,
+				get session(): never {
+					throw new Error("session not available in test");
+				},
+				completed: Promise.resolve({} as ChildAgentResult),
+				abort: async () => {
+					calls.push(runId);
+				},
+			});
+		}
+		registry.markRunning("running-run", 0);
+
+		await registry.abortQueued("activation replaced");
+
+		assert.deepEqual(calls, ["queued-run"]);
+	});
+
+	it("tracks queued ownership per handle without aborting a running sibling's run controller", async () => {
+		const registry = new ChildAgentRegistry();
+		const calls: number[] = [];
+		for (const stepIndex of [0, 1]) {
+			registry.register({
+				runId: RUN_ID,
+				stepIndex,
+				get session(): never {
+					throw new Error("session not available in test");
+				},
+				completed: Promise.resolve({} as ChildAgentResult),
+				abort: async () => {
+					calls.push(stepIndex);
+				},
+			});
+		}
+		registry.markRunning(RUN_ID, 0);
+
+		await registry.abortQueued("activation replaced");
+
+		assert.deepEqual(calls, [1]);
+		assert.equal(registry.signalForRun(RUN_ID).aborted, false);
 	});
 
 	it("aborts each handle once when a run has multiple steps", async () => {

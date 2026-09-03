@@ -4,8 +4,6 @@ import { evictCompletionDedupeForRunId, markCompletionDedupeForRunId } from "../
 import { interruptRun, awaitRunTerminal, type AwaitRunTerminalOutcome } from "./layer0-runs.ts";
 import type { SubagentState, SubagentToolResult } from "../protocol/types.ts";
 
-type ForegroundControl = SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
-
 export function getForegroundControl(state: SubagentState, runId: string | undefined) {
 	if (runId) return state.foregroundControls.get(runId);
 	if (state.lastForegroundControlId) {
@@ -144,9 +142,13 @@ export async function interruptAllAsyncRuns(
 		if (job.status !== "running" && job.status !== "queued") continue;
 		try {
 			const handle = childRegistry.get(job.asyncId);
-			const aborted = handle
-				? (void childRegistry.abortRun(job.asyncId, "interrupt-all requested"), true)
-				: interruptRun(job.asyncId, { cascade: true }).interruptedRunIds.length > 0;
+			let aborted: boolean;
+			if (handle) {
+				await childRegistry.abortRun(job.asyncId, "interrupt-all requested");
+				aborted = true;
+			} else {
+				aborted = interruptRun(job.asyncId, { cascade: true }).interruptedRunIds.length > 0;
+			}
 			if (!aborted) continue;
 			targets.push({
 				runId: job.asyncId,
@@ -190,7 +192,24 @@ export async function interruptAsyncRun(
 	state: SubagentState,
 	childRegistry: ChildAgentRegistry,
 	runId: string | undefined,
+	requestingRootSessionId?: string,
 ): Promise<SubagentToolResult | null> {
+	if (runId && !state.asyncJobs.has(runId)) {
+		const entry = readAllEntries().find((candidate) => candidate.runId === runId);
+		const recordedRootSessionId = entry?.rootSessionId ?? entry?.parentSessionId;
+		if (recordedRootSessionId && recordedRootSessionId !== requestingRootSessionId) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Run ${runId} belongs to root session ${recordedRootSessionId}, not the current root session ${requestingRootSessionId ?? "unavailable"}. Interrupt it from its owning root session.`,
+					},
+				],
+				isError: true,
+				details: { mode: "management", results: [] },
+			};
+		}
+	}
 	const target = getAsyncInterruptTarget(state, runId);
 	if (!target) return null;
 	const handle = childRegistry.get(target.asyncId);

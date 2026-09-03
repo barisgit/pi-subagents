@@ -294,6 +294,29 @@ describe("resume action", () => {
 		}
 	});
 
+	it("rejects live resume from a foreign root session", async () => {
+		const tempDir = createTempDir("pi-subagent-resume-action-");
+		try {
+			const harness = makeHarness(tempDir);
+			const session = registerHandle(harness.childRegistry, "run-foreign", 0);
+			harness.childRegistry.seedRunView("run-foreign", {
+				mode: "single",
+				state: "running",
+				rootSessionId: "session-other",
+				steps: [{ agent: "explorer", status: "running" }],
+			});
+			markAsync(harness.state, "run-foreign", "running");
+
+			const result = await harness.execute({ action: "resume", id: "run-foreign", message: "continue" });
+
+			assert.equal(result.isError, true);
+			assert.match(text(result), /belongs to root session session-other/);
+			assert.deepEqual(session.messages, []);
+		} finally {
+			removeTempDir(tempDir);
+		}
+	});
+
 	it("missing-id-rejected", () => {
 		const error = validateSubagentToolInput({ action: "resume", message: "hi" });
 

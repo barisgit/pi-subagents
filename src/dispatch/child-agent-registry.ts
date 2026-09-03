@@ -52,6 +52,7 @@ function isTerminalState(state: PersistedRunStatus["state"]): boolean {
 
 export class ChildAgentRegistry {
 	private readonly handles = new Map<string, Map<number, ChildAgentHandle>>();
+	private readonly handleStates = new Map<string, Map<number, "queued" | "running">>();
 	private readonly controllers = new Map<string, AbortController>();
 	/** In-memory live status mirror, SAME shape as status.json, keyed by runId. */
 	private readonly statuses = new Map<string, PersistedRunStatus & { steps: PersistedRunStep[] }>();
@@ -80,6 +81,17 @@ export class ChildAgentRegistry {
 			this.handles.set(handle.runId, byStep);
 		}
 		byStep.set(handle.stepIndex, handle);
+		let statesByStep = this.handleStates.get(handle.runId);
+		if (!statesByStep) {
+			statesByStep = new Map();
+			this.handleStates.set(handle.runId, statesByStep);
+		}
+		statesByStep.set(handle.stepIndex, "queued");
+	}
+
+	markRunning(runId: string, stepIndex: number): void {
+		const statesByStep = this.handleStates.get(runId);
+		if (statesByStep?.has(stepIndex)) statesByStep.set(stepIndex, "running");
 	}
 
 	get(runId: string): ChildAgentHandle | undefined {
@@ -95,13 +107,17 @@ export class ChildAgentRegistry {
 	delete(runId: string, stepIndex?: number): void {
 		if (stepIndex === undefined) {
 			this.handles.delete(runId);
+			this.handleStates.delete(runId);
 			this.controllers.delete(runId);
 			return;
 		}
 		const byStep = this.handles.get(runId);
 		byStep?.delete(stepIndex);
+		const statesByStep = this.handleStates.get(runId);
+		statesByStep?.delete(stepIndex);
 		if (!byStep || byStep.size === 0) {
 			this.handles.delete(runId);
+			this.handleStates.delete(runId);
 			this.controllers.delete(runId);
 		}
 	}
@@ -116,6 +132,18 @@ export class ChildAgentRegistry {
 
 	async abortAll(reason: string): Promise<void> {
 		await Promise.all([...this.handles.keys()].map((runId) => this.abortRun(runId, reason)));
+	}
+
+	async abortQueued(reason: string): Promise<void> {
+		const queuedHandles = [...this.handleStates].flatMap(([runId, statesByStep]) =>
+			[...statesByStep]
+				.filter(([, state]) => state === "queued")
+				.flatMap(([stepIndex]) => {
+					const handle = this.handles.get(runId)?.get(stepIndex);
+					return handle ? [handle] : [];
+				}),
+		);
+		await Promise.all(queuedHandles.map((handle) => handle.abort(reason)));
 	}
 
 	async abortRun(runId: string, reason: string): Promise<void> {
@@ -163,6 +191,7 @@ export class ChildAgentRegistry {
 		if (!s) return;
 		const total = tokenUsageFromUsage(result.usage);
 		if (total) s.totalTokens = total;
+		s.state = result.state;
 		s.outputText = result.outputText;
 		s.endedAt ??= result.endedAt ?? Date.now();
 		this.terminalAt.set(runId, Date.now());

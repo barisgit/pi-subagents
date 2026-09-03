@@ -1,6 +1,5 @@
 import { constants as fsConstants, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
 	type AgentSession,
 	createAgentSession,
@@ -8,9 +7,6 @@ import {
 	getAgentDir,
 	SessionManager,
 	type AgentSessionEvent,
-	type ExtensionAPI,
-	type ExtensionContext,
-	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
 // Pi SDK contract: tools are referenced by string name; the session resolves builtins and
@@ -38,7 +34,6 @@ import {
 import {
 	SUBAGENT_PHASE_CHANGE_EVENT,
 	SUBAGENT_STUCK_EVENT,
-	type ControlConfig,
 	type SubagentLineage,
 	type SubagentPhaseChangePayload,
 	type SubagentStuckPayload,
@@ -60,7 +55,6 @@ import {
 	schemaReprompt,
 	type SubmitResultEnvelope,
 } from "../protocol/output-contract.ts";
-import { ChildAgentRegistry } from "./child-agent-registry.ts";
 import type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
 import { addUsageInto, nestedSubagentUsageFromToolEvent } from "./executor-helpers.ts";
 import { acquireLeafPermit, parkLeafPermit } from "./leaf-concurrency.ts";
@@ -74,7 +68,7 @@ import {
 import { isFallbackModelFailure, isTransportModelFailure } from "./model-fallback.ts";
 export { ChildAgentRegistry } from "./child-agent-registry.ts";
 export type { ChildAgentContext, ChildAgentHandle } from "./child-agent-registry.ts";
-import type { ChildAgentStep, ResolvedAgentConfig } from "./executor-types.ts";
+import type { ChildAgentStep } from "./executor-types.ts";
 export type { ChildAgentStep } from "./executor-types.ts";
 
 type StatusPatchBody = Omit<StatusPatch, "runId" | "stepIndex">;
@@ -390,6 +384,7 @@ function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAge
 	// handles before any child runs). The permit is released when the leaf settles.
 	const completed = (async () => {
 		const releasePermit = await acquireLeafPermit(step.runId, combinedSignal);
+		if (releasePermit) ctx.registry.markRunning(step.runId, step.stepIndex);
 		try {
 			const result = await executeChildAgent(step, teedCtx, combinedSignal, (createdSession) => {
 				session = createdSession;

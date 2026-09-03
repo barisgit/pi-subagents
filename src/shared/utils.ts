@@ -58,17 +58,23 @@ function reconcileStatus(status: PersistedRunStatus, mtimeMs: number): Persisted
 	// outlive their owner:
 	//   - running: an ungracefully killed runner leaves status.json frozen at running
 	//     with a stale heartbeat.
-	//   - queued: a child blocked on a leaf permit when its per-activation registry was
-	//     lost (reload/crash) stays queued forever — nothing re-adopts it.
-	// A live queued/running run renders from the in-memory registry mirror (deduped
-	// from disk), so only a dead/foreign owner reaches this disk-read path. Heartbeat
+	//   - queued: a child blocked on a leaf permit when its owning process was
+	//     lost (crash) stays queued forever — nothing re-adopts it.
+	// Live queued handles are owned explicitly by their per-activation registry;
+	// async RunViews may also be mirrored in memory and deduped from disk. Heartbeat
 	// staleness cannot tell a permit-starved live-queued run from an orphan (the
 	// heartbeat ticker only starts after the permit is acquired, so a waiting run never
-	// beats), so queued reaping keys on the same mtime ceiling: queued->running rewrites
-	// status.json and bumps mtime, so a queued record untouched for the ceiling has had
-	// zero progress and a dead owner. If an owner is somehow still alive and later starts
-	// it, its own status write flips it back to running (this derive never writes disk).
+	// beats). Current-process ownership therefore keeps queued waiters live; queued
+	// records from another/dead process still reap on the same mtime ceiling. If an
+	// owner is somehow still alive and later starts it, its own status write flips
+	// it back to running (this derive never writes disk).
 	if (status.state !== "running" && status.state !== "queued") return status;
+	// A current-process queued record still has a locally owned semaphore waiter.
+	// Unlike a running child it cannot emit activity heartbeats before acquiring a
+	// permit; activation teardown aborts that exact handle and finalizes the record.
+	if (status.state === "queued" && status.runnerPid === process.pid && status.runnerToken === currentRunnerToken()) {
+		return status;
+	}
 	const stale = Date.now() - mtimeMs > STALE_MTIME_THRESHOLD_MS;
 	const withinGrace = isWithinRunnerStaleGrace({
 		key: status.runId ? `read-status:${status.runId}` : undefined,

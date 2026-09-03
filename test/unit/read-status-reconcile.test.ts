@@ -116,6 +116,29 @@ describe("readStatus liveness reconciliation", () => {
 		}
 	});
 
+	it("keeps a queued waiter owned by the current process recoverable", () => {
+		__resetRunnerStaleGraceForTest();
+		let now = Date.now();
+		const restoreNow = __setRunnerStaleGraceNowForTest(() => now);
+		const dir = createRunDir({
+			runId: "read-status-current-queued",
+			state: "queued",
+			runnerPid: process.pid,
+			runnerToken: currentRunnerToken(),
+		});
+		try {
+			const stale = new Date(now - 15 * 60 * 1000);
+			fs.utimesSync(path.join(dir, "status.json"), stale, stale);
+
+			assert.equal(readStatus(dir)?.state, "queued");
+			now += RUNNER_STALE_GRACE_MS + 1;
+			assert.equal(readStatus(dir)?.state, "queued");
+		} finally {
+			restoreNow();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("marks stale queued orphans as lost without mutating disk", () => {
 		// A child blocked on a leaf permit when its owning activation died stays queued
 		// forever. A queued record untouched past the ceiling has a dead owner.

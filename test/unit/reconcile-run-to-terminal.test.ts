@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import { reconcileRunToTerminalOnDisk, writeStatusJson } from "../../src/state/status-writer.ts";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 import { createTempDir, removeTempDir } from "../support/helpers.ts";
+import { currentRunnerToken } from "../../src/shared/process-global.ts";
 
 function statusPath(dir: string): string {
 	return path.join(dir, "status.json");
@@ -171,6 +172,33 @@ describe("reconcileRunToTerminalOnDisk", () => {
 			// Rich fields preserved.
 			assert.equal(onDisk.parentRunId, "parent-run-1");
 			assert.deepEqual(onDisk.steps, status.steps);
+		} finally {
+			removeTempDir(dir);
+		}
+	});
+
+	it("leaves a stale queued waiter owned by the current process untouched", () => {
+		const dir = createTempDir("pi-reconcile-queued-owned-");
+		try {
+			const status: PersistedRunStatus = {
+				version: 1,
+				runId: "run-queued-owned",
+				mode: "single",
+				state: "queued",
+				startedAt: 1000,
+				runnerPid: process.pid,
+				runnerToken: currentRunnerToken(),
+				steps: [{ agent: "fixer", status: "queued" }],
+			};
+			writeStatusJson(statusPath(dir), status);
+			const stale = new Date(Date.now() - 15 * 60 * 1000);
+			fs.utimesSync(statusPath(dir), stale, stale);
+			const before = readRaw(dir);
+
+			const result = reconcileRunToTerminalOnDisk(dir, "lost");
+
+			assert.equal(result?.state, "queued");
+			assert.equal(readRaw(dir), before);
 		} finally {
 			removeTempDir(dir);
 		}

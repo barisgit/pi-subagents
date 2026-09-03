@@ -298,9 +298,13 @@ async function resumeRun(
 			? handles[0]
 			: handles.find((candidate) => candidate.stepIndex === parsed.stepIndex);
 	if (handle) {
-		const targetAgent =
-			tracked?.agents?.[parsed.stepIndex ?? 0] ??
-			childRegistry.getRunView(parsed.dispatchRunId)?.steps[parsed.stepIndex ?? 0]?.agent;
+		const liveView = childRegistry.getRunView(parsed.dispatchRunId);
+		if (liveView?.rootSessionId && liveView.rootSessionId !== requestingRootSessionId) {
+			return validationError(
+				`Run ${parsed.dispatchRunId} belongs to root session ${liveView.rootSessionId}, not the current root session ${requestingRootSessionId ?? "unavailable"}. Resume it from its owning root session.`,
+			);
+		}
+		const targetAgent = tracked?.agents?.[parsed.stepIndex ?? 0] ?? liveView?.steps[parsed.stepIndex ?? 0]?.agent;
 		const authorizationError = authorizeTarget(targetAgent);
 		if (authorizationError) return authorizationError;
 		const error = await postResumeMessage(handle, runId, message);
