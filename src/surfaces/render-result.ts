@@ -769,10 +769,17 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	const tallyRecentTools =
 		r.progress?.recentTools ?? (progress && "recentTools" in progress ? progress.recentTools : undefined);
 	const childTail = inlineChildTail(theme, d.runId, tallyRecentTools, isRunning);
-	const headBase = `${headGlyph} ${tintedName}${contextBadge}${labelTail}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}${childTail}`;
+	const completed = !isRunning && !r.interrupted && !r.detached && r.exitCode === 0;
+	const completedDuration = progress?.durationMs;
+	const headBase = isRunning
+		? `${tintedName}${contextBadge}${labelTail} ${theme.fg("accent", "[working]")}${childTail}`
+		: completed && completedDuration !== undefined
+			? `${tintedName}${contextBadge}${labelTail} completed in ${formatDuration(completedDuration)}${childTail}`
+			: `${headGlyph} ${tintedName}${contextBadge}${labelTail}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}${childTail}`;
 	c.addChild(new Text(truncLine(rightAlignSuffix(headBase, spark, width), width), 0, 0));
 
 	if (isRunning && r.progress) {
+		c.addChild(new Text(truncLine(theme.fg("muted", `  ${r.task}`), width), 0, 0));
 		// Chronological layout: history (oldest -> newest) on top, current activity at the bottom
 		// so the freshest information sits right next to "now".
 		renderChildActivity(
@@ -919,10 +926,19 @@ function renderMultiCompact(d: Details, theme: Theme, width: number): Component 
 	const headLabelTail = uniformLabel
 		? ` ${theme.fg("dim", "·")} ${theme.fg("muted", truncLine(uniformLabel, 30))}`
 		: "";
+	const parallelHeadline =
+		d.mode === "parallel" && !d.workflow
+			? hasRunning
+				? `${theme.fg("toolTitle", themeBold(theme, "Parallel"))}${contextBadge} · ${totalCount} agents${headLabelTail}`
+				: headerOk === totalCount && totalSummary
+					? `${totalCount} agents completed in ${formatDuration(totalSummary.durationMs)} · ${formatTokens(totalSummary.tokens)} tokens${contextBadge}${headLabelTail}`
+					: undefined
+			: undefined;
 	c.addChild(
 		new Text(
 			truncLine(
-				`${glyph} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`,
+				parallelHeadline ??
+					`${glyph} ${theme.fg("toolTitle", themeBold(theme, modeLabel))}${contextBadge}${headlinePrefix}${headLabelTail}${statsTail}`,
 				width,
 			),
 			0,

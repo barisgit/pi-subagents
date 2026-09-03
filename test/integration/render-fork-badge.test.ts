@@ -12,6 +12,7 @@ type RenderSubagentResult = (
 			totalSteps?: number;
 			expectedAgents?: number;
 			currentStepIndex?: number;
+			progressSummary?: { toolCount: number; tokens: number; durationMs: number };
 		};
 	},
 	options: { expanded: boolean },
@@ -200,7 +201,7 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.match(unwrap(expanded), /precisefailingtoolsequenceattheend\./);
 	});
 
-	it("uses glyph-first compact rendering for completed subagents", () => {
+	it("uses an agent-first completed title for a sync single result", () => {
 		const widget = renderSubagentResult!(
 			{
 				content: [{ type: "text", text: "done" }],
@@ -224,10 +225,8 @@ describe("renderSubagentResult fork indicator", () => {
 		);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /^✓ reviewer/);
-		assert.match(text, /⟳ 2/);
-		assert.match(text, /3 tool uses/);
-		assert.match(text, /1\.2k token/);
+		assert.match(text, /^reviewer completed in 1\.5s/);
+		assert.doesNotMatch(text, /^✓/);
 		assert.match(text, /└─ Done/);
 		// 'session:' line was dropped by design — the URL-encoded session path is gunk in this view.
 		assert.doesNotMatch(text, /session: \/tmp\/session\.jsonl/);
@@ -301,6 +300,7 @@ describe("renderSubagentResult fork indicator", () => {
 		);
 
 		const text = widget.render(120).join("\n");
+		assert.match(text, /^reviewer \[working\] +\n  review/);
 		// Tool is currently executing → "current" line shows the tool with elapsed time.
 		assert.match(text, /read: package\.json \| 3\.0s/);
 		// While running, the 'output:' line is hidden to keep the row count down;
@@ -462,10 +462,31 @@ describe("renderSubagentResult fork indicator", () => {
 		);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /parallel · agent 1\/3/);
+		assert.match(text, /^Parallel · 3 agents/);
 		assert.match(text, /Agent 3: worker/);
 		assert.doesNotMatch(text, /Step 3: worker/);
 		assert.doesNotMatch(text, /Agent 1: worker/);
+	});
+
+	it("summarizes a completed sync parallel result in its title", () => {
+		const widget = renderSubagentResult!(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {
+					mode: "parallel",
+					results: [
+						{ agent: "left", task: "left", exitCode: 0, messages: [], usage: emptyUsage },
+						{ agent: "right", task: "right", exitCode: 0, messages: [], usage: emptyUsage },
+					],
+					progressSummary: { toolCount: 4, tokens: 1200, durationMs: 1500 },
+				},
+			},
+			{ expanded: false },
+			theme,
+		);
+
+		const text = widget.render(120).join("\n");
+		assert.match(text, /^2 agents completed in 1\.5s · 1\.2k tokens/);
 	});
 
 	it("renders nested parallel workflow with parent-step counts and ∥ sub-step labels", () => {
