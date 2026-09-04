@@ -55,12 +55,14 @@ describe("FE-2026 phase-first render fixture", () => {
 		const selected = fe2026LiveRuns.find((run) => run.run.id === "draft-build-b");
 		assert.ok(selected);
 		const rendered = stripAnsi(
-			buildRightLines(theme, { kind: "run", run: selected }, 110, fe2026LiveRuns).join("\n"),
+			buildRightLines(theme, { kind: "run", run: selected }, 110, fe2026LiveRuns, undefined, undefined, {
+				pipelineChain: true,
+			}).join("\n"),
 		)
 			.split("\n")
 			.map((line) => line.trimEnd())
 			.join("\n")
 			.trimEnd();
-		assert.equal(rendered, fixture("chain"));
+		assert.equal(rendered, fixture("chain"), "the explicit chain view keeps the cross-stage fixture");
 	});
 });

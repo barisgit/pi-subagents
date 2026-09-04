@@ -108,7 +108,7 @@ export function formatPersistedResult(text: string): string[] {
 	}
 	const lines = normalizePaneText(rendered).split("\n");
 	if (lines.length <= 40) return lines;
-	return [...lines.slice(0, 39), `${ELLIPSIS} +${lines.length - 39} lines · ⏎ open stage`];
+	return [...lines.slice(0, 39), `${ELLIPSIS} +${lines.length - 39} lines · ⏎ open transcript`];
 }
 
 interface PipelineItemView {
@@ -122,7 +122,7 @@ interface PipelineView {
 	name: string;
 	itemCount: number;
 	stageCount: number;
-	stageTitles: string[];
+	stageTitles: Array<string | undefined>;
 	items: PipelineItemView[];
 }
 
@@ -141,10 +141,7 @@ function pipelineView(children: LiveRun[], pipelineId: string): PipelineView {
 		...stages.map((stage) => stage.run.pipeline?.stageCount ?? (stage.run.pipeline?.stageIndex ?? 0) + 1),
 	);
 	const stageTitles = Array.from({ length: stageCount }, (_, stageIndex) => {
-		return (
-			stages.find((stage) => stage.run.pipeline?.stageIndex === stageIndex)?.run.pipeline?.stageTitle ??
-			`stage ${stageIndex + 1}`
-		);
+		return stages.find((stage) => stage.run.pipeline?.stageIndex === stageIndex)?.run.pipeline?.stageTitle;
 	});
 	const items = Array.from({ length: itemCount }, (_, itemIndex) => {
 		const itemStages = stages
@@ -164,7 +161,8 @@ function pipelineView(children: LiveRun[], pipelineId: string): PipelineView {
 }
 
 function pipelineGrid(theme: Theme, pipeline: PipelineView, width: number): string[] {
-	const out = [theme.fg("muted", clip(`item · ${pipeline.stageTitles.join(" · ")} · progress · duration`, width))];
+	const stageTitles = pipeline.stageTitles.map((title, index) => title ?? `stage ${index + 1}`);
+	const out = [theme.fg("muted", clip(`item · ${stageTitles.join(" · ")} · progress · duration`, width))];
 	for (const item of pipeline.items) {
 		const byIndex = new Map(item.stages.map((stage) => [stage.run.pipeline?.stageIndex ?? 0, stage]));
 		const glyphs = pipeline.stageTitles.map((_, stageIndex) => {
@@ -301,26 +299,34 @@ function buildPipelineChainLines(theme: Theme, selected: LiveRun, width: number,
 	const byStage = new Map(item.stages.map((stage) => [stage.run.pipeline?.stageIndex ?? 0, stage]));
 	const totalDuration = item.stages.reduce((sum, stage) => sum + runDuration(stage), 0);
 	const states = item.stages.map(detailState);
+	const itemOrdinal = metadata.itemCount
+		? `item ${metadata.itemIndex + 1}/${metadata.itemCount}`
+		: `item ${metadata.itemIndex + 1}`;
+	const stageCount = metadata.stageCount ?? pipeline.stageCount;
 	const lines = [
 		clip(
-			`${rowGlyph(theme, aggregateState(states))} ${item.label ?? `Item ${metadata.itemIndex + 1}`} · ${pipeline.name} · ${pipeline.stageCount} stages · ${formatDuration(totalDuration)}`,
+			`${rowGlyph(theme, aggregateState(states))} ${item.label ?? `item ${metadata.itemIndex + 1}`}   ${pipeline.name} · ${itemOrdinal} · stage ${metadata.stageIndex + 1}/${stageCount} · ${formatDuration(totalDuration)}`,
 			width,
 		),
 	];
 	for (let stageIndex = 0; stageIndex < pipeline.stageCount; stageIndex += 1) {
 		const stage = byStage.get(stageIndex);
-		const title = pipeline.stageTitles[stageIndex] ?? `stage ${stageIndex + 1}`;
+		const stageTitle = pipeline.stageTitles[stageIndex];
+		const ruleTitle = stageTitle ?? "stage";
 		if (!stage) {
 			lines.push(
 				"",
-				theme.fg("dim", clip(`── ${title} ${stageIndex + 1}/${pipeline.stageCount} ──── · not started`, width)),
+				theme.fg(
+					"dim",
+					clip(`── ${ruleTitle} ${stageIndex + 1}/${pipeline.stageCount} ── · not started`, width),
+				),
 			);
 			continue;
 		}
 		const agent = runAgent(stage);
 		const toolCount = (stage.run.recentTools?.length ?? 0) + (stage.run.currentTool ? 1 : 0);
 		const stats = `${rowGlyph(theme, detailState(stage))} ${tintAgentName(agent, colorForAgentName(agent))} · ${toolCount} tool${toolCount === 1 ? "" : "s"} · ${formatTokenCounter(childTokenTotal(stage.run))} tokens · ${formatDuration(runDuration(stage))}`;
-		const rule = clip(`── ${title} ${stageIndex + 1}/${pipeline.stageCount} ──── ${stats}`, width);
+		const rule = clip(`── ${ruleTitle} ${stageIndex + 1}/${pipeline.stageCount} ── ${stats}`, width);
 		lines.push("", stage.run.id === selected.run.id ? theme.fg("accent", rule) : theme.fg("muted", rule));
 		if (stage.run.state === "running") {
 			const progress = progressForStage(stage);
@@ -331,9 +337,23 @@ function buildPipelineChainLines(theme: Theme, selected: LiveRun, width: number,
 		} else if (stage.run.finalOutput !== undefined) {
 			lines.push(...renderMarkdownLines(formatPersistedResult(stage.run.finalOutput).join("\n"), width));
 		}
-		lines.push(theme.fg("dim", clip("⏎ open transcript for this stage", width)));
 	}
 	return lines;
+}
+
+function buildPipelineStageHeader(theme: Theme, run: LiveRun, width: number): string[] {
+	const metadata = run.run.pipeline;
+	if (!metadata) return buildRunHeader(theme, run, width);
+	const agent = runAgent(run);
+	const toolCount = (run.run.recentTools?.length ?? 0) + (run.run.currentTool ? 1 : 0);
+	const stageCount = metadata.stageCount ?? metadata.stageIndex + 1;
+	return [
+		clip(
+			`${rowGlyph(theme, detailState(run))} ${metadata.itemLabel ?? `item ${metadata.itemIndex + 1}`} · ${metadata.name ?? "pipeline"} · ${metadata.stageTitle ?? "stage"} ${metadata.stageIndex + 1}/${stageCount} · ${tintAgentName(agent, colorForAgentName(agent))} · ${toolCount} tool${toolCount === 1 ? "" : "s"} · ${formatTokenCounter(childTokenTotal(run.run))} tokens · ${formatDuration(runDuration(run))}`,
+			width,
+		),
+		theme.fg("dim", clip("⏎ item chain", width)),
+	];
 }
 
 function buildRunHeader(theme: Theme, run: LiveRun, width: number): string[] {
@@ -351,13 +371,20 @@ export function buildRightLines(
 	runs: LiveRun[] = [],
 	live?: Parameters<typeof buildRunRightLines>[4],
 	historical?: Parameters<typeof buildRunRightLines>[5],
+	options: { pipelineChain?: boolean } = {},
 ): string[] {
 	if (!targetOrRun) return [theme.fg("dim", "(no events yet)")];
 	const target: DetailTarget = "ownership" in targetOrRun ? { kind: "run", run: targetOrRun } : targetOrRun;
 	if (target.kind === "phase") return buildPhaseTargetLines(theme, target, width, runs);
 	if (target.kind === "pipelineGroup") return buildPipelineGroupTargetLines(theme, target, width, runs);
 	if (target.run.run.workflow) return buildWorkflowRightLines(theme, target.run.run, width, runs);
-	if (target.run.run.pipeline) return buildPipelineChainLines(theme, target.run, width, runs);
+	if (target.run.run.pipeline) {
+		if (options.pipelineChain) return buildPipelineChainLines(theme, target.run, width, runs);
+		return [
+			...buildPipelineStageHeader(theme, target.run, width),
+			...buildRunRightLines(theme, target.run, width, runs, live, historical),
+		];
+	}
 	return [
 		...buildRunHeader(theme, target.run, width),
 		...buildRunRightLines(theme, target.run, width, runs, live, historical),

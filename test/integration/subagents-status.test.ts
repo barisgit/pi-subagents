@@ -354,7 +354,11 @@ describe("SubagentsStatusComponent", () => {
 				assert.doesNotMatch(output, /pgup\/pgdn\s+page/);
 				assert.match(output, /y\s+copy id/);
 				assert.match(output, /f\s+copy dir/);
-				assert.match(output, /return\/o\s+collapse group/);
+				assert.match(
+					output,
+					/return\/o\s+group \/ item chain/,
+					"Enter now serves groups and pipeline stage leaves",
+				);
 				assert.match(output, /a\s+all sessions/);
 				assert.match(output, /s\s+sidebar/);
 				assert.match(output, /q\/esc\s+close/);
@@ -639,6 +643,96 @@ describe("SubagentsStatusComponent", () => {
 			assert.ok(runningRow2?.includes("◈"), "selection bounded at first row");
 		} finally {
 			component.dispose();
+		}
+	});
+
+	it("Enter toggles a selected pipeline stage between transcript and item chain until selection moves", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-stage-toggle-"));
+		makeEventsFile(dir, [
+			{
+				type: "message_end",
+				ts: 1500,
+				message: { content: [{ type: "text", text: "first stage transcript" }] },
+			},
+		]);
+		const workflow = createRun("workflow", "running", {
+			workflow: true,
+			mode: "parallel",
+			steps: [],
+		});
+		const stage = (id: string, stageIndex: number, output: string): AsyncRunSummary =>
+			createRun(id, "complete", {
+				parentRunId: workflow.id,
+				phaseIndex: 1,
+				phaseTitle: "Review",
+				pipeline: {
+					id: "pipeline",
+					name: "Review pipeline",
+					itemIndex: 0,
+					itemCount: 1,
+					itemLabel: "widget",
+					stageIndex,
+					stageCount: 2,
+					stageTitle: stageIndex === 0 ? "Inspect" : "Confirm",
+				},
+				finalOutput: output,
+			});
+		const first = { ...stage("stage-one", 0, "first returned output"), asyncDir: dir };
+		const second = stage("stage-two", 1, "second returned output");
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [workflow], recent: [first, second] }),
+				refreshMs: 1000,
+			},
+		);
+
+		try {
+			component.render(180);
+			component.handleInput("j");
+			component.handleInput("j");
+			component.handleInput("j");
+			const transcript = component.render(180).join("\n");
+			assert.match(transcript, /first stage transcript/, "a selected stage starts on its transcript");
+			assert.doesNotMatch(transcript, /second returned output/, "sibling outputs stay hidden by default");
+			assert.match(transcript, /group \/ item chain/, "the existing footer documents the Enter action");
+
+			component.handleInput("\r");
+			const chain = component.render(180).join("\n");
+			assert.match(chain, /first returned output/, "Enter opens the selected item's returned outputs");
+			assert.match(chain, /second returned output/, "the item chain includes every stage for that item");
+
+			component.handleInput("\r");
+			assert.match(
+				component.render(180).join("\n"),
+				/first stage transcript/,
+				"Enter again returns to transcript",
+			);
+
+			component.handleInput("\r");
+			component.handleInput("k");
+			component.render(180);
+			component.handleInput("j");
+			const afterMove = component.render(180).join("\n");
+			assert.match(afterMove, /first stage transcript/, "moving selection away resets the stage to transcript");
+			assert.doesNotMatch(
+				afterMove,
+				/second returned output/,
+				"the chain toggle does not persist after selection moves",
+			);
+
+			component.handleInput("\r");
+			component.handleInput("\u001b");
+			assert.match(
+				component.render(180).join("\n"),
+				/first stage transcript/,
+				"Esc returns from the chain to transcript",
+			);
+		} finally {
+			component.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 

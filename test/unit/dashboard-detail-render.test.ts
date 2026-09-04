@@ -53,6 +53,85 @@ function stripAnsi(text: string): string {
 }
 
 describe("dashboard detail targets", () => {
+	it("defaults a pipeline stage leaf to its transcript and toggles the whole item chain", () => {
+		const workflow: LiveRun = {
+			ownership: "foreign",
+			run: { id: "wf", workflow: true, mode: "parallel", state: "running", startedAt: 1000, steps: [] },
+		};
+		const stage = (id: string, stageIndex: number, stageTitle?: string): LiveRun => ({
+			ownership: "foreign",
+			run: {
+				id,
+				parentRunId: "wf",
+				mode: "single",
+				state: "complete",
+				startedAt: 1100 + stageIndex * 1000,
+				endedAt: 1900 + stageIndex * 1000,
+				pipeline: {
+					id: "pipe",
+					name: "Review pipeline",
+					itemIndex: 0,
+					stageIndex,
+					itemLabel: "widget",
+					...(stageTitle ? { stageTitle } : {}),
+					stageCount: 2,
+					itemCount: 1,
+				},
+				finalOutput:
+					stageIndex === 0
+						? Array.from({ length: 60 }, (_, index) => `returned line ${index + 1}`).join("\n")
+						: "second returned value",
+				steps: [{ index: 0, agent: `stage-${stageIndex + 1}`, status: "complete" }],
+			},
+		});
+		const first = stage("first", 0, "Inspect");
+		const selected = stage("second", 1);
+		const runs = [workflow, first, selected];
+		const live = {
+			sessions: [
+				{
+					messages: [{ role: "user" as const, content: "selected stage transcript", timestamp: 1 }],
+					subscribe: () => () => {},
+				},
+			],
+			tui: { requestRender: () => {} } as never,
+		};
+
+		const transcript = stripAnsi(buildRightLines(theme, selected, 140, runs, live).join("\n"));
+		assert.match(
+			transcript,
+			/✓ widget · Review pipeline · stage 2\/2 · stage-2 · 0 tools · 0t tokens · 800ms/,
+			"a stage leaf uses its run header before the transcript",
+		);
+		assert.match(
+			transcript,
+			/⏎ item chain[\s\S]*selected stage transcript/,
+			"the default body is the selected stage transcript",
+		);
+		assert.doesNotMatch(transcript, /first returned value/, "the default does not expose sibling stage outputs");
+
+		const chain = stripAnsi(
+			buildRightLines(theme, selected, 140, runs, live, undefined, { pipelineChain: true }).join("\n"),
+		);
+		assert.match(
+			chain,
+			/✓ widget {3}Review pipeline · item 1\/1 · stage 2\/2 · 1\.6s/,
+			"the toggled body summarizes the selected item chain without a state word",
+		);
+		assert.match(chain, /── Inspect 1\/2 ──/, "a titled stage rule does not repeat its ordinal");
+		assert.match(chain, /── stage 2\/2 ──/, "an untitled stage rule uses the stage fallback once");
+		assert.match(chain, /… \+21 lines · ⏎ open transcript/, "stage output is capped with a transcript affordance");
+		assert.doesNotMatch(chain, /returned line 60/, "lines beyond the per-stage cap stay hidden");
+		assert.doesNotMatch(
+			chain,
+			/open transcript for this stage/,
+			"the obsolete per-stage hint is removed now that the whole pane toggles",
+		);
+
+		const transcriptAgain = stripAnsi(buildRightLines(theme, selected, 140, runs, live).join("\n"));
+		assert.match(transcriptAgain, /selected stage transcript/, "toggling back restores the transcript body");
+	});
+
 	it("renders workflow, phase, pipeline, item, and stage bodies from their targets", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), `detail-targets-${randomUUID()}-`));
 		try {
@@ -138,7 +217,15 @@ describe("dashboard detail targets", () => {
 			const rendered = Object.fromEntries(
 				Object.entries(targets).map(([kind, target]) => [
 					kind,
-					buildRightLines(theme, target, 120, runs).join("\n"),
+					buildRightLines(
+						theme,
+						target,
+						120,
+						runs,
+						undefined,
+						undefined,
+						kind === "stage" ? { pipelineChain: true } : undefined,
+					).join("\n"),
 				]),
 			);
 			assert.match(rendered.workflow ?? "", /── Phases/);
@@ -152,7 +239,11 @@ describe("dashboard detail targets", () => {
 			assert.match(rendered.pipelineGroup ?? "", /widget/);
 			assert.match(rendered.stage ?? "", /first returned value/);
 			assert.match(rendered.stage ?? "", /"answer": 42/);
-			assert.match(rendered.stage ?? "", /widget · Review pipeline · 2 stages/);
+			assert.match(
+				rendered.stage ?? "",
+				/widget {3}Review pipeline · item 1\/1 · stage 2\/2/,
+				"the chain header identifies the selected item and stage without a state word",
+			);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -208,7 +299,9 @@ describe("dashboard detail targets", () => {
 				run: runViewFromRegistryEntry(entry, entries),
 			}));
 			const target: DetailTarget = { kind: "run", run: stages[0]! };
-			const output = buildRightLines(theme, target, 120, [workflow, ...stages]).join("\n");
+			const output = buildRightLines(theme, target, 120, [workflow, ...stages], undefined, undefined, {
+				pipelineChain: true,
+			}).join("\n");
 			assert.match(output, /persisted markdown/);
 			assert.match(output, /"persisted": true/);
 		} finally {

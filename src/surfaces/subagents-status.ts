@@ -745,6 +745,7 @@ export class SubagentsStatusComponent implements Component {
 	// only async containers are collapsible).
 	private collapsedIds = new Set<string>();
 	private selectedId?: string;
+	private pipelineChainSelectionKey?: string;
 	private leftScroll = 0;
 	private lastRightHeight = MIN_VIEWPORT_HEIGHT;
 	private lastRightWidth = 0;
@@ -848,6 +849,7 @@ export class SubagentsStatusComponent implements Component {
 				selectionKey: (row) => this.overlayRowKey(row),
 				onSelectionChange: (row) => {
 					this.selectedId = row && row.kind !== "empty" ? dashboardRowKey(row) : undefined;
+					this.pipelineChainSelectionKey = undefined;
 					this.scheduleTranscriptLoad();
 				},
 				renderRow: (row, ctx) => this.renderOverlayPrimaryRow(row, ctx),
@@ -933,6 +935,10 @@ export class SubagentsStatusComponent implements Component {
 													!this.settledPersistedSelections.has(selectionKey)),
 										}
 									: undefined,
+								{
+									pipelineChain:
+										selectionKey !== undefined && this.pipelineChainSelectionKey === selectionKey,
+								},
 							)
 						: [];
 				},
@@ -988,9 +994,9 @@ export class SubagentsStatusComponent implements Component {
 				},
 				{
 					keys: ["return", "o"],
-					label: "collapse group",
+					label: "group / item chain",
 					run: (ctx) =>
-						this.toggleCollapseRow(
+						this.toggleSelectedRow(
 							ctx.selectedRow && ctx.selectedRow.kind !== "empty" ? ctx.selectedRow : undefined,
 						),
 				},
@@ -1020,6 +1026,16 @@ export class SubagentsStatusComponent implements Component {
 		this.displayRevision++;
 		this.setToolsExpanded?.(this.toolsExpanded);
 		this.tui.requestRender();
+	}
+
+	private toggleSelectedRow(row: DisplayRow | undefined): void {
+		if (row?.kind === "run" && row.run.run.pipeline) {
+			const key = dashboardRowKey(row);
+			this.pipelineChainSelectionKey = this.pipelineChainSelectionKey === key ? undefined : key;
+			this.tui.requestRender();
+			return;
+		}
+		this.toggleCollapseRow(row);
 	}
 
 	private toggleThinking(): void {
@@ -1181,6 +1197,7 @@ export class SubagentsStatusComponent implements Component {
 			this.errorMessage = error instanceof Error ? error.message : String(error);
 		}
 		this.reconcileSelection();
+		if (this.selectedId !== previousSelection) this.pipelineChainSelectionKey = undefined;
 		const selectedLiveSessionsChanged = this.reconcileLiveSubscriptions();
 		if (this.selectedId !== previousSelection || selectedLiveSessionsChanged) this.scheduleTranscriptLoad();
 	}
@@ -1352,6 +1369,11 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (data === "\u001b" && this.pipelineChainSelectionKey === this.selectedId) {
+			this.pipelineChainSelectionKey = undefined;
+			this.tui.requestRender();
+			return;
+		}
 		if (data === "q" || data === "\u001b" || data === "\u0003") {
 			this.done();
 			return;
