@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { runViewFromRegistryEntry, SubagentsStatusComponent } from "../../src/surfaces/subagents-status.ts";
-import { deriveDisplayRows } from "../../src/surfaces/dashboard-row-model.ts";
+import { containerRowInfo, deriveDisplayRows } from "../../src/surfaces/dashboard-row-model.ts";
 import {
 	appendRunEntry,
 	readAllEntries,
@@ -478,6 +478,38 @@ describe("dashboard workflow phase tree", () => {
 		}
 	});
 
+	it("uses the highest declared phase reached when durable phase writes arrive out of order", () => {
+		const root = tmpRegistry();
+		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
+		seedRun(root, {
+			runId: "verification-child",
+			agentName: "reviewer",
+			parentRunId: "wf",
+			rootRunId: "wf",
+			phaseIndex: 5,
+			phaseTitle: "Preverjanje",
+			startedAt: 1100,
+		});
+		seedWorkflowPlan(root, ["Zajem", "Načrt", "Izvedba", "Pregled", "Preverjanje"], "running");
+		const runRecordDir = path.join(root, "runs", "wf");
+		writeWorkflowGroupPhase(runRecordDir, 5, "Preverjanje");
+		writeWorkflowGroupPhase(runRecordDir, 3, "Izvedba");
+
+		const entries = readAllEntries();
+		const runs = entries.map((entry) => ({
+			ownership: "foreign" as const,
+			run: runViewFromRegistryEntry(entry, entries),
+		}));
+		const workflow = runs.find((run) => run.run.id === "wf");
+		assert.ok(workflow);
+		const info = containerRowInfo(runs, new Set(), workflow);
+		assert.equal(
+			info?.phaseChip,
+			"Phase 5/5: Preverjanje",
+			"the root chip reflects the furthest declared phase reached",
+		);
+	});
+
 	it("fails closed before unsafe metadata can inject a dashboard frame", () => {
 		const root = tmpRegistry();
 		seedRun(root, { runId: "wf", mode: "parallel", workflow: true, rootRunId: "wf", startedAt: 1000 });
@@ -609,6 +641,11 @@ describe("dashboard workflow phase tree", () => {
 		);
 		const groups = rows.filter((row) => row.kind === "pipelineGroup");
 		assert.equal(groups.length, 2);
+		assert.deepEqual(
+			groups.map((group) => group.name),
+			["pipeline 1", "pipeline 2"],
+			"unnamed pipelines are numbered in first-seen order within the phase",
+		);
 		assert.equal(new Set(rows.map((row) => `${row.kind}:${JSON.stringify(row)}`)).size > 0, true);
 		const keys = rows.map((row) =>
 			row.kind === "run"

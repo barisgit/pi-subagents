@@ -339,27 +339,47 @@ export function containerRowInfo(
 		const s = child.run.state;
 		return s === "complete" || s === "failed" || s === "interrupted" || s === "skipped";
 	}).length;
-	// Current phase comes from the durable group marker, with latest child as a
-	// compatibility fallback for records written before phase persistence.
 	let phaseChip: string | undefined;
-	if (run.run.workflow === true) {
-		let phaseIndex = run.run.phaseIndex;
-		let phaseTitle = run.run.phaseTitle ? canonicalWorkflowPhaseTitle(run.run.phaseTitle) : undefined;
-		if (phaseIndex === undefined) {
-			let best: { index: number; title?: string } | undefined;
-			for (const child of children) {
-				if (child.run.phaseIndex === undefined) continue;
-				if (!best || child.run.phaseIndex > best.index) {
-					best = {
-						index: child.run.phaseIndex,
-						...(child.run.phaseTitle !== undefined ? { title: child.run.phaseTitle } : {}),
-					};
-				}
+	if (run.run.workflow === true && run.run.state === "running") {
+		const candidates = [run, ...children].flatMap((candidate) =>
+			candidate.run.phaseIndex === undefined
+				? []
+				: [
+						{
+							index: candidate.run.phaseIndex,
+							...(candidate.run.phaseTitle !== undefined ? { title: candidate.run.phaseTitle } : {}),
+						},
+					],
+		);
+		const bestRuntime = candidates.reduce<(typeof candidates)[number] | undefined>(
+			(best, candidate) => (!best || candidate.index > best.index ? candidate : best),
+			undefined,
+		);
+		let phaseIndex = bestRuntime?.index;
+		let phaseTitle = bestRuntime?.title ? canonicalWorkflowPhaseTitle(bestRuntime.title) : undefined;
+		if (run.run.workflowMeta) {
+			const reachedTitles = new Set(
+				[
+					...(run.run.reachedPhaseTitles ?? []),
+					...(run.run.phaseTitle ? [run.run.phaseTitle] : []),
+					...children.flatMap((child) => (child.run.phaseTitle ? [child.run.phaseTitle] : [])),
+				].map(canonicalWorkflowPhaseTitle),
+			);
+			for (const candidate of candidates) {
+				const declared = run.run.workflowMeta.phases[candidate.index - 1];
+				if (declared) reachedTitles.add(canonicalWorkflowPhaseTitle(declared.title));
 			}
-			phaseIndex = best?.index;
-			phaseTitle = best?.title ? canonicalWorkflowPhaseTitle(best.title) : undefined;
+			for (let index = run.run.workflowMeta.phases.length - 1; index >= 0; index -= 1) {
+				const declared = run.run.workflowMeta.phases[index];
+				if (!declared) continue;
+				const title = canonicalWorkflowPhaseTitle(declared.title);
+				if (!reachedTitles.has(title)) continue;
+				phaseIndex = index + 1;
+				phaseTitle = title;
+				break;
+			}
 		}
-		if (phaseIndex !== undefined && run.run.state === "running") {
+		if (phaseIndex !== undefined) {
 			phaseChip = formatWorkflowPhase(run.run.workflowMeta, phaseIndex, phaseTitle) ?? `Phase ${phaseIndex}`;
 		}
 	}
