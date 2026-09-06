@@ -234,7 +234,7 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 	});
 	it("returns an async receipt for a child subagent when nested async is enabled", async () => {
 		const sessionId = "workflow-parent";
-		const { executor, ctx, promptGate } = setup("nested-subagent-async-opt-in-", {
+		const { events, executor, ctx, promptGate } = setup("nested-subagent-async-opt-in-", {
 			allowNestedAsync: true,
 			blockPrompt: true,
 		});
@@ -250,6 +250,7 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 			allowedDelegateAgents: ["A"],
 			maxSubagentDepth: 2,
 		});
+		const complete = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT);
 		try {
 			const result = await executor.execute(
 				"nested-opt-in",
@@ -262,6 +263,7 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 			assert.deepEqual(result.details?.results, []);
 		} finally {
 			promptGate.resolve();
+			await complete;
 			clearLineage(sessionId);
 		}
 	});
@@ -321,12 +323,13 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 	});
 
 	it("preserves host subagent async defaults and explicit overrides", async () => {
-		const { executor, ctx } = setup("host-subagent-async-modes-", { asyncByDefault: true });
+		const { events, executor, ctx } = setup("host-subagent-async-modes-", { asyncByDefault: true });
 
 		for (const [name, asyncMode] of [
 			["explicit true", true],
 			["omitted default", undefined],
 		] as const) {
+			const complete = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT);
 			const result = await executor.execute(
 				`host-${name}`,
 				{
@@ -339,6 +342,7 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 			);
 			assert.equal(typeof result.details?.asyncId, "string", name);
 			assert.equal(result.details?.results.length, 0, name);
+			await complete;
 		}
 
 		const foreground = await executor.execute(
@@ -417,6 +421,7 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 			allowedDelegateAgents: ["A"],
 			maxSubagentDepth: 2,
 		});
+		const complete = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT);
 		try {
 			const result = await tool.execute?.(
 				"wf-nested-opt-in",
@@ -435,12 +440,14 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 			);
 		} finally {
 			promptGate.resolve();
+			await complete;
 			clearLineage(sessionId);
 		}
 	});
 
 	it("params.async:true returns a running stub before the script finishes", async () => {
-		const { tool, ctx, promptGate, promptStarted } = setup("workflow-async-stub-", { blockPrompt: true });
+		const { events, tool, ctx, promptGate, promptStarted } = setup("workflow-async-stub-", { blockPrompt: true });
+		const complete = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT);
 
 		const result = await tool.execute?.(
 			"wf",
@@ -460,6 +467,7 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		assert.equal((result?.details as any).asyncId, (result?.details as any).runId);
 		assert.equal(typeof (result?.details as any).asyncDir, "string");
 		promptGate.resolve();
+		await complete;
 	});
 
 	it("params.async:false remains synchronous when asyncByDefault is true", async () => {
@@ -478,10 +486,11 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 	});
 
 	it("asyncByDefault:true backgrounds without params.async", async () => {
-		const { tool, ctx, promptGate, promptStarted } = setup("workflow-async-default-", {
+		const { events, tool, ctx, promptGate, promptStarted } = setup("workflow-async-default-", {
 			asyncByDefault: true,
 			blockPrompt: true,
 		});
+		const complete = waitForEvent(events, SUBAGENT_ASYNC_COMPLETE_EVENT);
 
 		const result = await tool.execute?.(
 			"wf",
@@ -495,6 +504,7 @@ describe("workflow async execution (VAL-ASYNC-WORKFLOW)", () => {
 		assert.deepEqual((result?.details as any).results, []);
 		assert.equal((result?.details as any).asyncId, (result?.details as any).runId);
 		promptGate.resolve();
+		await complete;
 	});
 
 	it("emits per-child async started and complete events under the workflow group", async () => {

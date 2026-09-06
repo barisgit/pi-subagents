@@ -19,6 +19,12 @@ interface AsyncJobTrackerModule {
 		options?: {
 			completionRetentionMs?: number;
 			pollIntervalMs?: number;
+			idleTracker?: {
+				onAsyncStarted(id: string): void;
+				onAsyncFinished(id: string): void;
+				hasActiveAsyncRuns(): boolean;
+				isIdle(): boolean;
+			};
 			getWidgetClient?: (ctx: unknown) => {
 				widgets: {
 					set(place: string, key: string, factory: unknown): void;
@@ -364,6 +370,11 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			assert.equal(job?.status, "running");
 			assert.deepEqual(job?.agents, ["worker"]);
 			assert.equal(job?.runnerHeartbeatAt, now);
+			assert.equal(
+				recorder.events.some((event) => event.channel === "subagent:async-complete"),
+				false,
+				"rehydration must not replay historical terminal completions into the resumed session",
+			);
 		} finally {
 			setRegistryPathForTests(null);
 			removeTempDir(asyncRoot);
@@ -748,6 +759,240 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 
 			await new Promise((resolve) => setTimeout(resolve, 40));
 			assert.equal(state.asyncJobs.has("run-1"), false, "delivered job should retire after retention");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("retains delivery received before the job is known", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const state = createState();
+			const tracker = trackerMod!.createAsyncJobTracker(createEventRecorder().pi, state as never, {
+				completionRetentionMs: 5,
+			});
+			tracker.handleDelivered({ runIds: ["run-before-start"] });
+			tracker.handleStarted({
+				id: "run-before-start",
+				asyncDir: path.join(asyncRoot, "run-before-start"),
+				agent: "worker",
+			});
+			tracker.handleComplete({ id: "run-before-start", success: true });
+
+			assert.equal(
+				(state.asyncJobs.get("run-before-start") as { pendingDelivery?: boolean } | undefined)?.pendingDelivery,
+				false,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(state.asyncJobs.has("run-before-start"), false, "delivered job should retire after retention");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("requires delivery for a resumed generation with the same run ID", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const state = createState();
+			const tracker = trackerMod!.createAsyncJobTracker(createEventRecorder().pi, state as never, {
+				completionRetentionMs: 5,
+			});
+			const asyncDir = path.join(asyncRoot, "run-resumed");
+
+			tracker.handleStarted({ id: "run-resumed", asyncDir, agent: "worker" });
+			tracker.handleDelivered({ runIds: ["run-resumed"] });
+			tracker.handleStarted({ id: "run-resumed", asyncDir, agent: "worker" });
+			tracker.handleComplete({ id: "run-resumed", success: true });
+
+			assert.equal(
+				(state.asyncJobs.get("run-resumed") as { pendingDelivery?: boolean } | undefined)?.pendingDelivery,
+				true,
+				"a resumed generation must wait for its own completion delivery",
+			);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			assert.equal(state.asyncJobs.has("run-resumed"), true, "undelivered resumed job must be retained");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("keeps a job live and retries when the status read fails transiently", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-io");
+			const finished: string[] = [];
+			const idleTracker = {
+				onAsyncStarted: () => {},
+				onAsyncFinished: (id: string) => {
+					finished.push(id);
+				},
+				hasActiveAsyncRuns: () => true,
+				isIdle: () => false,
+			};
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 5,
+				idleTracker,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-io", asyncDir: runDir, agent: "worker" });
+			// A directory named status.json makes readStatus throw (EISDIR) without ENOENT.
+			fs.mkdirSync(path.join(runDir, "status.json"), { recursive: true });
+
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			const job = () =>
+				state.asyncJobs.get("run-io") as { status: string; pendingDelivery?: boolean } | undefined;
+			assert.ok(job(), "job must survive a failing status read");
+			assert.notEqual(job()?.status, "failed", "a status-read IO error is not a child failure");
+			assert.deepEqual(finished, [], "idle tracker must not be released by a status-read error");
+
+			// Disk recovers: the next poll must pick up the live state.
+			fs.rmSync(path.join(runDir, "status.json"), { recursive: true });
+			writeStatus(runDir, {
+				runId: "run-io",
+				mode: "single",
+				state: "running",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+				lastActivityAt: Date.now(),
+				runnerHeartbeatAt: Date.now(),
+			});
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(job()?.status, "running");
+			assert.deepEqual(finished, []);
+
+			// Genuine terminal failure on disk: held for delivery, then retired.
+			writeStatus(runDir, {
+				runId: "run-io",
+				mode: "single",
+				state: "failed",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+			});
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(job()?.status, "failed");
+			assert.equal(job()?.pendingDelivery, true);
+			assert.deepEqual(finished, ["run-io"]);
+			assert.equal(state.asyncJobs.has("run-io"), true, "undelivered failed job must be retained");
+
+			tracker.handleDelivered({ runIds: ["run-io"] });
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(state.asyncJobs.has("run-io"), false, "delivered failed job must retire after retention");
+			assert.equal(state.cleanupTimers.size, 0);
+			tracker.shutdown();
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("registers the job and starts polling when the status file is unreadable at start", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-io");
+			// A directory named status.json makes readStatus throw (EISDIR) without ENOENT.
+			fs.mkdirSync(path.join(runDir, "status.json"), { recursive: true });
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 5,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-io", asyncDir: runDir, agent: "worker" });
+
+			const job = () => state.asyncJobs.get("run-io") as { status: string } | undefined;
+			assert.ok(job(), "job must register despite an unreadable status file");
+			assert.equal(job()?.status, "queued", "missing evidence must not invent a state");
+			assert.ok(state.poller, "poller must start");
+
+			fs.rmSync(path.join(runDir, "status.json"), { recursive: true });
+			writeStatus(runDir, {
+				runId: "run-io",
+				mode: "single",
+				state: "running",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+				lastActivityAt: Date.now(),
+				runnerHeartbeatAt: Date.now(),
+			});
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(job()?.status, "running");
+			tracker.shutdown();
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("finishes a completion event while the status file is unreadable, without inventing a running state", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-io");
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 1000,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-io", asyncDir: runDir, agent: "worker" });
+			const job = () =>
+				state.asyncJobs.get("run-io") as { status: string; pendingDelivery?: boolean } | undefined;
+
+			// Readable persisted 'running' (a resumed generation) still wins over a
+			// stale completion event.
+			writeStatus(runDir, {
+				runId: "run-io",
+				mode: "single",
+				state: "running",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+			});
+			tracker.handleComplete({ id: "run-io", success: false });
+			assert.equal(job()?.status, "queued", "readable running status keeps the resumed row");
+
+			// Unreadable status is missing evidence, not a running run: the bus event finishes the job.
+			fs.rmSync(path.join(runDir, "status.json"));
+			fs.mkdirSync(path.join(runDir, "status.json"));
+			tracker.handleComplete({ id: "run-io", success: false });
+			assert.equal(job()?.status, "failed");
+			assert.equal(job()?.pendingDelivery, true);
+
+			tracker.handleDelivered({ runIds: ["run-io"] });
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			assert.equal(state.asyncJobs.has("run-io"), false, "delivered failed job must retire after retention");
+			assert.equal(state.cleanupTimers.size, 0);
+			tracker.shutdown();
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("shutdown clears a job whose status read keeps failing", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-io");
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 5,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-io", asyncDir: runDir, agent: "worker" });
+			fs.mkdirSync(path.join(runDir, "status.json"), { recursive: true });
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			assert.equal(state.asyncJobs.has("run-io"), true);
+
+			tracker.shutdown();
+			assert.equal(state.poller, null);
+			assert.equal(state.asyncJobs.size, 0);
+			assert.equal(state.cleanupTimers.size, 0);
 		} finally {
 			removeTempDir(asyncRoot);
 		}

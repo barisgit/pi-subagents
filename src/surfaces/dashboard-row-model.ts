@@ -221,7 +221,20 @@ function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
 	const childrenForDisplay = (parent: LiveRun, children: LiveRun[]): LiveRun[] => {
 		// workflow is a disk-only field (foreground views never set it), so the
 		// field read selects foreign workflow parents directly.
-		if (!parent.run.workflow) return children;
+		// Parallel groups flatten their children into top-level rows, which keep the
+		// global priority order (needs attention first, newest first).
+		if (parent.run.mode === "parallel" && !parent.run.workflow) return children;
+		// An agent run that spawned sub-agents shows them in dispatch order:
+		// startedAt ascending, then run id as a deterministic tie-breaker.
+		// Re-sorting siblings by activity or terminal state made nested rows swap
+		// places on every poll tick.
+		if (!parent.run.workflow) {
+			return [...children].sort((a, b) => {
+				const byStart = (a.run.startedAt ?? 0) - (b.run.startedAt ?? 0);
+				if (byStart !== 0) return byStart;
+				return a.run.id < b.run.id ? -1 : a.run.id > b.run.id ? 1 : 0;
+			});
+		}
 		return children
 			.map((child, index) => ({ child, index }))
 			.sort((a, b) => {
@@ -297,7 +310,14 @@ export function sortLiveRuns(
 
 function phaseRowDone(run: LiveRun): boolean {
 	const state = run.run.state;
-	return state === "complete" || state === "failed" || state === "interrupted" || state === "skipped";
+	return (
+		state === "complete" ||
+		state === "failed" ||
+		state === "interrupted" ||
+		state === "skipped" ||
+		state === "paused" ||
+		state === "lost"
+	);
 }
 
 function isSkippedParallelContainer(runs: LiveRun[], run: LiveRun): boolean {
@@ -337,7 +357,14 @@ export function containerRowInfo(
 	const children = runs.filter((other) => other.run.parentRunId === run.run.id);
 	const done = children.filter((child) => {
 		const s = child.run.state;
-		return s === "complete" || s === "failed" || s === "interrupted" || s === "skipped";
+		return (
+			s === "complete" ||
+			s === "failed" ||
+			s === "interrupted" ||
+			s === "skipped" ||
+			s === "paused" ||
+			s === "lost"
+		);
 	}).length;
 	let phaseChip: string | undefined;
 	if (run.run.workflow === true && run.run.state === "running") {

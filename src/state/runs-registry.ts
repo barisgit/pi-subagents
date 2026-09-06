@@ -87,21 +87,25 @@ export function getShardPath(sessionId: string): string {
 /**
  * Register a run in the global index (source of truth for discovery) and, best
  * effort, in its session shard. Idempotent by runId: a retry after a partial
- * earlier attempt must not duplicate rows, so an already-registered runId is a
- * no-op. The shard is a derived per-session view (readers that miss a shard row
- * only lose session scoping, never the run itself), so a shard write failure is
- * logged and swallowed rather than orphaning the already-committed global row.
+ * earlier attempt must not duplicate rows. The shard is a derived per-session
+ * view (readers that miss a shard row only lose session scoping, never the run
+ * itself), so a shard write failure is logged and swallowed rather than
+ * orphaning the already-committed global row. A retry still checks the shard
+ * and writes it when needed to repair a partial append.
  * A GLOBAL append failure still throws: without that row the run is
  * undiscoverable, and the caller owns cleanup of anything it wrote first.
  */
 export function appendRunEntry(entry: RunsRegistryEntry): void {
 	const filePath = getRegistryPath();
-	if (readAllEntries().some((existing) => existing.runId === entry.runId)) return;
-	fs.mkdirSync(path.dirname(filePath), { recursive: true });
-	fs.appendFileSync(filePath, JSON.stringify(entry) + "\n", "utf8");
+	const alreadyRegistered = readAllEntries().some((existing) => existing.runId === entry.runId);
+	if (!alreadyRegistered) {
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.appendFileSync(filePath, JSON.stringify(entry) + "\n", "utf8");
+	}
 	const shardKey = entry.rootSessionId ?? entry.parentSessionId;
 	if (shardKey) {
 		try {
+			if (readShardEntries(shardKey).some((existing) => existing.runId === entry.runId)) return;
 			const shardPath = getShardPath(shardKey);
 			fs.mkdirSync(path.dirname(shardPath), { recursive: true });
 			fs.appendFileSync(shardPath, JSON.stringify(entry) + "\n", "utf8");

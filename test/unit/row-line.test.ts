@@ -44,7 +44,8 @@ describe("row-line state grammar", () => {
 		assert.equal(aggregateState(["complete", "attention", "running"]), "attention");
 		assert.equal(aggregateState(["complete", "running", "queued"]), "running");
 		assert.equal(aggregateState(["complete", "queued"]), "queued");
-		assert.equal(aggregateState(["complete", "interrupted", "skipped", "paused", "delivering"]), "complete");
+		assert.equal(aggregateState(["complete", "interrupted", "skipped", "delivering"]), "complete");
+		assert.equal(aggregateState(["complete", "paused"]), "paused");
 	});
 });
 

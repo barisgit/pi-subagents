@@ -170,7 +170,7 @@ function pipelineGrid(theme: Theme, pipeline: PipelineView, width: number): stri
 			return stage ? rowGlyph(theme, detailState(stage)) : theme.fg("dim", "·");
 		});
 		const done = item.stages.filter((stage) =>
-			["complete", "failed", "interrupted", "skipped"].includes(stage.run.state),
+			["complete", "failed", "interrupted", "skipped", "paused", "lost"].includes(stage.run.state),
 		).length;
 		const duration = item.stages.reduce((sum, stage) => sum + runDuration(stage), 0);
 		out.push(
@@ -183,18 +183,116 @@ function pipelineGrid(theme: Theme, pipeline: PipelineView, width: number): stri
 	return out;
 }
 
+function stateWord(run: LiveRun): string {
+	return run.run.displayState ?? run.run.state;
+}
+
+function liveToolCount(run: LiveRun): number {
+	return (run.run.recentTools?.length ?? 0) + (run.run.currentTool ? 1 : 0);
+}
+
+function isTerminal(run: LiveRun): boolean {
+	return ["complete", "failed", "interrupted", "skipped", "paused", "lost"].includes(run.run.state);
+}
+
+// One aggregate line for a group of child runs: counts only for states that
+// actually occur, then the shared token/duration totals.
+function groupSummaryLine(theme: Theme, children: LiveRun[], width: number): string {
+	const count = (state: LiveRun["run"]["state"]): number =>
+		children.filter((child) => child.run.state === state).length;
+	const parts = [`${children.length} run${children.length === 1 ? "" : "s"}`];
+	const done = children.filter(isTerminal).length;
+	if (done > 0) parts.push(`${done} done`);
+	const failed = count("failed");
+	if (failed > 0) parts.push(`${failed} failed`);
+	const paused = count("paused");
+	if (paused > 0) parts.push(`${paused} paused`);
+	const lost = count("lost");
+	if (lost > 0) parts.push(`${lost} lost`);
+	const running = count("running");
+	if (running > 0) parts.push(`${running} running`);
+	const queued = count("queued");
+	if (queued > 0) parts.push(`${queued} queued`);
+	const tokens = children.reduce((sum, child) => sum + childTokenTotal(child.run), 0);
+	parts.push(`${formatTokenCounter(tokens)} tokens`);
+	const duration = children.reduce((sum, child) => sum + runDuration(child), 0);
+	parts.push(formatDuration(duration));
+	return theme.fg("muted", clip(parts.join(" · "), width));
+}
+
+const CARD_PREVIEW_LINES = 4;
+
+// Bounded preview of a finished child's returned value: the <output> block when
+// one exists, JSON pretty-printed, otherwise the markdown source, capped to a
+// few lines so a group of cards stays scannable.
+function outputPreviewLines(text: string, width: number): string[] {
+	const content = locateOutputBlockForDisplay(text)?.content ?? text;
+	const panel = outputPanelContent(content.trim());
+	const rendered =
+		panel.kind === "json" ? fitAnsiLines(panel.text.split("\n"), width) : renderMarkdownLines(panel.text, width);
+	while (rendered.length > 0 && rendered[0]?.trim() === "") rendered.shift();
+	while (rendered.length > 0 && rendered[rendered.length - 1]?.trim() === "") rendered.pop();
+	if (rendered.length <= CARD_PREVIEW_LINES) return rendered;
+	return [...rendered.slice(0, CARD_PREVIEW_LINES), `${ELLIPSIS} +${rendered.length - CARD_PREVIEW_LINES} lines`];
+}
+
+// Compact child card for a group pane (phase / pipeline stage): identity once,
+// role + metrics on the header row, then what the child is doing (running) or
+// what it returned (finished). Reads only the RunView — no transcript loads.
+function buildChildCardLines(theme: Theme, child: LiveRun, width: number): string[] {
+	const agent = runAgent(child);
+	const cells = cellsFromRunView(child.run, Date.now());
+	cells.name = tintAgentName(agent, colorForAgentName(agent));
+	delete cells.nameColor;
+	cells.depth = 0;
+	const identity = child.run.pipeline?.itemLabel ?? child.run.label;
+	if (identity) cells.label = identity;
+	else delete cells.label;
+	const tools = liveToolCount(child);
+	if (tools > 0) cells.tools = tools;
+	const tokens = childTokenTotal(child.run);
+	if (tokens > 0) cells.tokens = tokens;
+	const lines = [renderRowLine(theme, cells, width, "detailStep")];
+	const bodyWidth = Math.max(1, width - 2);
+	const body = (text: string): string => `  ${clip(text, bodyWidth)}`;
+	if (child.run.state === "running") {
+		const progress = progressForStage(child);
+		for (const history of buildLiveHistoryLines(progress, 2, bodyWidth)) lines.push(theme.fg("dim", body(history)));
+		const current = buildLiveCurrentLine(progress, bodyWidth, agent);
+		lines.push(theme.fg(current.tone, body(current.text)));
+		return lines;
+	}
+	if (!isTerminal(child)) {
+		lines.push(theme.fg("dim", body(stateWord(child))));
+		return lines;
+	}
+	const error = child.run.steps.find((step) => step.error)?.error;
+	if (error) lines.push(theme.fg("error", body(`✗ ${error}`)));
+	if (child.run.finalOutput?.trim()) {
+		for (const line of outputPreviewLines(child.run.finalOutput, bodyWidth)) lines.push(`  ${line}`);
+	} else if (!error) {
+		lines.push(theme.fg("dim", body("(no output)")));
+	}
+	return lines;
+}
+
+function pushChildCards(lines: string[], theme: Theme, children: LiveRun[], width: number): void {
+	children.forEach((child, index) => {
+		if (index > 0) lines.push("");
+		lines.push(...buildChildCardLines(theme, child, width));
+	});
+}
+
+// The border names the selected phase. The body shows its state, aggregate
+// progress, then one card per child grouped by pipeline stage.
 function buildPhaseTargetLines(
 	theme: Theme,
 	target: Extract<DetailTarget, { kind: "phase" }>,
 	width: number,
 	runs: LiveRun[],
 ): string[] {
-	const tokens = target.children.reduce((sum, child) => sum + childTokenTotal(child.run), 0);
-	const title = `Phase ${target.phaseIndex}${target.title ? `: ${target.title}` : ""}`;
-	const lines = [
-		`${rowGlyph(theme, aggregateState(target.children.map(detailState)))} ${title}`,
-		theme.fg("muted", `${target.children.length} runs · ${formatTokenCounter(tokens)} tokens`),
-	];
+	const state = aggregateState(target.children.map(detailState));
+	const lines = [clip(`${rowGlyph(theme, state)} ${state}`, width), groupSummaryLine(theme, target.children, width)];
 	const pipelineIds = Array.from(
 		new Set(target.children.map((child) => child.run.pipeline?.id).filter((id): id is string => id !== undefined)),
 	);
@@ -206,29 +304,31 @@ function buildPhaseTargetLines(
 			(a, b) => a - b,
 		);
 		for (const stageIndex of stageIndexes) {
+			const stageTitle = pipeline.stageTitles[stageIndex] ?? `stage ${stageIndex + 1}`;
+			const stageRuns = phaseStages.filter((candidate) => candidate.run.pipeline?.stageIndex === stageIndex);
 			lines.push(
 				"",
 				theme.fg(
 					"accent",
 					clip(
-						`── ${pipeline.name} · ${pipeline.stageTitles[stageIndex] ?? `stage ${stageIndex + 1}`}`,
+						`── ${pipeline.name} · ${stageTitle} ${stageIndex + 1}/${pipeline.stageCount} · ${stageRuns.length}/${pipeline.itemCount} items`,
 						width,
 					),
 				),
 			);
-			for (const child of phaseStages.filter((candidate) => candidate.run.pipeline?.stageIndex === stageIndex)) {
-				lines.push(renderDetailStep(theme, child, width));
-			}
+			pushChildCards(lines, theme, stageRuns, width);
 		}
 	}
 	const loose = target.children.filter((child) => child.run.pipeline === undefined);
-	if (loose.length > 0) lines.push("", theme.fg("accent", clip("── Loose runs", width)));
-	for (const child of loose) {
-		lines.push(renderDetailStep(theme, child, width, { parallel: Boolean(child.run.parallelGroupId) }));
+	if (loose.length > 0) {
+		lines.push("", theme.fg("accent", clip(pipelineIds.length > 0 ? "── Loose runs" : "── Runs", width)));
+		pushChildCards(lines, theme, loose, width);
 	}
-	return lines.map((line) => clip(line, width));
+	return lines;
 }
 
+// The border names the pipeline and stage. The body shows progress, the
+// cross-stage grid when useful, then one card per item in the selected stage.
 function buildPipelineGroupTargetLines(
 	theme: Theme,
 	target: Extract<DetailTarget, { kind: "pipelineGroup" }>,
@@ -236,22 +336,18 @@ function buildPipelineGroupTargetLines(
 	runs: LiveRun[],
 ): string[] {
 	const pipeline = pipelineView(workflowChildren(target.workflow.run.id, runs), target.pipelineId);
-	const title = pipeline.stageTitles[target.stageIndex] ?? `stage ${target.stageIndex + 1}`;
+	const state = aggregateState(target.runs.map(detailState));
+	const done = target.runs.filter(isTerminal).length;
 	const lines = [
 		clip(
-			`${rowGlyph(theme, aggregateState(target.runs.map(detailState)))} ${pipeline.name} · ${title} · ${target.runs.length}/${pipeline.itemCount} items`,
+			`${rowGlyph(theme, state)} ${state} · stage ${target.stageIndex + 1}/${pipeline.stageCount} · ${done}/${pipeline.itemCount} items`,
 			width,
 		),
-		"",
-		theme.fg(
-			"accent",
-			clip(`── ${pipeline.name} (${pipeline.itemCount} items × ${pipeline.stageCount} stages)`, width),
-		),
-		...pipelineGrid(theme, pipeline, width),
-		"",
-		theme.fg("accent", clip(`── ${title}`, width)),
+		groupSummaryLine(theme, target.runs, width),
 	];
-	for (const child of target.runs) lines.push(renderDetailStep(theme, child, width));
+	if (pipeline.stageCount > 1) lines.push("", ...pipelineGrid(theme, pipeline, width));
+	lines.push("", theme.fg("accent", clip("── Items", width)));
+	pushChildCards(lines, theme, target.runs, width);
 	return lines;
 }
 
@@ -341,27 +437,103 @@ function buildPipelineChainLines(theme: Theme, selected: LiveRun, width: number,
 	return lines;
 }
 
+// The pane border already carries the run's title (its label, else its agent),
+// so the body header names only what the border cannot: the agent when a
+// label took the title, and the pipeline item/stage context. Then state and metrics.
+function bodyAgentCell(run: LiveRun): string | undefined {
+	if (!run.run.label) return undefined;
+	const agent = runAgent(run);
+	return tintAgentName(agent, colorForAgentName(agent));
+}
+
+function runMetricParts(run: LiveRun): string[] {
+	const parts = [stateWord(run)];
+	const tools = liveToolCount(run);
+	if (tools > 0) parts.push(`${tools} tool${tools === 1 ? "" : "s"}`);
+	parts.push(`${formatTokenCounter(childTokenTotal(run.run))} tokens`, formatDuration(runDuration(run)));
+	return parts;
+}
+
 function buildPipelineStageHeader(theme: Theme, run: LiveRun, width: number): string[] {
 	const metadata = run.run.pipeline;
 	if (!metadata) return buildRunHeader(theme, run, width);
-	const agent = runAgent(run);
-	const toolCount = (run.run.recentTools?.length ?? 0) + (run.run.currentTool ? 1 : 0);
 	const stageCount = metadata.stageCount ?? metadata.stageIndex + 1;
-	return [
-		clip(
-			`${rowGlyph(theme, detailState(run))} ${metadata.itemLabel ?? `item ${metadata.itemIndex + 1}`} · ${metadata.name ?? "pipeline"} · ${metadata.stageTitle ?? "stage"} ${metadata.stageIndex + 1}/${stageCount} · ${tintAgentName(agent, colorForAgentName(agent))} · ${toolCount} tool${toolCount === 1 ? "" : "s"} · ${formatTokenCounter(childTokenTotal(run.run))} tokens · ${formatDuration(runDuration(run))}`,
-			width,
-		),
-		theme.fg("dim", clip("⏎ item chain", width)),
+	const parts = [
+		`${rowGlyph(theme, detailState(run))} ${metadata.itemLabel ?? `item ${metadata.itemIndex + 1}`}`,
+		metadata.name ?? "pipeline",
+		`${metadata.stageTitle ?? "stage"} ${metadata.stageIndex + 1}/${stageCount}`,
 	];
+	const agent = bodyAgentCell(run);
+	if (agent) parts.push(agent);
+	parts.push(...runMetricParts(run));
+	return [clip(parts.join(" · "), width), theme.fg("dim", clip("⏎ item chain", width))];
 }
 
 function buildRunHeader(theme: Theme, run: LiveRun, width: number): string[] {
-	const tokens = childTokenTotal(run.run);
-	return [
-		renderDetailStep(theme, run, width),
-		theme.fg("muted", clip(`${run.run.mode} · ${formatTokenCounter(tokens)} tokens`, width)),
-	];
+	const parts = [`${rowGlyph(theme, detailState(run))} ${stateWord(run)}`];
+	const agent = bodyAgentCell(run);
+	if (agent) parts.push(agent);
+	if (run.run.phaseIndex !== undefined) {
+		const title = run.run.phaseTitle ? ` ${canonicalWorkflowPhaseTitle(run.run.phaseTitle)}` : "";
+		parts.push(theme.fg("dim", `P${run.run.phaseIndex}${title}`));
+	}
+	parts.push(...runMetricParts(run).slice(1));
+	return [clip(parts.join(" · "), width)];
+}
+
+// A session can switch model mid-run, so the model line is labelled by what it
+// can prove: "current" comes from a live session handle (model + reasoning
+// level), "last" from the newest assistant message or the persisted step model.
+// When the transcript shows more than one model the line says so instead of
+// pretending one model produced every message. Nothing is shown without
+// evidence — configured defaults are never presented as history.
+function messageModels(messages: AgentMessage[]): string[] {
+	const seen: string[] = [];
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		const ref = `${message.provider}/${message.model}`;
+		if (!seen.includes(ref)) seen.push(ref);
+	}
+	return seen;
+}
+
+export function buildModelEvidenceLine(
+	run: LiveRun,
+	live: DashboardMessageSession[] | undefined,
+	historical: DashboardMessageSession[] | undefined,
+): string | undefined {
+	const current: string[] = [];
+	const reasoning: string[] = [];
+	const recorded: string[] = [];
+	for (const session of live ?? []) {
+		const source = session.cacheKey ?? session;
+		const model = source.model ?? session.model;
+		if (model) {
+			const ref = `${model.provider}/${model.id}`;
+			if (!current.includes(ref)) current.push(ref);
+			const level = source.thinkingLevel ?? session.thinkingLevel;
+			if (level && !reasoning.includes(level)) reasoning.push(level);
+		}
+		for (const ref of messageModels(session.messages)) if (!recorded.includes(ref)) recorded.push(ref);
+	}
+	if (current.length > 0) {
+		const changed = recorded.some((ref) => !current.includes(ref));
+		const parts = [`current model: ${current.join(", ")}`];
+		if (reasoning.length > 0) parts.push(`reasoning: ${reasoning.join(", ")}`);
+		if (changed) parts.push("changed during run");
+		return parts.join(" · ");
+	}
+	for (const session of historical ?? []) {
+		for (const ref of messageModels(session.messages)) if (!recorded.includes(ref)) recorded.push(ref);
+	}
+	if (recorded.length > 0) {
+		const last = recorded[recorded.length - 1];
+		return recorded.length > 1 ? `last model: ${last} · changed during run` : `last model: ${last}`;
+	}
+	const stepModels = run.run.steps.map((step) => step.model).filter((model): model is string => Boolean(model));
+	if (stepModels.length === 0) return undefined;
+	const unique = Array.from(new Set(stepModels));
+	return `last model: ${unique.join(", ")}`;
 }
 
 export function buildRightLines(
@@ -378,17 +550,14 @@ export function buildRightLines(
 	if (target.kind === "phase") return buildPhaseTargetLines(theme, target, width, runs);
 	if (target.kind === "pipelineGroup") return buildPipelineGroupTargetLines(theme, target, width, runs);
 	if (target.run.run.workflow) return buildWorkflowRightLines(theme, target.run.run, width, runs);
-	if (target.run.run.pipeline) {
-		if (options.pipelineChain) return buildPipelineChainLines(theme, target.run, width, runs);
-		return [
-			...buildPipelineStageHeader(theme, target.run, width),
-			...buildRunRightLines(theme, target.run, width, runs, live, historical),
-		];
-	}
-	return [
-		...buildRunHeader(theme, target.run, width),
-		...buildRunRightLines(theme, target.run, width, runs, live, historical),
-	];
+	if (target.run.run.pipeline && options.pipelineChain)
+		return buildPipelineChainLines(theme, target.run, width, runs);
+	const header = target.run.run.pipeline
+		? buildPipelineStageHeader(theme, target.run, width)
+		: buildRunHeader(theme, target.run, width);
+	const model = buildModelEvidenceLine(target.run, live?.sessions, historical?.sessions);
+	if (model) header.push(theme.fg("muted", clip(model, width)));
+	return [...header, ...buildRunRightLines(theme, target.run, width, runs, live, historical)];
 }
 
 function outputPanelContent(content: string): { kind: "json" | "markdown"; text: string } {
@@ -743,9 +912,11 @@ function childTokenTotal(child: AsyncRunSummary): number {
 export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, width: number, runs: LiveRun[]): string[] {
 	const out: string[] = [];
 	const children = workflowChildren(run.id, runs);
-	const header = cellsFromRunView(run, Date.now());
-	header.name = run.workflowMeta?.name ?? "workflow";
-	out.push(renderRowLine(theme, header, width, "detailStep"));
+	const self: LiveRun = { ownership: "foreign", run };
+	out.push(
+		clip(`${rowGlyph(theme, detailState(self))} ${stateWord(self)} · ${formatDuration(runDuration(self))}`, width),
+		groupSummaryLine(theme, children, width),
+	);
 	if (run.workflowMeta?.description) {
 		for (const line of wrapTextWithAnsi(run.workflowMeta.description, width)) out.push(theme.fg("muted", line));
 	}
@@ -780,7 +951,7 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 			continue;
 		}
 		const done = phaseChildren.filter((child) =>
-			["complete", "failed", "interrupted", "skipped"].includes(child.run.state),
+			["complete", "failed", "interrupted", "skipped", "paused", "lost"].includes(child.run.state),
 		).length;
 		const duration = phaseChildren.reduce((sum, child) => sum + runDuration(child), 0);
 		out.push(
@@ -790,22 +961,6 @@ export function buildWorkflowRightLines(theme: Theme, run: AsyncRunSummary, widt
 			),
 		);
 	}
-	const done = children.filter((child) =>
-		["complete", "failed", "interrupted", "skipped"].includes(child.run.state),
-	).length;
-	const running = children.filter((child) => child.run.state === "running").length;
-	const queued = children.filter((child) => child.run.state === "queued").length;
-	const tokens = children.reduce((sum, child) => sum + childTokenTotal(child.run), 0);
-	const totalDuration = children.reduce((sum, child) => sum + runDuration(child), 0);
-	out.push(
-		theme.fg(
-			"muted",
-			clip(
-				`${children.length} runs · ${done} done · ${running} running · ${queued} queued · ${formatTokenCounter(tokens)} tokens · ${formatDuration(totalDuration)}`,
-				width,
-			),
-		),
-	);
 
 	const pipelineIds = Array.from(
 		new Set(children.map((child) => child.run.pipeline?.id).filter((id): id is string => id !== undefined)),
@@ -962,6 +1117,9 @@ interface DashboardMessageSession {
 	readonly messages: AgentMessage[];
 	readonly stepIndex?: number;
 	readonly cacheKey?: DashboardMessageSession;
+	/** Live session handles expose their current model and reasoning level. */
+	readonly model?: { provider: string; id: string };
+	readonly thinkingLevel?: string;
 	getToolDefinition?(name: string): ToolDefinition | undefined;
 }
 

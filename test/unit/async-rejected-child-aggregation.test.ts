@@ -10,6 +10,8 @@ import { __resetLeafConcurrencyForTest } from "../../src/dispatch/leaf-concurren
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
+import { logger } from "../../src/shared/logger.ts";
+import { __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
 import { readStatus } from "../../src/shared/utils.ts";
 import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { makeAgent } from "../support/helpers.ts";
@@ -33,17 +35,20 @@ function waitForEvent(events: EventEmitter, channel: string) {
  * post-execution seam where real rejections escape executeChildAgent's catch. */
 class RejectingRegistry extends ChildAgentRegistry {
 	private readonly poison: string;
-	constructor(poison: string) {
+	private readonly afterFinalize: (() => void) | undefined;
+	constructor(poison: string, afterFinalize?: () => void) {
 		super();
 		this.poison = poison;
+		this.afterFinalize = afterFinalize;
 	}
 	override finalizeView(runId: string, result: ChildAgentResult): void {
 		if (result.outputText.includes(this.poison)) throw new Error("registry mirror exploded");
 		super.finalizeView(runId, result);
+		this.afterFinalize?.();
 	}
 }
 
-function setup(prefix: string, poison: string) {
+function setup(prefix: string, poison: string, afterFinalize?: () => void) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	roots.push(root);
 	__resetLeafConcurrencyForTest();
@@ -107,7 +112,7 @@ function setup(prefix: string, poison: string) {
 		config: { maxConcurrentAgents: 4 },
 		asyncByDefault: false,
 		tempArtifactsDir: root,
-		childRegistry: new RejectingRegistry(poison),
+		childRegistry: new RejectingRegistry(poison, afterFinalize),
 		expandTilde: (value: string) => value,
 		discoverAgents: () => ({
 			agents: Array.from({ length: 4 }, (_, i) => makeAgent(`A${i}`, { model: "mock/test-model" })),
@@ -190,5 +195,46 @@ describe("async aggregation with a rejected child", () => {
 		assert.equal(complete.success, false);
 		assert.equal(complete.children.length, 1);
 		assert.equal(complete.children[0].state, "failed");
+	});
+});
+
+describe("detached terminal persistence failure", () => {
+	it("reports a final-write error without emitting successful completion", { timeout: 3000 }, async (t) => {
+		const failure = Object.assign(new Error("ENOSPC: detached final status write"), { code: "ENOSPC" });
+		let restoreWriter: (() => void) | undefined;
+		const harness = setup("async-finalize-enospc-", "unused-poison", () => {
+			restoreWriter = __setStatusWriterWriteJsonForTest(() => {
+				throw failure;
+			});
+		});
+		let completions = 0;
+		let reportedError: Error | undefined;
+		let reportedRunId: unknown;
+		const outcome = new Promise<"complete" | "error">((resolve) => {
+			harness.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, () => {
+				completions++;
+				resolve("complete");
+			});
+			t.mock.method(logger, "error", (_message: string, error?: Error, context?: { runId?: string }) => {
+				reportedError = error;
+				reportedRunId = context?.runId;
+				resolve("error");
+			});
+		});
+		try {
+			await harness.executor.execute(
+				"id",
+				{ run: [{ agent: "A0", task: "persist me" }], async: true } as never,
+				new AbortController().signal,
+				undefined,
+				harness.ctx as never,
+			);
+			assert.equal(await outcome, "error");
+			assert.equal(reportedError, failure);
+			assert.equal(typeof reportedRunId, "string");
+			assert.equal(completions, 0, "a failed final write must not emit successful completion");
+		} finally {
+			restoreWriter?.();
+		}
 	});
 });

@@ -41,7 +41,7 @@ import {
 } from "./dashboard-detail-renderer.ts";
 import { aggregateState, cellsFromRunView, renderRowLine, type RowCells, type RowState } from "./row-line.ts";
 import type { LiveToolProgress } from "../shared/live-session-relay.ts";
-import { readRunTranscript, RunMessageReader } from "../state/run-transcript.ts";
+import { peekRunTranscript, RunMessageReader } from "../state/run-transcript.ts";
 import { deriveRunDisplayState } from "../state/run-liveness.ts";
 import { formatPhase } from "../state/run-phase.ts";
 import { workflowDisplayName } from "../state/workflow-display.ts";
@@ -72,6 +72,12 @@ import { canonicalWorkflowPhaseTitle } from "../shared/workflow-phase-title.ts";
 
 // Re-exported from the pure row-derivation model so existing import sites stay stable.
 export type { ContainerRowInfo, DisplayRow } from "./dashboard-row-model.ts";
+
+// Last selected row key per host session id. Module scope survives closing and
+// reopening the overlay within one extension activation; a session switch
+// reloads extensions, so nothing leaks across sessions. Unscoped opens (no
+// session id) are not remembered.
+const lastSelectedRowKeyBySession = new Map<string, string>();
 
 const AUTO_REFRESH_MS = 1000;
 // When no run is live (all rows terminal/lost/idle), nothing needs a per-second
@@ -138,7 +144,7 @@ function buildPipelineGroupLine(
 		theme,
 		{
 			state,
-			name: `⋮ ${row.name} · ${row.stageTitle ?? "stage"} ${row.stageIndex + 1}/${row.stageCount}`,
+			name: `⋮ ${row.name}`,
 			depth: row.depth,
 			selected,
 			marker: row.collapsed ? "collapsed" : "expanded",
@@ -450,8 +456,14 @@ function runShapeBadge(run: LiveRun): string {
 	// Parallel progress uses done-count.
 	const current =
 		run.run.mode === "parallel"
-			? run.run.steps.filter((s) => s.status === "complete" || s.status === "failed" || s.status === "skipped")
-					.length
+			? run.run.steps.filter(
+					(s) =>
+						s.status === "complete" ||
+						s.status === "failed" ||
+						s.status === "skipped" ||
+						s.status === "paused" ||
+						s.status === "lost",
+				).length
 			: (run.run.currentStep ?? 0) + 1;
 	return formatShapeBadge({ mode: run.run.mode ?? "single", total, current }) ?? "";
 }
@@ -832,6 +844,7 @@ export class SubagentsStatusComponent implements Component {
 			this.toolsExpanded = false;
 		}
 		this.refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
+		if (this.sessionId) this.selectedId = lastSelectedRowKeyBySession.get(this.sessionId);
 		this.overlay = this.createPaneOverlay();
 		this.reload();
 		// Seed the signature so the first timer tick doesn't spuriously diff against
@@ -847,8 +860,12 @@ export class SubagentsStatusComponent implements Component {
 				mode: "cursor",
 				rows: () => this.overlayRows(),
 				selectionKey: (row) => this.overlayRowKey(row),
+				...(this.selectedId !== undefined ? { initialSelectionKey: this.selectedId } : {}),
 				onSelectionChange: (row) => {
 					this.selectedId = row && row.kind !== "empty" ? dashboardRowKey(row) : undefined;
+					if (this.sessionId && this.selectedId !== undefined) {
+						lastSelectedRowKeyBySession.set(this.sessionId, this.selectedId);
+					}
 					this.pipelineChainSelectionKey = undefined;
 					this.scheduleTranscriptLoad();
 				},
@@ -943,8 +960,10 @@ export class SubagentsStatusComponent implements Component {
 						: [];
 				},
 				title: (ctx) => {
-					const run = this.runForDetailTarget(this.detailTargetForOverlayRow(ctx.selectedRow));
-					if (!run) return "No run selected";
+					const target = this.detailTargetForOverlayRow(ctx.selectedRow);
+					const run = this.runForDetailTarget(target);
+					if (!target || !run) return "No run selected";
+					if (target.kind !== "run") return detailTargetTitle(target);
 					return this.sidebarCollapsed
 						? collapsedRunTitle(run, this.runs, ctx.detail.width)
 						: selectedRunTitle(run);
@@ -1505,8 +1524,14 @@ export class SubagentsStatusComponent implements Component {
 			if (target?.kind !== "run") return;
 			const run = target.run;
 			const sessions = this.liveSessions(run);
-			if (sessions.length > 0) this.settledLiveSelections.add(selection);
-			else if (run.run.asyncDir) {
+			if (sessions.length > 0) {
+				this.settledLiveSelections.add(selection);
+				// The preview and the full session share one render-cache entry (the
+				// preview's cacheKey is the real session). A clean preview entry would
+				// otherwise be returned verbatim for the full session, leaving the
+				// settled row stuck on the tail.
+				for (const session of sessions) this.liveRenderCache.clear(session);
+			} else if (run.run.asyncDir) {
 				this.runMessageReader.read(run.run.asyncDir);
 				this.settledPersistedSelections.add(selection);
 			}
@@ -1614,6 +1639,29 @@ function selectedRunTitle(run: LiveRun): string {
 	return step?.agent ?? run.run.mode ?? "(run)";
 }
 
+/** Right-pane title for a non-run selection: the selected phase or pipeline
+ * group itself, not the workflow root it belongs to. Mirrors the left-pane row
+ * labels so the border and the list agree. */
+export function detailTargetTitle(target: Extract<DetailTarget, { kind: "phase" | "pipelineGroup" }>): string {
+	if (target.kind === "phase") {
+		return target.title ? `Phase ${target.phaseIndex}: ${target.title}` : `Phase ${target.phaseIndex}`;
+	}
+	const metadata = target.runs[0]?.run.pipeline;
+	const name = metadata?.name ?? target.pipelineId;
+	const stageCount = metadata?.stageCount;
+	const stage = metadata?.stageTitle ?? `Stage ${target.stageIndex + 1}${stageCount ? `/${stageCount}` : ""}`;
+	return `⋮ ${name} · ${stage}`;
+}
+
+function selectedRunFailureLine(run: LiveRun): string | undefined {
+	if (run.run.state !== "failed") return undefined;
+	const step =
+		run.run.steps.find((candidate) => candidate.error) ??
+		run.run.steps.find((candidate) => candidate.status === "failed");
+	const message = step?.error?.split("\n")[0]?.trim();
+	return message ? `error: ${message}` : undefined;
+}
+
 function runAgentColor(run: LiveRun): string | undefined {
 	if (run.run.currentAgent) {
 		return run.run.currentAgentColor ?? colorForAgentName(run.run.currentAgent);
@@ -1680,9 +1728,15 @@ function runIsLost(run: LiveRun): boolean {
 	return run.run.state === "lost" || run.run.displayState === "lost";
 }
 
+// Tool count for the status box. Never reads or parses from disk during a
+// render: only a transcript already parsed for the settled selection
+// (peekRunTranscript) is counted; otherwise the slim live counters are used.
 function runToolCount(run: LiveRun): number {
-	if (run.run.asyncDir) return readRunTranscript(run.run.asyncDir).filter((event) => event.kind === "tool").length;
-	return run.run.recentTools?.length ?? 0;
+	if (run.run.asyncDir) {
+		const events = peekRunTranscript(run.run.asyncDir);
+		if (events) return events.filter((event) => event.kind === "tool").length;
+	}
+	return (run.run.recentTools?.length ?? 0) + (run.run.currentTool ? 1 : 0);
 }
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -1753,10 +1807,10 @@ function wrapPlainStatusText(text: string, width: number, maxLines: number): str
 
 function selectedRunMetaLines(run: LiveRun, width: number, now: number, maxLines: number): string[] {
 	if (maxLines <= 0) return [];
-	const started = formatStartedTime(run.run.startedAt, now);
-	const combined = `${run.run.mode} · id ${run.run.id} · started ${started}`;
+	const started = `started ${formatStartedTime(run.run.startedAt, now)}`;
+	const combined = `${started} · id ${run.run.id}`;
 	if (metaFits(width, combined)) return [combined];
-	const lines = [`${run.run.mode} · started ${started}`];
+	const lines = [started];
 	lines.push(...wrapPlainStatusText(`id ${run.run.id}`, width, maxLines - 1));
 	return lines;
 }
@@ -1783,6 +1837,8 @@ export function buildSelectedRunStatusBox(
 	if (stats.length > 0) lines.push(renderStatusBoxLine(theme, boxWidth, stats.join(" · ")));
 	const current = selectedRunCurrentLine(run, now);
 	if (current) lines.push(renderStatusBoxLine(theme, boxWidth, current));
+	const failure = selectedRunFailureLine(run);
+	if (failure) lines.push(renderStatusBoxLine(theme, boxWidth, failure));
 	for (const meta of selectedRunMetaLines(run, boxWidth, now, SELECTED_STATUS_BOX_ROWS - lines.length)) {
 		lines.push(renderStatusBoxLine(theme, boxWidth, meta));
 	}

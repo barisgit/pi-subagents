@@ -608,9 +608,10 @@ describe("dashboard workflow phase tree", () => {
 			const lines = leftRows(component);
 			const body = lines.join("\n");
 			assert.match(body, /Phase 1: Inspect · 2\/3/);
-			assert.match(body, /⋮ Osnutki · osnutek 1\/2 · 1\/2 items/);
+			assert.match(body, /⋮ Osnutki · 1\/2 items/);
+			assert.doesNotMatch(body, /⋮ Osnutki · (?:osnutek|verifikacija|stage) \d\/\d/);
 			assert.match(body, /Phase 2: Confirm · 1\/1/);
-			assert.match(body, /⋮ Osnutki · verifikacija 2\/2 · 1\/2 items · 1 waiting/);
+			assert.match(body, /⋮ Osnutki · 1\/2 items · 1 waiting/);
 			assert.equal(lines.filter((line) => /widget/.test(line)).length, 1);
 			assert.equal(lines.filter((line) => /gadget/.test(line)).length, 2);
 			assert.doesNotMatch(body, /\+\d+ pipeline stages|\[\d+\]|✓◈/);

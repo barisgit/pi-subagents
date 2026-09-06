@@ -4,6 +4,11 @@ export type Layer0ChildStatus = "pending" | "queued" | "running" | "complete" | 
 export function computeGroupStatus(childStatuses: Layer0ChildStatus[]): Layer0GroupStatus {
 	if (childStatuses.some((status) => status === "pending" || status === "queued" || status === "running"))
 		return "running";
-	if (childStatuses.some((status) => status === "failed" || status === "interrupted")) return "failed";
+	if (
+		childStatuses.some(
+			(status) => status === "failed" || status === "interrupted" || status === "paused" || status === "lost",
+		)
+	)
+		return "failed";
 	return "complete";
 }

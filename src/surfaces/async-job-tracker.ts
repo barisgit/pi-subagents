@@ -257,6 +257,19 @@ export function createAsyncJobTracker(
 		timer.unref?.();
 		state.cleanupTimers.set(asyncId, timer);
 	};
+	// Non-ENOENT read faults are missing evidence, not a run state: event handlers
+	// proceed on the bus event alone instead of throwing out of the listener.
+	const readStatusOrNull = (asyncDir: string): ReturnType<typeof readStatus> => {
+		try {
+			return readStatus(asyncDir);
+		} catch (error) {
+			logger.error("Failed to read async status", error instanceof Error ? error : undefined, {
+				asyncDir,
+				error: error instanceof Error ? undefined : String(error),
+			});
+			return null;
+		}
+	};
 	const updateActivityState = (job: AsyncJobState): ActivityState | undefined => {
 		const config = job.controlConfig ?? DEFAULT_CONTROL_CONFIG;
 		const previous = lastActivityStateByRunId.get(job.asyncId);
@@ -496,14 +509,13 @@ export function createAsyncJobTracker(
 						runnerHeartbeatAt: job.runnerHeartbeatAt,
 					});
 				} catch (error) {
+					// A status-read IO error is not a child failure: the child may still be
+					// running. Keep the row as-is and let the next poll retry; a genuine
+					// terminal state on disk takes the normal pending-delivery/cleanup path.
 					logger.error("Failed to read async status", error instanceof Error ? error : undefined, {
 						asyncDir: job.asyncDir,
 						error: error instanceof Error ? undefined : String(error),
 					});
-					job.status = "failed";
-					job.displayState = undefined;
-					job.updatedAt = Date.now();
-					idleTracker?.onAsyncFinished(job.asyncId);
 				}
 			}
 
@@ -524,12 +536,15 @@ export function createAsyncJobTracker(
 		};
 		logger.info("handleStarted: FIRED", { id: info.id, agent: info.agent, hasUi: !!state.lastUiContext });
 		if (!info.id) return;
+		// A known job means this is a resumed/restarted generation. Clear the
+		// prior generation's acknowledgement, but preserve an acknowledgement
+		// that raced before the first start made the job known.
+		if (state.asyncJobs.has(info.id)) deliveredRunIds.delete(info.id);
 		const staleCleanup = state.cleanupTimers.get(info.id);
 		if (staleCleanup) {
 			clearTimeout(staleCleanup);
 			state.cleanupTimers.delete(info.id);
 		}
-		deliveredRunIds.delete(info.id);
 		lastActivityStateByRunId.delete(info.id);
 		const now = Date.now();
 		const asyncDir =
@@ -540,7 +555,7 @@ export function createAsyncJobTracker(
 		}
 		const agents = info.agent ? [info.agent] : undefined;
 		const mode = info.parentRunId ? "parallel" : "single";
-		const status = readStatus(asyncDir);
+		const status = readStatusOrNull(asyncDir);
 		const workflowMeta = info.kind === "workflow" ? readWorkflowMeta(asyncDir) : undefined;
 		const workflowPhase = info.kind === "workflow" ? readWorkflowGroupPhase(asyncDir) : undefined;
 		idleTracker?.onAsyncStarted(info.id);
@@ -581,7 +596,7 @@ export function createAsyncJobTracker(
 		});
 		if (!asyncId) return;
 		const job = state.asyncJobs.get(asyncId);
-		const persisted = job ? readStatus(job.asyncDir) : null;
+		const persisted = job ? readStatusOrNull(job.asyncDir) : null;
 		if (job && (persisted?.state === "running" || persisted?.state === "queued")) {
 			// Interrupt waits for the child handle, while terminal persistence and the
 			// completion event finish asynchronously. A resume can therefore announce a
@@ -621,9 +636,9 @@ export function createAsyncJobTracker(
 		if (runIds.length === 0) return;
 		let changed = false;
 		for (const runId of runIds) {
+			deliveredRunIds.add(runId);
 			const job = state.asyncJobs.get(runId);
 			if (!job) continue;
-			deliveredRunIds.add(runId);
 			if (job.pendingDelivery) {
 				job.pendingDelivery = false;
 				changed = true;

@@ -267,8 +267,10 @@ export default function registerSubagentNotify(
 	const notificationPi = () => (isChildSession ? pi : getCurrentPi());
 
 	// Tell the widget which runs a notification covered (or would have covered,
-	// for deduped/silent results) so it can retire their rows. Resolve the
-	// current pi at call time for the same reload-safety reason as below.
+	// for deduped/silent results) so it can retire their rows. Emitted only once
+	// the host/parent accepted the send: a queued or failed send is not
+	// delivered. Resolve the current pi at call time for the same reload-safety
+	// reason as below.
 	const emitDelivered = (runIds: Array<string | undefined>) => {
 		const ids = runIds.filter((id): id is string => typeof id === "string" && id.length > 0);
 		if (ids.length === 0) return;
@@ -295,63 +297,116 @@ export default function registerSubagentNotify(
 	const unconfirmedSends: UnconfirmedSend[] = [];
 	const UNCONFIRMED_CAP = 20;
 
+	// Dedupe keys whose send is queued or awaiting the parent session. A
+	// duplicate completion for an in-flight key is dropped silently (no second
+	// send, no acknowledgement); the in-flight send acknowledges on success.
+	// Tracked separately from `seen`: that map records confirmed deliveries (or
+	// explicit pre-marks) only, so a slow parent cannot let the TTL prune a
+	// pending key and admit a duplicate send.
+	const inFlight = new Set<string>();
+
+	// Claim a completion key for sending. Returns false when the completion is
+	// still in flight (say nothing until that send settles) or was already
+	// delivered (acknowledge it again so the widget row retires).
+	const claimForSend = (key: string, now: number, idLabel: string, coveredRunIds: Array<string | undefined>) => {
+		if (inFlight.has(key)) {
+			logger.info("notify.handleComplete: IN FLIGHT", { id: idLabel, key });
+			return false;
+		}
+		if (markSeenWithTtl(seen, key, now, ttlMs)) {
+			logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
+			emitDelivered(coveredRunIds);
+			return false;
+		}
+		// markSeenWithTtl recorded the key; only a confirmed delivery may keep it.
+		seen.delete(key);
+		inFlight.add(key);
+		return true;
+	};
+
 	const sendNotification = (
+		key: string,
 		idLabel: string,
 		content: string,
-		details?: SubagentNotifyDetails | SubagentBatchNotifyDetails,
+		details: SubagentNotifyDetails | SubagentBatchNotifyDetails | undefined,
+		coveredRunIds: Array<string | undefined>,
+		onFailed?: () => void,
 	) => {
+		const message = {
+			customType: "subagent-notify",
+			content,
+			display: true,
+			...(details ? { details } : {}),
+		};
+		const trackUnconfirmed = (wasStreaming: boolean) => {
+			if (!wasStreaming) return;
+			unconfirmedSends.push({ idLabel, content, details });
+			if (unconfirmedSends.length > UNCONFIRMED_CAP)
+				unconfirmedSends.splice(0, unconfirmedSends.length - UNCONFIRMED_CAP);
+		};
+		// Acknowledge only a send the host/parent accepted, and record the dedupe
+		// mark only then. A failed send leaves no mark, so a re-announced
+		// completion retries instead of being swallowed for the TTL window.
+		const delivered = () => {
+			inFlight.delete(key);
+			seen.set(key, Date.now());
+			logger.info("notify.handleComplete: notification delivered", { id: idLabel });
+			emitDelivered(coveredRunIds);
+		};
+		const failed = (err: unknown) => {
+			inFlight.delete(key);
+			logger.error(
+				"notify.handleComplete: notification delivery failed",
+				err instanceof Error ? err : new Error(String(err)),
+				{ id: idLabel },
+			);
+			onFailed?.();
+		};
+		logger.info("notify.handleComplete: delivering notification", { id: idLabel, isChildSession });
+		if (isChildSession) {
+			// The parent AgentSession's sendCustomMessage settles when the parent
+			// accepts the message (queued while streaming) or, when idle with
+			// triggerTurn, when the triggered turn finishes.
+			const send = async () => {
+				try {
+					if (!childSessionMessageDelivery) throw new Error("Child session message delivery is unavailable");
+					const wasStreaming = agentStreaming;
+					const delivery = childSessionMessageDelivery(message, { triggerTurn: true });
+					trackUnconfirmed(wasStreaming);
+					await delivery;
+					delivered();
+					return true;
+				} catch (err) {
+					failed(err);
+					return false;
+				}
+			};
+			const parentRunId = getParentRunId();
+			if (parentRunId) enqueueNestedCompletionReprompt(parentRunId, send);
+			else void send();
+			return;
+		}
 		// Cannot use the captured `pi` from registration time: the activate that
 		// registered this handler may have been replaced by ctx.reload()/fork()/
 		// newSession()/switchSession(), invalidating that pi. We must resolve the
-		// CURRENT pi at call time.
-		const send = async () => {
-			try {
-				const message = {
-					customType: "subagent-notify",
-					content,
-					display: true,
-					...(details ? { details } : {}),
-				};
-				const wasStreaming = agentStreaming;
-				logger.info("notify.handleComplete: delivering notification", { id: idLabel, isChildSession });
-				let delivery: Promise<void> | undefined;
-				if (isChildSession) {
-					if (!childSessionMessageDelivery) throw new Error("Child session message delivery is unavailable");
-					delivery = childSessionMessageDelivery(message, { triggerTurn: true });
-				} else {
-					notificationPi().sendMessage(message, { triggerTurn: true });
-				}
-				if (wasStreaming) {
-					unconfirmedSends.push({ idLabel, content, details });
-					if (unconfirmedSends.length > UNCONFIRMED_CAP)
-						unconfirmedSends.splice(0, unconfirmedSends.length - UNCONFIRMED_CAP);
-				}
-				await delivery;
-				logger.info("notify.handleComplete: notification delivered", { id: idLabel });
-				return true;
-			} catch (err) {
-				logger.error(
-					"notify.handleComplete: notification delivery failed",
-					err instanceof Error ? err : new Error(String(err)),
-					{ id: idLabel },
-				);
-				return false;
-			}
-		};
-		const parentRunId = isChildSession ? getParentRunId() : null;
-		if (parentRunId) enqueueNestedCompletionReprompt(parentRunId, send);
-		else void send();
+		// CURRENT pi at call time. ExtensionAPI.sendMessage returns void, so the
+		// only observable failure is a synchronous throw (stale pi, invalid ctx).
+		try {
+			const wasStreaming = agentStreaming;
+			notificationPi().sendMessage(message, { triggerTurn: true });
+			trackUnconfirmed(wasStreaming);
+			delivered();
+		} catch (err) {
+			failed(err);
+		}
 	};
 
 	const sendOnce = (result: SubagentResult, now: number) => {
 		const key = buildCompletionKey(result, "notify");
-		if (markSeenWithTtl(seen, key, now, ttlMs)) {
-			logger.info("notify.handleComplete: DEDUPED", { id: result.id ?? "<null>", key });
-			emitDelivered([result.runId ?? result.id ?? undefined]);
-			return;
-		}
-		sendNotification(result.id ?? "<null>", singleNotificationContent(result));
-		emitDelivered([result.runId ?? result.id ?? undefined]);
+		const idLabel = result.id ?? "<null>";
+		const coveredRunIds = [result.runId ?? result.id ?? undefined];
+		if (!claimForSend(key, now, idLabel, coveredRunIds)) return;
+		sendNotification(key, idLabel, singleNotificationContent(result), undefined, coveredRunIds);
 	};
 
 	const notifyChildren = (result: SubagentResult, children: ChildStepResult[], now: number) => {
@@ -412,13 +467,8 @@ export default function registerSubagentNotify(
 		// never fan out through the back-compat children+each path below.
 		if (result.kind === "workflow") {
 			const key = buildCompletionKey(result, "notify");
-			if (markSeenWithTtl(seen, key, now, ttlMs)) {
-				logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
-				emitDelivered(coveredRunIds);
-				return;
-			}
-			sendNotification(idLabel, singleNotificationContent(result));
-			emitDelivered(coveredRunIds);
+			if (!claimForSend(key, now, idLabel, coveredRunIds)) return;
+			sendNotification(key, idLabel, singleNotificationContent(result), undefined, coveredRunIds);
 			return;
 		}
 
@@ -449,16 +499,26 @@ export default function registerSubagentNotify(
 						rollupChildren.filter((child) => child.state === "complete" || child.success).length,
 				};
 				const key = buildCompletionKey(rollup, "notify");
-				if (markSeenWithTtl(seen, key, now, ttlMs)) {
-					logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
-					emitDelivered(coveredRunIds);
+				// Put the drained children back so a re-announced group completion rolls
+				// them up again: after a failed send, or when this duplicate event hit a
+				// send still in flight (late children must stay buffered, not vanish).
+				const restoreAccumulated = () => {
+					if (!groupRunId) return;
+					groupedRuns.set(groupRunId, [...accumulated, ...(groupedRuns.get(groupRunId) ?? [])]);
+				};
+				if (!claimForSend(key, now, idLabel, coveredRunIds)) {
+					if (inFlight.has(key)) restoreAccumulated();
 					return;
 				}
 				sendNotification(
+					key,
 					idLabel,
 					batchNotificationContent(rollup, rollupChildren),
 					batchNotificationDetails(rollup, rollupChildren),
+					coveredRunIds,
+					restoreAccumulated,
 				);
+				return;
 			}
 			emitDelivered(coveredRunIds);
 			return;
@@ -474,22 +534,19 @@ export default function registerSubagentNotify(
 		}
 
 		const key = buildCompletionKey(result, "notify");
-		if (markSeenWithTtl(seen, key, now, ttlMs)) {
-			logger.info("notify.handleComplete: DEDUPED", { id: idLabel, key });
-			emitDelivered(coveredRunIds);
-			return;
-		}
+		if (!claimForSend(key, now, idLabel, coveredRunIds)) return;
 
 		const rollupChildren = children && policy === "rollup" ? dedupeChildrenByRunIdKeepLatest(children) : undefined;
 		const content = rollupChildren
 			? batchNotificationContent(result, rollupChildren)
 			: singleNotificationContent(result);
 		sendNotification(
+			key,
 			idLabel,
 			content,
 			rollupChildren ? batchNotificationDetails(result, rollupChildren) : undefined,
+			coveredRunIds,
 		);
-		emitDelivered(coveredRunIds);
 	};
 
 	// Subscribe on this session's pi.events bus. The subscription is re-attached

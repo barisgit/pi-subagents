@@ -568,7 +568,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 			} else if (finalResult?.usage) {
 				addUsageInto(totalUsage, finalResult.usage as Usage);
 			}
-			if (finalResult) finalizeRun(runHandle, { via: "result", result: finalResult, totalUsage });
+			if (finalResult) await finalizeRun(runHandle, { via: "result", result: finalResult, totalUsage });
 			logger.info("finalizeAsync: emitting COMPLETE", {
 				runId,
 				success: finalResult?.state === "complete",

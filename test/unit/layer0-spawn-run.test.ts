@@ -11,6 +11,7 @@ import {
 	type Layer0RunAgent,
 } from "../../src/dispatch/layer0-runs.ts";
 import { readAllEntries, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
+import { __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
 import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 
 const tmpRoots: string[] = [];
@@ -165,5 +166,59 @@ describe("Layer-0 spawnRun rejection", () => {
 		assert.equal(typeof status.endedAt, "number");
 		assert.match(String(status.error), /leaf exploded/);
 		assert.equal(status.steps[0].status, "failed");
+	});
+});
+
+describe("Layer-0 terminal persistence failure", () => {
+	it("surfaces the persistence error when recording an already-rejected child", async () => {
+		const root = setupTempHome("layer0-rejected-enospc-");
+		const failure = Object.assign(new Error("ENOSPC: failed child final status write"), { code: "ENOSPC" });
+		const handle = spawnRun(
+			{ agentName: "worker", task: "failed execution", cwd: root },
+			{
+				rootRunId: "root-run",
+				notifyPolicy: "silent",
+				defaultSessionDir: path.join(root, "runs"),
+				runAgent: async () => {
+					throw new Error("execution failed first");
+				},
+			},
+		);
+		const restore = __setStatusWriterWriteJsonForTest(() => {
+			throw failure;
+		});
+		try {
+			await assert.rejects(awaitRun(handle), (error) => error === failure);
+		} finally {
+			restore();
+		}
+	});
+	it("rejects completion instead of announcing success when the final write fails", async () => {
+		const root = setupTempHome("layer0-finalize-enospc-");
+		const completed: Array<{ result?: ChildAgentResult; error?: unknown }> = [];
+		const handle = spawnRun(
+			{ agentName: "worker", task: "persist result", cwd: root },
+			{
+				rootRunId: "root-run",
+				notifyPolicy: "silent",
+				defaultSessionDir: path.join(root, "runs"),
+				runAgent: async (step) => resultFor(step),
+				onLifecycle: (event) => {
+					if (event.type === "run.completed") completed.push(event);
+				},
+			},
+		);
+		const failure = Object.assign(new Error("ENOSPC: final status write"), { code: "ENOSPC" });
+		const restore = __setStatusWriterWriteJsonForTest(() => {
+			throw failure;
+		});
+		try {
+			await assert.rejects(awaitRun(handle), (error) => error === failure);
+			assert.equal(completed.length, 1, "the lifecycle must settle once with the persistence error");
+			assert.equal(completed[0]?.error, failure);
+			assert.equal(completed[0]?.result, undefined, "no successful lifecycle result before persistence");
+		} finally {
+			restore();
+		}
 	});
 });

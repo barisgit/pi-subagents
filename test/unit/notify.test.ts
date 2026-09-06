@@ -11,6 +11,7 @@ import {
 	markNestedParentTurn,
 	releaseNestedAsyncParent,
 } from "../../src/dispatch/nested-async-coordinator.ts";
+import { getGlobalSeenMap } from "../../src/state/completion-dedupe.ts";
 import {
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
@@ -343,12 +344,348 @@ describe("registerSubagentNotify", () => {
 		assert.equal(childSent.length, 0, "reprompt waits for the parent leaf permit");
 		assert.equal(host.sent.length, 1, "nested completion must not create a second host wake");
 		assert.equal(hostDelivered, 1);
-		assert.equal(childDelivered, 1);
+		assert.equal(childDelivered, 0, "a queued reprompt is not delivered yet");
 
 		await flushNestedCompletionReprompts(parentRunId);
 		assert.equal(childSent.length, 1);
 		assert.equal(host.sent.length, 1);
+		assert.equal(childDelivered, 1, "delivered fires once the flushed send succeeds");
 		releaseNestedAsyncParent(parentRunId);
+	});
+
+	it("does not acknowledge a single notification whose host send throws, and retries it", () => {
+		const { bus, inner } = createBus();
+		const sent: unknown[] = [];
+		let failNext = true;
+		const pi = {
+			events: bus,
+			on() {},
+			sendMessage(message: unknown): void {
+				if (failNext) {
+					failNext = false;
+					throw new Error("stale pi");
+				}
+				sent.push(message);
+			},
+		};
+		setCurrentPi(pi as never);
+		registerSubagentNotify(pi as never);
+		const delivered: string[][] = [];
+		bus.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, (data) => {
+			delivered.push(((data as { runIds?: string[] })?.runIds ?? []).slice());
+		});
+		const completion = {
+			id: "send-throws-single",
+			runId: "send-throws-single",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 5000,
+		};
+
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+		assert.equal(sent.length, 0);
+		assert.equal(delivered.length, 0, "a failed send must not be acknowledged as delivered");
+
+		// Same completion re-announced (e.g. reload re-announce): must not be deduped.
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+		assert.equal(sent.length, 1, "failed send must stay retryable");
+		assert.deepEqual(delivered, [["send-throws-single"]]);
+
+		// Once delivered, a further duplicate is deduped and acknowledged without a resend.
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+		assert.equal(sent.length, 1);
+		assert.equal(delivered.length, 2);
+	});
+
+	it("keeps drained rollup children for retry when the batch send throws", () => {
+		const { bus, inner } = createBus();
+		const sent: Array<{ message: { content?: string } }> = [];
+		let failNext = true;
+		const pi = {
+			events: bus,
+			on() {},
+			sendMessage(message: { content?: string }): void {
+				if (failNext) {
+					failNext = false;
+					throw new Error("stale pi");
+				}
+				sent.push({ message });
+			},
+		};
+		setCurrentPi(pi as never);
+		registerSubagentNotify(pi as never);
+		const delivered: string[][] = [];
+		bus.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, (data) => {
+			delivered.push(((data as { runIds?: string[] })?.runIds ?? []).slice());
+		});
+		const children = ["e0000000-0000-4000-8000-00000000000a", "e0000000-0000-4000-8000-00000000000b"];
+		for (const childRunId of children) {
+			inner.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, {
+				id: childRunId,
+				runId: childRunId,
+				parentRunId: "group-send-throws",
+				rootRunId: "group-send-throws",
+				notifyPolicy: "rollup",
+				agent: "A",
+				success: true,
+				state: "complete",
+				summary: `child ${childRunId.slice(-1)} done`,
+				timestamp: 6000,
+			});
+		}
+		const group = {
+			id: "group-send-throws",
+			runId: "group-send-throws",
+			rootRunId: "group-send-throws",
+			notifyPolicy: "rollup",
+			agent: "A,A",
+			success: true,
+			state: "complete",
+			summary: "group done",
+			timestamp: 6001,
+		};
+
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, group);
+		assert.equal(sent.length, 0);
+		assert.equal(delivered.length, 0, "failed rollup must not acknowledge the group or its children");
+
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, group);
+		assert.equal(sent.length, 1, "rollup retried after failure");
+		const content = sent[0]!.message.content ?? "";
+		assert.ok(content.includes("child a done"), "retried rollup keeps drained child a");
+		assert.ok(content.includes("child b done"), "retried rollup keeps drained child b");
+		assert.equal(delivered.length, 1);
+		assert.deepEqual([...delivered[0]!].sort(), [...children, "group-send-throws"].sort());
+	});
+
+	it("acknowledges a nested reprompt only after the parent delivery resolves, and retries a rejected one", async () => {
+		const parentRunId = "parent-retry-after-reject";
+		const { inner, bus } = createBus();
+		const childPi = { events: bus, on() {}, sendMessage(): void {} };
+		let rejectNext = true;
+		const delivered: string[][] = [];
+		const parentSends: unknown[] = [];
+		registerNestedAsyncParent(parentRunId);
+		asChildSession(
+			() => registerSubagentNotify(childPi as never, () => parentRunId),
+			async (message) => {
+				if (rejectNext) {
+					rejectNext = false;
+					throw new Error("parent session gone");
+				}
+				parentSends.push(message);
+			},
+		);
+		bus.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, (data) => {
+			delivered.push(((data as { runIds?: string[] })?.runIds ?? []).slice());
+		});
+		const completion = {
+			id: "nested-retry",
+			runId: "nested-retry",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 7000,
+		};
+
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 1);
+		assert.equal(delivered.length, 0, "queued is not delivered");
+
+		// A duplicate completion while the first is queued must not enqueue a second send
+		// and must not acknowledge delivery on the dedupe path.
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 1, "no duplicate in-flight send");
+		assert.equal(delivered.length, 0, "in-flight duplicate must not be acknowledged");
+
+		await flushNestedCompletionReprompts(parentRunId);
+		assert.equal(parentSends.length, 0);
+		assert.equal(delivered.length, 0, "rejected parent delivery must not be acknowledged");
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, false);
+
+		// Re-announced completion is retryable (dedupe cleared by the failure).
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+		assert.equal(
+			nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts,
+			1,
+			"failed send is re-enqueued on retry",
+		);
+		assert.equal(delivered.length, 0);
+		await flushNestedCompletionReprompts(parentRunId);
+		assert.equal(parentSends.length, 1);
+		assert.deepEqual(delivered, [["nested-retry"]]);
+		releaseNestedAsyncParent(parentRunId);
+	});
+
+	it("keeps a duplicate out of flight even when the dedupe TTL lapses before the parent settles", async () => {
+		const parentRunId = "parent-ttl-in-flight";
+		const { inner, bus } = createBus();
+		const childPi = { events: bus, on() {}, sendMessage(): void {} };
+		const delivered: string[][] = [];
+		const parentSends: unknown[] = [];
+		let releaseParent: (() => void) | undefined;
+		registerNestedAsyncParent(parentRunId);
+		asChildSession(
+			() => registerSubagentNotify(childPi as never, () => parentRunId),
+			async (message) => {
+				await new Promise<void>((resolve) => {
+					releaseParent = resolve;
+				});
+				parentSends.push(message);
+			},
+		);
+		bus.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, (data) => {
+			delivered.push(((data as { runIds?: string[] })?.runIds ?? []).slice());
+		});
+		const completion = {
+			id: "nested-ttl",
+			runId: "nested-ttl",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 8000,
+		};
+		const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
+		const realNow = Date.now;
+		const base = realNow();
+		Date.now = () => base;
+		try {
+			inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+			assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 1);
+			const flush = flushNestedCompletionReprompts(parentRunId);
+			await Promise.resolve();
+			assert.equal(seen.has("id:nested-ttl"), false, "seen must only record confirmed deliveries");
+
+			// The parent is still holding the message past the dedupe TTL.
+			Date.now = () => base + 11 * 60 * 1000;
+			inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+			assert.equal(
+				nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts,
+				0,
+				"in-flight key must reject a duplicate independently of the TTL",
+			);
+			assert.equal(delivered.length, 0);
+
+			releaseParent?.();
+			await flush;
+			assert.equal(parentSends.length, 1);
+			assert.deepEqual(delivered, [["nested-ttl"]]);
+			assert.equal(seen.has("id:nested-ttl"), true, "confirmed delivery is recorded as seen");
+		} finally {
+			Date.now = realNow;
+			releaseNestedAsyncParent(parentRunId);
+		}
+	});
+
+	it("keeps late rollup children buffered when a duplicate group completion hits an in-flight send", async () => {
+		const parentRunId = "parent-late-rollup";
+		const { inner, bus } = createBus();
+		const childPi = { events: bus, on() {}, sendMessage(): void {} };
+		let rejectNext = true;
+		const parentSends: unknown[] = [];
+		registerNestedAsyncParent(parentRunId);
+		asChildSession(
+			() => registerSubagentNotify(childPi as never, () => parentRunId),
+			async (message) => {
+				if (rejectNext) {
+					rejectNext = false;
+					throw new Error("parent session gone");
+				}
+				parentSends.push(message);
+			},
+		);
+		const child = (runId: string) => ({
+			id: runId,
+			runId,
+			parentRunId: "group-late",
+			rootRunId: "group-late",
+			notifyPolicy: "rollup",
+			agent: "A",
+			success: true,
+			state: "complete",
+			summary: "child done",
+			timestamp: Date.now(),
+		});
+		const group = {
+			id: "group-late",
+			runId: "group-late",
+			rootRunId: "group-late",
+			notifyPolicy: "rollup",
+			agent: "A,A",
+			success: true,
+			state: "complete",
+			summary: "group done",
+			timestamp: Date.now(),
+		};
+
+		inner.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, child("late-a"));
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, group);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 1);
+		// A late child lands while the rollup is in flight, then the group is re-announced.
+		inner.emit(SUBAGENT_ASYNC_RUN_COMPLETE_EVENT, child("late-b"));
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, group);
+		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 1, "no duplicate in-flight send");
+
+		await flushNestedCompletionReprompts(parentRunId);
+		assert.equal(parentSends.length, 0, "first delivery rejected");
+
+		// The retry must roll up both the restored and the late child.
+		inner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, group);
+		await flushNestedCompletionReprompts(parentRunId);
+		assert.equal(parentSends.length, 1);
+		const details = (parentSends[0] as { details?: { children?: Array<{ runId?: string }> } }).details;
+		assert.deepEqual((details?.children ?? []).map((entry) => entry.runId).sort(), ["late-a", "late-b"]);
+		releaseNestedAsyncParent(parentRunId);
+	});
+
+	it("does not let a replacement registration acknowledge a send still pending in the prior one", async () => {
+		const parentRunId = "parent-replaced-registration";
+		const { inner: childInner, bus: childBus } = createBus();
+		const childPi = { events: childBus, on() {}, sendMessage(): void {} };
+		let releaseParent: (() => void) | undefined;
+		registerNestedAsyncParent(parentRunId);
+		asChildSession(
+			() => registerSubagentNotify(childPi as never, () => parentRunId),
+			async () => {
+				await new Promise<void>((resolve) => {
+					releaseParent = resolve;
+				});
+			},
+		);
+		const completion = {
+			id: "replaced-reg",
+			runId: "replaced-reg",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 9000,
+		};
+		try {
+			childInner.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+			const flush = flushNestedCompletionReprompts(parentRunId);
+			await Promise.resolve();
+
+			// A fresh host registration (reload) sees the same completion while the
+			// prior registration's send is still awaiting the parent.
+			const host = createPi();
+			const hostDelivered: string[][] = [];
+			host.bus.on(SUBAGENT_NOTIFY_DELIVERED_EVENT, (data) => {
+				hostDelivered.push(((data as { runIds?: string[] })?.runIds ?? []).slice());
+			});
+			host.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, completion);
+			assert.equal(host.sent.length, 1, "the replacement must send for itself, not inherit an unconfirmed mark");
+			assert.deepEqual(hostDelivered, [["replaced-reg"]], "acknowledged only after its own confirmed send");
+
+			releaseParent?.();
+			await flush;
+		} finally {
+			releaseNestedAsyncParent(parentRunId);
+		}
 	});
 
 	it("labels paused completions as paused even without an exit code", () => {

@@ -376,7 +376,9 @@ describe("workflow dashboard reader overlays", () => {
 		const theme = createTestTheme();
 		const lines = buildWorkflowRightLines(theme, groupSummary, 120, runs).join("\n");
 
-		assert.match(lines, /Parity audit/);
+		assert.doesNotMatch(lines, /Parity audit/, "the pane border titles the workflow; the body does not repeat it");
+		assert.match(lines, /^✓ complete · 2\.0s$/m);
+		assert.match(lines, /^3 runs · 3 done · 0t tokens · 30ms$/m);
 		assert.match(lines, /Compare behavior/);
 		// Root progress reuses the canonical phase label, including the declared phase count.
 		assert.match(lines, /Phase 1\/3: inspect .*2\/2/);

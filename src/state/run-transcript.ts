@@ -530,6 +530,13 @@ function parseSessionFile(input: {
 	return lines;
 }
 
+/** Already-parsed transcript for a run record, or undefined when nothing has
+ * been parsed yet. Pure cache lookup: no stat, read, or parse, so callers on the
+ * render path can consult it without touching the disk. */
+export function peekRunTranscript(runRecordDir: string): TranscriptLine[] | undefined {
+	return cache.get(runRecordDir)?.lines;
+}
+
 export function readRunTranscript(runRecordDir: string): TranscriptLine[] {
 	const statusPath = path.join(runRecordDir, "status.json");
 	// Read status FIRST so discovery can use it to find session files that live

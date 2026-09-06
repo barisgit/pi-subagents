@@ -39,14 +39,24 @@ export function createForegroundRunController(
 	control: ForegroundControl | undefined,
 	opts?: ForegroundRunControllerOptions,
 ): ForegroundRunController {
+	const activeInterrupts = new Map<number, (reason?: string) => boolean>();
+	const interruptActiveSteps = (reason?: string): boolean => {
+		let interrupted = false;
+		for (const interrupt of activeInterrupts.values()) {
+			if (interrupt(reason)) interrupted = true;
+		}
+		return interrupted;
+	};
+
 	return {
 		beginStep(agent, index, interrupt) {
 			if (!control) return;
+			activeInterrupts.set(index, interrupt);
 			control.currentAgent = agent;
 			control.currentIndex = index;
 			control.currentActivityState = undefined;
 			control.updatedAt = Date.now();
-			control.interrupt = interrupt;
+			control.interrupt = interruptActiveSteps;
 		},
 		applyProgress(agent, index, firstProgress, finalOutput) {
 			if (!control) return;
@@ -66,20 +76,23 @@ export function createForegroundRunController(
 			control.updatedAt = Date.now();
 		},
 		finalizeStep(index, final) {
-			if (!control || control.currentIndex !== index) return;
-			control.interrupt = undefined;
+			if (!control || !activeInterrupts.has(index)) return;
+			activeInterrupts.delete(index);
 			if (final) {
-				control.currentActivityState = final.progress?.activityState;
-				control.lastActivityAt = final.progress?.lastActivityAt;
-				control.currentTool = final.progress?.currentTool;
-				control.currentToolStartedAt = final.progress?.currentToolStartedAt;
-				control.phase = final.progress?.phase;
-				control.phaseStartedAt = final.progress?.phaseStartedAt;
-				control.lastToolEndAt = final.progress?.lastToolEndAt;
-				control.recentTools = final.progress?.recentTools;
-				control.recentOutput = final.progress?.recentOutput;
-				control.finalOutput = final.finalOutput;
+				if (control.currentIndex === index) {
+					control.currentActivityState = final.progress?.activityState;
+					control.lastActivityAt = final.progress?.lastActivityAt;
+					control.currentTool = final.progress?.currentTool;
+					control.currentToolStartedAt = final.progress?.currentToolStartedAt;
+					control.phase = final.progress?.phase;
+					control.phaseStartedAt = final.progress?.phaseStartedAt;
+					control.lastToolEndAt = final.progress?.lastToolEndAt;
+					control.recentTools = final.progress?.recentTools;
+					control.recentOutput = final.progress?.recentOutput;
+					control.finalOutput = final.finalOutput;
+				}
 			}
+			if (activeInterrupts.size === 0) control.interrupt = undefined;
 			control.updatedAt = Date.now();
 		},
 	};

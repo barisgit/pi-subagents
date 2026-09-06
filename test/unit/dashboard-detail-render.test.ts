@@ -29,6 +29,7 @@ import {
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 import type { DetailTarget } from "../../src/surfaces/dashboard-row-model.ts";
+import { readRunTranscript } from "../../src/state/run-transcript.ts";
 import type { RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 
 // The final-text and narration blocks render through pi-tui Markdown, whose
@@ -100,8 +101,13 @@ describe("dashboard detail targets", () => {
 		const transcript = stripAnsi(buildRightLines(theme, selected, 140, runs, live).join("\n"));
 		assert.match(
 			transcript,
-			/✓ widget · Review pipeline · stage 2\/2 · stage-2 · 0 tools · 0t tokens · 800ms/,
+			/✓ widget · Review pipeline · stage 2\/2 · complete · 0t tokens · 800ms/,
 			"a stage leaf uses its run header before the transcript",
+		);
+		assert.doesNotMatch(
+			transcript,
+			/stage 2\/2 · stage-2/,
+			"the pane border already titles the run by its agent, so the body header does not repeat it",
 		);
 		assert.match(
 			transcript,
@@ -235,7 +241,12 @@ describe("dashboard detail targets", () => {
 			assert.match(rendered.workflow ?? "", /final workflow result/);
 			assert.ok((rendered.workflow ?? "").indexOf("── Script") < (rendered.workflow ?? "").indexOf("── Phases"));
 			assert.match(rendered.phase ?? "", /2 runs/);
-			assert.match(rendered.pipelineGroup ?? "", /Review pipeline · Inspect/);
+			assert.doesNotMatch(
+				rendered.pipelineGroup ?? "",
+				/Review pipeline/,
+				"pipeline identity belongs to the border",
+			);
+			assert.match(rendered.pipelineGroup ?? "", /stage 1\/2 · 1\/1 items/);
 			assert.match(rendered.pipelineGroup ?? "", /widget/);
 			assert.match(rendered.stage ?? "", /first returned value/);
 			assert.match(rendered.stage ?? "", /"answer": 42/);
@@ -2223,6 +2234,9 @@ describe("dashboard selected-run status section", () => {
 				totalTokens: { input: 1_000_000, output: 3_240_235, total: 4_240_235 },
 			};
 			const width = 44;
+			// The status box never parses from disk on render; the tool count comes
+			// from the transcript promoted for the settled selection.
+			readRunTranscript(dir);
 			const lines = buildSelectedRunStatusBox(
 				statusTheme,
 				{ ownership: "foreign", run: summary } satisfies LiveRun,
@@ -2236,7 +2250,7 @@ describe("dashboard selected-run status section", () => {
 			assert.match(plainLines[0]!, /^polish dashboard +complete · 13m58s$/);
 			assert.doesNotMatch(plainLines[0]!, /─/, "status header carries no rule dashes");
 			assert.match(plainLines[1]!, /^ {2}2 tools · 4\.2Mt · 13m58s$/);
-			assert.match(plainLines[2]!, /^ {2}parallel · started Jul 5 14:00$/);
+			assert.match(plainLines[2]!, /^ {2}started Jul 5 14:00$/);
 			assert.match(plainLines[3]!, new RegExp(`^ {2}id ${runId}$`));
 			assert.doesNotMatch(joined, /123e4567\.\.\./, "full run id is not truncated");
 			const narrowLines = buildSelectedRunStatusBox(
@@ -2294,7 +2308,7 @@ describe("dashboard selected-run status section", () => {
 		).map(stripAnsi);
 
 		assert.equal(lines.length, 3, "wide status section stays compact");
-		assert.match(lines[2]!, new RegExp(`^ {2}single · id ${runId} · started 09:05$`));
+		assert.match(lines[2]!, new RegExp(`^ {2}started 09:05 · id ${runId}$`));
 		assert.doesNotMatch(lines[2]!, /Jul 6/);
 	});
 

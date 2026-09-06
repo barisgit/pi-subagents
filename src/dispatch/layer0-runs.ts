@@ -236,7 +236,9 @@ export function openRunRecord(step: Layer0RunStep, opts: OpenRunRecordOpts): Ope
 						...(opts.pipeline.stageCount !== undefined
 							? { pipelineStageCount: opts.pipeline.stageCount }
 							: {}),
-						...(opts.pipeline.itemCount !== undefined ? { pipelineItemCount: opts.pipeline.itemCount } : {}),
+						...(opts.pipeline.itemCount !== undefined
+							? { pipelineItemCount: opts.pipeline.itemCount }
+							: {}),
 					}
 				: {}),
 			...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
@@ -284,7 +286,12 @@ export type FinalizeRunPayload =
 	  };
 
 // finalize ONLY; dispose stays at call sites.
-export function finalizeRun(handle: OpenRunHandle, payload: FinalizeRunPayload): void {
+export function finalizeRun(handle: OpenRunHandle, payload: Extract<FinalizeRunPayload, { via: "terminal" }>): void;
+export function finalizeRun(
+	handle: OpenRunHandle,
+	payload: Extract<FinalizeRunPayload, { via: "result" }>,
+): Promise<void>;
+export function finalizeRun(handle: OpenRunHandle, payload: FinalizeRunPayload): void | Promise<void> {
 	if (payload.via === "terminal") {
 		if (handle.variant !== "sync-foreground")
 			throw new Error(`finalizeRun: 'terminal' payload requires sync-foreground variant, got ${handle.variant}`);
@@ -301,7 +308,7 @@ export function finalizeRun(handle: OpenRunHandle, payload: FinalizeRunPayload):
 			throw new Error(
 				`finalizeRun: 'result' payload requires group-child or async-detached variant, got ${handle.variant}`,
 			);
-		void handle.statusWriter.finalize(
+		return handle.statusWriter.finalize(
 			payload.result,
 			payload.totalUsage !== undefined ? { totalUsage: payload.totalUsage } : undefined,
 		);
@@ -358,31 +365,15 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 		.runAgent(preparedStep, { abortSignal: controller.signal, statusWriter: handle.statusWriter })
 		.then(
 			async (result) => {
-				opts.onLifecycle?.({
-					type: "run.completed",
-					runId,
-					runRecordDir: handle.runRecordDir,
-					sessionFile: handle.sessionFile,
-					timestamp: Date.now(),
-					result,
-				});
-				finalizeRun(handle, { via: "result", result });
+				await finalizeRun(handle, { via: "result", result });
 				return result;
 			},
-			(error: unknown) => {
-				opts.onLifecycle?.({
-					type: "run.completed",
-					runId,
-					runRecordDir: handle.runRecordDir,
-					sessionFile: handle.sessionFile,
-					timestamp: Date.now(),
-					error,
-				});
+			async (error: unknown) => {
 				// A rejected leaf must not leave status.json frozen non-terminal
 				// (queued/running forever): finalize the persisted record as failed
 				// before the writer is disposed, then rethrow for the awaiting caller.
 				const endedAt = Date.now();
-				finalizeRun(handle, {
+				await finalizeRun(handle, {
 					via: "result",
 					result: {
 						runId,
@@ -399,6 +390,30 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 						sessionFile: handle.sessionFile,
 						error: { message: error instanceof Error ? error.message : String(error) },
 					},
+				});
+				throw error;
+			},
+		)
+		.then(
+			(result) => {
+				opts.onLifecycle?.({
+					type: "run.completed",
+					runId,
+					runRecordDir: handle.runRecordDir,
+					sessionFile: handle.sessionFile,
+					timestamp: Date.now(),
+					result,
+				});
+				return result;
+			},
+			(error: unknown) => {
+				opts.onLifecycle?.({
+					type: "run.completed",
+					runId,
+					runRecordDir: handle.runRecordDir,
+					sessionFile: handle.sessionFile,
+					timestamp: Date.now(),
+					error,
 				});
 				throw error;
 			},

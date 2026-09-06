@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { formatDuration } from "../../src/surfaces/formatters.ts";
+import { containerRowInfo } from "../../src/surfaces/dashboard-row-model.ts";
 import { runViewFromRegistryEntry } from "../../src/surfaces/subagents-status.ts";
 import {
 	appendRunEntry,
@@ -45,7 +46,7 @@ function appendChild(
 		parentRunId: string;
 		rootRunId: string;
 		agentName: string;
-		state: "running" | "complete" | "failed";
+		state: "running" | "complete" | "failed" | "paused" | "lost";
 		startedAt: number;
 		endedAt?: number;
 	},
@@ -94,6 +95,43 @@ afterEach(() => {
 });
 
 describe("group row status", () => {
+	it("counts paused and lost children as terminal without making the group successful", () => {
+		const root = tmpRegistry();
+		const group = appendGroup(root, "group-terminal-children", 1000);
+		appendChild(root, {
+			runId: "paused-child",
+			parentRunId: group.runId,
+			rootRunId: group.runId,
+			agentName: "fixer",
+			state: "paused",
+			startedAt: 2000,
+			endedAt: 7000,
+		});
+		appendChild(root, {
+			runId: "lost-child",
+			parentRunId: group.runId,
+			rootRunId: group.runId,
+			agentName: "qa",
+			state: "lost",
+			startedAt: 3000,
+			endedAt: 11000,
+		});
+
+		const entries = readAllEntries();
+		const summary = runViewFromRegistryEntry(group, entries);
+		assert.equal(summary.state, "failed");
+		assert.equal(summary.endedAt, 11000);
+
+		const childViews = entries
+			.filter((entry) => entry.parentRunId === group.runId)
+			.map((entry) => ({ ownership: "foreign" as const, run: runViewFromRegistryEntry(entry, entries) }));
+		const info = containerRowInfo([{ ownership: "foreign", run: summary }, ...childViews], new Set(), {
+			ownership: "foreign",
+			run: summary,
+		});
+		assert.deepEqual(info && { done: info.done, total: info.total }, { done: 2, total: 2 });
+	});
+
 	it("group row derives status and endedAt from children", () => {
 		const root = tmpRegistry();
 		const completeGroup = appendGroup(root, "group-complete", 1000);

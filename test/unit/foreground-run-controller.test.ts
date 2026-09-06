@@ -34,7 +34,7 @@ describe("createForegroundRunController", () => {
 		assert.equal(control.currentAgent, "fixer");
 		assert.equal(control.currentIndex, 2);
 		assert.equal(control.currentActivityState, undefined);
-		assert.equal(control.interrupt, interrupt);
+		assert.equal(typeof control.interrupt, "function");
 		assert.equal(typeof control.updatedAt, "number");
 
 		// progress copies the snapshot fields
@@ -54,7 +54,7 @@ describe("createForegroundRunController", () => {
 		// needs_attention clears only activity (interrupt closure stays installed)
 		fg.markNeedsAttention();
 		assert.equal(control.currentActivityState, undefined);
-		assert.equal(control.interrupt, interrupt);
+		assert.equal(typeof control.interrupt, "function");
 
 		// complete copies the final snapshot subset and clears interrupt
 		const finalProgress = makeProgress({
@@ -105,8 +105,37 @@ describe("createForegroundRunController", () => {
 		fg.finalizeStep(0, { progress: makeProgress(), finalOutput: "x" });
 
 		// index mismatch -> control untouched
-		assert.equal(control.interrupt, interrupt);
+		assert.equal(typeof control.interrupt, "function");
 		assert.equal(control.finalOutput, undefined);
+	});
+
+	it("keeps a shared interrupt for all active parallel steps", () => {
+		const control: Record<string, unknown> = {};
+		const fg = createForegroundRunController(control as never);
+		let firstInterrupts = 0;
+		let secondInterrupts = 0;
+
+		fg.beginStep("first", 0, () => {
+			firstInterrupts++;
+			return true;
+		});
+		fg.beginStep("second", 1, () => {
+			secondInterrupts++;
+			return true;
+		});
+
+		assert.equal((control.interrupt as () => boolean)(), true);
+		assert.equal(firstInterrupts, 1);
+		assert.equal(secondInterrupts, 1);
+
+		fg.finalizeStep(1);
+		assert.equal(typeof control.interrupt, "function");
+		assert.equal((control.interrupt as () => boolean)(), true);
+		assert.equal(firstInterrupts, 2);
+		assert.equal(secondInterrupts, 1);
+
+		fg.finalizeStep(0);
+		assert.equal(control.interrupt, undefined);
 	});
 
 	it("installs an interrupt mid-run that clears activity and returns true", () => {

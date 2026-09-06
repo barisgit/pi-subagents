@@ -58,6 +58,24 @@ describe("runs registry session shards", () => {
 		assert.deepEqual(readAllEntries(), [run]);
 	});
 
+	it("retrying after a shard write failure repairs the missing shard", () => {
+		const run = entry("run-repair", 150, { rootSessionId: "host" });
+		const sessionsPath = path.dirname(getShardPath("host"));
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+		fs.writeFileSync(sessionsPath, "not a directory", "utf8");
+
+		appendRunEntry(run);
+		fs.rmSync(sessionsPath);
+		assert.deepEqual(readShardEntries("host"), []);
+
+		appendRunEntry(run);
+		appendRunEntry(run);
+
+		assert.equal(fs.readFileSync(getShardPath("host"), "utf8"), JSON.stringify(run) + "\n");
+		assert.deepEqual(readShardEntries("host"), [run]);
+		assert.deepEqual(readAllEntries(), [run]);
+	});
+
 	it("nested child entries are keyed by rootSessionId before parentSessionId", () => {
 		const child = entry("child", 200, { rootSessionId: "host", parentSessionId: "sub" });
 		appendRunEntry(child);

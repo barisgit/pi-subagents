@@ -64,6 +64,7 @@ export function aggregateState(children: readonly RowState[]): RowState {
 	if (children.length === 0) return "queued";
 	if (children.includes("failed")) return "failed";
 	if (children.includes("lost")) return "lost";
+	if (children.includes("paused")) return "paused";
 	if (children.includes("attention")) return "attention";
 	if (children.includes("running")) return "running";
 	if (children.includes("queued")) return "queued";
