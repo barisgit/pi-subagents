@@ -847,6 +847,7 @@ export class SubagentsStatusComponent implements Component {
 		if (this.sessionId) this.selectedId = lastSelectedRowKeyBySession.get(this.sessionId);
 		this.overlay = this.createPaneOverlay();
 		this.reload();
+		this.restoreOverlaySelection();
 		// Seed the signature so the first timer tick doesn't spuriously diff against
 		// undefined; the initial paint is driven by the overlay open, not the timer.
 		this.lastRunsSignature = overlayRunsSignature(this.runs, this.selectedId, this.errorMessage);
@@ -860,11 +861,14 @@ export class SubagentsStatusComponent implements Component {
 				mode: "cursor",
 				rows: () => this.overlayRows(),
 				selectionKey: (row) => this.overlayRowKey(row),
-				...(this.selectedId !== undefined ? { initialSelectionKey: this.selectedId } : {}),
-				onSelectionChange: (row) => {
+				onSelectionChange: (row, index) => {
 					this.selectedId = row && row.kind !== "empty" ? dashboardRowKey(row) : undefined;
-					if (this.sessionId && this.selectedId !== undefined) {
-						lastSelectedRowKeyBySession.set(this.sessionId, this.selectedId);
+					if (this.sessionId) {
+						if (this.selectedId !== undefined && index > 0) {
+							lastSelectedRowKeyBySession.set(this.sessionId, this.selectedId);
+						} else {
+							lastSelectedRowKeyBySession.delete(this.sessionId);
+						}
 					}
 					this.pipelineChainSelectionKey = undefined;
 					this.scheduleTranscriptLoad();
@@ -1030,6 +1034,12 @@ export class SubagentsStatusComponent implements Component {
 			],
 		});
 		return factory(this.tui, this.theme, undefined, () => this.done()) as PaneOverlayComponent;
+	}
+
+	private restoreOverlaySelection(): void {
+		if (this.selectedId === undefined) return;
+		const index = this.overlayRows().findIndex((row) => this.overlayRowKey(row) === this.selectedId);
+		for (let step = 0; step < index; step += 1) this.overlay.handleInput("\u001b[B");
 	}
 
 	private displayMode() {
@@ -1741,20 +1751,11 @@ function runToolCount(run: LiveRun): number {
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function formatStartedTime(ms: number, now: number): string {
+function formatStartedTime(ms: number): string {
 	const date = new Date(ms);
-	const today = new Date(now);
 	const hours = date.getHours().toString().padStart(2, "0");
 	const minutes = date.getMinutes().toString().padStart(2, "0");
-	const time = `${hours}:${minutes}`;
-	if (
-		date.getFullYear() === today.getFullYear() &&
-		date.getMonth() === today.getMonth() &&
-		date.getDate() === today.getDate()
-	) {
-		return time;
-	}
-	return `${MONTH_LABELS[date.getMonth()] ?? ""} ${date.getDate()} ${time}`;
+	return `${date.getFullYear()} ${MONTH_LABELS[date.getMonth()] ?? ""} ${date.getDate()} ${hours}:${minutes}`;
 }
 
 function clipPlain(text: string, width: number): string {
@@ -1807,7 +1808,7 @@ function wrapPlainStatusText(text: string, width: number, maxLines: number): str
 
 function selectedRunMetaLines(run: LiveRun, width: number, now: number, maxLines: number): string[] {
 	if (maxLines <= 0) return [];
-	const started = `started ${formatStartedTime(run.run.startedAt, now)}`;
+	const started = `started ${formatStartedTime(run.run.startedAt)}`;
 	const combined = `${started} · id ${run.run.id}`;
 	if (metaFits(width, combined)) return [combined];
 	const lines = [started];

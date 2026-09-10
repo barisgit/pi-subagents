@@ -140,7 +140,8 @@ export interface RowCells {
 	tools?: number;
 	tokens?: number;
 	durationMs?: number;
-	endedAt?: number;
+	/** Time since the original run started, independent of execution duration. */
+	ageMs?: number;
 	stageStrip?: readonly RowState[];
 	parallel?: boolean;
 	resumeCount?: number;
@@ -189,15 +190,20 @@ export function renderRowLine(theme: Theme, cells: RowCells, width: number, vari
 		parts.push(theme.fg("dim", `age ${formatDuration(Math.max(0, cells.identityDurationMs))}`));
 	}
 	const base = parts.join(" · ");
-	if (variant !== "dashboard" || cells.endedAt === undefined) return truncLine(base, width);
+	if (variant !== "dashboard" || cells.ageMs === undefined) return truncLine(base, width);
 
-	const date = new Date(cells.endedAt);
-	const stamp = theme.fg(
-		"dim",
-		`@${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`,
-	);
-	const stampWidth = 6;
-	if (width <= stampWidth) return truncLine(stamp, width);
+	const minutes = Math.floor(Math.max(0, cells.ageMs) / 60_000);
+	const age =
+		minutes < 1
+			? "now"
+			: minutes < 60
+				? `${minutes}m ago`
+				: minutes < 1440
+					? `${Math.floor(minutes / 60)}h ago`
+					: `${Math.floor(minutes / 1440)}d ago`;
+	const stamp = theme.fg("dim", age);
+	const stampWidth = age.length;
+	if (width <= stampWidth + 1) return truncLine(stamp, width);
 	const clippedBase = truncLine(base, width - stampWidth - 1);
 	const gap = " ".repeat(Math.max(1, width - textWidth(clippedBase) - stampWidth));
 	return `${clippedBase}${gap}${stamp}`;
@@ -257,6 +263,7 @@ export function cellsFromRunView(run: RunView, now: number, opts: RowCellOptions
 	const name = runNameAndColor(run);
 	const cells: RowCells = {
 		state,
+		ageMs: Math.max(0, now - run.startedAt),
 		...name,
 		...(opts.depth !== undefined ? { depth: opts.depth } : {}),
 		...(opts.selected !== undefined ? { selected: opts.selected } : {}),
@@ -272,8 +279,6 @@ export function cellsFromRunView(run: RunView, now: number, opts: RowCellOptions
 	const durationEnd = frozenEnd ?? now;
 	cells.durationMs = Math.max(0, durationEnd - startedAt);
 	if ((run.resumeCount ?? 0) > 0) cells.identityDurationMs = Math.max(0, durationEnd - run.startedAt);
-	const stampEnd = run.endedAt ?? (state === "lost" ? frozenEnd : undefined);
-	if (stampEnd !== undefined) cells.endedAt = stampEnd;
 	return cells;
 }
 

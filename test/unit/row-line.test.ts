@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, it } from "node:test";
 import type { Theme } from "../../src/surfaces/render-shared.ts";
 import {
@@ -97,21 +98,27 @@ describe("renderRowLine", () => {
 		assert.equal(renderRowLine(plainTheme, cells, 120, "notice"), body);
 	});
 
-	it("right-aligns a wall-clock stamp only for terminal dashboard rows", () => {
-		const endedAt = new Date(2024, 0, 2, 3, 4).getTime();
-		const dashboard = renderRowLine(
-			plainTheme,
-			{ state: "complete", name: "worker", durationMs: 3_000, endedAt },
-			30,
-			"dashboard",
-		);
-		assert.equal(dashboard.length, 30);
-		assert.match(dashboard, /· 3\.0s\s+@03:04$/);
-		assert.doesNotMatch(
-			renderRowLine(plainTheme, { state: "complete", name: "worker", endedAt }, 80, "notice"),
-			/@/,
-		);
-		assert.doesNotMatch(renderRowLine(plainTheme, { state: "running", name: "worker" }, 80, "dashboard"), /@/);
+	it("right-aligns relative start age only in dashboard rows", () => {
+		for (const [ageMs, expected] of [
+			[-1, "now"],
+			[59_999, "now"],
+			[60_000, "1m ago"],
+			[3_599_999, "59m ago"],
+			[3_600_000, "1h ago"],
+			[86_399_999, "23h ago"],
+			[86_400_000, "1d ago"],
+			[5 * 86_400_000, "5d ago"],
+		] as const) {
+			const cells = { state: "complete" as const, name: "worker", durationMs: 3_000, ageMs };
+			const dashboard = renderRowLine(plainTheme, cells, 40, "dashboard");
+			assert.equal(dashboard.length, 40);
+			assert.ok(dashboard.endsWith(expected));
+			assert.match(dashboard, /· 3\.0s/);
+			for (const variant of ["notice", "widget", "detailStep"] as const) {
+				assert.ok(!renderRowLine(plainTheme, cells, 80, variant).includes(expected));
+			}
+			assert.ok(visibleWidth(renderRowLine(plainTheme, cells, 4, "dashboard")) <= 4);
+		}
 	});
 });
 
@@ -124,19 +131,20 @@ describe("row cell producers", () => {
 			state: "running",
 			name: "single",
 			durationMs: 5_000,
+			ageMs: 6_000,
 		});
 		assert.equal(cellsFromRunView({ ...base, state: "queued" }, 7_000).durationMs, undefined);
 		assert.deepEqual(cellsFromRunView({ ...base, state: "complete", endedAt: 6_000 }, 9_000), {
 			state: "complete",
 			name: "single",
 			durationMs: 5_000,
-			endedAt: 6_000,
+			ageMs: 8_000,
 		});
 		assert.deepEqual(cellsFromRunView({ ...base, displayState: "lost", lastUpdate: 5_000 }, 9_000), {
 			state: "lost",
 			name: "single",
 			durationMs: 4_000,
-			endedAt: 5_000,
+			ageMs: 8_000,
 		});
 		assert.equal(cellsFromRunView({ ...base, displayState: "needs_attention" }, 7_000).state, "attention");
 		assert.equal(cellsFromRunView(base, 7_000, { pendingDelivery: true }).state, "delivering");

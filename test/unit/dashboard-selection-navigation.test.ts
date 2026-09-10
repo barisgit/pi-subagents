@@ -95,6 +95,50 @@ describe("dashboard selection restore across reopen", () => {
 		}
 	});
 
+	it("follows the current first row when the previous selection was first", () => {
+		const sessionId = "sess-restore-top";
+		const first = createComponent(runsFor(sessionId), { sessionId });
+		try {
+			assert.match(selectedLeftLine(first), /label run-a/);
+		} finally {
+			first.dispose();
+		}
+
+		const runs = [makeRun("run-new", "/missing/new", 4000, sessionId), ...runsFor(sessionId)];
+		const reopened = createComponent(runs, { sessionId });
+		try {
+			assert.match(selectedLeftLine(reopened), /label run-new/);
+		} finally {
+			reopened.dispose();
+		}
+	});
+
+	it("restores a visible selection without scrolling it to the top", () => {
+		const sessionId = "sess-restore-visible";
+		const runs = Array.from({ length: 6 }, (_, index) =>
+			makeRun(`run-${index}`, `/missing/${index}`, 6000 - index, sessionId),
+		);
+		const first = createComponent(runs, { sessionId });
+		try {
+			for (let index = 0; index < 4; index += 1) first.handleInput("j");
+			assert.match(selectedLeftLine(first), /label run-4/);
+		} finally {
+			first.dispose();
+		}
+
+		const reopened = createComponent(runs, { sessionId });
+		try {
+			const lines = reopened.render(120).map(stripAnsi);
+			assert.ok(
+				lines.some((line) => line.includes("label run-0")),
+				"the list remains scrolled to the top",
+			);
+			assert.match(selectedLeftLine(reopened), /label run-4/);
+		} finally {
+			reopened.dispose();
+		}
+	});
+
 	it("does not leak the remembered selection into a different host session", () => {
 		const first = createComponent(runsFor("sess-leak-a"), { sessionId: "sess-leak-a" });
 		try {

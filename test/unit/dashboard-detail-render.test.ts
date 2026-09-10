@@ -2250,7 +2250,7 @@ describe("dashboard selected-run status section", () => {
 			assert.match(plainLines[0]!, /^polish dashboard +complete · 13m58s$/);
 			assert.doesNotMatch(plainLines[0]!, /─/, "status header carries no rule dashes");
 			assert.match(plainLines[1]!, /^ {2}2 tools · 4\.2Mt · 13m58s$/);
-			assert.match(plainLines[2]!, /^ {2}started Jul 5 14:00$/);
+			assert.match(plainLines[2]!, /^ {2}started 2026 Jul 5 14:00$/);
 			assert.match(plainLines[3]!, new RegExp(`^ {2}id ${runId}$`));
 			assert.doesNotMatch(joined, /123e4567\.\.\./, "full run id is not truncated");
 			const narrowLines = buildSelectedRunStatusBox(
@@ -2292,7 +2292,7 @@ describe("dashboard selected-run status section", () => {
 		}
 	});
 
-	it("keeps today's start time short when the id fits on one metadata line", () => {
+	it("includes today's full date when the id fits on one metadata line", () => {
 		const runId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 		const startedAt = new Date(2026, 6, 6, 9, 5).getTime();
 		const summary: AsyncRunSummary = {
@@ -2308,8 +2308,7 @@ describe("dashboard selected-run status section", () => {
 		).map(stripAnsi);
 
 		assert.equal(lines.length, 3, "wide status section stays compact");
-		assert.match(lines[2]!, new RegExp(`^ {2}started 09:05 · id ${runId}$`));
-		assert.doesNotMatch(lines[2]!, /Jul 6/);
+		assert.match(lines[2]!, new RegExp(`^ {2}started 2026 Jul 6 09:05 · id ${runId}$`));
 	});
 
 	it("treats lost as authoritative over a stale current phase", () => {

@@ -38,7 +38,7 @@ function renderTree(): string {
 		for (const line of component.render(220).slice(1)) {
 			const left = stripAnsi(line).slice(1).split("│")[0]?.trimEnd() ?? "";
 			if (left.startsWith("─")) break;
-			if (left.trim()) rows.push(left.replace(/\s+@\d{2}:\d{2}$/, ""));
+			if (left.trim()) rows.push(left.replace(/\s+(?:now|\d+[mhd] ago)$/, ""));
 		}
 		return rows.join("\n");
 	} finally {

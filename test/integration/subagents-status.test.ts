@@ -510,9 +510,7 @@ describe("SubagentsStatusComponent", () => {
 			assert.doesNotMatch(row, /· interrupted/);
 			assert.doesNotMatch(row, /thinking|streaming|writing|waiting \d/);
 
-			const d = new Date(endedAt);
-			const stamp = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-			assert.match(row, new RegExp(`\\b${stamp}\\b`));
+			assert.match(row, /\bnow\b/);
 		} finally {
 			component.dispose();
 		}
@@ -1251,7 +1249,7 @@ describe("SubagentsStatusComponent", () => {
 			assert.doesNotMatch(output, /running\/lost/);
 		});
 
-		it("shows a frozen lost duration and a separate clock stamp", () => {
+		it("shows a frozen lost duration and a separate start age", () => {
 			const died = new Date();
 			died.setHours(14, 7, 0, 0);
 			const output = renderStatus(
@@ -1259,15 +1257,16 @@ describe("SubagentsStatusComponent", () => {
 					currentTool: undefined,
 					currentToolStartedAt: undefined,
 					displayState: "lost",
+					startedAt: Date.now() - 5 * 86_400_000,
 					endedAt: undefined,
 					lastUpdate: died.getTime(),
 					runnerHeartbeatAt: died.getTime(),
 				}),
 			);
 
-			// Duration and wall clock no longer share a column: elapsed time freezes at
-			// the last heartbeat and the dashboard alone right-aligns @HH:MM.
-			assert.match(output, /(?:\d+ms|\d+(?:\.\d+)?s|\d+m\d+s)\s+@14:07/);
+			// Execution duration freezes; start age continues independently.
+			assert.match(output, /(?:\d+ms|\d+(?:\.\d+)?s|\d+m\d+s)\s+5d ago/);
+			assert.match(output, /started \d{4} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}/);
 		});
 
 		it("freezes the resumed identity age once a run is terminal", () => {
