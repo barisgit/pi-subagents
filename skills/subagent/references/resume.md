@@ -20,6 +20,8 @@ Resume whenever a live run needs a correction, changed constraint, answer, or ne
 
 Terminal, paused, or interrupted runs can also resume when their saved session is available. Keep the message concrete: state what changed, what to do next, and whether prior constraints still apply.
 
+Resume continues an objective; it is not a way to reuse one child for unrelated work. When the next task is a different objective or area, or the child's context has grown enough that a fresh brief would serve as well, start a new `run` instead.
+
 ```ts
 subagent({
   action: "status",
