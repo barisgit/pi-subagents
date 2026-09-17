@@ -467,7 +467,10 @@ describe("dashboard detail pane redesign", () => {
 	});
 
 	it("crossing twenty preview rows loads only the final selected transcript", async () => {
-		const runs = Array.from({ length: 20 }, (_, index) => makeRun(`run-preview-${index}`, `/preview/${index}`));
+		const runs = Array.from({ length: 20 }, (_, index) => ({
+			...makeRun(`run-preview-${index}`, `/preview/${index}`),
+			startedAt: 20 - index,
+		}));
 		const loaded = new Map<string, Array<{ messages: LiveDashboardSession["messages"] }>>();
 		const reads: string[] = [];
 		const reader = {

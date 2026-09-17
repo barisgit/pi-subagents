@@ -8,7 +8,6 @@
 // disk IO. The component owns fetching the raw LiveRun[] (reading the registry /
 // async-status from disk, foreground sync runs, sync-vs-disk dedupe) and then
 // delegates the filter/sort/display-row derivation here.
-import { compareRunsForDisplay } from "../state/run-liveness.ts";
 import { formatWorkflowPhase, shapeWorkflowPhasePlan, type WorkflowPhasePlanState } from "../state/workflow-display.ts";
 import type { AsyncRunSummary } from "../state/async-status.ts";
 import type { LiveRun } from "../state/run-view.ts";
@@ -198,9 +197,14 @@ export function filterRunsToSessionTree(
 }
 
 function baseSortLiveRuns(runs: LiveRun[]): LiveRun[] {
-	return [...runs].sort((a, b) =>
-		compareRunsForDisplay({ ...a.run, updatedAt: a.run.lastUpdate }, { ...b.run, updatedAt: b.run.lastUpdate }),
-	);
+	return [...runs].sort((a, b) => {
+		const aActive = a.run.state === "running" || a.run.state === "queued";
+		const bActive = b.run.state === "running" || b.run.state === "queued";
+		if (aActive !== bActive) return aActive ? -1 : 1;
+		const byStart = (b.run.startedAt ?? 0) - (a.run.startedAt ?? 0);
+		if (byStart !== 0) return byStart;
+		return a.run.id < b.run.id ? -1 : a.run.id > b.run.id ? 1 : 0;
+	});
 }
 
 function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
@@ -222,7 +226,7 @@ function orderRunsWithChildren(sorted: LiveRun[]): LiveRun[] {
 		// workflow is a disk-only field (foreground views never set it), so the
 		// field read selects foreign workflow parents directly.
 		// Parallel groups flatten their children into top-level rows, which keep the
-		// global priority order (needs attention first, newest first).
+		// global active-first order (newest spawn first within each group).
 		if (parent.run.mode === "parallel" && !parent.run.workflow) return children;
 		// An agent run that spawned sub-agents shows them in dispatch order:
 		// startedAt ascending, then run id as a deterministic tie-breaker.
@@ -292,11 +296,9 @@ export function sortLiveRuns(
 	async: AsyncRunSummary[],
 	ownedIds?: ReadonlySet<string>,
 ): LiveRun[] {
-	// Single ordering rule for the dashboard: needs_attention pinned to the very top,
-	// then everything strictly by spawn time (newest first). State buckets are NOT
-	// used here -- otherwise old failed runs would float above recently completed
-	// runs just because 'failed' bucket ranks above 'complete'. The status glyph on
-	// each row already communicates state, so bucketing only hurt the mental model.
+	// Keep active runs first, then spawn order (newest first), with run id breaking ties.
+	// Activity and attention updates must not move existing rows.
+	// The status glyph communicates state without changing the list's order.
 	//
 	// Provenance assignment: foreground runs are always live (in-process). Async
 	// overlay runs are live ONLY when this process owns them (the registry memory

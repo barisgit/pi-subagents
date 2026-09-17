@@ -46,6 +46,7 @@ function createComponent(
 	runs: AsyncRunSummary[],
 	options: {
 		sessionId?: string;
+		refreshMs?: number;
 		reader?: unknown;
 		tui?: unknown;
 		getLiveSessions?: (runId: string) => LiveDashboardSession[];
@@ -62,7 +63,7 @@ function createComponent(
 			runMessageReader: (options.reader ?? new RunMessageReader()) as never,
 			...(options.getLiveSessions ? { getLiveSessions: options.getLiveSessions } : {}),
 			selectionSettleMs: 5,
-			refreshMs: 60_000,
+			refreshMs: options.refreshMs ?? 60_000,
 			...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
 		},
 	);
@@ -180,6 +181,79 @@ describe("dashboard selection restore across reopen", () => {
 	});
 });
 
+describe("dashboard refresh ordering", () => {
+	it("keeps selection and transcript on the same run through activity, completion, resume and insertion", async () => {
+		const runs = [
+			{
+				...makeRun("a", "/missing/a", 3000),
+				state: "running" as const,
+				displayState: "quiet" as const,
+				parentRunId: "batch",
+			},
+			{
+				...makeRun("b", "/missing/b", 2000),
+				state: "running" as const,
+				displayState: "quiet" as const,
+				parentRunId: "batch",
+			},
+			{
+				...makeRun("c", "/missing/c", 1000),
+				state: "running" as const,
+				displayState: "quiet" as const,
+				parentRunId: "batch",
+			},
+		];
+		const overlayRuns: AsyncRunSummary[] = [
+			{ id: "batch", mode: "parallel", state: "running", startedAt: 500, steps: [] },
+			...runs,
+		];
+		let renders = 0;
+		const component = createComponent(overlayRuns, {
+			refreshMs: 5,
+			reader: {
+				readPreview: (dir: string) => [
+					{ messages: [{ role: "user", content: `transcript ${dir}`, timestamp: 1 }] },
+				],
+				peek: () => undefined,
+				read: (dir: string) => [{ messages: [{ role: "user", content: `transcript ${dir}`, timestamp: 1 }] }],
+			},
+			tui: { requestRender: () => renders++, terminal: { rows: 32 } },
+		});
+		const visibleLabels = () =>
+			component
+				.render(120)
+				.map(stripAnsi)
+				.map((line) => line.split("│")[1] ?? "")
+				.filter((line) => line.includes("fixer"))
+				.flatMap((line) => line.match(/label [abcd]/g) ?? []);
+		try {
+			component.handleInput("j");
+			assert.deepEqual(visibleLabels(), ["label a", "label b", "label c"]);
+			assert.match(selectedLeftLine(component), /label b/);
+			overlayRuns[3] = { ...runs[2]!, displayState: "tool_running" };
+
+			const checkRefresh = async (expected: string[]) => {
+				const before = renders;
+				const deadline = performance.now() + 2000;
+				while (renders === before && performance.now() < deadline) await delay(5);
+				assert.ok(renders > before, "the dashboard refreshed");
+				assert.deepEqual(visibleLabels(), expected);
+				assert.match(selectedLeftLine(component), /label b/);
+				assert.match(stripAnsi(component.render(120).join("\n")), /transcript \/missing\/b/);
+			};
+			await checkRefresh(["label a", "label b", "label c"]);
+			overlayRuns[2] = { ...runs[1]!, state: "complete", displayState: undefined, endedAt: 9000 };
+			await checkRefresh(["label a", "label c", "label b"]);
+			overlayRuns[2] = { ...runs[1]! };
+			await checkRefresh(["label a", "label b", "label c"]);
+			overlayRuns.push({ ...makeRun("d", "/missing/d", 4000), state: "queued", parentRunId: "batch" });
+			await checkRefresh(["label d", "label a", "label b", "label c"]);
+		} finally {
+			component.dispose();
+		}
+	});
+});
+
 describe("nested sibling ordering", () => {
 	function mk(
 		id: string,
@@ -238,16 +312,42 @@ describe("nested sibling ordering", () => {
 		);
 	});
 
-	it("preserves top-level priority ordering (needs attention first, then newest)", () => {
-		const a = mk("a", undefined, "running", 1000);
-		const b = mk("b", undefined, "running", 2000);
-		const c = mk("c", undefined, "running", 1500, { displayState: "needs_attention" });
-		assert.equal(order([a, b, c]), "c,b,a");
-		assert.equal(
-			order([mk("a", undefined, "complete", 1000, { endedAt: 5000 }), mk("b", undefined, "running", 2000)]),
-			"b,a",
-		);
-	});
+	for (const parent of [undefined, "batch"]) {
+		it(`keeps ${parent ? "flattened parallel" : "top-level"} rows stable within lifecycle groups`, () => {
+			const container = parent ? [mk(parent, undefined, "running", 500, { mode: "parallel" })] : [];
+			const a = mk("a", parent, "running", 1000);
+			const b = mk("b", parent, "running", 2000);
+			const c = mk("c", parent, "running", 2000);
+			const visibleOrder = (runs: AsyncRunSummary[]) => order([...container, ...runs]).replace("batch,", "");
+			assert.equal(visibleOrder([c, a, b]), "b,c,a", "equal timestamps use a fixed tie-breaker");
+			assert.equal(
+				visibleOrder([a, { ...b, state: "complete" }, c]),
+				"c,a,b",
+				"finished rows move below active rows",
+			);
+			assert.equal(
+				visibleOrder([
+					{ ...a, state: "queued" },
+					{ ...b, state: "complete" },
+					{ ...c, state: "failed" },
+				]),
+				"a,b,c",
+				"queued runs precede finished runs",
+			);
+			for (const displayState of ["tool_running", "working", "quiet", "needs_attention", "lost"] as const) {
+				assert.equal(visibleOrder([{ ...a, displayState }, c, b]), "b,c,a", displayState);
+			}
+			assert.equal(
+				visibleOrder([
+					{ ...a, state: "complete", endedAt: 9000 },
+					{ ...c, state: "failed", lastUpdate: 10000 },
+					b,
+				]),
+				"b,c,a",
+				"finished rows retain spawn order, not completion order",
+			);
+		});
+	}
 });
 
 function writeLargeRun(dir: string, runId: string, toolCalls: number): void {
