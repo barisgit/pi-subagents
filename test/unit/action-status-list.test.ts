@@ -9,6 +9,7 @@ import { inspectSubagentStatus } from "../../src/state/run-status.ts";
 import { appendRunEntry, setRegistryPathForTests, type RunsRegistryEntry } from "../../src/state/runs-registry.ts";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
 import type { SubagentState } from "../../src/protocol/types.ts";
+import { setChildLineage, removeChildLineageBindings, type SubagentLineage } from "../../src/state/lineage.ts";
 
 const tmpRoots: string[] = [];
 const originalHome = process.env.HOME;
@@ -155,6 +156,55 @@ afterEach(() => {
 });
 
 describe("action status list", () => {
+	it("limits child discovery to its own descendants while the root retains the whole tree", async () => {
+		const root = tmpRegistry();
+		const lineage: SubagentLineage = {
+			role: "child",
+			currentAgent: "worker",
+			parentAgent: "coordinator",
+			parentSessionId: "scope-root",
+			rootSessionId: "scope-root",
+			depth: 1,
+			runId: "caller-run",
+			rootRunId: "caller-run",
+		};
+		setChildLineage("scope-child", lineage);
+		setChildLineage("scope-empty-child", lineage);
+		try {
+			for (const [runId, parentSessionId, parentRunId] of [
+				["caller-run", "scope-root", undefined],
+				["sibling-run", "scope-root", undefined],
+				["sibling-descendant", "scope-sibling", "sibling-run"],
+				["own-child", "scope-child", "caller-run"],
+				["own-grandchild", "scope-grandchild", "own-child"],
+			] as const) {
+				appendStatusRun(root, {
+					runId,
+					agentName: "worker",
+					state: "complete",
+					startedAt: 1000,
+					endedAt: 2000,
+					parentSessionId,
+					parentRunId,
+					rootSessionId: "scope-root",
+				});
+			}
+			const childText = await executorStatusText(root, "scope-child");
+			assert.match(childText, /own-child/);
+			assert.match(childText, /^Subagent runs: 2/m);
+			assert.doesNotMatch(childText, /caller-run|sibling-run|sibling-descendant/);
+			const emptyChildText = await executorStatusText(root, "scope-empty-child");
+			assert.doesNotMatch(emptyChildText, /caller-run|sibling-run|own-child/);
+			const rootText = await executorStatusText(root, "scope-root");
+			assert.match(rootText, /^Subagent runs: 5/m);
+			for (const id of ["caller-run", "sibling-run"]) {
+				assert.ok(rootText.includes(id), id);
+			}
+		} finally {
+			removeChildLineageBindings(lineage);
+		}
+	});
+
 	it("recovers interrupted runs after reload without crossing same-cwd session boundaries", async () => {
 		const root = tmpRegistry();
 		const otherCwd = path.join(root, "other-project");

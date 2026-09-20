@@ -11,8 +11,9 @@ export interface RunStatusParams {
 	id?: string;
 	runId?: string;
 	dir?: string;
-	// Scope for the no-id list mode. A session ID strictly selects that root
-	// session's tree; cwd is used only when no session identity is available.
+	// Scope for the no-id list mode. A session ID selects runs dispatched by
+	// that session and their descendants; roots retain their entire tree.
+	// Cwd is used only when no session identity is available.
 	// Without either value, every entry in
 	// runs-index.jsonl across every project ever spawned would be returned —
 	// including thousands of long-dead test temp-dir runs that synthesize a
@@ -37,13 +38,27 @@ function activityText(activityState: unknown, lastActivityAt: unknown): string |
 // Session tags are authoritative. Untagged legacy rows cannot be attributed
 // safely when multiple root sessions share a cwd, so session-scoped discovery
 // excludes them; callers without a session ID retain the cwd fallback.
-function scopeRunsForSession<T extends { rootSessionId?: string; parentSessionId?: string; cwd?: string }>(
-	runs: T[],
-	scope: { sessionId?: string; sessionCwd?: string },
-): T[] {
+function scopeRunsForSession<
+	T extends { id: string; parentRunId?: string; rootSessionId?: string; parentSessionId?: string; cwd?: string },
+>(runs: T[], scope: { sessionId?: string; sessionCwd?: string }): T[] {
 	if (scope.sessionId) {
 		const sid = scope.sessionId;
-		return runs.filter((run) => (run.rootSessionId ?? run.parentSessionId) === sid);
+		const visible = new Set(
+			runs.filter((run) => run.rootSessionId === sid || run.parentSessionId === sid).map((run) => run.id),
+		);
+		// Nested sessions retain the root's tag. Follow run edges downward from
+		// the caller's dispatches, never upward into siblings or ancestors.
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const run of runs) {
+				if (!visible.has(run.id) && run.parentRunId && visible.has(run.parentRunId)) {
+					visible.add(run.id);
+					changed = true;
+				}
+			}
+		}
+		return runs.filter((run) => visible.has(run.id));
 	}
 	if (scope.sessionCwd) {
 		const cwd = scope.sessionCwd;

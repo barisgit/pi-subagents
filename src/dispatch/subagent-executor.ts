@@ -146,10 +146,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId,
 				);
 				if (foreground) return foregroundStatusResult(foreground);
-				// Auto-scope the no-id list to the current session's tree (matches the
-				// /subagents-status overlay) so `subagent({ action: "status" })` doesn't
-				// dump every entry in runs-index.jsonl across every project ever spawned.
-				const statusSessionId = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
+				// Discovery belongs to the caller, not its root: resolving root lineage
+				// here exposes siblings and ancestors to nested sessions.
+				const statusSessionId = ctx.sessionManager.getSessionId() ?? deps.state.currentSessionId ?? undefined;
 				return inspectSubagentStatus({
 					...(paramsWithResolvedCwd as {
 						action?: "status";
