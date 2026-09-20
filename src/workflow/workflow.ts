@@ -972,45 +972,84 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): Workflow
 		name: "workflow",
 		label: "Workflow",
 		promptSnippet: "Orchestrate subagents with JS control flow: branch on results, retry, loop, fan out",
-		description: `Orchestrate multiple subagents with real control flow, written as JavaScript. Workflow is the harness's programmable control plane: agent calls, ordinary JavaScript state, and control flow can be nested and composed freely. Use it when runtime results shape later topology—dynamic fan-out, fan-in, branching, retries, feedback, convergence, or synthesis. Plain subagents and Workflow intentionally overlap; choose whichever representation helps the task.
+		description: `Run result-driven orchestration as JavaScript. The six sandbox globals compose with ordinary variables, loops, branches, and nesting, so topology may emerge at runtime: dynamic fan-out and fan-in, streaming pipelines, barriers, structured results, partial failure, feedback, bounded requeue, convergence, and synthesis. Plain subagent dispatch remains suitable when the branches are already known.
 
-Scaling and composition:
-- config maxConcurrentAgents is the process-global active leaf limit and per-workflow direct-child limit. Admission happens before child run records are created.
-- pipeline() streams at most config workflow.maxPipelineItemsInFlight item chains at once (default 8); parallel() is a barrier. Both compose in nested loops and branches.
+Runtime contract:
+- meta({ name, description, phases }) declares optional display metadata once, before orchestration. phases accepts titles such as ["Discover"] or objects such as [{ title: "Discover", detail: "Map scope" }]; declared titles are unique.
+- agent(role, task, opts?) dispatches one configured role and returns its result directly. Results are strings unless opts.schema supplies a plain JSON Schema for the child's structured result. Child execution failures reject. opts.phase attributes one call without changing the default phase and must match a phase declared by meta() when metadata phases exist; opts.label sets its persisted row label; opts.cwd sets its working directory, with relative paths resolved from the caller/session cwd. Role strings come from the caller's configured roles; replace placeholders such as "<analysis-role>" before running a script.
+- parallel(thunks) concurrently runs a dynamic set and is a fail-fast barrier. parallelSettled(thunks) is the ordered partial-failure form, returning { ok: true, value } or { ok: false, error: string } for each thunk.
+- pipeline(items, ...stages) and pipeline({ name, items }, ...stages) stream each item through all dependent stages, preserving item order. At most config workflow.maxPipelineItemsInFlight item chains are active (default 8). A stage is a function or { title, run }; each receives (previousResult, originalItem, index), with the first receiving (item, item, index). The pipeline is fail-fast: any stage or item failure rejects it.
+- phase(title) sets the default display phase for subsequent dispatches. Inside concurrent callbacks, opts.phase attributes individual calls without inserting a barrier.
 
-Worked examples—not templates or limits (replace role placeholders with configured roles):
-- Discovery fan-out: let a structured child result set the topology; give each branch one self-contained brief and distinct focus.
-    const areas = await agent("<investigation-role>", "List the distinct areas this audit must cover. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
-    const brief = "Read-only audit of <repo and key paths>. Cite file and line evidence for every claim. Expected output: a findings list. Area: ";
-    const reports = await parallel(areas.map((a) => () => agent("<investigation-role>", brief + a)));
-- Explore → verify → synthesize: a named pipeline with named stages keeps every child's context bounded and makes progress legible.
-    const verified = await pipeline({ name: "Area audit", items: areas },
-      { title: "Explore", run: (a) => agent("<investigation-role>", "Audit area: " + a, { phase: "Explore" }) },
-      { title: "Verify", run: (report) => agent("<review-role>", "Re-check each claim against the actual files and commands it cites; drop claims you cannot reproduce, keep the rest verbatim:\\n" + report, { phase: "Verify" }) });
-    return await agent("<review-role>", "Synthesize a decision-ready report from these verified area reports:\\n" + verified.join("\\n---\\n"));
-- Gate loop: requeue only what has not passed, under an attempt bound.
-    let gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
-    for (let round = 0; round < 3 && gaps.length > 0; round++) {
-      await parallel(gaps.map((gap) => () => agent("<investigation-role>", "Close this gap: " + gap)));
-      gaps = await agent("<review-role>", "List remaining coverage gaps. Return only the list.", { schema: { type: "array", items: { type: "string" } } });
+config maxConcurrentAgents is the process-global active-leaf and per-workflow direct-child admission limit; admission occurs before child run records are created. pipeline() streams item chains, while parallel() and parallelSettled() wait at barriers. These primitives may be nested inside pipeline stages, branches, and feedback loops.
+
+One compositional example follows. It demonstrates the vocabulary rather than prescribing a topology; replace every role placeholder with a configured role and make each child brief specific to the real repository:
+    meta({ name: "Adaptive component repair", description: "Discover, repair, and report residual risk",
+      phases: ["Discover", "Analyze", "Propose", "Converge", "Synthesize"] });
+    const text = { type: "string" };
+    const texts = { type: "array", items: text };
+    const record = (properties) => ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
+    const component = record({ id: text, cwd: text });
+    const componentsSchema = { type: "array", items: component };
+    const pendingSchema = { type: "array", items: record({ id: text, cwd: text, gaps: texts }) };
+    const analysisSchema = record({ summary: text, gaps: texts });
+    const attemptSchema = record({ id: text, resolved: { type: "boolean" }, evidence: text });
+    phase("Discover");
+    const components = await agent("<discovery-role>",
+      "Inspect the repository and return independent components that need analysis, each with id and cwd.",
+      { schema: componentsSchema, label: "Discover components" });
+    phase("Analyze");
+    const assessed = await pipeline(
+      { name: "Component assessment", items: components },
+      {
+        title: "Analyze",
+        run: (component) =>
+          agent("<analysis-role>", "Analyze component " + component.id + " in " + component.cwd + ". Return summary and concrete gaps.", {
+            phase: "Analyze", label: "Analyze " + component.id, cwd: component.cwd, schema: analysisSchema,
+          }),
+      },
+      {
+        title: "Propose",
+        run: async (analysis, component) => {
+          if (analysis.gaps.length === 0) return { component, analysis, proposals: [] };
+          const tasks = ["Propose a minimal repair for " + component.id + ": " + analysis.gaps.join("; ")];
+          if (analysis.gaps.length > 1) tasks.push("Challenge the gaps and propose an alternative for " + component.id + ": " + JSON.stringify(analysis));
+          const proposals = await parallelSettled(tasks.map((task, index) => () =>
+            agent(index === 0 ? "<proposal-role>" : "<challenge-role>", task, {
+              phase: "Propose", label: "Proposal " + (index + 1) + " for " + component.id, cwd: component.cwd,
+            }),
+          ));
+          return { component, analysis, proposals };
+        },
+      },
+    );
+    let pending = assessed
+      .filter((entry) => entry.analysis.gaps.length > 0)
+      .map((entry) => ({ id: entry.component.id, cwd: entry.component.cwd, gaps: entry.analysis.gaps }));
+    const history = [];
+    phase("Converge");
+    for (let round = 0; round < 3 && pending.length > 0; round++) {
+      const attempts = await parallelSettled(pending.map((item) => () =>
+        agent("<implementation-role>", "Repair " + item.id + " from: " + JSON.stringify({ item, assessment: assessed.find((entry) => entry.component.id === item.id) }), {
+          phase: "Converge", label: "Repair " + item.id + " round " + (round + 1), cwd: item.cwd, schema: attemptSchema,
+        }),
+      ));
+      const next = await agent(
+        "<gate-role>",
+        "Verify actual files and commands, then return only unresolved items with id, cwd, and gaps. Inputs: " + JSON.stringify({ pending, attempts }),
+        { phase: "Converge", label: "Gate round " + (round + 1), schema: pendingSchema },
+      );
+      history.push({ round: round + 1, pending, attempts, next });
+      pending = next;
     }
-These are not canonical recipes; requeue gates are ordinary JavaScript.
+    phase("Synthesize");
+    return await agent("<synthesis-role>",
+      "Produce a decision-ready report with verified outcomes and residual risk: " + JSON.stringify({ assessed, history, pending }),
+      { phase: "Synthesize", label: "Synthesize outcome" });
 
-The script runs in a sandbox with six globals:
-- meta({ name, description, phases }) — call once before other globals. phases: ["Recon"] or [{ title: "Recon" }]; objects may add detail; titles are non-empty and unique.
-- agent(role, task, opts?) -> Promise<result> — dispatch one subagent. role is a string chosen from the caller's configured agent roles; placeholders like "<investigation-role>" or "<implementation-role>" must be replaced with a real configured role. opts may contain schema, phase, label, and cwd. opts.phase selects this child's phase without changing the default and must match metadata when phases are declared; opts.label is its persisted display label; a relative opts.cwd resolves from the caller/session cwd. Results are strings by default. Child failures reject. opts.schema validates structured output; the workflow owns that contract.
-- parallel(thunks) -> Promise<results[]> — run thunks concurrently; maxConcurrentAgents bounds direct-child admission and active leaves. It is a FAIL-FAST Promise.all barrier.
-- parallelSettled(thunks) -> Promise<Array<{ ok: true, value } | { ok: false, error: string }>> — use instead of per-thunk try/catch when partial results are acceptable; results preserve input order.
-- pipeline(items, ...stages) or pipeline({ name, items }, ...stages) -> Promise<results[]> — stream each item through stages with at most workflow.maxPipelineItemsInFlight item chains active; results preserve input order. A stage is a function or { title, run }. Each stage receives (previousResult, originalItem, index); the first receives (item, item, index). It is fail-fast like Promise.all.
-- phase(title) — set the default phase for subsequent dispatches. opts.phase overrides one call and is the right tool inside pipeline/parallel callbacks.
+Top-level await is supported and the script's return value is the workflow result. Every agent(), parallel(), parallelSettled(), and pipeline() call must be awaited so failures remain attributable; use the workflow concurrency primitives for agent work rather than raw Promise combinators. The sandbox provides no fetch, filesystem, or timers, so children perform I/O. Each child starts without conversation context and needs a self-contained task with relevant paths, constraints, observed behavior, expected output, and edit authority.
 
-Use one pipeline with N stages for dependent per-item work; attribute later stages via opts.phase inside the stage callback. Never split dependent stages into separate pipeline() calls with a phase() barrier between them.
-
-Top-level await is supported; the script's return value is the workflow result. Set async:true to run in the background — the tool returns an id and Pi notifies you on completion; do not poll. Child-session Workflow calls run synchronously despite async/default unless nested async is explicitly enabled in extension config; when enabled, completion starts a new turn in the immediate parent session.
-
-Rules: always await every agent()/parallel()/parallelSettled()/pipeline() call — failures surface only when promises are awaited. Use these concurrency primitives, not raw Promise.all/Promise.reject on agent work, so failures are attributed. No setTimeout/fetch/fs in the sandbox; subagents do the real work.
-
-Each child starts with no conversation context. Make tasks self-contained with paths, constraints, observed behavior, expected output, and whether work is read-only or includes implementation. Verification stages check actual files and commands, not an earlier child's summary.`,
+Set async:true for background execution; the tool returns an id and Pi starts a new turn on completion or attention needs. A Workflow call made from a child session is forced synchronous unless extension config explicitly enables allowNestedAsync; with that opt-in, it may return immediately and completion starts a new turn in the immediate parent session.`,
 		parameters: WorkflowParams,
 		async execute(id, params, signal, onUpdate, ctx) {
 			// Declared outside the try so the catch can record a synthetic failed child

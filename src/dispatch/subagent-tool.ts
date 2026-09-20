@@ -33,15 +33,13 @@ export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeo
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage runs",
-		description: `Delegate a bounded task to a configured agent or inspect/resume background runs. Plain subagents may form agent-directed delegation trees; \`workflow\` provides a programmable JavaScript orchestration runtime when explicit orchestration is useful. Their capabilities intentionally overlap.
+		description: `Delegate bounded work to configured agents, or manage existing runs. Plain subagents may form agent-directed delegation trees. Use \`workflow\` when later dispatch depends on earlier results or needs programmable control flow.
 
-\`run\` dispatches any fixed set of branches; multiple entries run in parallel. Shared \`message\` text applies one template across the entries—swarm-style dispatch—and supports \`{task}\` and at most one \`{in}\` substitution. \`async\` returns immediately and \`batch\` groups completion notices. Top-level \`cwd\` defaults every run entry and resolves from the caller cwd; an entry \`cwd\` overrides it and resolves from the resolved top-level cwd. Delegation invoked from a child session always runs synchronously regardless of \`async\` or its default, so the caller owns and awaits the result.
+\`run\` accepts one or more entries; multiple entries execute in parallel. A shared \`message\` templates the entries with \`{task}\` and at most one \`{in}\` substitution. \`batch\` groups completion notices. Top-level \`cwd\` defaults every entry and resolves from the caller cwd; an entry \`cwd\` overrides it and resolves from that top-level cwd. \`context\` defaults to \`"fresh"\`; \`"fork"\` is same-role self-branching, while delegation to another configured role uses \`"fresh"\`.
 
-\`context\` defaults to \`"fresh"\`. \`"fork"\` is same-role self-branching only, never a role switch; cross-agent delegation uses \`"fresh"\`.
+\`async\` returns immediately. Calls made from a child session are forced to synchronous execution unless extension config explicitly enables \`allowNestedAsync\`; with that opt-in, completion starts a new turn in the immediate parent session. After any async dispatch, leave the delegated scope to the child and do not poll or duplicate its work; Pi reports completion or attention needs in a new turn.
 
-Use \`action\` to list, inspect, interrupt, or resume runs; resume requires \`id\` and \`message\`. Resume steers a live run with new instructions without interrupting first; use interrupt only when the current work must stop. A terminal run with a saved session can also be resumed. Use { action: "list" } when available agents are unknown or may have changed, and select only executable/non-disabled agents.
-
-After an async dispatch, either stop or continue only work that neither overlaps nor duplicates a child's scope. Do not poll or redo the child's investigation, implementation, or verification; Pi sends a new turn when the run completes or needs attention. If a delayed check is truly necessary and a background scheduler is available, schedule it for 10–15 minutes or longer. Agents are files under \`agents/<name>.md\`.`,
+Use \`action\` to list, inspect, interrupt, or resume runs. Resume requires \`id\` and \`message\`: it steers a live run without first interrupting it, and may restart a terminal run that has a saved session. Interrupt only work that must stop. When configured roles are unknown or may have changed, use { action: "list" } and choose an executable/non-disabled role. Agents are defined under \`agents/<name>.md\`.`,
 		parameters: SubagentParams,
 
 		async execute(id, params, signal, onUpdate, ctx) {

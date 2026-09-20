@@ -1,6 +1,6 @@
 ---
 name: subagent
-description: Use for delegating bounded repo work to configured subagents, parallel runs, workflow scripts with control flow, same-role forks, async jobs, and run management.
+description: Delegate bounded work to configured agents, run parallel or async branches, orchestrate result-driven workflows, fork same-role context, and inspect, steer, interrupt, or resume runs.
 ---
 
 # Subagent
