@@ -114,7 +114,8 @@ describe("registerSubagentNotify", () => {
 			timestamp: 123,
 		});
 
-		await flushNestedCompletionReprompts(parentRunId);
+		const delivery = await flushNestedCompletionReprompts(parentRunId);
+		assert.deepEqual(delivery, { aborted: false, failed: true });
 		assert.equal(extensionSendCalls, 0);
 		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, false);
 		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.pendingReprompts, 0);
@@ -158,7 +159,7 @@ describe("registerSubagentNotify", () => {
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		assert.equal(nestedAsyncParentSnapshot(parentRunId)?.agentInFlight, true);
 		finishTurn();
-		await flush;
+		assert.deepEqual(await flush, { aborted: false, failed: false });
 		assert.deepEqual(delivered, [
 			{
 				message: {

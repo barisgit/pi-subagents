@@ -244,22 +244,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				// Bare resume (async omitted) follows the host's asyncByDefault, exactly
 				// like normal dispatch's async resolution — so the two surfaces
 				// share one mode default instead of resume hard-defaulting to async.
-				// A nested foreground resume blocks the calling agent (which holds a leaf
-				// permit) while it awaits the resumed child, so park that permit for the
-				// span — same deadlock-avoidance rule as fresh nested dispatch. Async
-				// resume returns immediately, making the park a trivial no-op span.
-				const resumeParentRunId = resolveDispatchParentRunId(ctx);
-				return parkLeafPermit(resumeParentRunId, () =>
-					resumeRun(
-						deps.state,
-						deps.childRegistry,
-						paramsWithResolvedCwd.id!,
-						paramsWithResolvedCwd.message!,
-						resumeAsyncMode,
-						resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined),
-						resumeData,
-						deps,
-					),
+				return resumeRun(
+					deps.state,
+					deps.childRegistry,
+					paramsWithResolvedCwd.id!,
+					paramsWithResolvedCwd.message!,
+					resumeAsyncMode,
+					resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined),
+					resumeData,
+					deps,
 				);
 			}
 			if (!(ALLOWED_CONTROL_ACTIONS as readonly string[]).includes(params.action)) {

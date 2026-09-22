@@ -53,6 +53,7 @@ import {
 	validationError,
 } from "./executor-helpers.ts";
 import { buildAsyncChildStep, runInProcessChildStep } from "./child-step-runner.ts";
+import { parkLeafPermit } from "./leaf-concurrency.ts";
 
 function parseChildRunId(id: string): { dispatchRunId: string; stepIndex?: number } {
 	const match = id.match(/^(.*):(\d+)$/);
@@ -166,10 +167,14 @@ export function resolveResumeTarget(runId: string, stepIndex = 0, requestingRoot
 }
 
 export function assertResumableTarget(target: Pick<ResumeTarget, "runId" | "state" | "status">): void {
-	// Reject only a genuinely live run: state 'running' with a fresh heartbeat.
-	// Every terminal state (complete/failed/interrupted/lost/paused) is resumable,
-	// and a dead-'running' record (ungraceful kill a cross-session sweep has not
-	// yet finalized) is resumable too.
+	// A queued run still owns a permit waiter, even in another activation whose
+	// registry/in-flight guard we cannot see. readStatus already maps abandoned
+	// queued records to 'lost'; do not use heartbeat age here because live queued
+	// runs do not heartbeat until admission. Dead-running and terminal records
+	// remain resumable.
+	if (target.state === "queued") {
+		throw new Error(`Run ${target.runId} is still queued; wait for it to finish or interrupt it before resuming.`);
+	}
 	if (target.state === "running" && !isRunnerHardDead(target.status)) {
 		throw new Error(`Run ${target.runId} is still running; wait for it to finish or interrupt it before resuming.`);
 	}
@@ -381,9 +386,14 @@ async function resumeRun(
 	const resumeCount = (target.status.resumeCount ?? 0) + 1;
 	const resumeBaseline = resumedUsageTotals(target.status, undefined);
 	const previousResumeStep = target.status.steps?.[step.stepIndex];
+	let resumedStepTokens = previousResumeStep?.tokens;
+	let resumedOutputText = previousResumeStep?.live?.outputText ?? "";
+	let resumedToolCallCount = previousResumeStep?.live?.toolCallCount ?? previousResumeStep?.live?.toolCount ?? 0;
+	let resumedToolResultCount = previousResumeStep?.live?.toolResultCount ?? 0;
+	let resumedToolErrorCount = previousResumeStep?.live?.toolErrorCount ?? 0;
 	statusWriter.initialize({
 		mode: target.status.mode,
-		state: "running",
+		state: "queued",
 		startedAt: target.startedAt,
 		lastActivityAt: resumedAt,
 		runnerHeartbeatAt: resumedAt,
@@ -401,7 +411,7 @@ async function resumeRun(
 			const isResumedStep = index === step.stepIndex;
 			return {
 				...statusStep,
-				status: isResumedStep ? "running" : statusStep.status,
+				status: isResumedStep ? "queued" : statusStep.status,
 				startedAt: statusStep.startedAt ?? target.startedAt,
 				...(isResumedStep
 					? { endedAt: undefined, durationMs: undefined, error: undefined, lastActivityAt: resumedAt }
@@ -411,7 +421,7 @@ async function resumeRun(
 		}) ?? [
 			{
 				agent: target.agentName,
-				status: "running",
+				status: "queued",
 				startedAt: target.startedAt,
 				lastActivityAt: resumedAt,
 				sessionFile: target.sessionFile,
@@ -527,30 +537,32 @@ async function resumeRun(
 		resumeInFlight.add(resumeKey);
 		try {
 			emitSyncLifecycleEvent(deps.pi, SUBAGENT_SPAWN_STARTED_EVENT, eventPayload);
-			result = await runInProcessChildStep({
-				data: resumeData,
-				deps,
-				agentConfig,
-				task: message,
-				cleanTask: message,
-				stepIndex: step.stepIndex,
-				cwd: target.cwd,
-				...(step.label ? { label: step.label } : {}),
-				interruptSignal: interruptController.signal,
-				maxSubagentDepth: step.maxSubagentDepth,
-				onUpdate: forwardUpdate,
-				onControlEvent: (event) => {
-					if (!interruptForegroundOnNeedsAttention(event, interruptController, foregroundControl)) {
-						onControlEvent(event);
-					}
-				},
-				layer0: {
-					runId: target.runId,
-					runRecordDir: target.runRecordDir,
-					sessionFile: target.sessionFile,
-					rootRunId: target.rootRunId,
-				},
-			});
+			result = await parkLeafPermit(nestedParentRunId ?? undefined, () =>
+				runInProcessChildStep({
+					data: resumeData,
+					deps,
+					agentConfig,
+					task: message,
+					cleanTask: message,
+					stepIndex: step.stepIndex,
+					cwd: target.cwd,
+					...(step.label ? { label: step.label } : {}),
+					interruptSignal: interruptController.signal,
+					maxSubagentDepth: step.maxSubagentDepth,
+					onUpdate: forwardUpdate,
+					onControlEvent: (event) => {
+						if (!interruptForegroundOnNeedsAttention(event, interruptController, foregroundControl)) {
+							onControlEvent(event);
+						}
+					},
+					layer0: {
+						runId: target.runId,
+						runRecordDir: target.runRecordDir,
+						sessionFile: target.sessionFile,
+						rootRunId: target.rootRunId,
+					},
+				}),
+			);
 			fg.finalizeStep(step.stepIndex, {
 				progress: result.progress,
 				finalOutput: getSingleResultOutput(result),
@@ -640,16 +652,24 @@ async function resumeRun(
 		extensionCtx: effectiveData.ctx,
 		abortSignal: detachedAbort.signal,
 		onStatusUpdate: (patch: Parameters<StatusWriter["enqueue"]>[0]) => {
-			const resumedStepTokens =
+			const patchStepTokens =
 				patch.stepIndex === step.stepIndex
 					? sumTokenUsages(previousResumeStep?.tokens, patch.tokens)
 					: patch.tokens;
+			if (patch.stepIndex === step.stepIndex) {
+				if (patchStepTokens) resumedStepTokens = patchStepTokens;
+				if (patch.liveText !== undefined) resumedOutputText = patch.liveText;
+				if (patch.outputText !== undefined) resumedOutputText = patch.outputText;
+				resumedToolCallCount += patch.toolCallDelta ?? 0;
+				resumedToolResultCount += patch.toolResultDelta ?? 0;
+				resumedToolErrorCount += patch.toolErrorDelta ?? 0;
+			}
 			const resumedTotalTokens = patch.tokens
 				? sumTokenUsages(resumeBaseline.totalTokens, patch.tokens)
 				: undefined;
 			statusWriter.enqueue({
 				...patch,
-				...(resumedStepTokens ? { tokens: resumedStepTokens } : {}),
+				...(patchStepTokens ? { tokens: patchStepTokens } : {}),
 				...(resumedTotalTokens ? { totalTokens: resumedTotalTokens } : {}),
 			});
 		},
@@ -743,6 +763,59 @@ async function resumeRun(
 				},
 				nestedParentRunId ? deps.pi : undefined,
 			);
+		} catch (error) {
+			const failureMessage = error instanceof Error ? error.message : String(error);
+			const endedAt = Date.now();
+			const failedResult: ChildAgentResult = {
+				runId: target.runId,
+				stepIndex: step.stepIndex,
+				state: "failed",
+				exitCode: 1,
+				outputText: resumedOutputText,
+				toolCallCount: resumedToolCallCount,
+				toolResultCount: resumedToolResultCount,
+				toolErrorCount: resumedToolErrorCount,
+				durationMs: endedAt - resumedAt,
+				startedAt: resumedAt,
+				endedAt,
+				sessionFile: target.sessionFile,
+				error: { message: failureMessage },
+			};
+			try {
+				await statusWriter.finalize(failedResult, {
+					...(resumedStepTokens ? { stepTokens: resumedStepTokens } : {}),
+				});
+			} catch (cleanupError) {
+				// Persistence failure must not mask the child failure or suppress its notice.
+				logger.debug("Failed to persist async resume failure", {
+					runId: target.runId,
+					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+				});
+			}
+			safeEmit(
+				SUBAGENT_ASYNC_COMPLETE_EVENT,
+				{
+					id: target.runId,
+					runId: target.runId,
+					...((nestedParentRunId ?? target.parentRunId)
+						? { parentRunId: nestedParentRunId ?? target.parentRunId }
+						: {}),
+					rootRunId: target.rootRunId,
+					notifyPolicy: "each",
+					success: false,
+					agent: target.agentName,
+					summary: failureMessage,
+					exitCode: 1,
+					state: "failed",
+					durationMs: failedResult.durationMs,
+					sessionFile: failedResult.sessionFile,
+					timestamp: endedAt,
+					result: failedResult,
+					asyncDir: target.runRecordDir,
+				},
+				nestedParentRunId ? deps.pi : undefined,
+			);
+			throw error;
 		} finally {
 			unregisterNestedCancellation();
 			releaseRunController(target.runId);

@@ -11,6 +11,13 @@ import {
 	type ChildAgentContext,
 	type ChildAgentStep,
 } from "../../src/dispatch/in-process-executor.ts";
+import {
+	enqueueNestedCompletionReprompt,
+	markNestedAsyncFinished,
+	markNestedAsyncStarted,
+	markNestedParentTurn,
+	registerNestedAsyncParent,
+} from "../../src/dispatch/nested-async-coordinator.ts";
 
 const cleanup: string[] = [];
 const restoreFns: Array<() => void> = [];
@@ -77,6 +84,29 @@ class SchemaInvalidOutputSession {
 	async abort(): Promise<void> {}
 	dispose(): void {}
 	setActiveToolsByName(): void {}
+}
+
+class SchemaChangedByDescendantSession extends SchemaInvalidOutputSession {
+	override async bindExtensions(): Promise<void> {
+		registerNestedAsyncParent("run-1");
+	}
+
+	override async prompt(text: string): Promise<void> {
+		await super.prompt(text);
+		if (this.prompts.length !== 3) return;
+
+		this.lastAssistantText = '<output>{"ok": true}</output>';
+		markNestedAsyncStarted("run-1", "reprompt-descendant");
+		queueMicrotask(() => {
+			markNestedAsyncFinished("run-1", "reprompt-descendant");
+			enqueueNestedCompletionReprompt("run-1", () => {
+				markNestedParentTurn("run-1", true);
+				this.lastAssistantText = '<output>{"ok": "changed after descendant"}</output>';
+				markNestedParentTurn("run-1", false);
+				return true;
+			});
+		});
+	}
 }
 
 // Streams a prose PREAMBLE via text_delta, then lands a compliant <output> block
@@ -187,6 +217,19 @@ describe("sad-path reprompt", () => {
 		assert.deepEqual(result.structuredResult, { result: "REAL RESULT: VERDICT APPROVED" });
 		// The persisted/async-visible field must be the block, never the preamble.
 		assert.equal(result.outputText, "REAL RESULT: VERDICT APPROVED");
+	});
+
+	it("validates descendant-updated output after a contract reprompt reaches quiescence", async () => {
+		const session = new SchemaChangedByDescendantSession();
+		install(session);
+		const schema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
+
+		const result = await runChildAgent(makeStep(tempDir(), schema), makeContext());
+
+		assert.equal(result.state, "failed");
+		assert.equal(result.error?.reason, "schema_validation");
+		assert.equal(result.outputText, '<output>{"ok": "changed after descendant"}</output>');
+		assert.equal(session.prompts.length, 3, "initial prompt plus the two bounded schema reprompts");
 	});
 
 	it("reprompts schema-invalid <output> blocks and fails closed", async () => {

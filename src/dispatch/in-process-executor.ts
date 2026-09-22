@@ -326,15 +326,17 @@ async function settleNestedAsyncParent(
 	stepIndex: number,
 	signal: AbortSignal,
 	onStatusUpdate?: (patch: StatusPatch) => void,
-): Promise<void> {
+): Promise<"settled" | "aborted" | "delivery_failed"> {
 	while (!signal.aborted) {
 		const snapshot = nestedAsyncParentSnapshot(runId);
-		if (!snapshot) return;
+		if (!snapshot) return "settled";
 		if (snapshot.pendingReprompts > 0) {
-			await flushNestedCompletionReprompts(runId);
+			const delivery = await flushNestedCompletionReprompts(runId, signal);
+			if (delivery.aborted) return "aborted";
+			if (delivery.failed) return "delivery_failed";
 			continue;
 		}
-		if (!snapshot.active && !snapshot.agentInFlight) return;
+		if (!snapshot.active && !snapshot.agentInFlight) return "settled";
 		const wait = () => waitForNestedAsyncParentChange(runId, snapshot.version, signal);
 		if (snapshot.active && !snapshot.agentInFlight) await parkLeafPermit(runId, wait, signal);
 		else await wait();
@@ -346,6 +348,7 @@ async function settleNestedAsyncParent(
 			});
 		}
 	}
+	return "aborted";
 }
 
 function startChildAgent(step: ChildAgentStep, ctx: ChildAgentContext): ChildAgentHandle {
@@ -534,6 +537,27 @@ async function executeChildAgent(
 		if (!session) throw new Error(`Child agent session for ${step.runId} is not ready yet`);
 		return session;
 	};
+	const awaitNestedQuiescence = async (): Promise<ChildAgentResult | undefined> => {
+		const outcome = await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate);
+		if (outcome === "settled") return undefined;
+
+		if (outcome === "aborted") await activeSession().abort();
+		const result = baseResult(outcome === "aborted" ? "interrupted" : "failed", {
+			message:
+				outcome === "aborted"
+					? `Child agent interrupted: ${abortReason(signal)}`
+					: "A nested completion could not be delivered to the parent session.",
+			reason: outcome === "aborted" ? abortReason(signal) : "nested_delivery_failed",
+		});
+		ctx.onStatusUpdate?.({
+			runId: step.runId,
+			stepIndex: step.stepIndex,
+			state: result.state,
+			endedAt: result.endedAt,
+			outputText: result.outputText,
+		});
+		return result;
+	};
 
 	try {
 		if (signal.aborted) {
@@ -702,7 +726,8 @@ async function executeChildAgent(
 			return result;
 		}
 
-		await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate);
+		const initialNestedResult = await awaitNestedQuiescence();
+		if (initialNestedResult) return initialNestedResult;
 
 		if (!outputText.trim()) {
 			outputText = activeSession().getLastAssistantText?.() ?? "";
@@ -714,11 +739,13 @@ async function executeChildAgent(
 		// assistant TEXT (getLastAssistantText), not a toolResult. The accumulated
 		// outputText is the streamed-delta fallback when no last-assistant text exists.
 		const finalAssistantText = (): string => activeSession().getLastAssistantText?.() || outputText;
-		for (
-			let reprompt = 0;
-			reprompt < 2 && !parseOutputEnvelope(finalAssistantText(), step.resultSchema).ok;
-			reprompt++
-		) {
+		// A contract-repair turn can spawn descendants too. Validate only after
+		// their completion turns settle, never against a provisional parent answer.
+		for (let reprompt = 0; reprompt < 2; reprompt++) {
+			const nestedResult = await awaitNestedQuiescence();
+			if (nestedResult) return nestedResult;
+			if (parseOutputEnvelope(finalAssistantText(), step.resultSchema).ok) break;
+
 			const text = finalAssistantText();
 			const repromptMessage =
 				step.resultSchema && hasOutputBlock(text) ? schemaReprompt(step.resultSchema) : OUTPUT_REPROMPT;
@@ -754,6 +781,9 @@ async function executeChildAgent(
 				return result;
 			}
 		}
+
+		const finalNestedResult = await awaitNestedQuiescence();
+		if (finalNestedResult) return finalNestedResult;
 		{
 			// Codec at the finish boundary: extract the LAST <output> block and resolve it.
 			// Three outcomes: (1) valid -> structured result (a typed object is
@@ -789,10 +819,6 @@ async function executeChildAgent(
 				outputText = text;
 			}
 		}
-
-		// Completion can race the output-contract reprompt above. Drain any new
-		// descendant completion turn before the parent can become terminal.
-		await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate);
 
 		// Detect provider-level failures that the SDK swallows.
 		//

@@ -840,6 +840,130 @@ describe("dashboard detail pane redesign", () => {
 		assert.equal(resultRenders, rendersAfterDispose, "dispose releases every shared pending component");
 	});
 
+	it("retires nested renderer callbacks when a shared live session is released", async () => {
+		const originalSetInterval = globalThis.setInterval;
+		const originalClearInterval = globalThis.clearInterval;
+		let nextTimerId = 1;
+		const activeTimers = new Set<number>();
+		Object.defineProperty(globalThis, "setInterval", {
+			configurable: true,
+			value: () => {
+				const id = nextTimerId++;
+				activeTimers.add(id);
+				return id;
+			},
+		});
+		Object.defineProperty(globalThis, "clearInterval", {
+			configurable: true,
+			value: (timer: number) => activeTimers.delete(timer),
+		});
+
+		try {
+			const run: LiveRun = { ownership: "live", run: makeRun("run-nested-release", "/missing/nested") };
+			const bridges = new WeakMap<
+				object,
+				{
+					live: boolean;
+					queued: boolean;
+					didQueue: boolean;
+					invalidate: () => void;
+					timer?: ReturnType<typeof setInterval>;
+				}
+			>();
+			const toolDefinition: ToolDefinition = {
+				name: "nested_run",
+				label: "Nested run",
+				description: "Model a nested renderer with Fo-style queued invalidation and animation cleanup",
+				parameters: Type.Object({}),
+				execute: async () => ({ content: [{ type: "text", text: "unused" }], details: undefined }),
+				renderResult: (result, _options, _theme, context) => {
+					let bridge = bridges.get(context.state);
+					if (!bridge) {
+						bridge = { live: false, queued: false, didQueue: false, invalidate: () => {} };
+						bridges.set(context.state, bridge);
+					}
+					const details = typeof result.details === "object" && result.details !== null ? result.details : {};
+					const timeline = "timeline" in details && Array.isArray(details.timeline) ? details.timeline : [];
+					if (timeline.length === 0 && context.isError) return new Text("nested run error", 0, 0);
+					if (timeline.length === 0) {
+						bridge.live = false;
+						bridge.invalidate = () => {};
+						if (bridge.timer) clearInterval(bridge.timer);
+						bridge.timer = undefined;
+					} else {
+						bridge.live = context.executionStarted;
+						bridge.invalidate = context.invalidate;
+						bridge.timer ??= setInterval(() => bridge?.invalidate(), 1000);
+						if (bridge.live && !bridge.queued && !bridge.didQueue) {
+							bridge.queued = true;
+							bridge.didQueue = true;
+							queueMicrotask(() => {
+								bridge!.queued = false;
+								if (bridge!.live) bridge!.invalidate();
+							});
+						}
+					}
+					return context.lastComponent instanceof Text ? context.lastComponent : new Text("nested run", 0, 0);
+				},
+			};
+			const session: LiveDashboardSession = {
+				messages: [
+					{
+						role: "assistant",
+						content: [{ type: "toolCall", id: "call-nested", name: "nested_run", arguments: {} }],
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: "test",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "toolUse",
+						timestamp: 1,
+					},
+				],
+				getToolDefinition: () => toolDefinition,
+				subscribe: () => () => {},
+			};
+			const liveToolComponents = new LiveToolComponentStore();
+			const cache = new LiveSessionRenderCache(liveToolComponents);
+			let renderRequests = 0;
+			buildRightLines(theme, run, 100, [], {
+				sessions: [session],
+				tui: { requestRender: () => renderRequests++ } as never,
+				cache,
+			});
+			liveToolComponents.handleSessionEvent(session as never, {
+				type: "tool_execution_update",
+				toolCallId: "call-nested",
+				toolName: "nested_run",
+				args: {},
+				partialResult: {
+					content: [{ type: "text", text: "nested timeline" }],
+					details: { timeline: [{ kind: "tool", id: "inner-call" }] },
+				},
+			});
+			assert.equal(activeTimers.size, 1);
+
+			cache.dispose();
+			const requestsAfterClose = renderRequests;
+			await Promise.resolve();
+			assert.equal(activeTimers.size, 0, "release clears timers retained by the nested renderer");
+			assert.equal(
+				renderRequests,
+				requestsAfterClose,
+				"an already-queued nested callback cannot repaint after close",
+			);
+		} finally {
+			Object.defineProperty(globalThis, "setInterval", { configurable: true, value: originalSetInterval });
+			Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: originalClearInterval });
+		}
+	});
+
 	it("does not retain completed tool pairs in the shared component store", () => {
 		const run: LiveRun = { ownership: "foreign", run: makeRun("run-completed-release", "/missing/completed") };
 		let resultRenders = 0;

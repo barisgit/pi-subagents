@@ -110,24 +110,72 @@ export function nestedAsyncParentSnapshot(parentRunId: string): {
 	};
 }
 
-export async function flushNestedCompletionReprompts(parentRunId: string): Promise<void> {
+export interface NestedCompletionFlushResult {
+	aborted: boolean;
+	failed: boolean;
+}
+
+export async function flushNestedCompletionReprompts(
+	parentRunId: string,
+	signal?: AbortSignal,
+): Promise<NestedCompletionFlushResult> {
 	const state = registry().parents.get(parentRunId);
-	if (!state || state.pendingReprompts.length === 0) return;
+	if (!state || state.pendingReprompts.length === 0) {
+		return { aborted: signal?.aborted ?? false, failed: false };
+	}
 	const sends = state.pendingReprompts.splice(0, state.pendingReprompts.length);
 	const deliveryTurnVersion = state.turnVersion;
 	state.agentInFlight = true;
 	let queued = false;
+	let failed = false;
+	let aborted = false;
 	for (const send of sends) {
+		if (signal?.aborted) {
+			aborted = true;
+			break;
+		}
 		try {
-			queued = (await send()) || queued;
+			if (!signal) {
+				const outcome = await send();
+				queued = outcome || queued;
+				failed = !outcome || failed;
+				continue;
+			}
+
+			const delivery = Promise.resolve().then(send);
+			const outcome = await new Promise<boolean | undefined>((resolve, reject) => {
+				const onAbort = () => {
+					signal.removeEventListener("abort", onAbort);
+					resolve(undefined);
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+				if (signal.aborted) onAbort();
+				delivery.then(
+					(value) => {
+						signal.removeEventListener("abort", onAbort);
+						resolve(value);
+					},
+					(error: unknown) => {
+						signal.removeEventListener("abort", onAbort);
+						reject(error);
+					},
+				);
+			});
+			if (outcome === undefined) {
+				aborted = true;
+				break;
+			}
+			queued = outcome || queued;
+			failed = !outcome || failed;
 		} catch {
-			// A failed delivery must not leave speculative parent activity behind.
+			failed = true;
 		}
 	}
 	if (state.turnVersion === deliveryTurnVersion) {
-		state.agentInFlight = queued;
+		state.agentInFlight = queued && !aborted;
 		changed(state);
 	}
+	return { aborted, failed };
 }
 
 export function waitForNestedAsyncParentChange(

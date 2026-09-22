@@ -721,11 +721,7 @@ export class LiveToolComponentStore {
 	releaseSession(session: DashboardMessageSession): void {
 		const tools = this.pendingTools.get(session);
 		if (!tools) return;
-		for (const pending of tools.values()) {
-			updatePendingTool(pending, () =>
-				pending.component.updateResult(pending.latestResult ?? { content: [], isError: true }),
-			);
-		}
+		for (const pending of tools.values()) releasePendingTool(pending);
 		this.pendingTools.delete(session);
 	}
 
@@ -1160,6 +1156,11 @@ function updatePendingTool(pending: PendingToolComponent, update: () => void): v
 	}
 }
 
+function releasePendingTool(pending: PendingToolComponent): void {
+	pending.renderRequestsEnabled = false;
+	pending.component.updateResult({ content: [], isError: false });
+}
+
 function messageGroups(messages: AgentMessage[]): AgentMessage[][] {
 	const groups: AgentMessage[][] = [];
 	for (let index = 0; index < messages.length; index++) {
@@ -1210,11 +1211,7 @@ export class LiveSessionRenderCache {
 	private clearPendingTools(session: DashboardMessageSession): void {
 		const tools = this.pendingTools.get(session);
 		if (!tools) return;
-		for (const pending of tools.values()) {
-			updatePendingTool(pending, () =>
-				pending.component.updateResult(pending.latestResult ?? { content: [], isError: true }),
-			);
-		}
+		for (const pending of tools.values()) releasePendingTool(pending);
 		this.pendingTools.delete(session);
 		this.pendingSessions.delete(session);
 	}

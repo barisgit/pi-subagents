@@ -1,14 +1,30 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, mock } from "node:test";
+import type { ExecutionContextData, ExecutorDeps } from "../../src/dispatch/executor-types.ts";
+import { DEFAULT_ARTIFACT_CONFIG } from "../../src/protocol/types.ts";
+import { resolveControlConfig } from "../../src/dispatch/subagent-control.ts";
+import { resolveIntercomBridge } from "../../src/dispatch/intercom-bridge.ts";
+import { StatusWriter } from "../../src/state/status-writer.ts";
+import { STALE_MTIME_THRESHOLD_MS } from "../../src/shared/utils.ts";
+import { logger } from "../../src/shared/logger.ts";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
-import { __resetLeafConcurrencyForTest } from "../../src/dispatch/leaf-concurrency.ts";
+import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
+import {
+	__resetLeafConcurrencyForTest,
+	acquireLeafPermit,
+	leafConcurrencyLimit,
+} from "../../src/dispatch/leaf-concurrency.ts";
 import { appendRunEntry, setRegistryPathForTests } from "../../src/state/runs-registry.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { createTempDir, events, makeAgent, removeTempDir } from "../support/helpers.ts";
-import { SUBAGENT_ASYNC_STARTED_EVENT, type SubagentState } from "../../src/protocol/types.ts";
+import {
+	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_ASYNC_STARTED_EVENT,
+	type SubagentState,
+} from "../../src/protocol/types.ts";
 import { removeChildLineageBindings, setChildLineage, type SubagentLineage } from "../../src/state/lineage.ts";
 
 let tempDir: string | undefined;
@@ -30,6 +46,7 @@ afterEach(async () => {
 	activeRegistry = undefined;
 	if (activeLineage) removeChildLineageBindings(activeLineage);
 	activeLineage = undefined;
+	mock.restoreAll();
 	restoreDeps?.();
 	restoreDeps = undefined;
 	setRegistryPathForTests(null);
@@ -47,6 +64,46 @@ it("returns an async handle for child resume when nested async is enabled", asyn
 	assert.match(result.content[0]?.text ?? "", /Async resume/);
 	assert.equal(h.state.foregroundControls.size, 0);
 	h.session.resolvePrompt?.();
+});
+
+it("async resume must return before descendant completes at capacity", async () => {
+	const h = setup({ pending: true, allowNestedAsync: true });
+	markParentSessionAsChild();
+	writeCompleteRun(tempDir!);
+	leafConcurrencyLimit(1);
+	const releaseParent = await acquireLeafPermit("parent-run");
+	let returned = false;
+	const pending = h
+		.execute({ action: "resume", id: "resume-run", message: "continue", async: true })
+		.then((result) => {
+			returned = true;
+			return result;
+		});
+
+	for (let attempt = 0; attempt < 10 && !returned; attempt += 1) {
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	const returnedBeforeDescendantCompleted = returned;
+	if (returned) {
+		assert.equal(
+			h.session.prompts.length,
+			0,
+			"the descendant should remain queued while the parent holds capacity",
+		);
+		releaseParent();
+		await waitFor(() => h.session.prompts.length === 1);
+	} else {
+		await waitFor(() => h.session.prompts.length === 1);
+	}
+	h.session.resolvePrompt?.();
+	await pending;
+	releaseParent();
+
+	assert.equal(
+		returnedBeforeDescendantCompleted,
+		true,
+		"Async resume waited for descendant completion before returning its handle",
+	);
 });
 
 function makeState(cwd: string): SubagentState {
@@ -76,6 +133,12 @@ function markParentSessionAsChild(): void {
 		maxSubagentDepth: 2,
 	};
 	setChildLineage("parent-session", activeLineage);
+}
+
+class RejectingRegistry extends ChildAgentRegistry {
+	override finalizeView(_runId: string, _result: ChildAgentResult): void {
+		throw new Error("registry mirror exploded");
+	}
 }
 
 class FakeSession {
@@ -116,14 +179,21 @@ class FakeSession {
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-	for (let i = 0; i < 50; i++) {
+	for (let i = 0; i < 150; i++) {
 		if (predicate()) return;
 		await new Promise((resolve) => setTimeout(resolve, 5));
 	}
 	assert.equal(predicate(), true, "timed out waiting for condition");
 }
 
-function setup(opts: { pending?: boolean; asyncByDefault?: boolean; allowNestedAsync?: boolean } = {}) {
+function setup(
+	opts: {
+		pending?: boolean;
+		asyncByDefault?: boolean;
+		allowNestedAsync?: boolean;
+		rejectFinalization?: boolean;
+	} = {},
+) {
 	tempDir = createTempDir("pi-subagent-sync-resume-foreground-");
 	setRegistryPathForTests(path.join(tempDir, "runs-index.jsonl"));
 	const state = makeState(tempDir);
@@ -164,11 +234,11 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean; allowNestedA
 		getAgentDir: () => tempDir!,
 		createAgentSession: (async () => ({ session })) as never,
 	});
-	const childRegistry = new ChildAgentRegistry();
+	const childRegistry = opts.rejectFinalization ? new RejectingRegistry() : new ChildAgentRegistry();
 	// Let afterEach settle any detached child this test spawns before teardown.
 	activeSession = session;
 	activeRegistry = childRegistry;
-	const executor = createSubagentExecutor({
+	const deps: ExecutorDeps = {
 		pi,
 		state,
 		config: { allowNestedAsync: opts.allowNestedAsync },
@@ -177,7 +247,8 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean; allowNestedA
 		childRegistry,
 		expandTilde: (v: string) => v,
 		discoverAgents: () => ({ agents: [makeAgent("fixer", { model: "mock/test-model" })] }),
-	} as never);
+	} as never;
+	const executor = createSubagentExecutor(deps);
 	const execute = (params: Record<string, unknown>) =>
 		executor.execute("id", params as never, new AbortController().signal, undefined, {
 			cwd: tempDir!,
@@ -192,6 +263,7 @@ function setup(opts: { pending?: boolean; asyncByDefault?: boolean; allowNestedA
 			details?: { mode?: string; runId?: string; results: Array<{ exitCode?: number }> };
 		}>;
 	return {
+		deps,
 		execute,
 		session,
 		events,
@@ -359,6 +431,8 @@ describe("sync resume foreground", () => {
 		const h = setup({ pending: true });
 		markParentSessionAsChild();
 		writeCompleteRun(tempDir!);
+		leafConcurrencyLimit(1);
+		const releaseParent = await acquireLeafPermit("parent-run");
 		const pending = h.execute({ action: "resume", id: "resume-run", message: "continue", async: true });
 		await waitFor(() => h.session.prompts.length === 1);
 		assert.equal(h.state.foregroundControls.has("resume-run"), true);
@@ -368,6 +442,7 @@ describe("sync resume foreground", () => {
 		assert.match(result.content[0]?.text ?? "", /resumed output/);
 		assert.doesNotMatch(result.content[0]?.text ?? "", /Async resume/);
 		assert.equal(result.details?.results.length, 1);
+		releaseParent();
 	});
 
 	it("coerces asyncByDefault:true resume to foreground in a child session", async () => {
@@ -554,6 +629,211 @@ describe("sync resume foreground", () => {
 		assert.equal(status.steps[1].live.toolCount, 5);
 		assert.equal(status.steps[1].live.tokens, 180);
 		assert.deepEqual(status.steps[0], before.steps[0]);
+	});
+
+	it("rejects an independent resume instance while the original waits for capacity", async () => {
+		const h = setup({ pending: true });
+		const run = writeCompleteRun(tempDir!);
+		leafConcurrencyLimit(1);
+		const releaseBlocker = await acquireLeafPermit("blocker");
+		// A query import models the fresh module scope loaded by a child activation/reload.
+		const independent: typeof import("../../src/dispatch/resume-run.ts") = await import(
+			new URL("../../src/dispatch/resume-run.ts?independent-resume", import.meta.url).href
+		);
+		const registry = new ChildAgentRegistry();
+		const state = makeState(tempDir!);
+		const deps = { ...h.deps, state, childRegistry: registry };
+		const data: ExecutionContextData = {
+			params: {},
+			effectiveCwd: tempDir!,
+			ctx: {
+				cwd: tempDir!,
+				hasUI: false,
+				ui: {},
+				sessionManager: { getSessionId: () => "parent-session", getSessionFile: () => null },
+				modelRegistry: { getAvailable: () => [{ provider: "mock", id: "test-model" }] },
+				model: { provider: "mock" },
+			} as never,
+			signal: new AbortController().signal,
+			agents: deps.discoverAgents(tempDir!, "both").agents,
+			runId: "resume-run",
+			rootRunId: "resume-run",
+			shareEnabled: false,
+			sessionRoot: "",
+			sessionDirForIndex: () => "",
+			sessionFileForIndex: () => undefined,
+			artifactConfig: { ...DEFAULT_ARTIFACT_CONFIG, enabled: false },
+			artifactsDir: tempDir!,
+			backgroundRequestedWhileClarifying: false,
+			effectiveAsync: true,
+			controlConfig: resolveControlConfig(undefined, undefined),
+			intercomBridge: resolveIntercomBridge({ config: undefined, context: undefined }),
+		};
+		let second: Awaited<ReturnType<typeof independent.resumeRun>>;
+		try {
+			const first = await h.execute({ action: "resume", id: "resume-run", message: "first", async: true });
+			assert.equal(first.isError, undefined);
+			const before = fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8");
+			assert.equal(JSON.parse(before).state, "queued");
+			second = await independent.resumeRun(
+				state,
+				registry,
+				"resume-run",
+				"second",
+				true,
+				"parent-session",
+				data,
+				deps,
+			);
+			assert.equal(second.isError, true, "a fresh activation must not reopen a live queued resume");
+			assert.equal(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"), before);
+			assert.equal(registry.list().length, 0);
+			// Permit waiters do not heartbeat: even an old current-process record is live.
+			const old = new Date(Date.now() - STALE_MTIME_THRESHOLD_MS - 1000);
+			fs.utimesSync(path.join(run.runRecordDir, "status.json"), old, old);
+			const agedRetry = await independent.resumeRun(
+				state,
+				registry,
+				"resume-run",
+				"aged retry",
+				true,
+				"parent-session",
+				data,
+				deps,
+			);
+			assert.equal(agedRetry.isError, true);
+			assert.equal(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"), before);
+		} finally {
+			// Drain both handles even on the red path so a duplicate cannot leak into another test.
+			const handles = [...h.childRegistry.list(), ...registry.list()];
+			releaseBlocker();
+			await waitFor(() => h.session.prompts.length > 0);
+			h.session.resolvePrompt?.();
+			await Promise.allSettled(handles.map((handle) => handle.completed));
+		}
+		assert.deepEqual(h.session.prompts, ["first"]);
+	});
+
+	it("recovers an abandoned queued resume using the persisted orphan rule", async () => {
+		const h = setup();
+		const run = writeCompleteRun(tempDir!);
+		const statusPath = path.join(run.runRecordDir, "status.json");
+		const status = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+		status.state = "queued";
+		status.steps[0].status = "queued";
+		status.runnerPid = process.pid;
+		status.runnerToken = "previous-process-token";
+		fs.writeFileSync(statusPath, JSON.stringify(status));
+		const old = new Date(Date.now() - STALE_MTIME_THRESHOLD_MS - 1000);
+		fs.utimesSync(statusPath, old, old);
+		const result = await h.execute({ action: "resume", id: "resume-run", message: "recover", async: false });
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		assert.deepEqual(h.session.prompts, ["recover"]);
+		assert.equal(JSON.parse(fs.readFileSync(statusPath, "utf8")).state, "complete");
+	});
+
+	it("notifies the original async failure when terminal persistence also rejects", async () => {
+		const h = setup({ rejectFinalization: true, allowNestedAsync: true });
+		markParentSessionAsChild();
+		writeCompleteRun(tempDir!);
+		const warnings = mock.method(logger, "warn", () => {});
+		mock.method(StatusWriter.prototype, "finalize", async () => {
+			throw new Error("disk write failed");
+		});
+		const receipt = await h.execute({ action: "resume", id: "resume-run", message: "continue", async: true });
+		assert.equal(receipt.isError, undefined);
+		await waitFor(() => h.events.some((event) => event.channel === SUBAGENT_ASYNC_COMPLETE_EVENT));
+		const completion = h.events.find((event) => event.channel === SUBAGENT_ASYNC_COMPLETE_EVENT);
+		assert.equal(completion?.data.success, false);
+		assert.equal(completion?.data.summary, "registry mirror exploded");
+		assert.equal(completion?.data.result.error.message, "registry mirror exploded");
+		await waitFor(() => warnings.mock.callCount() === 1);
+		assert.equal(warnings.mock.calls[0]?.arguments[1]?.error, "registry mirror exploded");
+		assert.equal(h.childRegistry.list().length, 0);
+	});
+
+	it("keeps a resumed run queued until leaf admission", async () => {
+		const h = setup({ pending: true });
+		const run = writeCompleteMultiStepRun(tempDir!);
+		leafConcurrencyLimit(1);
+		const releaseBlocker = await acquireLeafPermit("blocker");
+
+		const receipt = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "continue",
+			async: true,
+		});
+		assert.equal(receipt.isError, undefined, receipt.content[0]?.text);
+		const queued = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(queued.state, "queued");
+		assert.equal(queued.steps[1].status, "queued");
+		assert.equal(queued.executionStartedAt, undefined);
+		assert.equal(queued.resumeCount, 1);
+		assert.equal(queued.steps[0].endedAt, 5000);
+
+		releaseBlocker();
+		await waitFor(() => {
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			return status.state === "running" && typeof status.executionStartedAt === "number";
+		});
+		h.session.resolvePrompt?.();
+		await waitFor(() => {
+			const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+			return status.state === "complete";
+		});
+	});
+
+	it("persists and notifies a failed async resume when child teardown rejects", async () => {
+		const h = setup({ rejectFinalization: true, allowNestedAsync: true });
+		markParentSessionAsChild();
+		const run = writeCompleteMultiStepRun(tempDir!);
+		h.session.eventsToEmit = [
+			events.toolStart("read"),
+			events.toolEnd("read"),
+			events.assistantMessage("<output>partial resumed output</output>"),
+		];
+
+		const receipt = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "continue",
+			async: true,
+		});
+		assert.equal(receipt.isError, undefined, receipt.content[0]?.text);
+		await waitFor(() =>
+			h.events.some(
+				(event) => event.channel === SUBAGENT_ASYNC_COMPLETE_EVENT && event.data.runId === "multi-step-run",
+			),
+		);
+
+		const completion = h.events.find(
+			(event) => event.channel === SUBAGENT_ASYNC_COMPLETE_EVENT && event.data.runId === "multi-step-run",
+		);
+		assert.equal(completion?.data.success, false);
+		assert.equal(completion?.data.state, "failed");
+		assert.match(completion?.data.summary ?? "", /registry mirror exploded/);
+		const status = JSON.parse(fs.readFileSync(path.join(run.runRecordDir, "status.json"), "utf8"));
+		assert.equal(status.state, "failed");
+		assert.equal(status.steps[1].status, "failed");
+		assert.equal(typeof status.endedAt, "number");
+		assert.equal(status.resumeCount, 1);
+		assert.equal(typeof status.resumedAt, "number");
+		assert.equal(status.steps[1].live.outputText, "resumed output");
+		assert.equal(status.steps[1].live.toolCallCount, 4);
+		assert.equal(status.steps[1].live.toolResultCount, 3);
+		assert.equal(status.steps[1].live.toolErrorCount, 1);
+		assert.equal(status.steps[1].tokens.total, 30);
+		assert.equal(status.totalTokens.total, 30);
+		assert.equal(status.steps[0].endedAt, 5000);
+
+		const retry = await h.execute({
+			action: "resume",
+			id: "multi-step-run:1",
+			message: "retry",
+			async: true,
+		});
+		assert.doesNotMatch(retry.content[0]?.text ?? "", /Resume already in progress/);
 	});
 
 	it("foreground concurrent resumes steer the same ready session", async () => {

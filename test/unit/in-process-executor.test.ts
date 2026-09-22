@@ -89,7 +89,9 @@ it("reaches quiescence and releases the leaf permit when parent-session delivery
 		return true;
 	});
 
-	assert.equal((await parent).state, "complete");
+	const result = await parent;
+	assert.equal(result.state, "failed");
+	assert.equal(result.error?.reason, "nested_delivery_failed");
 	assert.deepEqual(parentSession.sendCustomMessageCalls, [
 		{
 			message: { customType: "subagent-notify", content: "Done", display: true, details: { runId: "child" } },
@@ -99,6 +101,56 @@ it("reaches quiescence and releases the leaf permit when parent-session delivery
 	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
 	assert.equal(parentSession.disposeCalls, 1);
 	assert.equal((await runChildAgent(makeStep({ runId: "run-after-failed-send" }), makeContext())).state, "complete");
+});
+
+it("aborts the active session when its controller fires during completion delivery", async () => {
+	const parentRunId = "run-aborted-delivery-parent";
+	const controller = new AbortController();
+	let promptSettled!: () => void;
+	const settled = new Promise<void>((resolve) => {
+		promptSettled = resolve;
+	});
+	let deliveryStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		deliveryStarted = resolve;
+	});
+	let deliverMessage: ChildSessionMessageDelivery | undefined;
+	const session = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		markNestedAsyncStarted(parentRunId, "run-aborted-delivery-child");
+		self.lastAssistantText = "<output>waiting</output>";
+		promptSettled();
+	});
+	session.sendCustomMessageImpl = async () => {
+		deliveryStarted();
+		await new Promise<void>(() => {});
+	};
+	installFakeRuntime([session], () => {
+		deliverMessage = getChildSessionMessageDelivery();
+	});
+	const parent = runChildAgent(makeStep({ runId: parentRunId }), makeContext({ abortSignal: controller.signal }));
+	await settled;
+	markNestedAsyncFinished(parentRunId, "run-aborted-delivery-child");
+	enqueueNestedCompletionReprompt(parentRunId, async () => {
+		assert.ok(deliverMessage);
+		await deliverMessage({ customType: "subagent-notify", content: "Done", display: true }, { triggerTurn: true });
+		return true;
+	});
+	await started;
+
+	controller.abort("controller-only abort");
+	const terminatedPromptly = await Promise.race([
+		parent.then(() => true),
+		new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+	]);
+	const result = await parent;
+
+	assert.equal(terminatedPromptly, true);
+	assert.equal(result.state, "interrupted");
+	assert.equal(result.error?.reason, "controller-only abort");
+	assert.equal(session.abortCalls, 1);
+	assert.equal(session.disposeCalls, 1);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
 });
 
 it("releases nested coordinator state when an active parent child is aborted", async () => {
