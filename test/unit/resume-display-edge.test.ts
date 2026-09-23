@@ -40,6 +40,7 @@ function state(cwd: string): SubagentState {
 class BlockingSession {
 	async bindExtensions(): Promise<void> {}
 	resolvePrompt: (() => void) | undefined;
+	onPrompt: (() => void) | undefined;
 	messages: string[] = [];
 	subscribe() {
 		return () => {};
@@ -54,6 +55,7 @@ class BlockingSession {
 	}
 	async prompt(message: string, options?: { preflightResult?: (success: boolean) => void }) {
 		this.messages.push(message);
+		this.onPrompt?.();
 		if (options?.preflightResult) {
 			options.preflightResult(true);
 			return;
@@ -150,6 +152,9 @@ const theme = { fg: (_name: string, text: string) => text, bold: (text: string) 
 describe("resume display edge cases", () => {
 	it("steers an in-flight resumed session without reopening it", async () => {
 		const session = new BlockingSession();
+		const promptStarted = new Promise<void>((resolve) => {
+			session.onPrompt = resolve;
+		});
 		const h = setup(session);
 		const run = seedRun(tempDir!);
 		const writes: Array<Record<string, any>> = [];
@@ -160,7 +165,7 @@ describe("resume display edge cases", () => {
 		});
 		try {
 			const first = h.execute({ action: "resume", id: run.runId, message: "first", async: false });
-			await new Promise((resolve) => setImmediate(resolve));
+			await promptStarted;
 			const second = await h.execute({ action: "resume", id: run.runId, message: "second", async: false });
 			assert.equal(second.isError, undefined);
 			assert.match(second.content[0]?.text ?? "", /Resume message sent/);

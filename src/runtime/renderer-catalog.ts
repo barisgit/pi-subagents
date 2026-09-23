@@ -4,7 +4,6 @@ import {
 	getAgentDir,
 	SessionManager,
 	type AgentSession,
-	type ExtensionContext,
 	type ResourceLoader,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -46,10 +45,10 @@ export class RendererCatalog {
 		this.cwd = cwd;
 	}
 
-	ensure(modelRegistry: ExtensionContext["modelRegistry"]): Promise<boolean> {
+	ensure(): Promise<boolean> {
 		if (this.disposed) return Promise.resolve(false);
 		if (this.session) return Promise.resolve(true);
-		this.initialization ??= this.initialize(modelRegistry);
+		this.initialization ??= this.initialize();
 		return this.initialization;
 	}
 
@@ -64,7 +63,7 @@ export class RendererCatalog {
 		this.session = undefined;
 	}
 
-	private async initialize(modelRegistry: ExtensionContext["modelRegistry"]): Promise<boolean> {
+	private async initialize(): Promise<boolean> {
 		try {
 			const created = await runInChildSessionContext(async () => {
 				const agentDir = runtimeDeps.getAgentDir();
@@ -74,7 +73,6 @@ export class RendererCatalog {
 				return await runtimeDeps.createAgentSession({
 					cwd: this.cwd,
 					agentDir,
-					modelRegistry,
 					resourceLoader,
 					sessionManager,
 				});

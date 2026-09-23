@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { RendererCatalog, __setRendererCatalogDepsForTest } from "../../src/runtime/renderer-catalog.ts";
 import { isInsideChildSession } from "../../src/shared/child-session-context.ts";
 
@@ -46,16 +45,15 @@ describe("RendererCatalog", () => {
 		});
 		try {
 			const catalog = new RendererCatalog("/project");
-			const modelRegistry = {} as ExtensionContext["modelRegistry"];
-			const first = catalog.ensure(modelRegistry);
-			const second = catalog.ensure(modelRegistry);
+			const first = catalog.ensure();
+			const second = catalog.ensure();
 			releaseReload?.();
 			assert.equal(await first, true);
 			assert.equal(await second, true);
 			assert.deepEqual(calls, ["loader:/project:/agent", "reload", "memory:/project", "create"]);
 			assert.equal(options?.cwd, "/project");
 			assert.equal(options?.agentDir, "/agent");
-			assert.equal(options?.modelRegistry, modelRegistry);
+			assert.equal(Object.hasOwn(options ?? {}, "modelRegistry"), false);
 			assert.equal((options?.sessionManager as { kind?: string }).kind, "memory");
 			for (const key of ["tools", "noTools", "excludeTools", "customTools"]) {
 				assert.equal(Object.hasOwn(options ?? {}, key), false, `${key} must be omitted`);
@@ -92,7 +90,7 @@ describe("RendererCatalog", () => {
 		});
 		try {
 			const catalog = new RendererCatalog("/project");
-			const pending = catalog.ensure({} as ExtensionContext["modelRegistry"]);
+			const pending = catalog.ensure();
 			catalog.dispose();
 			releaseCreate?.();
 			assert.equal(await pending, false);

@@ -1039,6 +1039,8 @@ async function createSessionWithFallback(
 		await loader.reload();
 
 		const models = options.models ?? uniqueModels([step.model, ...step.modelCandidates]);
+		const agentDir = runtimeDeps.getAgentDir();
+
 		const attemptedModels: ChildModel[] = [];
 		let lastError: unknown;
 		for (let index = options.startIndex ?? 0; index < models.length; index++) {
@@ -1068,8 +1070,7 @@ async function createSessionWithFallback(
 
 				const created = await runtimeDeps.createAgentSession({
 					cwd: step.cwd,
-					agentDir: runtimeDeps.getAgentDir(),
-					modelRegistry: ctx.extensionCtx.modelRegistry,
+					agentDir,
 					model,
 					thinkingLevel: step.thinkingLevel,
 					scopedModels: models.map((candidate) => ({ model: candidate, thinkingLevel: step.thinkingLevel })),
@@ -1079,8 +1080,44 @@ async function createSessionWithFallback(
 					resourceLoader: loader,
 					sessionManager,
 				});
-				await created.session.bindExtensions({});
-				return { session: created.session, model, modelIndex: index, attemptedModels };
+				try {
+					await created.session.bindExtensions({});
+					// The SDK creates a fresh runtime for each child. Replay provider
+					// registrations absent from it, then install the parent's effective
+					// key (which may have been supplied only via --api-key) before prompt.
+					const childRuntime = created.session.modelRuntime;
+					const parentRegistry = ctx.extensionCtx.modelRegistry;
+					if (childRuntime && parentRegistry.getApiKeyForProvider) {
+						for (const provider of new Set(models.map((candidate) => candidate.provider))) {
+							if (!childRuntime.getRegisteredProviderIds().includes(provider)) {
+								const native = parentRegistry.getRegisteredNativeProvider?.(provider);
+								if (native) childRuntime.registerNativeProvider(native);
+								else {
+									const config = parentRegistry.getRegisteredProviderConfig?.(provider);
+									if (config) childRuntime.registerProvider(provider, config);
+								}
+							}
+							const parentKey = await parentRegistry.getApiKeyForProvider(provider);
+							if (!parentKey) continue;
+							if (parentRegistry.getProviderAuthStatus?.(provider).source === "runtime") {
+								// A parent --api-key overrides even expired stored child credentials.
+								await childRuntime.setRuntimeApiKey(provider, parentKey);
+								continue;
+							}
+							// getAuth resolves stored OAuth even before the registration's
+							// asynchronous availability refresh updates its snapshot.
+							const childAuth = await childRuntime.getAuth(provider);
+							const parentModel = models.find((candidate) => candidate.provider === provider)!;
+							if (!childAuth && !parentRegistry.isUsingOAuth?.(parentModel)) {
+								await childRuntime.setRuntimeApiKey(provider, parentKey);
+							}
+						}
+					}
+					return { session: created.session, model, modelIndex: index, attemptedModels };
+				} catch (error) {
+					await disposeChildSession(created.session);
+					throw error;
+				}
 			} catch (error) {
 				lastError = error;
 				if (!isAuthFailure(error) || index === models.length - 1) throw error;

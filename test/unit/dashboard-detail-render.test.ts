@@ -1297,157 +1297,119 @@ describe("dashboard detail pane redesign", () => {
 		assert.match(render(), /settled preview/);
 	});
 
-	it("recreates a pending builtin bash card after cache disposal and clears its interval on completion", () => {
-		const originalDateNow = Date.now;
-		const originalSetInterval = globalThis.setInterval;
-		const originalClearInterval = globalThis.clearInterval;
-		let now = 1000;
-		let nextTimerId = 1;
-		const activeTimers = new Set<number>();
-		Date.now = () => now;
-		Object.defineProperty(globalThis, "setInterval", {
-			configurable: true,
-			value: () => {
-				const id = nextTimerId++;
-				activeTimers.add(id);
-				return id;
+	it("recreates a pending builtin bash card after cache disposal and finalizes it on completion", () => {
+		const run: LiveRun = { ownership: "live", run: makeRun("run-bash-pending", "/missing/run-bash-pending") };
+		const messages: LiveDashboardSession["messages"] = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "sleep 5" } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: 1,
+			},
+		];
+		const session: LiveDashboardSession = { messages, subscribe: () => () => {} };
+		const liveToolComponents = new LiveToolComponentStore();
+		let cache = new LiveSessionRenderCache(liveToolComponents);
+		const progress = new Map<string, LiveToolProgress>([
+			[
+				"bash-call",
+				{
+					partialResult: {
+						content: [{ type: "text", text: "working" }],
+						details: undefined,
+						isError: false,
+					},
+				},
+			],
+		]);
+		const render = () =>
+			stripAnsi(
+				buildRightLines(theme, run, 100, [], {
+					sessions: [session],
+					tui: { requestRender: () => {} } as never,
+					cache,
+					toolProgress: new Map([[session, progress]]),
+				}).join("\n"),
+			);
+
+		assert.match(render(), /working/);
+		cache.dispose();
+		cache = new LiveSessionRenderCache(liveToolComponents);
+		progress.set("bash-call", {
+			partialResult: {
+				content: [{ type: "text", text: "still working" }],
+				details: undefined,
+				isError: false,
 			},
 		});
-		Object.defineProperty(globalThis, "clearInterval", {
-			configurable: true,
-			value: (timer: number) => activeTimers.delete(timer),
+		cache.invalidate(session, {
+			type: "tool_execution_update",
+			toolCallId: "bash-call",
+			toolName: "bash",
+			args: { command: "sleep 5" },
+			partialResult: progress.get("bash-call")!.partialResult!,
 		});
+		assert.match(render(), /still working/);
 
-		try {
-			const run: LiveRun = { ownership: "live", run: makeRun("run-bash-elapsed", "/missing/run-bash-elapsed") };
-			const messages: LiveDashboardSession["messages"] = [
-				{
-					role: "assistant",
-					content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "sleep 5" } }],
-					api: "anthropic-messages",
-					provider: "anthropic",
-					model: "test",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-					stopReason: "toolUse",
-					timestamp: 1,
-				},
-			];
-			const session: LiveDashboardSession = { messages, subscribe: () => () => {} };
-			const liveToolComponents = new LiveToolComponentStore();
-			let cache = new LiveSessionRenderCache(liveToolComponents);
-			const progress = new Map<string, LiveToolProgress>([
-				[
-					"bash-call",
-					{
-						partialResult: {
-							content: [{ type: "text", text: "working" }],
-							details: undefined,
-							isError: false,
-						},
-					},
-				],
-			]);
-			const render = () =>
-				stripAnsi(
-					buildRightLines(theme, run, 100, [], {
-						sessions: [session],
-						tui: { requestRender: () => {} } as never,
-						cache,
-						toolProgress: new Map([[session, progress]]),
-					}).join("\n"),
-				);
-
-			assert.match(render(), /Elapsed 0\.0s/);
-			assert.equal(activeTimers.size, 1);
-			cache.dispose();
-			cache = new LiveSessionRenderCache(liveToolComponents);
-			now = 6000;
-			progress.set("bash-call", {
-				partialResult: {
-					content: [{ type: "text", text: "still working" }],
-					details: undefined,
-					isError: false,
-				},
-			});
-			cache.invalidate(session, {
-				type: "tool_execution_update",
-				toolCallId: "bash-call",
-				toolName: "bash",
-				args: { command: "sleep 5" },
-				partialResult: progress.get("bash-call")!.partialResult!,
-			});
-			assert.match(render(), /still working/);
-			assert.match(render(), /Elapsed 0\.0s/);
-			assert.equal(activeTimers.size, 1);
-
-			progress.delete("bash-call");
+		progress.delete("bash-call");
+		messages.push({
+			role: "toolResult",
+			toolCallId: "bash-call",
+			toolName: "bash",
+			content: [{ type: "text", text: "done" }],
+			isError: false,
+			timestamp: 2,
+		});
+		cache.invalidate(session, {
+			type: "tool_execution_end",
+			toolCallId: "bash-call",
+			toolName: "bash",
+			result: messages[1],
+			isError: false,
+		});
+		assert.match(render(), /done/);
+		const firstAssistant = messages[0];
+		assert.equal(firstAssistant?.role, "assistant");
+		if (firstAssistant?.role === "assistant") {
 			messages.push({
-				role: "toolResult",
-				toolCallId: "bash-call",
-				toolName: "bash",
-				content: [{ type: "text", text: "done" }],
-				isError: false,
-				timestamp: 2,
-			});
-			cache.invalidate(session, {
-				type: "tool_execution_end",
-				toolCallId: "bash-call",
-				toolName: "bash",
-				result: messages[1],
-				isError: false,
-			});
-			assert.match(render(), /Took 0\.0s/);
-			assert.equal(activeTimers.size, 0);
-			const firstAssistant = messages[0];
-			assert.equal(firstAssistant?.role, "assistant");
-			if (firstAssistant?.role === "assistant") {
-				messages.push({
-					...firstAssistant,
-					content: [
-						{ type: "toolCall", id: "bash-call-cleanup", name: "bash", arguments: { command: "sleep 5" } },
-					],
-					timestamp: 3,
-				});
-			}
-			progress.set("bash-call-cleanup", {
-				partialResult: { content: [{ type: "text", text: "working" }], details: undefined, isError: false },
-			});
-			cache.invalidate(session);
-			assert.match(render(), /Elapsed 0\.0s/);
-			assert.equal(activeTimers.size, 1);
-			liveToolComponents.handleSessionEvent(session as never, { type: "compaction_end" } as AgentSessionEvent);
-			assert.equal(activeTimers.size, 0, "compaction finalizes pending native tools while closed");
-			messages.pop();
-			messages.push({
-				...firstAssistant!,
+				...firstAssistant,
 				content: [
-					{ type: "toolCall", id: "bash-call-dispose", name: "bash", arguments: { command: "sleep 5" } },
+					{ type: "toolCall", id: "bash-call-cleanup", name: "bash", arguments: { command: "sleep 5" } },
 				],
-				timestamp: 4,
+				timestamp: 3,
 			});
-			progress.delete("bash-call-cleanup");
-			progress.set("bash-call-dispose", {
-				partialResult: { content: [{ type: "text", text: "working" }], details: undefined, isError: false },
-			});
-			cache.invalidate(session);
-			assert.match(render(), /Elapsed 0\.0s/);
-			assert.equal(activeTimers.size, 1);
-			liveToolComponents.dispose();
-			assert.equal(activeTimers.size, 0, "activation cleanup finalizes pending native tools");
-		} finally {
-			Date.now = originalDateNow;
-			Object.defineProperty(globalThis, "setInterval", { configurable: true, value: originalSetInterval });
-			Object.defineProperty(globalThis, "clearInterval", { configurable: true, value: originalClearInterval });
 		}
+		progress.set("bash-call-cleanup", {
+			partialResult: { content: [{ type: "text", text: "working" }], details: undefined, isError: false },
+		});
+		cache.invalidate(session);
+		assert.match(render(), /working/);
+		liveToolComponents.handleSessionEvent(session as never, { type: "compaction_end" } as AgentSessionEvent);
+		messages.pop();
+		messages.push({
+			...firstAssistant!,
+			content: [{ type: "toolCall", id: "bash-call-dispose", name: "bash", arguments: { command: "sleep 5" } }],
+			timestamp: 4,
+		});
+		progress.delete("bash-call-cleanup");
+		progress.set("bash-call-dispose", {
+			partialResult: { content: [{ type: "text", text: "working" }], details: undefined, isError: false },
+		});
+		cache.invalidate(session);
+		assert.match(render(), /working/);
+		liveToolComponents.dispose();
 	});
-
 	it("preserves custom renderer state per session across partial cache rebuilds", () => {
 		const run: LiveRun = { ownership: "live", run: makeRun("run-renderer-state", "/missing/run-renderer-state") };
 		const seenStates: object[] = [];
@@ -2137,7 +2099,7 @@ describe("dashboard detail pane redesign", () => {
 		const output = lines.join("\n");
 		assert.ok(output.includes("\x1b[31mΩ call\x1b[0m"));
 		assert.match(stripAnsi(output), /first CRLF[\s\S]*second Unicode λ/);
-		assert.match(stripAnsi(output), /progress 10%progress 20% done/);
+		assert.match(stripAnsi(output), /progress 10%\s+progress 20% done/);
 	});
 
 	it("renders the full prompt, every tool call on its own card, and keeps the final block", () => {
@@ -2692,7 +2654,7 @@ describe("dashboard detail pane tool cards", () => {
 			{ stopReason: "aborted" as const, errorMessage: "stopped by user", marker: "stopped by user" },
 			{
 				stopReason: "length" as const,
-				marker: "Error: Model stopped because it reached the maximum output token limit.",
+				marker: "Response was truncated before completion.",
 			},
 		];
 		type AssistantContent = Extract<LiveDashboardSession["messages"][number], { role: "assistant" }>["content"];

@@ -50,7 +50,7 @@ interface DashboardLiveSessionSource {
 }
 
 interface DashboardRendererCatalog {
-	ensure(modelRegistry: ExtensionContext["modelRegistry"]): Promise<boolean>;
+	ensure(): Promise<boolean>;
 	getToolDefinition(name: string): ToolDefinition | undefined;
 }
 
@@ -531,7 +531,7 @@ export function registerSlashCommands(
 
 	// Shared opener so the slash command and the shortcut stay in sync.
 	const openSubagentsStatus = async (ctx: ExtensionContext) => {
-		const rendererCatalogReady = (await rendererCatalog?.ensure(ctx.modelRegistry)) === true;
+		const rendererCatalogReady = (await rendererCatalog?.ensure()) === true;
 		const sessionCwd = (ctx as { cwd?: string }).cwd ?? state.baseCwd;
 		const sessionId = ctx.sessionManager?.getSessionId?.() ?? state.currentSessionId ?? undefined;
 		// Branch-aware membership: collect the top-level run ids anchored on the

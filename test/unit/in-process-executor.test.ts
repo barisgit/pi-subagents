@@ -741,6 +741,150 @@ function installFakeRuntime(
 }
 
 describe("runChildAgent", () => {
+	it("inherits a parent runtime-only API key for an in-process child", async () => {
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		let childKey: string | undefined;
+		Object.defineProperty(session, "modelRuntime", {
+			value: {
+				getRegisteredProviderIds: () => [],
+				getAuth: async () => {
+					throw new Error("stored OAuth refresh failed");
+				},
+				setRuntimeApiKey: async (_provider: string, key: string) => {
+					childKey = key;
+				},
+			},
+		});
+		installFakeRuntime([session]);
+		const ctx = makeContext({
+			extensionCtx: {
+				modelRegistry: {
+					getApiKeyForProvider: async () => "parent-runtime-key",
+					getProviderAuthStatus: () => ({ configured: true, source: "runtime" }),
+				},
+			} as never,
+		});
+		const step = makeStep({ model: { provider: "openai", id: "gpt-4o" } as never });
+
+		assert.equal((await runChildAgent(step, ctx)).state, "complete");
+		assert.equal(childKey, "parent-runtime-key");
+	});
+
+	it("carries a parent-only provider registration into the child runtime", async () => {
+		const config = { name: "Parent-only provider" };
+		let registered: unknown;
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		Object.defineProperty(session, "modelRuntime", {
+			value: {
+				getRegisteredProviderIds: () => [],
+				registerProvider: (provider: string, value: unknown) => {
+					assert.equal(provider, "parent-only");
+					registered = value;
+				},
+			},
+		});
+		installFakeRuntime([session]);
+		const ctx = makeContext({
+			extensionCtx: {
+				modelRegistry: {
+					getApiKeyForProvider: async () => undefined,
+					getRegisteredProviderConfig: () => config,
+					getRegisteredNativeProvider: () => undefined,
+				},
+			} as never,
+		});
+		const step = makeStep({ model: { provider: "parent-only", id: "model-a" } as never });
+
+		assert.equal((await runChildAgent(step, ctx)).state, "complete");
+		assert.equal(registered, config);
+	});
+
+	it("keeps stored OAuth auth when replaying a native provider before availability refresh", async () => {
+		const native = { id: "parent-oauth" };
+		let registered = false;
+		let runtimeKeySet = false;
+		const session = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		Object.defineProperty(session, "modelRuntime", {
+			value: {
+				getRegisteredProviderIds: () => [],
+				registerNativeProvider: (value: unknown) => {
+					assert.equal(value, native);
+					registered = true;
+				},
+				hasConfiguredAuth: () => false,
+				getAuth: async () => ({ auth: { apiKey: "child-oauth-key" } }),
+				setRuntimeApiKey: async () => {
+					runtimeKeySet = true;
+				},
+			},
+		});
+		installFakeRuntime([session]);
+		const ctx = makeContext({
+			extensionCtx: {
+				modelRegistry: {
+					getRegisteredNativeProvider: () => native,
+					getApiKeyForProvider: async () => "parent-oauth-key",
+					getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+				},
+			} as never,
+		});
+		const step = makeStep({ model: { provider: "parent-oauth", id: "model-a" } as never });
+
+		assert.equal((await runChildAgent(step, ctx)).state, "complete");
+		assert.equal(registered, true);
+		assert.equal(runtimeKeySet, false);
+	});
+
+	it("disposes an extension-bound session when runtime key setup fails before fallback", async () => {
+		const cleanup: string[] = [];
+		const failed = new FakeAgentSession(async () => {});
+		failed.shutdownHandler = () => {
+			cleanup.push("shutdown");
+		};
+		failed.disposeImpl = () => {
+			cleanup.push("dispose");
+		};
+		Object.defineProperty(failed, "modelRuntime", {
+			value: {
+				getRegisteredProviderIds: () => [],
+				getAuth: async () => undefined,
+				setRuntimeApiKey: async () => {
+					throw new Error("API key synchronization failed");
+				},
+			},
+		});
+		const fallback = new FakeAgentSession(async (self) => {
+			self.lastAssistantText = "<output>done</output>";
+		});
+		Object.defineProperty(fallback, "modelRuntime", {
+			value: {
+				getRegisteredProviderIds: () => [],
+				getAuth: async () => undefined,
+				setRuntimeApiKey: async () => {},
+			},
+		});
+		installFakeRuntime([failed, fallback]);
+		const ctx = makeContext({
+			extensionCtx: {
+				modelRegistry: { getApiKeyForProvider: async () => "parent-runtime-key" },
+			} as never,
+		});
+		const result = await runChildAgent(
+			makeStep({ modelCandidates: [{ provider: "test", id: "model-b" } as never] }),
+			ctx,
+		);
+
+		assert.equal(result.state, "complete");
+		assert.deepEqual(cleanup, ["shutdown", "dispose"]);
+		assert.equal(failed.disposeCalls, 1);
+	});
+
 	it("runs child lifecycle shutdown before dispose invalidates its live tracker context", async () => {
 		let stale = false;
 		let contextAccesses = 0;
@@ -1181,7 +1325,14 @@ describe("runChildAgent", () => {
 	});
 
 	it("aborts the session and returns interrupted when abortSignal fires", async () => {
-		const session = new FakeAgentSession(async () => await new Promise<void>(() => {}));
+		let markPromptStarted!: () => void;
+		const promptStarted = new Promise<void>((resolve) => {
+			markPromptStarted = resolve;
+		});
+		const session = new FakeAgentSession(async () => {
+			markPromptStarted();
+			await new Promise<void>(() => {});
+		});
 		installFakeRuntime([session]);
 		const controller = new AbortController();
 		const directory = new LiveSessionDirectory();
@@ -1190,7 +1341,7 @@ describe("runChildAgent", () => {
 			makeContext({ abortSignal: controller.signal }),
 		);
 
-		await new Promise((resolve) => setImmediate(resolve));
+		await promptStarted;
 		assert.deepEqual(directory.sessionsForRun("relay-abort"), [session]);
 		controller.abort("stop-now");
 		const result = await promise;
