@@ -85,7 +85,8 @@ describe("registered workflow tool description", () => {
 		assert.match(description, /<implementation-role>/);
 		assert.match(description, /process-global active-leaf/i);
 		assert.match(description, /workflow\.maxPipelineItemsInFlight/i);
-		assert.match(description, /meta\(\{ name, description, phases \}\)/i);
+		assert.match(description, /meta\(\{ name, description\?, phases \}\)/i);
+		assert.match(description, /workflow\(\{ resume: /);
 		assert.match(description, /six sandbox globals/i);
 		assert.match(description, /opts\.schema[\s\S]*structured result/i);
 		assert.match(description, /opts\.phase[\s\S]*opts\.label[\s\S]*opts\.cwd/i);

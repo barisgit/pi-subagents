@@ -180,6 +180,103 @@ export function assertResumableTarget(target: Pick<ResumeTarget, "runId" | "stat
 	}
 }
 
+// Workflow resume reopens the SAME workflow group in place. Ownership matches
+// single-run resume: only the owning root session may resume it. A workflow
+// whose orchestrator or children are still live must be interrupted first,
+// otherwise its work would run twice.
+export function resolveWorkflowResume(
+	workflowRunId: string,
+	requestingRootSessionId: string | undefined,
+	isOrchestratorLive: (runId: string) => boolean,
+): { entry: RunsRegistryEntry; nextChildIndex: number } {
+	const entries = readAllEntries();
+	const entry = entries.find((candidate) => candidate.runId === workflowRunId);
+	if (entry?.kind !== "workflow") throw new Error(`Unknown workflow id '${workflowRunId}'.`);
+	const recordedRootSessionId = entry.rootSessionId ?? entry.parentSessionId;
+	if (!recordedRootSessionId || recordedRootSessionId !== requestingRootSessionId) {
+		throw new Error(
+			`Workflow ${workflowRunId} belongs to root session ${recordedRootSessionId ?? "(unknown)"}; resume it from its owning root session.`,
+		);
+	}
+	if (isOrchestratorLive(workflowRunId)) {
+		throw new Error(`Workflow ${workflowRunId} is still running; interrupt it before resuming.`);
+	}
+	const children = entries.filter((candidate) => candidate.parentRunId === workflowRunId);
+	for (const child of children) {
+		const status = readStatus(child.runRecordDir);
+		if (!status) continue;
+		try {
+			assertResumableTarget({ runId: child.runId, state: status.state, status });
+		} catch {
+			throw new Error(
+				`Workflow ${workflowRunId} still has live child ${child.runId}; interrupt the workflow before resuming.`,
+			);
+		}
+		// failWorkflow records a synthetic failed "workflow" child so a script
+		// error shows the group as failed. Resuming supersedes that failure; left
+		// as-is it would mark the resumed workflow failed forever.
+		if (child.agentName === "workflow" && status.state === "failed") supersedeWorkflowFailure(child.runRecordDir);
+	}
+	// Child records live under <group>/run-<index>/; new calls continue the numbering.
+	let nextChildIndex = 0;
+	try {
+		for (const name of fs.readdirSync(entry.runRecordDir)) {
+			const match = /^run-(\d+)$/.exec(name);
+			if (match) nextChildIndex = Math.max(nextChildIndex, Number(match[1]) + 1);
+		}
+	} catch {
+		/* no child directories yet */
+	}
+	return { entry, nextChildIndex };
+}
+
+function supersedeWorkflowFailure(runRecordDir: string): void {
+	const statusPath = path.join(runRecordDir, "status.json");
+	try {
+		const raw: unknown = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return;
+		const previousOutput = Reflect.get(raw, "outputText");
+		const outputText = `Superseded by resume. Earlier failure: ${typeof previousOutput === "string" ? previousOutput : "unknown"}`;
+		const rawSteps = Reflect.get(raw, "steps");
+		const steps = Array.isArray(rawSteps)
+			? rawSteps.map((step: unknown) =>
+					step !== null && typeof step === "object"
+						? { ...step, status: "complete", error: undefined }
+						: step,
+				)
+			: rawSteps;
+		fs.writeFileSync(
+			statusPath,
+			JSON.stringify({ ...raw, state: "complete", exitCode: 0, error: undefined, outputText, steps }),
+			"utf8",
+		);
+	} catch {
+		/* best-effort: the resumed workflow still runs, it may just display as failed */
+	}
+}
+
+// An unfinished workflow child continues in place from its own session. Returns
+// undefined when there is nothing to continue (unknown run, not a child of this
+// workflow, or stopped before its first turn was recorded), so the call starts fresh.
+export function resolveWorkflowChildResume(
+	childRunId: string,
+	workflowRunId: string,
+): { runId: string; runRecordDir: string; sessionFile: string; startedAt: number; resumeCount: number } | undefined {
+	const entry = readAllEntries().find((candidate) => candidate.runId === childRunId);
+	if (!entry || entry.parentRunId !== workflowRunId) return undefined;
+	const status = readStatus(entry.runRecordDir);
+	if (!status) return undefined;
+	const sessionFile = status.steps?.[0]?.sessionFile ?? status.sessionFile;
+	if (!sessionFile || !fs.existsSync(sessionFile) || fs.statSync(sessionFile).size === 0) return undefined;
+	return {
+		runId: entry.runId,
+		runRecordDir: entry.runRecordDir,
+		sessionFile,
+		startedAt: status.startedAt ?? entry.startedAt,
+		resumeCount: (status.resumeCount ?? 0) + 1,
+	};
+}
+
 const resumeInFlight = new Set<string>();
 
 async function postResumeMessage(

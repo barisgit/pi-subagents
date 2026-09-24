@@ -41,6 +41,7 @@ import {
 	awaitRun,
 	openRunRecord,
 	finalizeRun,
+	hasRunController,
 	registerRunController,
 	releaseRunController,
 	type OpenRunHandle,
@@ -49,7 +50,7 @@ import { getLineageForSession } from "../state/lineage.ts";
 import type { SubagentToolInput } from "../protocol/schemas.ts";
 import type { WorkflowGroupHandle } from "../workflow/workflow.ts";
 import { writeWorkflowGroupState } from "../workflow/workflow-group-state.ts";
-import { resumeRun } from "./resume-run.ts";
+import { resolveWorkflowChildResume, resolveWorkflowResume, resumeRun } from "./resume-run.ts";
 import { runAsyncPath } from "./run-async-path.ts";
 import { runParallelPath } from "./run-parallel-path.ts";
 import {
@@ -98,6 +99,13 @@ function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefine
 	return resolveChildCwd(runtimeCwd, requestedCwd);
 }
 
+// Prompt for a resumed workflow child that did not finish. Its own session
+// history is restored first, so it only needs to know why it stopped and that
+// the last step or any work it delegated may be incomplete.
+const WORKFLOW_CONTINUE_PROMPT =
+	"Your session was interrupted and has been restored. Continue the task from where you left off. " +
+	"Your last step may not have completed, and any subagents you started may have been interrupted: check before relying on them.";
+
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
@@ -119,6 +127,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate?: (r: SubagentToolResult) => void;
 		ctx: ExtensionContext;
 		requestedAsync?: boolean;
+		resumeRunId?: string;
 	}) => WorkflowGroupHandle;
 } {
 	const executeImpl = async (
@@ -697,7 +706,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		execute: (id, params, signal, onUpdate, ctx) =>
 			executeImpl(id, params as InternalSubagentParams, signal, onUpdate, ctx, false),
 		executeInternal: (id, params, signal, onUpdate, ctx) => executeImpl(id, params, signal, onUpdate, ctx, true),
-		openWorkflowGroup: ({ signal, onUpdate, ctx, requestedAsync }) => {
+		openWorkflowGroup: ({ signal, onUpdate, ctx, requestedAsync, resumeRunId }) => {
 			const currentSessionId = ctx.sessionManager.getSessionId();
 			const currentLineage = currentSessionId ? getLineageForSession(currentSessionId) : null;
 			const nestedGuard = checkNestedDelegationGuard([], currentLineage);
@@ -716,7 +725,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const effectiveCwd = ctx.cwd;
 			const agents = deps.discoverAgents(effectiveCwd, "both", { includeInternal: true }).agents;
 			const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
-			const provisionalRunId = randomUUID();
+			// Read session identity once, now. An async workflow outlives this tool
+			// call and can outlive the extension activation: after a reload the
+			// captured ctx throws on access, which would crash Pi when a later child
+			// starts or the workflow finishes.
+			const parentSessionId = ctx.sessionManager?.getSessionId?.();
+			const rootSessionId = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
+			const sessionIdentity = {
+				...(parentSessionId ? { parentSessionId } : {}),
+				...(rootSessionId ? { rootSessionId } : {}),
+			};
+			// Resume reopens the same workflow: same id, directory, and journal.
+			const resumed = resumeRunId
+				? resolveWorkflowResume(resumeRunId, rootSessionId, hasRunController)
+				: undefined;
+			const provisionalRunId = resumed?.entry.runId ?? randomUUID();
 			const parentRunId = resolveDispatchParentRunId(ctx);
 			const rootRunId = resolveDispatchRootRunId(ctx, provisionalRunId);
 			const calledFromChildSession = currentLineage
@@ -749,14 +772,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
 					: {}),
 				parentSessionFile,
-				...(ctx.sessionManager?.getSessionId ? { parentSessionId: ctx.sessionManager.getSessionId() } : {}),
-				...(() => {
-					const root = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
-					return root ? { rootSessionId: root } : {};
-				})(),
+				...sessionIdentity,
 				kind: "workflow",
 				source: effectiveAsync ? "async" : "sync",
 				mode: "parallel",
+				...(resumed ? { existing: resumed.entry } : {}),
 			});
 			if (effectiveAsync) registerRunController(group.runId, workflowDetachedAbort);
 			const groupRootRunId = rootRunId === provisionalRunId ? group.runId : rootRunId;
@@ -794,7 +814,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const data: ExecutionContextData = {
 				params: {},
 				effectiveCwd,
-				ctx,
+				// Async workflow children may start after an extension reload, when the
+				// captured ctx's getters throw. Pi's ctx exposes its values as own
+				// getters, so a spread snapshots them now (children read cwd and
+				// modelRegistry).
+				ctx: effectiveAsync ? { ...ctx } : ctx,
 				signal: effectiveAsync ? workflowDetachedAbort.signal : signal,
 				onUpdate,
 				agents,
@@ -817,6 +841,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			};
 			return {
 				groupRunId: group.runId,
+				...(resumed ? { nextChildIndex: resumed.nextChildIndex } : {}),
 				maxPipelineItemsInFlight,
 				async: effectiveAsync,
 				asyncDir: group.runRecordDir,
@@ -835,6 +860,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					pipeline,
 					resultSchema,
 					onChildProgress,
+					onRunStarted,
+					resumeRunId: childResumeRunId,
 				}) => {
 					const childCwd = resolveChildCwd(effectiveCwd, cwd);
 					const admissionPermit = await workflowAdmission.acquire(data.signal);
@@ -852,9 +879,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						}
 						const agentConfig = agents.find((agent) => agent.name === role);
 						let result: SingleResult | undefined;
+						// Workflow resume: an unfinished child continues in place from its own
+						// session (same run id and session file), prompted to finish rather
+						// than repeat the task. The output contract lives in the system prompt.
+						const resumeChild = childResumeRunId
+							? resolveWorkflowChildResume(childResumeRunId, group.runId)
+							: undefined;
 						const handle = spawnRun(
 							{ agentName: role, task, cwd: childCwd, ...(label ? { label } : {}) },
 							{
+								...(resumeChild ? { resume: resumeChild } : {}),
 								parentRunId: group.runId,
 								controlConfig,
 								rootRunId: groupRootRunId,
@@ -872,16 +906,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 											),
 										}
 									: {}),
-								...(ctx.sessionManager?.getSessionId
-									? { parentSessionId: ctx.sessionManager.getSessionId() }
-									: {}),
-								...(() => {
-									const root = resolveDispatchRootSessionId(
-										ctx,
-										deps.state.currentSessionId ?? undefined,
-									);
-									return root ? { rootSessionId: root } : {};
-								})(),
+								...sessionIdentity,
 								source: effectiveAsync ? "async" : "sync",
 								runAgent: async (prepared, layer0Ctx) => {
 									// Unknown agent: still resolve through a real child run so the group
@@ -922,11 +947,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 											},
 										};
 									}
+									onRunStarted?.(prepared.runId);
 									result = await runInProcessChildStep({
 										data,
 										deps,
 										agentConfig,
-										task,
+										task: resumeChild ? WORKFLOW_CONTINUE_PROMPT : task,
 										cleanTask: task,
 										...(label ? { label } : {}),
 										stepIndex: index,
@@ -1050,16 +1076,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							...(deps.config.defaultSessionDir
 								? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
 								: {}),
-							...(ctx.sessionManager?.getSessionId
-								? { parentSessionId: ctx.sessionManager.getSessionId() }
-								: {}),
-							...(() => {
-								const root = resolveDispatchRootSessionId(
-									ctx,
-									deps.state.currentSessionId ?? undefined,
-								);
-								return root ? { rootSessionId: root } : {};
-							})(),
+							...sessionIdentity,
 							source: effectiveAsync ? "async" : "sync",
 							runAgent: async (prepared) => {
 								result = {
@@ -1117,13 +1134,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						publishSubagentUsage(deps.pi, deps.state, {
 							runId: group.runId,
 							rootRunId: groupRootRunId,
-							...(() => {
-								const rootSessionId = resolveDispatchRootSessionId(
-									ctx,
-									deps.state.currentSessionId ?? undefined,
-								);
-								return rootSessionId ? { rootSessionId } : {};
-							})(),
+							...(rootSessionId ? { rootSessionId } : {}),
 							mode: "workflow",
 							source: "async",
 							totalUsage,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseWorkflowMeta, type WorkflowMeta } from "../protocol/workflow-meta.ts";
@@ -17,6 +18,7 @@ export type WorkflowGroupLifecycle = "running" | "complete" | "failed";
 // liveness without ever writing status.json. Best-effort: never throw into a run.
 const WORKFLOW_GROUP_STATE_FILE = "workflow-group.json";
 const WORKFLOW_SCRIPT_FILE = "workflow-script.json";
+const WORKFLOW_JOURNAL_FILE = "workflow-journal.jsonl";
 const MAX_WORKFLOW_RESULT_BYTES = 8 * 1024;
 const WORKFLOW_RESULT_TRUNCATION_MARKER = "\n[TRUNCATED]";
 
@@ -252,4 +254,70 @@ export function readWorkflowGroupState(runRecordDir: string): WorkflowGroupLifec
 
 export function readWorkflowGroupPhase(runRecordDir: string): WorkflowGroupPhase | undefined {
 	return readWorkflowGroupRecord(runRecordDir)?.phase;
+}
+
+// Replay journal for workflow resume, kept in the workflow's own directory.
+// Append-only JSONL keyed by agent() call:
+// - { key, runId } when the call's child run starts, so an unfinished child can
+//   later be continued in place from its own session;
+// - { key, result } when the call SUCCEEDS, holding the exact value agent()
+//   returned into the script.
+// Resuming re-runs the script in the same workflow: journaled results are
+// returned without dispatching, and started-but-unfinished calls continue their
+// child run.
+//
+// Unlike the other markers this is written synchronously BEFORE the value is
+// handed to the script: any later effect that depends on a result can only exist
+// if the result was journaled first. Still best-effort: a failed write only
+// means that call runs again on resume.
+export function workflowCallKey(role: string, task: string, schema: unknown, cwd: string | undefined): string {
+	// Label and phase are display-only and deliberately excluded, so editing them in
+	// a resumed script does not invalidate cached results. Schema and cwd change what
+	// the child produces, so they are part of the identity.
+	return createHash("sha256")
+		.update(JSON.stringify([role, task, schema ?? null, cwd ?? null]))
+		.digest("hex");
+}
+
+export type WorkflowJournalLine = { key: string; result: unknown } | { key: string; runId: string };
+
+export function appendWorkflowJournal(runRecordDir: string, line: WorkflowJournalLine): void {
+	try {
+		fs.appendFileSync(path.join(runRecordDir, WORKFLOW_JOURNAL_FILE), `${JSON.stringify(line)}\n`, "utf8");
+	} catch {
+		/* best-effort; the call simply runs again on resume */
+	}
+}
+
+export interface WorkflowJournal {
+	results: Map<string, unknown>;
+	// Latest child run per call key; only meaningful for keys without a result.
+	runIds: Map<string, string>;
+}
+
+// Malformed lines (e.g. a torn final line after a crash) are skipped: a missing
+// entry only costs a re-run, never a wrong replayed value.
+export function readWorkflowJournal(runRecordDir: string): WorkflowJournal {
+	const journal: WorkflowJournal = { results: new Map(), runIds: new Map() };
+	let raw: string;
+	try {
+		raw = fs.readFileSync(path.join(runRecordDir, WORKFLOW_JOURNAL_FILE), "utf8");
+	} catch {
+		return journal;
+	}
+	for (const line of raw.split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			const parsed: unknown = JSON.parse(line);
+			if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+			const key = Reflect.get(parsed, "key");
+			if (typeof key !== "string") continue;
+			const runId = Reflect.get(parsed, "runId");
+			if ("result" in parsed) journal.results.set(key, Reflect.get(parsed, "result"));
+			else if (typeof runId === "string") journal.runIds.set(key, runId);
+		} catch {
+			/* skip malformed line */
+		}
+	}
+	return journal;
 }

@@ -11,7 +11,8 @@ export interface WorkflowPhaseMeta {
 
 export interface WorkflowMeta {
 	name: string;
-	description: string;
+	// Optional: display-only, and requiring it made scripts fail just for omitting it.
+	description?: string;
 	phases: WorkflowPhaseMeta[];
 }
 
@@ -39,8 +40,10 @@ export function parseWorkflowMeta(value: unknown): WorkflowMetaParseResult {
 		}
 		const parsedName = displayString(Reflect.get(value, "name"), "meta.name");
 		if (!parsedName.ok) return parsedName;
-		const parsedDescription = displayString(Reflect.get(value, "description"), "meta.description");
-		if (!parsedDescription.ok) return parsedDescription;
+		const rawDescription = Reflect.get(value, "description");
+		const parsedDescription =
+			rawDescription === undefined ? undefined : displayString(rawDescription, "meta.description");
+		if (parsedDescription && !parsedDescription.ok) return parsedDescription;
 		const rawPhases = Reflect.get(value, "phases");
 		if (!Array.isArray(rawPhases)) return { ok: false, reason: "meta.phases must be an array" };
 		if (rawPhases.length > MAX_WORKFLOW_PHASES) {
@@ -72,7 +75,11 @@ export function parseWorkflowMeta(value: unknown): WorkflowMetaParseResult {
 
 		return {
 			ok: true,
-			value: { name: parsedName.value, description: parsedDescription.value, phases },
+			value: {
+				name: parsedName.value,
+				...(parsedDescription ? { description: parsedDescription.value } : {}),
+				phases,
+			},
 		};
 	} catch {
 		return { ok: false, reason: "meta(value) could not be read" };

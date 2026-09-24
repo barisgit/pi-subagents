@@ -6,11 +6,17 @@ import type { AgentToolUpdateCallback, ExtensionContext, ToolDefinition } from "
 import { Type, type Static, type TSchema } from "typebox";
 import { ASYNC_NO_POLL_GUIDANCE, formatAsyncStatusHint } from "../surfaces/async-guidance.ts";
 import {
+	type WorkflowJournal,
+	appendWorkflowJournal,
+	readWorkflowJournal,
+	readWorkflowScript,
+	workflowCallKey,
 	writeWorkflowGroupPhase,
 	writeWorkflowGroupResult,
 	writeWorkflowMeta,
 	writeWorkflowScript,
 } from "./workflow-group-state.ts";
+import { readAllEntries } from "../state/runs-registry.ts";
 import type { SubmitResultEnvelope } from "../protocol/output-contract.ts";
 import { displayString, parseWorkflowMeta, type WorkflowMeta } from "../protocol/workflow-meta.ts";
 import { processGlobal } from "../shared/process-global.ts";
@@ -21,7 +27,13 @@ import type { AgentProgress, Details, PipelineMetadata, SingleResult, SubagentTo
 
 export const WorkflowParams = Type.Object(
 	{
-		script: Type.String(),
+		script: Type.Optional(Type.String()),
+		resume: Type.Optional(
+			Type.String({
+				description:
+					"Id of an interrupted or failed workflow to resume. Its successful agent() results are replayed; omit script to re-run its saved script.",
+			}),
+		),
 		async: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
@@ -73,6 +85,8 @@ export type WorkflowPhaseEmit = (title: string) => void;
 
 export interface WorkflowGroupHandle {
 	groupRunId: string;
+	// First free child index; non-zero when an existing workflow is resumed.
+	nextChildIndex?: number;
 	maxPipelineItemsInFlight?: number;
 	async?: boolean;
 	asyncDir?: string;
@@ -90,6 +104,11 @@ export interface WorkflowGroupHandle {
 		// Live progress callback fired per child session event (sync path only).
 		// Lets the workflow emitter repaint the running child's widget frame mid-run.
 		onChildProgress?: (progress: AgentProgress) => void;
+		// Fired once the child's run id is known, before it runs.
+		onRunStarted?: (runId: string) => void;
+		// Resume: continue this earlier, unfinished child run in place (same run id
+		// and session) instead of starting the task from scratch.
+		resumeRunId?: string;
 	}): Promise<SingleResult>;
 	finishAsync?(success: boolean, summary?: string): void;
 	failWorkflow?(message: string, tags?: { phaseIndex?: number; phaseTitle?: string }): Promise<void>;
@@ -719,6 +738,8 @@ export interface WorkflowToolDispatchContext {
 	onUpdate?: (partialResult: SubagentToolResult) => void;
 	ctx: ExtensionContext;
 	requestedAsync?: boolean;
+	// Reopen this existing workflow instead of starting a new one.
+	resumeRunId?: string;
 	tags?: WorkflowDispatchTags;
 }
 
@@ -967,6 +988,25 @@ export interface WorkflowToolDefinition extends ToolDefinition<typeof WorkflowPa
 	): Promise<SubagentToolResult<unknown>>;
 }
 
+interface WorkflowResumeSource {
+	script?: string;
+	journal: WorkflowJournal;
+}
+
+// Reads a workflow's saved script and replay journal. Ownership and liveness
+// checks happen when the dispatch layer reopens the group.
+function readWorkflowResumeSource(workflowId: string): WorkflowResumeSource {
+	const entry = readAllEntries().find((candidate) => candidate.runId === workflowId);
+	if (entry?.kind !== "workflow") throw new Error(`Unknown workflow id '${workflowId}'.`);
+	const script = readWorkflowScript(entry.runRecordDir);
+	return { ...(script ? { script } : {}), journal: readWorkflowJournal(entry.runRecordDir) };
+}
+
+// A failed or interrupted workflow reports its id so the caller can resume it.
+function withResumeHint(message: string, workflowId: string | undefined): string {
+	return workflowId ? `${message}\nResume with workflow({ resume: "${workflowId}" }).` : message;
+}
+
 export function createWorkflowTool(options: CreateWorkflowToolOptions): WorkflowToolDefinition {
 	return {
 		name: "workflow",
@@ -975,7 +1015,7 @@ export function createWorkflowTool(options: CreateWorkflowToolOptions): Workflow
 		description: `Run result-driven orchestration as JavaScript. The six sandbox globals compose with ordinary variables, loops, branches, and nesting, so topology may emerge at runtime: dynamic fan-out and fan-in, streaming pipelines, barriers, structured results, partial failure, feedback, bounded requeue, convergence, and synthesis. Plain subagent dispatch remains suitable when the branches are already known.
 
 Runtime contract:
-- meta({ name, description, phases }) declares optional display metadata once, before orchestration. phases accepts titles such as ["Discover"] or objects such as [{ title: "Discover", detail: "Map scope" }]; declared titles are unique.
+- meta({ name, description?, phases }) declares optional display metadata once, before orchestration. phases accepts titles such as ["Discover"] or objects such as [{ title: "Discover", detail: "Map scope" }]; declared titles are unique.
 - agent(role, task, opts?) dispatches one configured role and returns its result directly. Results are strings unless opts.schema supplies a plain JSON Schema for the child's structured result. Child execution failures reject. opts.phase attributes one call without changing the default phase and must match a phase declared by meta() when metadata phases exist; opts.label sets its persisted row label; opts.cwd sets its working directory, with relative paths resolved from the caller/session cwd. Role strings come from the caller's configured roles; replace placeholders such as "<analysis-role>" before running a script.
 - parallel(thunks) concurrently runs a dynamic set and is a fail-fast barrier. parallelSettled(thunks) is the ordered partial-failure form, returning { ok: true, value } or { ok: false, error: string } for each thunk.
 - pipeline(items, ...stages) and pipeline({ name, items }, ...stages) stream each item through all dependent stages, preserving item order. At most config workflow.maxPipelineItemsInFlight item chains are active (default 8). A stage is a function or { title, run }; each receives (previousResult, originalItem, index), with the first receiving (item, item, index). The pipeline is fail-fast: any stage or item failure rejects it.
@@ -1049,6 +1089,8 @@ One compositional example follows. It demonstrates the vocabulary rather than pr
 
 Top-level await is supported and the script's return value is the workflow result. Every agent(), parallel(), parallelSettled(), and pipeline() call must be awaited so failures remain attributable; use the workflow concurrency primitives for agent work rather than raw Promise combinators. The sandbox provides no fetch, filesystem, or timers, so children perform I/O. Each child starts without conversation context and needs a self-contained task with relevant paths, constraints, observed behavior, expected output, and edit authority.
 
+Resume: when a workflow was interrupted or failed, call workflow({ resume: "<workflow id>" }) to re-run its saved script, or pass a corrected script alongside resume. Every agent() call that already succeeded with the same role, task, schema, and cwd returns its recorded result instantly; a call whose child was interrupted or failed continues that child's session with a prompt to finish the work; calls never reached start fresh. Interrupt a workflow that is still running before resuming it.
+
 Set async:true for background execution; the tool returns an id and Pi starts a new turn on completion or attention needs. A Workflow call made from a child session is forced synchronous unless extension config explicitly enables allowNestedAsync; with that opt-in, it may return immediately and completion starts a new turn in the immediate parent session.`,
 		parameters: WorkflowParams,
 		async execute(id, params, signal, onUpdate, ctx) {
@@ -1057,6 +1099,17 @@ Set async:true for background execution; the tool returns an id and Pi starts a 
 			let group: WorkflowGroupHandle | undefined;
 			let emitter: WorkflowPhaseEmitter | undefined;
 			try {
+				// Resolve the resume source BEFORE opening a group so a bad id fails
+				// without leaving an empty workflow record behind.
+				const resumeSource = params.resume ? readWorkflowResumeSource(params.resume) : undefined;
+				const script = params.script ?? resumeSource?.script;
+				if (!script) {
+					throw new Error(
+						params.resume
+							? `Workflow '${params.resume}' has no saved script; pass script to resume it.`
+							: "workflow requires script (or resume with a prior workflow id).",
+					);
+				}
 				const workflowOnUpdate = onUpdate as ((partialResult: SubagentToolResult) => void) | undefined;
 				const workflowContext = {
 					toolCallId: id,
@@ -1064,12 +1117,19 @@ Set async:true for background execution; the tool returns an id and Pi starts a 
 					onUpdate: workflowOnUpdate,
 					ctx,
 					requestedAsync: params.async,
+					...(params.resume ? { resumeRunId: params.resume } : {}),
 				};
 				group = options.openWorkflowGroup?.(workflowContext);
+				if (params.resume && !group) throw new Error("workflow resume is not configured");
 				// Persist the script next to the group record so status surfaces can show
 				// WHAT this workflow does, not just its children.
-				if (group?.asyncDir) writeWorkflowScript(group.asyncDir, params.script);
-				let childIndex = 0;
+				// A resume without a corrected script keeps the saved record (and its meta).
+				if (group?.asyncDir && params.script) writeWorkflowScript(group.asyncDir, script);
+				let childIndex = group?.nextChildIndex ?? 0;
+				// Per-key call counters make repeated identical agent() calls distinct
+				// journal entries. They advance at call time (synchronously, before any
+				// await), so numbering follows script order rather than completion order.
+				const callOccurrences = new Map<string, number>();
 				emitter = createWorkflowPhaseEmitter(id, group?.async ? undefined : workflowOnUpdate);
 				const currentPhaseTags = () => ({
 					phaseIndex: emitter!.phaseIndex(),
@@ -1084,6 +1144,14 @@ Set async:true for background execution; the tool returns an id and Pi starts a 
 						},
 						dispatch: async (role, task, tags) => {
 							if (group) {
+								const baseKey = workflowCallKey(role, task, tags?.resultSchema, tags?.cwd);
+								const occurrence = callOccurrences.get(baseKey) ?? 0;
+								callOccurrences.set(baseKey, occurrence + 1);
+								const callKey = `${baseKey}#${occurrence}`;
+								if (resumeSource?.journal.results.has(callKey)) {
+									return { result: resumeSource.journal.results.get(callKey) };
+								}
+								const priorRunId = resumeSource?.journal.runIds.get(callKey);
 								const index = childIndex++;
 								const childPhaseIndex = tags?.phaseIndex ?? emitter!.phaseIndex();
 								const childPhaseTitle = tags?.phaseTitle ?? emitter!.phaseTitle();
@@ -1108,12 +1176,24 @@ Set async:true for background execution; the tool returns an id and Pi starts a 
 									...(tags?.pipeline ? { pipeline: tags.pipeline } : {}),
 									...(tags?.resultSchema ? { resultSchema: tags.resultSchema } : {}),
 									onChildProgress: (progress) => emitter!.childProgress(index, progress),
+									onRunStarted: (runId) => {
+										if (group?.asyncDir)
+											appendWorkflowJournal(group.asyncDir, { key: callKey, runId });
+									},
+									...(priorRunId ? { resumeRunId: priorRunId } : {}),
 								});
 								emitter!.childSettled(result, index);
+								const isError =
+									result.exitCode !== 0 || Boolean(result.error) || result.interrupted === true;
+								if (!isError && result.structuredResult && group.asyncDir) {
+									appendWorkflowJournal(group.asyncDir, {
+										key: callKey,
+										result: result.structuredResult.result,
+									});
+								}
 								return {
 									envelope: result.structuredResult,
-									isError:
-										result.exitCode !== 0 || Boolean(result.error) || result.interrupted === true,
+									isError,
 									exitCode: result.exitCode,
 									error: result.error,
 									interrupted: result.interrupted,
@@ -1130,7 +1210,7 @@ Set async:true for background execution; the tool returns an id and Pi starts a 
 						},
 						onParallelGroup: (groupId, size) => emitter!.expectParallel(groupId, size),
 						onParallelGroupSettled: (groupId) => emitter!.parallelGroupSettled(groupId),
-						script: params.script,
+						script,
 					});
 				const runAndPersistResult = async () => {
 					const value = await run();
@@ -1148,7 +1228,7 @@ Set async:true for background execution; the tool returns an id and Pi starts a 
 							try {
 								await asyncGroup.failWorkflow?.(message, currentPhaseTags());
 							} finally {
-								asyncGroup.finishAsync?.(false, message);
+								asyncGroup.finishAsync?.(false, withResumeHint(message, asyncGroup.groupRunId));
 							}
 						});
 					const asyncDir = asyncGroup.asyncDir ?? "";
@@ -1195,7 +1275,7 @@ Set async:true for background execution; the tool returns an id and Pi starts a 
 					if (group?.async) group.finishAsync?.(false, message);
 				}
 				return {
-					content: [{ type: "text", text: message }],
+					content: [{ type: "text", text: withResumeHint(message, group?.groupRunId) }],
 					isError: true,
 					// No Details to show (the envelope/{message} are not a Details); let the
 					// renderer fall back to the content text above.

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readAllEntries, appendRunEntry } from "../state/runs-registry.ts";
+import { readAllEntries, appendRunEntry, type RunsRegistryEntry } from "../state/runs-registry.ts";
 import { readStatus } from "../shared/utils.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import { StatusWriter, type StatusMeta } from "../state/status-writer.ts";
@@ -66,6 +66,9 @@ export interface SpawnRunOpts {
 	source?: "sync" | "async";
 	controlConfig?: ResolvedControlConfig;
 	onLifecycle?: RunLifecycleSink;
+	// Continue an existing run in place (workflow resume): reuse its id, record
+	// directory, and session file instead of minting new ones.
+	resume?: { runId: string; runRecordDir: string; sessionFile: string; startedAt: number; resumeCount: number };
 }
 
 export interface Layer0RunHandle {
@@ -90,6 +93,8 @@ export interface OpenGroupOpts {
 	source?: "sync" | "async";
 	mode?: "single" | "parallel";
 	label?: string;
+	// Reopen an existing group (workflow resume) instead of minting a new one.
+	existing?: Pick<RunsRegistryEntry, "runId" | "runRecordDir" | "startedAt">;
 }
 
 export interface Layer0GroupHandle {
@@ -118,6 +123,10 @@ const controllersByRunId = processGlobal("pi.subagents.runControllers", () => ne
 // reload, so interruptRun's map lookup is the only post-reload abort path.
 export function registerRunController(runId: string, controller: AbortController): void {
 	controllersByRunId.set(runId, controller);
+}
+
+export function hasRunController(runId: string): boolean {
+	return controllersByRunId.has(runId);
 }
 
 export function releaseRunController(runId: string): void {
@@ -329,12 +338,20 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 		...(opts.phaseTitle ? { phaseTitle: opts.phaseTitle } : {}),
 		...(opts.parallelGroupId ? { parallelGroupId: opts.parallelGroupId } : {}),
 		...(opts.pipeline ? { pipeline: opts.pipeline } : {}),
+		...(opts.resume
+			? {
+					runId: opts.resume.runId,
+					runRecordDir: opts.resume.runRecordDir,
+					sessionFile: opts.resume.sessionFile,
+				}
+			: {}),
 		variant: "group-child",
 		initialize: {
 			mode: "single",
 			...(opts.controlConfig ? { controlConfig: opts.controlConfig } : {}),
 			cwd: step.cwd,
-			startedAt: Date.now(),
+			startedAt: opts.resume?.startedAt ?? Date.now(),
+			...(opts.resume ? { resumedAt: Date.now(), resumeCount: opts.resume.resumeCount } : {}),
 			currentStep: 0,
 			...(step.label ? { label: step.label } : {}),
 			...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
@@ -433,18 +450,22 @@ export function spawnRun(step: Layer0RunStep, opts: SpawnRunOpts): Layer0RunHand
 }
 
 export function openGroup(opts: OpenGroupOpts): Layer0GroupHandle {
-	const runId = randomUUID();
-	const sessionPaths = resolveChildSessionFile({
-		parentCwd: opts.cwd,
-		parentSessionFile: opts.parentSessionFile ?? null,
-		runId,
-		stepIndex: 0,
-		...(opts.sessionDir ? { sessionDirOverride: opts.sessionDir } : {}),
-		...(opts.defaultSessionDir ? { defaultSessionDir: opts.defaultSessionDir } : {}),
-	});
+	const runId = opts.existing?.runId ?? randomUUID();
+	const runRecordDir =
+		opts.existing?.runRecordDir ??
+		resolveChildSessionFile({
+			parentCwd: opts.cwd,
+			parentSessionFile: opts.parentSessionFile ?? null,
+			runId,
+			stepIndex: 0,
+			...(opts.sessionDir ? { sessionDirOverride: opts.sessionDir } : {}),
+			...(opts.defaultSessionDir ? { defaultSessionDir: opts.defaultSessionDir } : {}),
+		}).runRecordDir;
+	// A reopened group appends a fresh registry row under the same id; the
+	// registry reader keeps the newest row per runId.
 	appendRunEntry({
 		runId,
-		runRecordDir: sessionPaths.runRecordDir,
+		runRecordDir,
 		mode: opts.mode ?? "parallel",
 		source: opts.source ?? "sync",
 		...(opts.kind ? { kind: opts.kind } : {}),
@@ -454,9 +475,9 @@ export function openGroup(opts: OpenGroupOpts): Layer0GroupHandle {
 		...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
 		...(opts.rootSessionId ? { rootSessionId: opts.rootSessionId } : {}),
 		cwd: opts.cwd,
-		startedAt: Date.now(),
+		startedAt: opts.existing?.startedAt ?? Date.now(),
 	});
-	return { runId, runRecordDir: sessionPaths.runRecordDir, notifyPolicy: opts.notifyPolicy };
+	return { runId, runRecordDir, notifyPolicy: opts.notifyPolicy };
 }
 
 export async function awaitRun(handle: Layer0RunHandle): Promise<ChildAgentResult> {

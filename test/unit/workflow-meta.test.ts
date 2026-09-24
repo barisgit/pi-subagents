@@ -273,8 +273,17 @@ describe("workflow metadata disk codec", () => {
 	});
 
 	it("fails closed on malformed persisted metadata without hiding a valid script", () => {
-		const root = record({ script: "return 'safe';", meta: { name: "Broken", phases: [] } });
+		const root = record({ script: "return 'safe';", meta: { name: "Broken", phases: "Scope" } });
 		assert.equal(readWorkflowScript(root), "return 'safe';");
 		assert.equal(readWorkflowMeta(root), undefined);
+	});
+
+	it("treats description as optional", () => {
+		const root = record({ script: "return 'safe';", meta: { name: "Audit", phases: ["Scope"] } });
+		assert.deepEqual(readWorkflowMeta(root), { name: "Audit", phases: [{ title: "Scope" }] });
+		assert.deepEqual(parseWorkflowMeta({ name: "Audit", description: " ", phases: [] }), {
+			ok: false,
+			reason: "meta.description must be a non-empty string",
+		});
 	});
 });
