@@ -114,9 +114,23 @@ export interface ResumeTarget {
 	registryEntry: RunsRegistryEntry;
 }
 
-export function resolveResumeTarget(runId: string, stepIndex = 0, requestingRootSessionId?: string): ResumeTarget {
-	const entry = readAllEntries().find((candidate) => candidate.runId === runId);
-	if (!entry) throw new Error(`Unknown runId '${runId}'.`);
+export function resolveResumeTarget(idOrPrefix: string, stepIndex = 0, requestingRootSessionId?: string): ResumeTarget {
+	const entries = readAllEntries();
+	let entry = entries.find((candidate) => candidate.runId === idOrPrefix);
+	if (!entry) {
+		// Notices show 8-character run ids, so accept a unique prefix, as the status action does.
+		const prefixIds = new Set(
+			entries.filter((candidate) => candidate.runId.startsWith(idOrPrefix)).map((candidate) => candidate.runId),
+		);
+		if (prefixIds.size > 1) {
+			throw new Error(
+				`Run ID prefix '${idOrPrefix}' is ambiguous (${prefixIds.size} matches); provide a longer ID.`,
+			);
+		}
+		entry = entries.find((candidate) => prefixIds.has(candidate.runId));
+	}
+	if (!entry) throw new Error(`Unknown runId '${idOrPrefix}'.`);
+	const runId = entry.runId;
 	const recordedRootSessionId = entry.rootSessionId ?? entry.parentSessionId;
 	if (!recordedRootSessionId) {
 		throw new Error(

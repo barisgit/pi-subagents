@@ -141,6 +141,36 @@ describe("resolveResumeTarget", () => {
 		assert.throws(() => resolveResumeTarget("missing-run"), /Unknown runId 'missing-run'/);
 	});
 
+	it("a unique run id prefix resolves to the full run id; an ambiguous one is rejected", () => {
+		const root = setup();
+		const runRecordDir = path.join(root, "abcdef12-run");
+		const sessionFile = path.join(runRecordDir, "run-0", "session.jsonl");
+		for (const runId of ["abcdef12-run", "abc99999-run"]) {
+			appendRunEntry({
+				runId,
+				runRecordDir: path.join(root, runId),
+				mode: "single",
+				source: "async",
+				agentName: "fixer",
+				rootSessionId: "root-session",
+				cwd: root,
+				startedAt: 1,
+			});
+		}
+		writeSessionFile(sessionFile);
+		writeStatus(runRecordDir, {
+			runId: "abcdef12-run",
+			mode: "single",
+			state: "complete",
+			startedAt: 1,
+			cwd: root,
+			steps: [{ agent: "fixer", status: "complete", sessionFile }],
+		});
+
+		assert.equal(resolveResumeTarget("abcdef", 0, "root-session").runId, "abcdef12-run");
+		assert.throws(() => resolveResumeTarget("abc", 0, "root-session"), /prefix 'abc' is ambiguous \(2 matches\)/);
+	});
+
 	it("resumable gate rejects a still-live running run", () => {
 		assert.throws(
 			() =>
