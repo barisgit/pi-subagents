@@ -21,6 +21,8 @@ Delegation invoked from a child session runs synchronously, even when `async:tru
 
 ## Workflow
 
+Workflow is the most expressive delegation tool available: the plan becomes a program, so loops, branches, dynamic fan-out, schema-checked results, votes, tournaments, and repair rounds are ordinary code. Use it boldly and inventively, and design the topology the problem deserves rather than the smallest one that works. Work with dependent stages, repeated items, or value in several independent attempts or judges usually belongs in a workflow.
+
 Choose the shape from the dependency pattern:
 
 - Use `pipeline({ name, items }, ...stages)` for named per-item multi-stage work. A stage may be `{ title, run }`; `run` receives `(previousResult, originalItem, index)` and the first receives `(item, item, index)`. The unnamed function forms remain supported.
