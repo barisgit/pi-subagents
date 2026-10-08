@@ -26,7 +26,7 @@ describe("chain docs eviction", () => {
 				"subagent description",
 				toolDescription(
 					read("src/dispatch/subagent-tool.ts"),
-					"description: `Delegate a bounded task",
+					"description: `Delegate bounded work",
 					"parameters: SubagentParams",
 				),
 			],
@@ -34,7 +34,7 @@ describe("chain docs eviction", () => {
 				"workflow description",
 				toolDescription(
 					read("src/workflow/workflow.ts"),
-					"description: `Orchestrate multiple subagents",
+					"description: `Run result-driven orchestration",
 					"parameters: WorkflowParams",
 				),
 			],
