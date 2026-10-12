@@ -27,6 +27,8 @@ import { resolveCurrentMaxSubagentDepth } from "../shared/runtime-env.ts";
 import type { ExecutionContextData, ExecutorDeps, TaskParam } from "./executor-types.ts";
 import {
 	createForegroundControlNotifier,
+	isDispatchContextStale,
+	STALE_DISPATCH_CONTEXT_ERROR,
 	resolveDispatchRootSessionId,
 	singleResultToChildAgentResult,
 } from "./executor-helpers.ts";
@@ -216,6 +218,13 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 export async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<SubagentToolResult> {
 	const { params, effectiveCwd, agents, ctx, runId, artifactsDir, backgroundRequestedWhileClarifying, onUpdate } =
 		data;
+	if (isDispatchContextStale(ctx)) {
+		return {
+			content: [{ type: "text", text: STALE_DISPATCH_CONTEXT_ERROR }],
+			isError: true,
+			details: { mode: "parallel", results: [] },
+		};
+	}
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget : undefined;
 	const allProgress: AgentProgress[] = [];

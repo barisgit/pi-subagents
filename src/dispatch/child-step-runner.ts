@@ -22,6 +22,8 @@ import {
 	emptyUsage,
 	getRequestedModeLabel,
 	nestedSubagentUsageFromToolEvent,
+	isDispatchContextStale,
+	STALE_DISPATCH_CONTEXT_ERROR,
 } from "./executor-helpers.ts";
 import { prepareChildStep } from "./prepare-child-step.ts";
 import { runChildAgent } from "./in-process-executor.ts";
@@ -53,6 +55,15 @@ export function buildAsyncChildStep(input: {
 	maxSubagentDepth: number;
 }): AsyncDispatchStep | { error: SubagentToolResult } {
 	const { data, deps, agentConfig, stepIndex } = input;
+	if (isDispatchContextStale(data.ctx)) {
+		return {
+			error: {
+				content: [{ type: "text", text: STALE_DISPATCH_CONTEXT_ERROR }],
+				isError: true,
+				details: { mode: getRequestedModeLabel(data.params), results: [] },
+			},
+		};
+	}
 	const rawSkills =
 		input.skills !== undefined ? input.skills : resolveStepBehavior(agentConfig, { skills: undefined }).skills;
 	const skillNames = data.forkReuse || rawSkills === false ? [] : (rawSkills ?? agentConfig.skills ?? []);
@@ -81,7 +92,15 @@ export function buildAsyncChildStep(input: {
 	if ("error" in prepared) {
 		return {
 			error: {
-				content: [{ type: "text", text: "No model available for child agent." }],
+				content: [
+					{
+						type: "text",
+						text:
+							prepared.error === "stale-context"
+								? STALE_DISPATCH_CONTEXT_ERROR
+								: "No model available for child agent.",
+					},
+				],
 				isError: true,
 				details: { mode: getRequestedModeLabel(data.params), results: [] },
 			},
@@ -283,7 +302,10 @@ export async function runInProcessChildStep(input: {
 			exitCode: 1,
 			messages: [],
 			usage: emptyUsage(),
-			error: "No model available for child agent.",
+			error:
+				prepared.error === "stale-context"
+					? STALE_DISPATCH_CONTEXT_ERROR
+					: "No model available for child agent.",
 		};
 	}
 	const { step, missingSkills, modelRefs } = prepared;

@@ -47,6 +47,20 @@ describe("resolveParallelTaskCwd precedence", () => {
 });
 
 describe("runParallelPath early returns", () => {
+	it("returns a clear error instead of rejecting when its captured context is stale", async () => {
+		const data = makeData({
+			params: { tasks: [{ agent: "worker", task: "late" }] },
+			agents: [{ name: "worker" }] as never,
+		});
+		Object.defineProperty(data.ctx, "sessionManager", {
+			get() {
+				throw new Error("This extension ctx is stale after session replacement or reload.");
+			},
+		});
+		const result = await runParallelPath(data, makeDeps());
+		assert.equal(result.isError, true);
+		assert.match(firstText(result), /session.*replaced or reloaded/i);
+	});
 	it("returns a Max tasks error when tasks exceed the parallel cap", async () => {
 		const tasks = Array.from({ length: 9 }, (_, i) => ({ agent: "fixer", task: `t${i}` }));
 		const result = await runParallelPath(makeData({ params: { tasks } }), makeDeps());

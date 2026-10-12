@@ -34,6 +34,7 @@ Subagent dispatch and child-agent execution layer for the pi-subagents extension
 ### File index
 
 - `agent-scope.ts` — resolves requested agent scope (user/project/both) for dispatch.
+- Delayed child preparation and parallel dispatch reject invalidated parent contexts with a clean run error. `executor-helpers.ts` remembers stale contexts so subsequent workflow children never read them again; async workflows preserve Pi’s guards rather than snapshotting the extension context.
 - `child-agent-registry.ts` — per-activation in-memory `ChildAgentRegistry` holding the live `RunView` mirror + abort handles and exposing retained step sessions in order for live dashboard rendering (not a singleton; does not survive reload).
 - `child-step-runner.ts` — builds and runs a single child step (`buildAsyncChildStep`, `runInProcessChildStep`, result conversion); also exports `createProgressUpdateCoalescer`, the trailing-edge emit throttle that coalesces `tool_execution_update` progress emits (injectable timer fns for tests).
 - `concurrency-semaphore.ts` — FIFO async semaphore primitive (`acquire`→permit `release`/`runWhileParked`); used by active-leaf, workflow-child-admission, and pipeline item-chain limits.

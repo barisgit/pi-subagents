@@ -814,11 +814,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const data: ExecutionContextData = {
 				params: {},
 				effectiveCwd,
-				// Async workflow children may start after an extension reload, when the
-				// captured ctx's getters throw. Pi's ctx exposes its values as own
-				// getters, so a spread snapshots them now (children read cwd and
-				// modelRegistry).
-				ctx: effectiveAsync ? { ...ctx } : ctx,
+				// Preserve Pi's invalidation guards: later children fail cleanly after
+				// replacement instead of bypassing the activation lifetime with a spread.
+				ctx,
 				signal: effectiveAsync ? workflowDetachedAbort.signal : signal,
 				onUpdate,
 				agents,

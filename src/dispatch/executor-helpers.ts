@@ -43,6 +43,34 @@ import { getLineageForSession, resolveRootSessionIdForSession } from "../state/l
 import { getCurrentPi } from "../shared/current-pi.ts";
 import { logger } from "../shared/logger.ts";
 
+export const STALE_DISPATCH_CONTEXT_ERROR =
+	"Child dispatch stopped because the parent session was replaced or reloaded. Start a new run from the current session.";
+
+const staleDispatchContexts = new WeakSet<object>();
+
+/**
+ * Fail closed when Pi invalidates an activation. Remember that context so later
+ * workflow children never touch it again. Pi 0.87.1 and 1.1.0 both guard this
+ * getter; there is no public API to obtain the replacement activation's context.
+ * Call before synchronous preparation, not as a lease across an await.
+ */
+export function isDispatchContextStale(ctx: { sessionManager?: unknown }): boolean {
+	if (staleDispatchContexts.has(ctx)) return true;
+	try {
+		void ctx.sessionManager;
+		return false;
+	} catch (error) {
+		if (
+			!(error instanceof Error) ||
+			!error.message.startsWith("This extension ctx is stale after session replacement or reload.")
+		) {
+			throw error;
+		}
+		staleDispatchContexts.add(ctx);
+		return true;
+	}
+}
+
 /**
  * Resolve the parent runId for a dispatch happening NOW. The dispatching
  * session's lineage tells us our own runId; that becomes the parent for any

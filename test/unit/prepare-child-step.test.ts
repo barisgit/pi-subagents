@@ -113,6 +113,34 @@ describe("prepareChildStep", () => {
 		assert.equal(step.outputPath, undefined);
 	});
 
+	it("fails cleanly and stops reading a stale context on subsequent children", () => {
+		let accesses = 0;
+		const data = makeData(cwd, {
+			ctx: {
+				get sessionManager() {
+					accesses++;
+					throw new Error("This extension ctx is stale after session replacement or reload.");
+				},
+				cwd,
+				model: { provider: "anthropic" },
+				modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+			},
+		});
+		const input = {
+			data,
+			deps: makeDeps(cwd),
+			agentConfig: makeAgentConfig(),
+			stepIndex: 0,
+			cwd,
+			task: "late child",
+			skillNames: [],
+			maxSubagentDepth: 3,
+		};
+		assert.deepEqual(prepareChildStep(input), { error: "stale-context" });
+		assert.deepEqual(prepareChildStep({ ...input, stepIndex: 1 }), { error: "stale-context" });
+		assert.equal(accesses, 1);
+	});
+
 	it("returns the no-model sentinel when no model resolves", () => {
 		const data = makeData(cwd, {
 			ctx: {

@@ -325,7 +325,7 @@ describe("workflow resume", () => {
 });
 
 describe("async workflow across an extension reload", () => {
-	it("finishes without touching the stale ctx after reload", async () => {
+	it("fails later children cleanly after reload", async () => {
 		const { executor, ctx } = setup("workflow-reload-stale-ctx-");
 		let stale = false;
 		const guard = <T>(value: T): T => {
@@ -385,7 +385,7 @@ describe("async workflow across an extension reload", () => {
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
 
-			assert.equal(readState(), "complete", "the second child starts and the workflow completes");
+			assert.equal(readState(), "failed", "a later child cannot use the invalidated parent activation");
 			assert.deepEqual(unhandled, []);
 		} finally {
 			process.off("unhandledRejection", onUnhandled);

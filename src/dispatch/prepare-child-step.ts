@@ -9,7 +9,7 @@ import { buildSkillInjection, resolveSkillsWithFallback } from "../shared/skills
 import { buildOutputContractAppend } from "../protocol/output-contract.ts";
 import { resolveChildSessionFile } from "../state/session-paths.ts";
 import type { ChildAgentStep, ExecutionContextData, ExecutorDeps } from "./executor-types.ts";
-import { resolveChildTools, resolveDispatchRootSessionId } from "./executor-helpers.ts";
+import { resolveChildTools, resolveDispatchRootSessionId, isDispatchContextStale } from "./executor-helpers.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 function applyThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {
@@ -63,12 +63,12 @@ function resolveModelFromRef(
  * object, the resolved `outputPath`, the normalized `skillNames`, and an
  * optional `layer0` override (foreground layer-0 reuses its run's
  * runId/sessionFile/runRecordDir/rootRunId). On model-resolution failure it
- * returns the `{ error: "no-model" }` sentinel and each caller maps it to its
- * own return shape.
+ * returns an error sentinel and each caller maps it to its own return shape.
+ * An invalidated parent activation fails closed before any child is prepared.
  */
 export type PrepareChildStepResult =
 	| { step: ChildAgentStep; resolvedSkills: ResolvedSkill[]; missingSkills: string[]; modelRefs: string[] }
-	| { error: "no-model" };
+	| { error: "no-model" | "stale-context" };
 
 export function prepareChildStep(input: {
 	data: ExecutionContextData;
@@ -92,6 +92,7 @@ export function prepareChildStep(input: {
 	resultSchema?: TSchema;
 }): PrepareChildStepResult {
 	const { data, deps, agentConfig, stepIndex } = input;
+	if (isDispatchContextStale(data.ctx)) return { error: "stale-context" };
 	const availableModels = data.ctx.modelRegistry.getAvailable();
 	const modelRefs = buildModelCandidates(
 		input.modelOverride ?? agentConfig.model,
