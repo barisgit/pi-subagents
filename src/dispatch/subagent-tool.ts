@@ -33,7 +33,7 @@ export function createSubagentToolDefinitions(deps: { executor: ReturnType<typeo
 		name: "subagent",
 		label: "Subagent",
 		promptSnippet: "Delegate to subagents or manage runs",
-		description: `Delegate bounded work to configured agents, or manage existing runs. Plain subagents may form agent-directed delegation trees. Use \`workflow\` when later dispatch depends on earlier results or needs programmable control flow.
+		description: `Delegate bounded work to configured agents, or manage existing runs. Plain subagents may form agent-directed delegation trees. Use \`workflow\` when later dispatch depends on earlier results or needs programmable branching.
 
 \`run\` accepts one or more entries; multiple entries execute in parallel. A shared \`message\` templates the entries with \`{task}\` and at most one \`{in}\` substitution. \`batch\` groups completion notices. Top-level \`cwd\` defaults every entry and resolves from the caller cwd; an entry \`cwd\` overrides it and resolves from that top-level cwd. \`context\` defaults to \`"fresh"\`; \`"fork"\` is same-role self-branching, while delegation to another configured role uses \`"fresh"\`.
 

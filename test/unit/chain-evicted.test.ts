@@ -26,7 +26,7 @@ describe("chain eviction", () => {
 		const props = (SubagentParams as { properties?: Record<string, unknown> }).properties ?? {};
 		assert.equal(Object.hasOwn(props, "chain"), false);
 		const index = read("src/dispatch/subagent-tool.ts");
-		const start = index.indexOf("description: `Delegate a bounded task");
+		const start = index.indexOf("description: `", index.indexOf('name: "subagent"'));
 		const end = index.indexOf("parameters: SubagentParams", start);
 		assert.ok(start >= 0 && end > start, "subagent tool description should be present");
 		const description = index.slice(start, end);

@@ -9,7 +9,7 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(testDir, "..", "..");
 const thisFile = fileURLToPath(import.meta.url);
 
-const skippedDirs = new Set([".git", "node_modules", ".pi", "lib", "skills"]);
+const skippedDirs = new Set([".git", ".worktrees", "node_modules", ".pi", "lib", "skills"]);
 const scannedExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs", ".md"]);
 const legacyAllowed = new Set([
 	path.join(projectRoot, "docs/schema-decisions.md"),

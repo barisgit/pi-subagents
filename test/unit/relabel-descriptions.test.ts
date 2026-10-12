@@ -18,7 +18,7 @@ describe("description relabel guards", () => {
 		const schemas = readSource("src/protocol/schemas.ts");
 
 		assert.doesNotMatch(index, /inspect\/resume async runs/);
-		assert.match(index, /inspect\/resume background runs/);
+		assert.match(index, /manage existing runs/);
 		assert.doesNotMatch(index, /\[async\]/);
 		assert.match(index, /\[background\]/);
 		assert.doesNotMatch(slash, /Show live sync and async subagent runs/);

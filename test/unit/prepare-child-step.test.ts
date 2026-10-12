@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { prepareChildStep } from "../../src/dispatch/prepare-child-step.ts";
+import { createExtensionRuntime, ExtensionRunner, SessionManager } from "@earendil-works/pi-coding-agent";
 import { OUTPUT_OPEN, OUTPUT_SYSTEM_INSTRUCTION } from "../../src/protocol/output-contract.ts";
 
 // A realistic fake model the registry hands back. The shape only needs the
@@ -139,6 +140,26 @@ describe("prepareChildStep", () => {
 		assert.deepEqual(prepareChildStep(input), { error: "stale-context" });
 		assert.deepEqual(prepareChildStep({ ...input, stepIndex: 1 }), { error: "stale-context" });
 		assert.equal(accesses, 1);
+	});
+
+	it("contains Pi's actual invalidated-context getter error", () => {
+		// The registry is never read: invalidation must stop preparation first.
+		const runner = new ExtensionRunner([], createExtensionRuntime(), cwd, SessionManager.inMemory(cwd), {
+			getAvailable: () => AVAILABLE_MODELS,
+		} as never);
+		const ctx = runner.createContext();
+		runner.invalidate();
+		const result = prepareChildStep({
+			data: makeData(cwd, { ctx }),
+			deps: makeDeps(cwd),
+			agentConfig: makeAgentConfig(),
+			stepIndex: 0,
+			cwd,
+			task: "late child",
+			skillNames: [],
+			maxSubagentDepth: 3,
+		});
+		assert.deepEqual(result, { error: "stale-context" });
 	});
 
 	it("returns the no-model sentinel when no model resolves", () => {
