@@ -359,13 +359,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 					publishSubagentUsage(deps.pi, deps.state, {
 						runId: groupRunId,
 						rootRunId: groupRootRunId,
-						...(() => {
-							const rootSessionId = resolveDispatchRootSessionId(
-								ctx,
-								deps.state.currentSessionId ?? undefined,
-							);
-							return rootSessionId ? { rootSessionId } : {};
-						})(),
+						...(rootSessionId ? { rootSessionId } : {}),
 						mode: "parallel",
 						source: "async",
 						totalUsage,
@@ -623,13 +617,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 				publishSubagentUsage(deps.pi, deps.state, {
 					runId,
 					rootRunId,
-					...(() => {
-						const rootSessionId = resolveDispatchRootSessionId(
-							ctx,
-							deps.state.currentSessionId ?? undefined,
-						);
-						return rootSessionId ? { rootSessionId } : {};
-					})(),
+					...(asyncRootSessionId ? { rootSessionId: asyncRootSessionId } : {}),
 					mode,
 					source: "async",
 					totalUsage,

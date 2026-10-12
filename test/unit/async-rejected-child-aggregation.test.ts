@@ -142,6 +142,38 @@ afterEach(() => {
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
+for (const count of [1, 2]) {
+	it(`async ${count}-child completion preserves success after parent replacement`, async () => {
+		let stale = false;
+		const harness = setup("async-replaced-parent-", "never matches", () => {
+			stale = true;
+		});
+		const manager = harness.ctx.sessionManager;
+		Object.defineProperty(harness.ctx, "sessionManager", {
+			get() {
+				if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+				return manager;
+			},
+		});
+		const completePromise = waitForEvent(harness.events, SUBAGENT_ASYNC_COMPLETE_EVENT);
+		await harness.executor.execute(
+			"id",
+			{ run: Array.from({ length: count }, (_, index) => ({ agent: `A${index}`, task: "done" })), async: true },
+			new AbortController().signal,
+			undefined,
+			harness.ctx as never,
+		);
+		const complete = await Promise.race([
+			completePromise,
+			new Promise((_, reject) => {
+				setTimeout(() => reject(new Error("No completion event after parent replacement")), 1000);
+			}),
+		]);
+		assert.equal(complete.success, true);
+		assert.equal(complete.completed, count);
+	});
+}
+
 describe("async aggregation with a rejected child", () => {
 	it("parallel: counts the rejected child as failed instead of dropping it", async () => {
 		const harness = setup("async-parallel-reject-", "t1");

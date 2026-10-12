@@ -194,6 +194,34 @@ function execute(
 	);
 }
 
+it("settles a running child without reading its invalidated parent context", async () => {
+	const cwd = setupTempHome("sync-replaced-parent-");
+	installFakeRuntime();
+	const deps = makeDeps(cwd);
+	const ctx = makeCtx(cwd);
+	const sessionManager = ctx.sessionManager;
+	let stale = false;
+	Object.defineProperty(ctx, "sessionManager", {
+		get() {
+			if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+			return sessionManager;
+		},
+	});
+	promptEvents = [
+		() => {
+			stale = true;
+		},
+	];
+	const result = await createSubagentExecutor(deps).execute(
+		"id",
+		{ run: [{ agent: "A", task: "alpha" }] },
+		new AbortController().signal,
+		undefined,
+		ctx as never,
+	);
+	assert.notEqual(result.isError, true);
+});
+
 afterEach(() => {
 	restoreRuntime?.();
 	restoreRuntime = undefined;

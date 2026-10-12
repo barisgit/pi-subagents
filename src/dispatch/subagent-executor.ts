@@ -25,6 +25,8 @@ import {
 	sumUsages,
 	terminalStatusStepFromResult,
 	validationError,
+	isDispatchContextStale,
+	STALE_DISPATCH_CONTEXT_ERROR,
 } from "./executor-helpers.ts";
 import { runInProcessChildStep } from "./child-step-runner.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget } from "./intercom-bridge.ts";
@@ -138,6 +140,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		ctx: ExtensionContext,
 		internal: boolean,
 	): Promise<SubagentToolResult> => {
+		if (isDispatchContextStale(ctx)) return buildRequestedModeError(params, STALE_DISPATCH_CONTEXT_ERROR);
 		deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
@@ -432,6 +435,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 		const parentRunId = resolveDispatchParentRunId(ctx);
 		let rootRunId = resolveDispatchRootRunId(ctx, runId);
+		// Completion may outlive this activation; keep immutable lineage, not ctx.
+		const dispatchRootSessionId = resolveDispatchRootSessionId(ctx, deps.state.currentSessionId ?? undefined);
 		const foregroundGroup =
 			!effectiveAsync && foregroundMode === "parallel"
 				? openGroup({
@@ -647,13 +652,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					publishSubagentUsage(deps.pi, deps.state, {
 						runId,
 						rootRunId,
-						...(() => {
-							const rootSessionId = resolveDispatchRootSessionId(
-								ctx,
-								deps.state.currentSessionId ?? undefined,
-							);
-							return rootSessionId ? { rootSessionId } : {};
-						})(),
+						...(dispatchRootSessionId ? { rootSessionId: dispatchRootSessionId } : {}),
 						mode: details.workflow ? "workflow" : details.mode,
 						source: "sync",
 						totalUsage,
