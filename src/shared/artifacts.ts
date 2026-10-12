@@ -37,35 +37,40 @@ export function writeMetadata(filePath: string, metadata: object): void {
 	fs.writeFileSync(filePath, JSON.stringify(metadata, null, 2), "utf-8");
 }
 
+/** Best-effort housekeeping: scanning or stamping a cleanup marker must not block activation. */
 export function cleanupOldArtifacts(dir: string, maxAgeDays: number): void {
-	if (!fs.existsSync(dir)) return;
+	try {
+		if (!fs.existsSync(dir)) return;
 
-	const markerPath = path.join(dir, CLEANUP_MARKER_FILE);
-	const now = Date.now();
+		const markerPath = path.join(dir, CLEANUP_MARKER_FILE);
+		const now = Date.now();
 
-	if (fs.existsSync(markerPath)) {
-		const stat = fs.statSync(markerPath);
-		if (now - stat.mtimeMs < 24 * 60 * 60 * 1000) return;
-	}
-
-	const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
-	const cutoff = now - maxAgeMs;
-
-	for (const file of fs.readdirSync(dir)) {
-		if (file === CLEANUP_MARKER_FILE) continue;
-		const filePath = path.join(dir, file);
-		try {
-			const stat = fs.statSync(filePath);
-			if (stat.mtimeMs < cutoff) {
-				fs.unlinkSync(filePath);
-			}
-		} catch {
-			// Artifact cleanup is best-effort housekeeping. Skip files that disappear
-			// or become unreadable while scanning so one bad entry does not block the rest.
+		if (fs.existsSync(markerPath)) {
+			const stat = fs.statSync(markerPath);
+			if (now - stat.mtimeMs < 24 * 60 * 60 * 1000) return;
 		}
-	}
 
-	fs.writeFileSync(markerPath, String(now));
+		const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+		const cutoff = now - maxAgeMs;
+
+		for (const file of fs.readdirSync(dir)) {
+			if (file === CLEANUP_MARKER_FILE) continue;
+			const filePath = path.join(dir, file);
+			try {
+				const stat = fs.statSync(filePath);
+				if (stat.mtimeMs < cutoff) {
+					fs.unlinkSync(filePath);
+				}
+			} catch {
+				// Artifact cleanup is best-effort housekeeping. Skip files that disappear
+				// or become unreadable while scanning so one bad entry does not block the rest.
+			}
+		}
+
+		fs.writeFileSync(markerPath, String(now));
+	} catch {
+		// Includes directory/marker races and disk-full failures at extension startup.
+	}
 }
 
 export function cleanupAllArtifactDirs(maxAgeDays: number): void {
