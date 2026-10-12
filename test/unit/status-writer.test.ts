@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { after, afterEach, describe, it } from "node:test";
-import { StatusWriter, __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
+import { after, afterEach, describe, it, mock } from "node:test";
+import { StatusWriter, __setStatusWriterWriteJsonForTest, writeStatusJson } from "../../src/state/status-writer.ts";
+import { logger } from "../../src/shared/logger.ts";
 import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 import type { AsyncJobState, SubagentState } from "../../src/protocol/types.ts";
 import type { PersistedRunStatus } from "../../src/protocol/status-types.ts";
@@ -98,6 +99,38 @@ function stopSubagentStateTimers(state: SubagentState): void {
 }
 
 describe("StatusWriter", () => {
+	it("keeps running after ENOSPC telemetry failures, warns once, and retries", async () => {
+		const dir = tempDir("pi-status-enospc-");
+		const warning = mock.method(logger, "warn", () => {});
+		let fail = true;
+		restoreFns.push(
+			__setStatusWriterWriteJsonForTest((filePath, payload) => {
+				if (fail) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+				fs.writeFileSync(filePath, JSON.stringify(payload));
+			}),
+		);
+		const writer = new StatusWriter({ runRecordDir: dir, runId: "run-1", debounceMs: 1 });
+		try {
+			assert.doesNotThrow(() => writer.initialize({ state: "running" }));
+			writer.enqueue({ runId: "run-1", stepIndex: 0, liveText: "partial" });
+			await delay(20);
+			await assert.doesNotReject(writer.finalize(result()));
+			assert.equal(warning.mock.callCount(), 1);
+			fail = false;
+			await writer.finalize(result());
+			assert.equal(readStatus(dir).state, "complete");
+		} finally {
+			writer.dispose();
+			warning.mock.restore();
+		}
+	});
+
+	it("does not throw when status directory creation fails", () => {
+		const dir = tempDir("pi-status-mkdir-failure-");
+		const blocked = path.join(dir, "file");
+		fs.writeFileSync(blocked, "not a directory");
+		assert.doesNotThrow(() => writeStatusJson(path.join(blocked, "status.json"), {}));
+	});
 	it("rehydrates activity with the persisted custom control threshold", async () => {
 		const { statusToRunView } = await import("../../src/state/async-status.ts");
 		const dir = tempDir("pi-status-control-config-");

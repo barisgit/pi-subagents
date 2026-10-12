@@ -170,7 +170,7 @@ describe("Layer-0 spawnRun rejection", () => {
 });
 
 describe("Layer-0 terminal persistence failure", () => {
-	it("surfaces the persistence error when recording an already-rejected child", async () => {
+	it("preserves the execution error when recording an already-rejected child", async () => {
 		const root = setupTempHome("layer0-rejected-enospc-");
 		const failure = Object.assign(new Error("ENOSPC: failed child final status write"), { code: "ENOSPC" });
 		const handle = spawnRun(
@@ -188,12 +188,12 @@ describe("Layer-0 terminal persistence failure", () => {
 			throw failure;
 		});
 		try {
-			await assert.rejects(awaitRun(handle), (error) => error === failure);
+			await assert.rejects(awaitRun(handle), /execution failed first/);
 		} finally {
 			restore();
 		}
 	});
-	it("rejects completion instead of announcing success when the final write fails", async () => {
+	it("completes successfully even when the final telemetry write fails", async () => {
 		const root = setupTempHome("layer0-finalize-enospc-");
 		const completed: Array<{ result?: ChildAgentResult; error?: unknown }> = [];
 		const handle = spawnRun(
@@ -213,10 +213,11 @@ describe("Layer-0 terminal persistence failure", () => {
 			throw failure;
 		});
 		try {
-			await assert.rejects(awaitRun(handle), (error) => error === failure);
-			assert.equal(completed.length, 1, "the lifecycle must settle once with the persistence error");
-			assert.equal(completed[0]?.error, failure);
-			assert.equal(completed[0]?.result, undefined, "no successful lifecycle result before persistence");
+			const result = await awaitRun(handle);
+			assert.equal(result.state, "complete");
+			assert.equal(completed.length, 1, "the lifecycle must settle once despite telemetry failure");
+			assert.equal(completed[0]?.error, undefined);
+			assert.equal(completed[0]?.result, result);
 		} finally {
 			restore();
 		}

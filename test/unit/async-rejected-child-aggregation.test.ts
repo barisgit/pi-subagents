@@ -199,7 +199,7 @@ describe("async aggregation with a rejected child", () => {
 });
 
 describe("detached terminal persistence failure", () => {
-	it("reports a final-write error without emitting successful completion", { timeout: 3000 }, async (t) => {
+	it("emits successful completion despite a final telemetry write failure", { timeout: 3000 }, async (t) => {
 		const failure = Object.assign(new Error("ENOSPC: detached final status write"), { code: "ENOSPC" });
 		let restoreWriter: (() => void) | undefined;
 		const harness = setup("async-finalize-enospc-", "unused-poison", () => {
@@ -229,10 +229,10 @@ describe("detached terminal persistence failure", () => {
 				undefined,
 				harness.ctx as never,
 			);
-			assert.equal(await outcome, "error");
-			assert.equal(reportedError, failure);
-			assert.equal(typeof reportedRunId, "string");
-			assert.equal(completions, 0, "a failed final write must not emit successful completion");
+			assert.equal(await outcome, "complete");
+			assert.equal(reportedError, undefined);
+			assert.equal(reportedRunId, undefined);
+			assert.equal(completions, 1, "telemetry failure must not suppress completion");
 		} finally {
 			restoreWriter?.();
 		}

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { logger } from "../shared/logger.ts";
 import {
 	type ChildAgentResult,
 	type ChildAgentExitState,
@@ -347,7 +348,7 @@ export class StatusWriter {
 
 	private writeNow(): void {
 		if (!this.status) return;
-		writeJsonImpl(this.statusPath, this.status);
+		writeStatusJson(this.statusPath, this.status);
 	}
 
 	private clearTimer(): void {
@@ -357,7 +358,8 @@ export class StatusWriter {
 	}
 }
 
-let writeJsonImpl = writeStatusJson;
+let writeJsonImpl = writeStatusJsonAtomic;
+let writeFailureReported = false;
 
 export function __setStatusWriterWriteJsonForTest(fn: (filePath: string, payload: object) => void): () => void {
 	const previous = writeJsonImpl;
@@ -507,11 +509,28 @@ export function reconcileRunToTerminalOnDisk(
 		endedAt: now,
 		...(updated.totalTokens ? { totalTokens: updated.totalTokens } : {}),
 	});
-	writeStatusJson(statusPath, updated);
-	return updated;
+	return writeStatusJson(statusPath, updated) ? updated : null;
 }
 
-export function writeStatusJson(filePath: string, payload: object): void {
+/** Best-effort atomic telemetry write; returns false on failure and keeps future writes enabled. */
+export function writeStatusJson(filePath: string, payload: object): boolean {
+	try {
+		writeJsonImpl(filePath, payload);
+		return true;
+	} catch (error) {
+		// One warning per module activation prevents a full disk flooding logs on every heartbeat.
+		if (!writeFailureReported) {
+			writeFailureReported = true;
+			logger.warn("status.json write failed; run continues without persisted telemetry", {
+				filePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		return false;
+	}
+}
+
+function writeStatusJsonAtomic(filePath: string, payload: object): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const tempPath = path.join(
 		path.dirname(filePath),
@@ -521,10 +540,10 @@ export function writeStatusJson(filePath: string, payload: object): void {
 		fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), "utf-8");
 		fs.renameSync(tempPath, filePath);
 	} finally {
-		if (fs.existsSync(tempPath)) {
-			try {
-				fs.unlinkSync(tempPath);
-			} catch {}
+		try {
+			fs.unlinkSync(tempPath);
+		} catch {
+			// Rename consumed the file, or cleanup is unavailable on the failing disk.
 		}
 	}
 }
