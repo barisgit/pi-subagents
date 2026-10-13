@@ -154,11 +154,17 @@ export function createRootRoleManager(deps: {
 	}
 
 	function applyRootThinking(role: AgentConfig): void {
-		if (!role.thinking) return;
-		if (["off", "minimal", "low", "medium", "high", "xhigh"].includes(role.thinking)) {
-			void withRuntimePresetSettingsPreserved(() =>
-				pi.setThinkingLevel(role.thinking as "off" | "minimal" | "low" | "medium" | "high" | "xhigh"),
-			);
+		const thinking = role.thinking;
+		if (
+			thinking === "off" ||
+			thinking === "minimal" ||
+			thinking === "low" ||
+			thinking === "medium" ||
+			thinking === "high" ||
+			thinking === "xhigh" ||
+			thinking === "max"
+		) {
+			void withRuntimePresetSettingsPreserved(() => pi.setThinkingLevel(thinking));
 		}
 	}
 
