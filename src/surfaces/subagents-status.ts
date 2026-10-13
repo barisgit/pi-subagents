@@ -7,7 +7,7 @@ import {
 	type Theme,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	computeSplitPaneLayout,
@@ -1395,6 +1395,19 @@ export class SubagentsStatusComponent implements Component {
 			),
 		);
 		this.tui.requestRender();
+	}
+
+	/** Forward host-normalized wheel input through paneOverlay's existing scroll owner. */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "wheel" || !event.wheelDelta) return undefined;
+		// Pi 1.2 consumes wheel reports before handleInput; older hosts may still
+		// forward raw SGR there. Use the same pane hit-testing and per-selection
+		// scroll state for both paths, retaining the host's accelerated line count.
+		const report = `\u001b[<${event.wheelDelta < 0 ? 64 : 65};${event.x + 1};${event.y + 1}M`;
+		for (let line = 0; line < Math.abs(event.wheelDelta); line += 1) {
+			this.overlay.handleInput(report);
+		}
+		return { handled: true };
 	}
 
 	handleInput(data: string): void {

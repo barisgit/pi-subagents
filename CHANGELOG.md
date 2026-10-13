@@ -11,6 +11,7 @@
 - Added runtime `fallbackModels` failover after exhausted rate-limit, quota, authentication, and provider failures while preserving the child session history.
 
 ### Fixed
+- Restored dashboard mouse-wheel scrolling in Pi 1.2 fullscreen mode while retaining legacy wheel input support.
 - Foreground/sync subagents now auto-interrupt on `needs_attention` instead of emitting an unrouteable parent notice that could only surface after the tool call ended.
 - Prevented laptop sleep from permanently marking a still-live in-process child as lost while retaining bounded orphan recovery after extension reloads.
 

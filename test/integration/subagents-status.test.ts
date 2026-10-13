@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, describe, it } from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { renderSubagentResult } from "../../src/surfaces/render-result.ts";
 import {
 	expandOverlayByRootRunId,
@@ -261,6 +261,73 @@ describe("SubagentsStatusComponent", () => {
 			assert.equal(visibleWidth(narrowTitle), 32);
 		} finally {
 			component.dispose();
+		}
+	});
+
+	it("routes normalized wheel input to the same pane scroll as legacy SGR input", (t) => {
+		t.mock.method(Date, "now", () => 100_000);
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-scroll-"));
+		makeEventsFile(
+			dir,
+			Array.from({ length: 60 }, (_, index) => ({
+				type: "tool_execution_start",
+				toolCallId: `tool-${index}`,
+				toolName: "bash",
+				args: { cmd: `transcript line ${index}` },
+				observedAt: 1000 + index,
+			})),
+		);
+		const runs = Array.from({ length: 35 }, (_, index) =>
+			createRun(`scroll-${index}`, "running", { asyncDir: dir, startedAt: 1000 + index }),
+		);
+		const makeComponent = () =>
+			new SubagentsStatusComponent(
+				createTestTui(() => {}),
+				createTestTheme(),
+				() => {},
+				{ listRunsForOverlay: () => ({ active: runs, recent: [] }) },
+			);
+		const legacy = makeComponent();
+		const native = makeComponent();
+		const receiver: Component = native;
+		const render = (component: SubagentsStatusComponent) => component.render(120).join("\n");
+		try {
+			assert.equal(render(native), render(legacy));
+			for (const collapsed of [false, true]) {
+				if (collapsed) {
+					legacy.handleInput("s");
+					native.handleInput("s");
+				}
+				for (const x of collapsed ? [80] : [5, 80]) {
+					for (const delta of [3, -3]) {
+						const before = render(legacy);
+						for (let line = 0; line < Math.abs(delta); line++) {
+							legacy.handleInput(`\x1b[<${delta < 0 ? 64 : 65};${x + 1};6M`);
+						}
+						assert.notEqual(render(legacy), before, "fixture must actually scroll");
+						const result = receiver.handleMouse?.({
+							type: "wheel",
+							button: "none",
+							x,
+							y: 5,
+							screenX: x,
+							screenY: 5,
+							width: 120,
+							height: 32,
+							shift: false,
+							alt: false,
+							ctrl: false,
+							wheelDelta: delta,
+						});
+						assert.equal(result?.handled, true);
+						assert.equal(render(native), render(legacy));
+					}
+				}
+			}
+		} finally {
+			legacy.dispose();
+			native.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
