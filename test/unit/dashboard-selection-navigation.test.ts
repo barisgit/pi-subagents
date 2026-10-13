@@ -545,7 +545,10 @@ describe("rapid selection changes over large transcripts", () => {
 		}
 	});
 
-	it("disk-backed: a stale settle cannot promote a row the user already left, and close drops pending work", async () => {
+	it("disk-backed: a stale settle cannot promote a row the user already left, and close drops pending work", (t) => {
+		// Real sleeps can cross the 5 ms settle boundary when CI is under load.
+		// Advance the navigation and settle deadlines independently.
+		t.mock.timers.enable({ apis: ["setTimeout"] });
 		const loaded = new Map<string, Array<{ messages: LiveDashboardSession["messages"] }>>();
 		const reads: string[] = [];
 		const reader = {
@@ -568,14 +571,14 @@ describe("rapid selection changes over large transcripts", () => {
 		const component = createComponent(runs, { reader });
 		try {
 			component.render(120);
-			await delay(15);
+			t.mock.timers.tick(15);
 			assert.deepEqual(reads, ["/preview/a"]);
 			component.handleInput("j");
 			component.render(120);
-			await delay(3);
+			t.mock.timers.tick(3);
 			component.handleInput("j");
 			component.render(120);
-			await delay(15);
+			t.mock.timers.tick(15);
 			assert.deepEqual(reads, ["/preview/a", "/preview/c"], "the abandoned middle row never loads");
 			const painted = stripAnsi(component.render(120).join("\n"));
 			assert.match(painted, /full \/preview\/c/);
@@ -585,7 +588,7 @@ describe("rapid selection changes over large transcripts", () => {
 		} finally {
 			component.dispose();
 		}
-		await delay(15);
+		t.mock.timers.tick(15);
 		assert.deepEqual(reads, ["/preview/a", "/preview/c"], "a pending settle is dropped on close");
 	});
 
