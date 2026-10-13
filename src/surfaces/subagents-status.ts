@@ -11,13 +11,8 @@ import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earend
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	computeSplitPaneLayout,
-	endCursor,
 	ensureCursorVisible as ensurePaneCursorVisible,
-	homeCursor,
-	moveCursor,
-	pageCursor,
 	paneOverlay,
-	resizeSplitPane,
 	togglePaneFocus,
 	type PaneOverlayComponent,
 	type PaneOverlayContext,
@@ -29,7 +24,6 @@ import {
 	isQueuedStubRecent,
 	listRunsFromRegistryForOverlay,
 	readLeafRunViewCached,
-	sortRuns,
 } from "../state/async-status.ts";
 import { formatDuration, formatTokenCounter } from "./formatters.ts";
 import { tintAgentName } from "./render-shared.ts";
@@ -562,23 +556,6 @@ export function runIdentityAge(run: LiveRun, now: number): string | undefined {
 	return formatDuration(Math.max(0, end - run.run.startedAt));
 }
 
-function stateBucket(state: AsyncRunSummary["state"]): number {
-	switch (state) {
-		case "running":
-			return 0;
-		case "queued":
-			return 1;
-		case "paused":
-			return 2;
-		case "failed":
-			return 3;
-		case "complete":
-			return 4;
-		default:
-			return 5;
-	}
-}
-
 // Compact cwd badge (rightmost path segment, capped) for any row. Suppressed
 // entirely in scoped mode — every visible run shares the current session cwd,
 // so repeating it on every row is just noise (`pi-subagents · pi-subagents ·
@@ -589,7 +566,7 @@ function runCwdBadge(run: LiveRun, forceShow: boolean): string {
 	const cwd = run.run.cwd;
 	if (!cwd) return "";
 	const base = path.basename(cwd) || cwd;
-	return base.length > 22 ? base.slice(0, 21) + "…" : base;
+	return base.length > 22 ? `${base.slice(0, 21)}…` : base;
 }
 
 // Compact local-time date stamp for completed/lost runs. Today: `HH:MM`,
@@ -1256,11 +1233,6 @@ export class SubagentsStatusComponent implements Component {
 		return deriveDisplayRows(this.runs, this.collapsedIds);
 	}
 
-	/** Toggle collapse on the selected container row (enter). No-op on leaf rows. */
-	private toggleCollapse(): void {
-		this.toggleCollapseRow(this.selectedRow());
-	}
-
 	private toggleCollapseRow(row: DisplayRow | undefined): void {
 		if (!row) return;
 		let id: string | undefined;
@@ -1307,10 +1279,6 @@ export class SubagentsStatusComponent implements Component {
 		return deriveCountAgentRows(this.runs);
 	}
 
-	private isGroupContainerRow(run: LiveRun): boolean {
-		return deriveIsGroupContainerRow(this.runs, run);
-	}
-
 	private containerRowInfo(run: LiveRun): ContainerRowInfo | undefined {
 		return deriveContainerRowInfo(this.runs, this.collapsedIds, run);
 	}
@@ -1333,68 +1301,6 @@ export class SubagentsStatusComponent implements Component {
 			viewportHeight: listHeight,
 		});
 		this.leftScroll = state.scroll;
-	}
-
-	private applySelectionState(state: { cursor: number; scroll: number }): void {
-		const visible = this.displayRows();
-		if (visible.length === 0) return;
-		this.selectedId = dashboardRowKey(visible[state.cursor]!);
-		this.leftScroll = state.scroll;
-	}
-
-	private moveSelection(delta: number): void {
-		const visible = this.displayRows();
-		if (visible.length === 0) return;
-		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
-		this.applySelectionState(
-			moveCursor(
-				{
-					cursor: this.selectedIndex(),
-					scroll: this.leftScroll,
-					itemCount: visible.length,
-					viewportHeight: listHeight,
-				},
-				delta,
-			),
-		);
-		this.tui.requestRender();
-	}
-
-	private jumpSelection(toEnd: boolean): void {
-		const visible = this.displayRows();
-		if (visible.length === 0) return;
-		const listHeight = this.lastLeftListHeight || computeBodyHeight(this.tui);
-		const state = {
-			cursor: this.selectedIndex(),
-			scroll: this.leftScroll,
-			itemCount: visible.length,
-			viewportHeight: listHeight,
-		};
-		this.applySelectionState(toEnd ? endCursor(state) : homeCursor(state));
-		this.tui.requestRender();
-	}
-
-	/** Move the left-pane selection by a viewport page (PageUp/PageDown, and u/d
-	 * when the left pane is focused). Page size is the list height captured at the
-	 * last render so it matches what the user actually sees. */
-	private pageSelection(direction: 1 | -1, fraction = 1): void {
-		const visible = this.displayRows();
-		if (visible.length === 0) return;
-		const page = this.lastLeftListHeight || computeBodyHeight(this.tui);
-		const step = Math.max(1, Math.floor(page * fraction));
-		this.applySelectionState(
-			pageCursor(
-				{
-					cursor: this.selectedIndex(),
-					scroll: this.leftScroll,
-					itemCount: visible.length,
-					viewportHeight: page,
-				},
-				direction,
-				step,
-			),
-		);
-		this.tui.requestRender();
 	}
 
 	/** Forward host-normalized wheel input through paneOverlay's existing scroll owner. */
@@ -1435,25 +1341,6 @@ export class SubagentsStatusComponent implements Component {
 			this.focus = togglePaneFocus(this.focus);
 		}
 		this.overlay.handleInput(data);
-	}
-
-	private shiftSplit(direction: -1 | 1): void {
-		const cols = this.tui.terminal?.columns ?? process.stdout.columns ?? 120;
-		const currentLeft = this.computeLeftWidth(cols);
-		const next = resizeSplitPane({
-			totalWidth: cols,
-			leftFraction: this.splitFraction,
-			minLeftWidth: MIN_LEFT_PANE,
-			minRightWidth: MIN_RIGHT_PANE,
-			leftMaxWidth: this.leftPaneCap,
-			direction,
-			stepCols: SPLIT_STEP_COLS,
-		});
-		if (next.leftWidth === currentLeft) {
-			return;
-		}
-		this.splitFraction = next.leftFraction;
-		this.tui.requestRender();
 	}
 
 	private computeLeftWidth(totalWidth: number): number {
@@ -1819,7 +1706,7 @@ function wrapPlainStatusText(text: string, width: number, maxLines: number): str
 	return lines;
 }
 
-function selectedRunMetaLines(run: LiveRun, width: number, now: number, maxLines: number): string[] {
+function selectedRunMetaLines(run: LiveRun, width: number, maxLines: number): string[] {
 	if (maxLines <= 0) return [];
 	const started = `started ${formatStartedTime(run.run.startedAt)}`;
 	const combined = `${started} · id ${run.run.id}`;
@@ -1853,29 +1740,8 @@ export function buildSelectedRunStatusBox(
 	if (current) lines.push(renderStatusBoxLine(theme, boxWidth, current));
 	const failure = selectedRunFailureLine(run);
 	if (failure) lines.push(renderStatusBoxLine(theme, boxWidth, failure));
-	for (const meta of selectedRunMetaLines(run, boxWidth, now, SELECTED_STATUS_BOX_ROWS - lines.length)) {
+	for (const meta of selectedRunMetaLines(run, boxWidth, SELECTED_STATUS_BOX_ROWS - lines.length)) {
 		lines.push(renderStatusBoxLine(theme, boxWidth, meta));
 	}
 	return lines.slice(0, SELECTED_STATUS_BOX_ROWS);
-}
-
-function selectedRunTailPlain(run: LiveRun): string {
-	const state = run.run.state ?? "";
-	const tool = run.run.currentTool ? ` · ${run.run.currentTool}` : "";
-	return state || tool ? `[${state}]${tool}` : "";
-}
-
-function selectedRunTailRendered(theme: Theme, run: LiveRun): string {
-	const state = run.run.state ?? "";
-	const stateColor =
-		state === "running"
-			? "accent"
-			: state === "failed" || state === "lost"
-				? "error"
-				: state === "complete"
-					? "success"
-					: "dim";
-	const parts = [theme.fg(stateColor, `[${state}]`)];
-	if (run.run.currentTool) parts.push(theme.fg("muted", run.run.currentTool));
-	return parts.join(theme.fg("dim", " · "));
 }

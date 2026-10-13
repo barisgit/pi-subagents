@@ -195,7 +195,7 @@ function makeEventsFile(dir: string, events: Array<Record<string, unknown>>): vo
 	}
 	const runDir = path.join(dir, "run-0");
 	fs.mkdirSync(runDir, { recursive: true });
-	fs.writeFileSync(path.join(runDir, "session.jsonl"), records.map((e) => JSON.stringify(e)).join("\n") + "\n");
+	fs.writeFileSync(path.join(runDir, "session.jsonl"), `${records.map((e) => JSON.stringify(e)).join("\n")}\n`);
 }
 
 describe("SubagentsStatusComponent", () => {
