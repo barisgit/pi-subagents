@@ -45,7 +45,7 @@ import { registerSlashCommands } from "../surfaces/slash-commands.ts";
 import { LiveToolComponentStore } from "../surfaces/dashboard-detail-renderer.ts";
 import { registerPromptTemplateDelegationBridge } from "../dispatch/prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "../surfaces/slash-bridge.ts";
-import { connect, type UtilsClient } from "pi-extension-utils";
+import { connect, type UtilsClient } from "pi-extension-utils/pi";
 import {
 	clearSlashSnapshots,
 	resolveSlashMessageDetails,

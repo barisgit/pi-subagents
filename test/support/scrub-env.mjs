@@ -10,6 +10,17 @@
  * and via register-loader.mjs for integration tests.
  */
 
+import { registerHooks } from "node:module";
+
+// Node refuses to strip TypeScript in node_modules. Use the equivalent compiled
+// utils entry in Node tests; real Pi/fo startup checks exercise the /pi entry with
+// the host loader and its shared SDK aliases.
+registerHooks({
+	resolve(specifier, context, nextResolve) {
+		return nextResolve(specifier === "pi-extension-utils/pi" ? "pi-extension-utils" : specifier, context);
+	},
+});
+
 delete process.env.PI_PRESET;
 delete process.env.PI_PACKAGE_DIR;
 

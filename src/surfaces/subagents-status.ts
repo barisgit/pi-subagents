@@ -16,7 +16,7 @@ import {
 	togglePaneFocus,
 	type PaneOverlayComponent,
 	type PaneOverlayContext,
-} from "pi-extension-utils";
+} from "pi-extension-utils/pi";
 import {
 	type AsyncRunOverlayData,
 	type AsyncRunSummary,
