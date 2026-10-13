@@ -59,8 +59,9 @@ function createPiHarness() {
 		},
 		on: (event: string, handler: (...args: unknown[]) => unknown) => {
 			const previous = sessionHandlers.get(event);
-			sessionHandlers.set(event, async (...args) => {
-				await previous?.(...args);
+			sessionHandlers.set(event, (...args) => {
+				const result = previous?.(...args);
+				if (result instanceof Promise) return result.then(() => handler(...args));
 				return handler(...args);
 			});
 		},
