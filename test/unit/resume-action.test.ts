@@ -377,7 +377,7 @@ describe("resume action", () => {
 			const result = await harness.execute({ action: "resume", id: "run-fail", message: "fail me" });
 
 			assert.equal(result.isError, true);
-			assert.match(text(result), /Failed to resume run run-fail: prompt preflight rejected the message/);
+			assert.match(text(result), /Failed to resume run run-fail: prompt failed/);
 			assert.doesNotMatch(text(result), /Resume message sent/);
 		} finally {
 			removeTempDir(tempDir);
