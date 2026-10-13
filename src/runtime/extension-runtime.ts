@@ -367,7 +367,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.on("agent_start", () => {
 		if (currentParentRunId) markNestedParentTurn(currentParentRunId, true);
 	});
-	pi.on("agent_end", () => {
+	// Keep the parent leaf permit through automatic recovery and queued follow-ups.
+	pi.on("agent_settled", () => {
 		if (currentParentRunId) markNestedParentTurn(currentParentRunId, false);
 	});
 

@@ -568,14 +568,16 @@ export const SUBAGENT_EXPOSE_API_EVENT = "subagent:expose-api";
  */
 export const SUBAGENT_LINEAGE_EVENT = "subagent:lineage";
 /**
- * Fires when THIS session goes fully idle: the main agent is not mid-turn
- * AND no async subagents are in flight. Sync subagent calls are subsumed
- * by the turn cycle (they run between turn_start and turn_end). Emits on
- * the busy → idle transition only after at least one busy period since
- * the last idle. Payload: `{ ts: number }`.
+ * Session-local busy → idle signal, emitted only after Pi's agent_settled
+ * (no remaining automatic retries, overflow recovery, compaction, or queued
+ * follow-ups) AND the tracked async-run set is empty, whichever drains last.
+ * Sync calls are subsumed by the host run. A session with no host run yet is
+ * initially settled, so async-only activity also produces a transition.
  *
- * Each session (host + each child) tracks idleness independently. Use this
- * to know "this agent + all its background subagents are done".
+ * Emits once per busy period, never at startup or for duplicate settlement /
+ * completion events. Payload remains `{ ts: number }` (Unix milliseconds).
+ * Host and child sessions track independently on their own event buses; this
+ * is a point-in-time signal, not a promise that new work cannot start afterward.
  */
 export const SUBAGENT_ALL_IDLE_EVENT = "subagent:all-idle";
 export const SUBAGENT_REGISTER_PERSONA_DIR_EVENT = "subagent:register-persona-dir";

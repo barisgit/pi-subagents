@@ -23,6 +23,7 @@ import {
 } from "../../src/state/slash-live-state.ts";
 import { renderWidget, stopWidgetAnimation } from "../../src/surfaces/render-widget.ts";
 import { stopResultAnimations, syncResultAnimation } from "../../src/surfaces/render-result.ts";
+import { nestedAsyncParentSnapshot } from "../../src/dispatch/nested-async-coordinator.ts";
 import { __setWidgetAnimationMsForTest } from "../../src/surfaces/render-shared.ts";
 
 function clearLineage(...sessionIds: string[]): void {
@@ -57,7 +58,11 @@ function createPiHarness() {
 			},
 		},
 		on: (event: string, handler: (...args: unknown[]) => unknown) => {
-			sessionHandlers.set(event, handler);
+			const previous = sessionHandlers.get(event);
+			sessionHandlers.set(event, async (...args) => {
+				await previous?.(...args);
+				return handler(...args);
+			});
 		},
 		registerTool: () => {},
 		registerCommand: () => {},
@@ -196,6 +201,42 @@ describe("spawnRaw API exposure", () => {
 			else process.env.PI_SUBAGENT_RUNTIME_MODE = previousRuntimeMode;
 			if (previousCurrentAgent === undefined) delete process.env.PI_SUBAGENT_CURRENT_AGENT;
 			else process.env.PI_SUBAGENT_CURRENT_AGENT = previousCurrentAgent;
+		}
+	});
+
+	it("keeps a nested parent busy through agent_end until Pi settles", async () => {
+		const sessionId = "session-child-settlement";
+		const runId = "child-settlement";
+		pushPendingChildLineage({
+			rootSessionId: "root-settlement",
+			parentSessionId: "root-settlement",
+			runId,
+			depth: 1,
+			role: "child",
+			currentAgent: "worker",
+			parentAgent: "worker",
+		});
+		const { pi, sessionHandlers } = createPiHarness();
+		try {
+			runInChildSessionContext(() => registerSubagentExtension(pi as never));
+			await sessionHandlers.get("session_start")?.(
+				{},
+				{
+					cwd: tempDir,
+					hasUI: false,
+					ui: {},
+					sessionManager: { getSessionId: () => sessionId, getSessionFile: () => null, getEntries: () => [] },
+					modelRegistry: { getAvailable: () => [], find: () => undefined },
+				},
+			);
+			await sessionHandlers.get("agent_start")?.();
+			await sessionHandlers.get("agent_end")?.({ messages: [] });
+			assert.equal(nestedAsyncParentSnapshot(runId)?.agentInFlight, true);
+			await sessionHandlers.get("agent_settled")?.();
+			assert.equal(nestedAsyncParentSnapshot(runId)?.agentInFlight, false);
+		} finally {
+			await sessionHandlers.get("session_shutdown")?.();
+			clearLineage(sessionId);
 		}
 	});
 
