@@ -16,9 +16,12 @@ interface ExecutorResult {
 class FakeSession {
 	readonly messages: string[] = [];
 
-	async prompt(message: string, options?: { preflightResult?: (success: boolean) => void }): Promise<void> {
+	async prompt(
+		message: string,
+		options?: { preflightResult?: (disposition: "started" | "queued" | "handled") => void },
+	): Promise<void> {
 		this.messages.push(message);
-		options?.preflightResult?.(true);
+		options?.preflightResult?.("started");
 	}
 
 	async sendUserMessage(message: string): Promise<void> {

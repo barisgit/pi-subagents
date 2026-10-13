@@ -21,7 +21,7 @@ class DeferredIdleSession {
 			expandPromptTemplates?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 			source?: string;
-			preflightResult?: (success: boolean) => void;
+			preflightResult?: (disposition: "started" | "queued" | "handled") => void;
 		};
 	}> = [];
 	preflightCalls = 0;
@@ -36,12 +36,12 @@ class DeferredIdleSession {
 			expandPromptTemplates?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 			source?: string;
-			preflightResult?: (success: boolean) => void;
+			preflightResult?: (disposition: "started" | "queued" | "handled") => void;
 		},
 	): Promise<void> {
 		this.prompts.push({ message, options });
 		this.preflightCalls += 1;
-		options?.preflightResult?.(true);
+		options?.preflightResult?.("started");
 		await this.turnCompleted;
 	}
 
@@ -67,12 +67,12 @@ class FakeSession {
 		message: string,
 		options?: {
 			streamingBehavior?: "steer" | "followUp";
-			preflightResult?: (success: boolean) => void;
+			preflightResult?: (disposition: "started" | "queued" | "handled") => void;
 		},
 	): Promise<void> {
 		this.messages.push(message);
 		this.deliveryOptions.push({ deliverAs: options?.streamingBehavior });
-		options?.preflightResult?.(true);
+		options?.preflightResult?.("started");
 	}
 }
 
@@ -84,18 +84,17 @@ class BusySteerSession {
 		message: string,
 		options?: {
 			streamingBehavior?: "steer" | "followUp";
-			preflightResult?: (success: boolean) => void;
+			preflightResult?: (disposition: "started" | "queued" | "handled") => void;
 		},
 	): Promise<void> {
 		this.promptCalls += 1;
 		if (options?.streamingBehavior !== "steer") {
-			options?.preflightResult?.(false);
 			throw new Error(
 				"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
 			);
 		}
 		await this.steer(message);
-		options.preflightResult?.(true);
+		options.preflightResult?.("queued");
 	}
 
 	async steer(message: string): Promise<void> {
@@ -104,8 +103,10 @@ class BusySteerSession {
 }
 
 class ThrowingSession {
-	async prompt(_message?: string, options?: { preflightResult?: (success: boolean) => void }): Promise<void> {
-		options?.preflightResult?.(false);
+	async prompt(
+		_message?: string,
+		options?: { preflightResult?: (disposition: "started" | "queued" | "handled") => void },
+	): Promise<void> {
 		throw new Error("prompt failed");
 	}
 }

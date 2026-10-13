@@ -298,16 +298,17 @@ async function postResumeMessage(
 	runId: string,
 	message: string,
 ): Promise<SubagentToolResult | null> {
+	type PromptDisposition = Parameters<NonNullable<PromptOptions["preflightResult"]>>[0];
 	type PromptOutcome =
-		| { kind: "preflight"; success: boolean }
+		| { kind: "preflight"; disposition: PromptDisposition }
 		| { kind: "turn"; ok: true }
 		| { kind: "turn"; ok: false; error: unknown };
 	let resolvePreflight!: (outcome: PromptOutcome) => void;
 	const preflight = new Promise<PromptOutcome>((resolve) => {
 		resolvePreflight = resolve;
 	});
-	const reportPreflight = (success: boolean): void => {
-		resolvePreflight({ kind: "preflight", success });
+	const reportPreflight = (disposition: PromptDisposition): void => {
+		resolvePreflight({ kind: "preflight", disposition });
 	};
 	let turn: Promise<void>;
 	try {
@@ -331,9 +332,6 @@ async function postResumeMessage(
 	if (outcome.kind === "turn" && !outcome.ok) {
 		const errorMessage = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
 		return validationError(`Failed to resume run ${runId}: ${errorMessage}`);
-	}
-	if (outcome.kind === "preflight" && !outcome.success) {
-		return validationError(`Failed to resume run ${runId}: prompt preflight rejected the message`);
 	}
 	if (outcome.kind === "turn") return null;
 	void observedTurn.then((outcome) => {

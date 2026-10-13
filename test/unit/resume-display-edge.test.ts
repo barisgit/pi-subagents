@@ -53,11 +53,14 @@ class BlockingSession {
 	async abort() {
 		this.resolvePrompt?.();
 	}
-	async prompt(message: string, options?: { preflightResult?: (success: boolean) => void }) {
+	async prompt(
+		message: string,
+		options?: { preflightResult?: (disposition: "started" | "queued" | "handled") => void },
+	) {
 		this.messages.push(message);
 		this.onPrompt?.();
 		if (options?.preflightResult) {
-			options.preflightResult(true);
+			options.preflightResult("started");
 			return;
 		}
 		await new Promise<void>((resolve) => {

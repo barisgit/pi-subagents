@@ -167,13 +167,13 @@ class FakeSession {
 	abort() {
 		this.resolvePrompt?.();
 	}
-	prompt(message: string, options?: { preflightResult?: (success: boolean) => void }) {
+	prompt(message: string, options?: { preflightResult?: (disposition: "started" | "queued" | "handled") => void }) {
 		this.prompts.push(message);
 		for (const event of this.eventsToEmit.splice(0)) this.emit(event);
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
-		options?.preflightResult?.(true);
+		options?.preflightResult?.("started");
 		return this.promptPromise;
 	}
 }

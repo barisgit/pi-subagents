@@ -50,12 +50,12 @@ class FakeSession {
 	abort() {
 		this.resolvePrompt?.();
 	}
-	prompt(message: string, options?: { preflightResult?: (success: boolean) => void }) {
+	prompt(message: string, options?: { preflightResult?: (disposition: "started" | "queued" | "handled") => void }) {
 		this.prompts.push(message);
 		this.promptPromise ??= new Promise<void>((resolve) => {
 			this.resolvePrompt = resolve;
 		});
-		options?.preflightResult?.(true);
+		options?.preflightResult?.("started");
 		return this.promptPromise;
 	}
 }
@@ -277,12 +277,12 @@ describe("disk resume", () => {
 				message: string,
 				options?: {
 					streamingBehavior?: "steer" | "followUp";
-					preflightResult?: (success: boolean) => void;
+					preflightResult?: (disposition: "started" | "queued" | "handled") => void;
 				},
 			) {
 				this.messages.push(message);
 				this.deliveryOptions.push({ deliverAs: options?.streamingBehavior });
-				options?.preflightResult?.(true);
+				options?.preflightResult?.("started");
 			},
 			async sendUserMessage(message: string, options?: { deliverAs?: "steer" | "followUp" }) {
 				this.messages.push(message);
