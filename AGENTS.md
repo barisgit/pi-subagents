@@ -2,7 +2,7 @@
 
 Durable constraints for working in this repo. This file deliberately omits anything
 you can discover in a few tool calls (how to run tests, file layout, dependencies —
-see `package.json` and the `codemap.md` atlas). It captures only the non-obvious
+see `package.json`). It captures only the non-obvious
 rules and invariants that are easy to violate and expensive to get wrong.
 
 ## Agent-facing text must never name concrete agents
@@ -103,3 +103,49 @@ codec at the disk boundary (a guard, not an adapter).
   speculative abstractions or adjacent refactors beyond the named seam.
 - Tests may only be deleted when they cover genuinely removed behavior. Every
   surviving behavior keeps a test; new modules/types get tests at the new seam.
+
+## Runtime and boundary invariants
+
+- Target plain Pi 1.2.0, not fo or Pi 0.87. Keep development SDK pins aligned
+  with the host; peer dependencies remain unrestricted.
+- `protocol/` and `shared/` are downward-imported leaves. Neither may import
+  dispatch, surfaces, runtime, or state. Filesystem paths and environment policy
+  belong in shared, not protocol. Dispatch-internal runtime import cycles stay zero.
+- Nested async is opt-in. Child dispatch, workflow, and resume stay foreground
+  unless `allowNestedAsync` is enabled. The coordinator holds parents until
+  descendants and queued completion reprompts settle, parks idle parent leaf
+  permits while descendants run, and cancels descendants on parent cleanup.
+  Leaf concurrency is process-global across fresh module instances; workflow
+  admission also bounds direct-child run records before spawning.
+- Child sessions bind extensions before their first prompt. Emit session shutdown
+  before disposal/replacement so activation-owned timers and lifecycle state can
+  clean up before Pi invalidates the context. Children never replace host-global
+  cleanup hooks or stop host animation timers.
+- The live-session relay is display-only: its process-global hub retains listeners,
+  not sessions/history. Only the host activation owns and disposes its dashboard
+  directory, renderer catalog, and pending native tool components. Per-open
+  dashboard caches/subscriptions are disposed on close.
+- Selection paints a bounded preview immediately; only a stable selection promotes
+  to the full transcript (default 50 ms). Rapid traversal must not load every
+  intermediate transcript. Preview/full wrappers share cache identity. Transcript
+  sidecars are validated, sanitized, and hard-bounded; full-message caches are
+  bounded and stat-invalidated.
+- Temporary root-role model/thinking changes must preserve persistent default
+  provider, model, and thinking settings.
+- Cross-extension API shape is stable and event-published. Publish provisional
+  lineage immediately and refine it at session start; child raw spawning/listing
+  remain unsupported.
+- Child structured completion comes from the LAST trailing output block. Without
+  a schema, missing blocks may fall back to text; with a schema, missing/invalid
+  output fails closed after bounded reprompts. Keep the persisted result carrier
+  backward-readable.
+- Workflow-created promises must drain before completion; floated attributable
+  failures fail the workflow without masking unrelated host rejections. Pipeline
+  admission bounds item chains while preserving input order and stage streaming.
+  Workflow groups use lifecycle/script/journal markers, not leaf `status.json`.
+- Persistence is best-effort: write failures must not change run success. Reopen
+  resumed workflows in place, reuse journaled results, and continue unfinished
+  child sessions rather than duplicating work.
+- Transport failures stay on the current model in interruptible backoff; only
+  provider failures consume ordered model fallbacks. Stale-heartbeat grace is
+  bounded and fingerprinted so sleep recovery cannot immortalize reload orphans.

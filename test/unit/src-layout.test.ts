@@ -30,14 +30,4 @@ describe("source layout", () => {
 			assert.ok(tsFiles.length > 0, `${dir} should contain TypeScript files`);
 		}
 	});
-
-	test("documents the src modules in codemap.md", () => {
-		const codemapPath = path.join(repoRoot, "codemap.md");
-		assert.ok(fs.existsSync(codemapPath), "codemap.md should exist");
-
-		const codemap = fs.readFileSync(codemapPath, "utf8");
-		for (const dir of moduleDirs) {
-			assert.match(codemap, new RegExp(`src/${dir}`));
-		}
-	});
 });

@@ -20,7 +20,6 @@ describe("chain docs eviction", () => {
 	it("removes chain-mode teaching from docs and tool descriptions", () => {
 		const samples = [
 			["README.md", read("README.md")],
-			["codemap.md", read("codemap.md")],
 			["skills/subagent/SKILL.md", read("skills/subagent/SKILL.md")],
 			[
 				"subagent description",
