@@ -1066,7 +1066,7 @@ it("holds a parent that throws unexpectedly until its active subtree settles", a
 		settleLeafDone();
 	};
 	const leafAbort = new AbortController();
-	const parentSession = new FakeAgentSession(async (self) => {
+	const parentSession = new FakeAgentSession(async () => {
 		registerNestedAsyncParent(parentRunId);
 		const leafHandle = dispatchAsyncChild(
 			makeStep({ runId: leafRunId }),

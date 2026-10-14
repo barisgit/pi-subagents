@@ -23,7 +23,6 @@ import {
 import { logger } from "../shared/logger.ts";
 import { holdNestedAsyncRollup, registerNestedAsyncCancellation } from "./nested-async-coordinator.ts";
 import {
-	type Details,
 	type Usage,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
@@ -671,7 +670,8 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 					rootRunId,
 					notifyPolicy: batchToNotifyPolicy(params.batch),
 					success: false,
-					agent: mode === "parallel" ? steps.map(({ step }) => step.agentName).join(",") : first.step.agentName,
+					agent:
+						mode === "parallel" ? steps.map(({ step }) => step.agentName).join(",") : first.step.agentName,
 					summary: "",
 					state: undefined,
 					results: [],
