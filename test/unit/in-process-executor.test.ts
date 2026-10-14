@@ -9,6 +9,7 @@ import {
 	__setChildAgentExecutorDepsForTest,
 	dispatchAsyncChild,
 	runChildAgent,
+	__setNestedParkKeepAliveForTest,
 	type ChildAgentContext,
 	type ChildAgentHandle,
 	type ChildAgentResult,
@@ -25,6 +26,7 @@ import {
 import { LiveSessionDirectory } from "../../src/shared/live-session-relay.ts";
 import { readRunTranscriptPreview } from "../../src/state/run-transcript-preview.ts";
 import {
+	__nestedAsyncWaiterCountForTest,
 	enqueueNestedCompletionReprompt,
 	flushNestedCompletionReprompts,
 	holdNestedAsyncRollup,
@@ -661,6 +663,66 @@ it("keeps a parked parent's liveness fresh while its whole subtree is active but
 	markNestedAsyncFinished(midRunId, leafRunId);
 	markNestedAsyncFinished(topRunId, midRunId);
 	assert.equal((await top).state, "complete");
+});
+
+it("does not accumulate abandoned change-waits across quiet keep-alive ticks", async () => {
+	leafConcurrencyLimit(4);
+	restoreFns.push(__setNestedParkKeepAliveForTest(60));
+	const parentRunId = "run-quiet-ticks-parent";
+	const leafRunId = "run-quiet-ticks-leaf";
+	let settleParentPrompt!: () => void;
+	const parentPromptSettled = new Promise<void>((resolve) => {
+		settleParentPrompt = resolve;
+	});
+	let signalLeafParked!: () => void;
+	const leafParked = new Promise<void>((resolve) => {
+		signalLeafParked = resolve;
+	});
+	let releaseLeaf!: () => void;
+	const leafGate = new Promise<void>((resolve) => {
+		releaseLeaf = resolve;
+	});
+	const leafSession = new FakeAgentSession(async () => {
+		signalLeafParked();
+		await leafGate;
+	});
+	const parentSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		dispatchAsyncChild(makeStep({ runId: leafRunId }), makeContext());
+		markNestedAsyncStarted(parentRunId, leafRunId);
+		self.lastAssistantText = "<output>waiting</output>";
+		settleParentPrompt();
+	});
+	installFakeRuntime([parentSession, leafSession]);
+	const patches: RecordedPatch[] = [];
+
+	const parent = runChildAgent(
+		makeStep({ runId: parentRunId }),
+		makeContext({ onStatusUpdate: (patch) => patches.push(patch) }),
+	);
+	await parentPromptSettled;
+	await leafParked;
+
+	// Each quiet cadence wake re-stamps activity; three stamps prove three
+	// keep-alive cycles ran and (pre-fix) three change-waits were abandoned.
+	const stampsBefore = patches.filter((patch) => patch.activity !== undefined).length;
+	await waitForAtMost(
+		() => patches.filter((patch) => patch.activity !== undefined).length >= stampsBefore + 3,
+		5_000,
+	);
+	assert.ok(
+		patches.filter((patch) => patch.activity !== undefined).length >= stampsBefore + 3,
+		"at least three keep-alive cycles must have run",
+	);
+	assert.ok(
+		__nestedAsyncWaiterCountForTest(parentRunId) <= 1,
+		`a quiet hold must keep at most the current change-wait registered (got ${__nestedAsyncWaiterCountForTest(parentRunId)})`,
+	);
+
+	releaseLeaf();
+	markNestedAsyncFinished(parentRunId, leafRunId);
+	assert.equal((await parent).state, "complete");
+	assert.equal(__nestedAsyncWaiterCountForTest(parentRunId), 0, "release must drain every waiter");
 });
 
 it("stops keeping a parent fresh once its descendant subtree settles, and exits exactly once", async () => {

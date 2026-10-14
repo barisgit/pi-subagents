@@ -348,6 +348,17 @@ export function dispatchAsyncChild(step: ChildAgentStep, ctx: ChildAgentContext)
  * inside every control-loop stall window without meaningful wake churn.
  */
 const NESTED_PARK_KEEP_ALIVE_MS = 5_000;
+let nestedParkKeepAliveMs = NESTED_PARK_KEEP_ALIVE_MS;
+
+/** Test-only: shrink the park keep-alive cadence so keep-alive cycles run in
+ * milliseconds instead of seconds. Returns a restore function. */
+export function __setNestedParkKeepAliveForTest(ms: number): () => void {
+	const previous = nestedParkKeepAliveMs;
+	nestedParkKeepAliveMs = ms;
+	return () => {
+		nestedParkKeepAliveMs = previous;
+	};
+}
 
 async function settleNestedAsyncParent(
 	runId: string,
@@ -377,12 +388,18 @@ async function settleNestedAsyncParent(
 		const wait = () =>
 			new Promise<void>((resolve) => {
 				let done = false;
+				// The change-wait is CANCELLED when the keep-alive timer wins the race:
+				// an abandoned wait would leave its coordinator waiter and abort-signal
+				// listener registered until release (~12 per minute on a quiet hold,
+				// enough to trip MaxListenersExceededWarning).
+				const cancelWait = new AbortController();
 				const timer = setTimeout(() => {
 					if (done) return;
 					done = true;
+					cancelWait.abort();
 					resolve();
-				}, NESTED_PARK_KEEP_ALIVE_MS);
-				void waitForNestedAsyncParentChange(runId, snapshot.version, signal).then(() => {
+				}, nestedParkKeepAliveMs);
+				void waitForNestedAsyncParentChange(runId, snapshot.version, signal, cancelWait.signal).then(() => {
 					if (done) return;
 					done = true;
 					clearTimeout(timer);

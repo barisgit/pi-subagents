@@ -182,18 +182,31 @@ export function waitForNestedAsyncParentChange(
 	parentRunId: string,
 	version: number,
 	signal: AbortSignal,
+	cancelSignal?: AbortSignal,
 ): Promise<void> {
 	const state = registry().parents.get(parentRunId);
-	if (!state || state.version !== version || signal.aborted) return Promise.resolve();
+	if (!state || state.version !== version || signal.aborted || cancelSignal?.aborted) {
+		return Promise.resolve();
+	}
 	return new Promise((resolve) => {
-		const done = () => {
-			signal.removeEventListener("abort", done);
-			state.waiters.delete(done);
+		let done = false;
+		const finish = () => {
+			if (done) return;
+			done = true;
+			signal.removeEventListener("abort", finish);
+			cancelSignal?.removeEventListener("abort", finish);
+			state.waiters.delete(finish);
 			resolve();
 		};
-		state.waiters.add(done);
-		signal.addEventListener("abort", done, { once: true });
+		state.waiters.add(finish);
+		signal.addEventListener("abort", finish);
+		cancelSignal?.addEventListener("abort", finish);
 	});
+}
+
+/** Test-only: how many change-waiters are currently parked on a parent state. */
+export function __nestedAsyncWaiterCountForTest(parentRunId: string): number {
+	return registry().parents.get(parentRunId)?.waiters.size ?? 0;
 }
 
 export function releaseNestedAsyncParent(parentRunId: string): void {
