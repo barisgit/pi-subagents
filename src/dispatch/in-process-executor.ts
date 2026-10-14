@@ -603,6 +603,16 @@ async function executeChildAgent(
 		return result;
 	};
 
+	// A naturally failing parent must not exit through a live subtree: hold until
+	// its descendants settle (flushing queued completion reprompts) so the release
+	// in the finally can neither cancel active work nor finalize the run early.
+	// The original failure stays terminal — a completion-reprompt delivery failure
+	// during the hold must not mask it. Explicit aborts skip the hold: their
+	// cascade-cancel is intended.
+	const holdFailedParentForSubtree = async (): Promise<void> => {
+		await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate);
+	};
+
 	try {
 		if (signal.aborted) {
 			const result = baseResult("interrupted", {
@@ -759,6 +769,7 @@ async function executeChildAgent(
 			return result;
 		}
 		if (promptOutcome.failure) {
+			await holdFailedParentForSubtree();
 			const result = baseResult("failed", { message: promptOutcome.failure, reason: "provider_error" });
 			ctx.onStatusUpdate?.({
 				runId: step.runId,
@@ -811,6 +822,7 @@ async function executeChildAgent(
 				return result;
 			}
 			if (repromptOutcome.failure) {
+				await holdFailedParentForSubtree();
 				const result = baseResult("failed", {
 					message: repromptOutcome.failure,
 					reason: "provider_error",
@@ -846,6 +858,7 @@ async function executeChildAgent(
 						: JSON.stringify(structuredResult.result);
 			} else if (step.resultSchema) {
 				outputText = text;
+				await holdFailedParentForSubtree();
 				const result = baseResult("failed", {
 					message: "Child agent output did not match the required schema.",
 					reason: "schema_validation",
@@ -877,6 +890,7 @@ async function executeChildAgent(
 		// of a misleading 5/5-succeeded summary.
 		const providerFailure = detectProviderFailure(activeSession());
 		if (providerFailure) {
+			await holdFailedParentForSubtree();
 			const result = baseResult("failed", {
 				message: providerFailure,
 				reason: "provider_error",
@@ -935,6 +949,9 @@ async function executeChildAgent(
 	} catch (error) {
 		const reason = formatError(error);
 		const state: ChildAgentExitState = signal.aborted ? "interrupted" : "failed";
+		// An unexpected failure with a live subtree must still hold for it before the
+		// terminal report; an abort (state above) keeps immediate cascade-cancel.
+		if (!signal.aborted) await holdFailedParentForSubtree();
 		const result = baseResult(state, {
 			message: reason,
 			reason: state === "interrupted" ? abortReason(signal) : undefined,
