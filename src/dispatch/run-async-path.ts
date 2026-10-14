@@ -181,143 +181,204 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 		const unregisterNestedCancellation = parentRunId
 			? registerNestedAsyncCancellation(parentRunId, () => asyncDetachedAbort.abort())
 			: () => {};
+		// Every registration above must unwind on EVERY path: a synchronous throw
+		// (spawnRun opening a child record) between here and the finalize IIFE would
+		// otherwise leak the group mark into an immortal hold — the settle
+		// keep-alive re-stamps it alive and silent. Same contract as finalizeAsync.
+		const failedAggregatePayload = () =>
+			buildAsyncAggregateCompletePayload({
+				id: groupRunId,
+				runId: groupRunId,
+				parentRunId,
+				rootRunId: groupRootRunId,
+				notifyPolicy,
+				success: false,
+				agent: steps.map(({ step }) => step.agentName).join(","),
+				summary: "",
+				state: undefined,
+				results: [],
+				children: [],
+				total: 0,
+				completed: 0,
+				asyncDir: group.runRecordDir,
+				metadata: params.metadata,
+				syncFields: {
+					exitCode: undefined,
+					durationMs: undefined,
+					sessionFile: undefined,
+					shareUrl: undefined,
+					result: undefined,
+					totalUsage: undefined,
+					batch: params.batch === true,
+					batchId: groupRunId,
+				},
+			});
 		// spawnRun reserves the run record + handle eagerly (so we still return all N
 		// handles immediately). The per-process leaf-concurrency pool inside
 		// startChildAgent bounds how many children run leaf sessions at once.
-		const childRuns = steps.map((item, originalStepIndex) => {
-			const handle = spawnRun(
-				{
-					agentName: item.step.agentName,
-					task: item.step.task,
-					cwd: item.step.cwd,
-					...(item.step.label ? { label: item.step.label } : {}),
-				},
-				{
-					parentRunId: groupRunId,
-					controlConfig,
-					rootRunId: groupRootRunId,
-					notifyPolicy: "each",
-					parentSessionFile: ctx.sessionManager.getSessionFile() ?? null,
-					...(params.sessionDir ? { sessionDir: path.resolve(deps.expandTilde(params.sessionDir)) } : {}),
-					...(deps.config.defaultSessionDir
-						? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
-						: {}),
-					...(rootSessionId ? { rootSessionId } : {}),
-					...(parentSessionId ? { parentSessionId } : {}),
-					source: "async",
-					runAgent: async (prepared, layer0Ctx) => {
-						// A child can be interrupted before it launches
-						// (subagent interrupt aborts the registry controller for its runId).
-						// Honor that here so it never launches a leaf session.
-						const registrySignal = deps.childRegistry.signalForRun(prepared.runId);
-						const childAbortSignal = AbortSignal.any([asyncDetachedAbort.signal, layer0Ctx.abortSignal]);
-						if (registrySignal.aborted || childAbortSignal.aborted) {
-							const now = Date.now();
-							return {
+		const startChildRuns = () =>
+			steps.map((item, originalStepIndex) => {
+				const handle = spawnRun(
+					{
+						agentName: item.step.agentName,
+						task: item.step.task,
+						cwd: item.step.cwd,
+						...(item.step.label ? { label: item.step.label } : {}),
+					},
+					{
+						parentRunId: groupRunId,
+						controlConfig,
+						rootRunId: groupRootRunId,
+						notifyPolicy: "each",
+						parentSessionFile: ctx.sessionManager.getSessionFile() ?? null,
+						...(params.sessionDir ? { sessionDir: path.resolve(deps.expandTilde(params.sessionDir)) } : {}),
+						...(deps.config.defaultSessionDir
+							? { defaultSessionDir: path.resolve(deps.expandTilde(deps.config.defaultSessionDir)) }
+							: {}),
+						...(rootSessionId ? { rootSessionId } : {}),
+						...(parentSessionId ? { parentSessionId } : {}),
+						source: "async",
+						runAgent: async (prepared, layer0Ctx) => {
+							// A child can be interrupted before it launches
+							// (subagent interrupt aborts the registry controller for its runId).
+							// Honor that here so it never launches a leaf session.
+							const registrySignal = deps.childRegistry.signalForRun(prepared.runId);
+							const childAbortSignal = AbortSignal.any([
+								asyncDetachedAbort.signal,
+								layer0Ctx.abortSignal,
+							]);
+							if (registrySignal.aborted || childAbortSignal.aborted) {
+								const now = Date.now();
+								return {
+									runId: prepared.runId,
+									stepIndex: 0,
+									state: "interrupted",
+									exitCode: 1,
+									outputText: "",
+									toolCallCount: 0,
+									toolResultCount: 0,
+									toolErrorCount: 0,
+									durationMs: 0,
+									startedAt: now,
+									endedAt: now,
+									sessionFile: prepared.sessionFile,
+									error: {
+										message: "Child agent interrupted before start",
+										reason: "interrupted",
+									},
+								} satisfies ChildAgentResult;
+							}
+							const childStep: ChildAgentStep = {
+								...item.step,
 								runId: prepared.runId,
 								stepIndex: 0,
-								state: "interrupted",
-								exitCode: 1,
-								outputText: "",
-								toolCallCount: 0,
-								toolResultCount: 0,
-								toolErrorCount: 0,
-								durationMs: 0,
-								startedAt: now,
-								endedAt: now,
+								runRecordDir: prepared.runRecordDir,
 								sessionFile: prepared.sessionFile,
-								error: { message: "Child agent interrupted before start", reason: "interrupted" },
-							} satisfies ChildAgentResult;
-						}
-						const childStep: ChildAgentStep = {
-							...item.step,
-							runId: prepared.runId,
-							stepIndex: 0,
-							runRecordDir: prepared.runRecordDir,
-							sessionFile: prepared.sessionFile,
-							rootRunId: groupRootRunId,
-						};
-						const childHandle = dispatchAsyncChild(childStep, {
-							extensionCtx: ctx,
-							abortSignal: childAbortSignal,
-							onStatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
-							registry: deps.childRegistry,
-							pi: deps.pi,
-						});
-						return await childHandle.completed;
-					},
-					onLifecycle: (event) => {
-						if (event.type === "run.started") {
+								rootRunId: groupRootRunId,
+							};
+							const childHandle = dispatchAsyncChild(childStep, {
+								extensionCtx: ctx,
+								abortSignal: childAbortSignal,
+								onStatusUpdate: (patch) => layer0Ctx.statusWriter.enqueue({ ...patch, stepIndex: 0 }),
+								registry: deps.childRegistry,
+								pi: deps.pi,
+							});
+							return await childHandle.completed;
+						},
+						onLifecycle: (event) => {
+							if (event.type === "run.started") {
+								safeEmit(
+									SUBAGENT_ASYNC_STARTED_EVENT,
+									{
+										id: event.runId,
+										runId: event.runId,
+										metadata: params.metadata,
+										controlConfig,
+										agent: item.step.agentName,
+										task: item.cleanTask.slice(0, 50),
+										cwd: item.step.cwd,
+										asyncDir: event.runRecordDir,
+										parentRunId: groupRunId,
+									},
+									parentRunId ? deps.pi : undefined,
+								);
+								return;
+							}
+							const result = event.result;
 							safeEmit(
-								SUBAGENT_ASYNC_STARTED_EVENT,
+								SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
 								{
 									id: event.runId,
 									runId: event.runId,
-									metadata: params.metadata,
-									controlConfig,
-									agent: item.step.agentName,
-									task: item.cleanTask.slice(0, 50),
-									cwd: item.step.cwd,
-									asyncDir: event.runRecordDir,
 									parentRunId: groupRunId,
+									rootRunId: groupRootRunId,
+									metadata: params.metadata,
+									notifyPolicy,
+									agent: item.step.agentName,
+									...(item.step.label ? { label: item.step.label } : {}),
+									success: result ? result.state === "complete" : false,
+									summary: result?.outputText ?? (event.error ? String(event.error) : ""),
+									exitCode: result?.exitCode,
+									state: result?.state ?? "failed",
+									durationMs: result?.durationMs,
+									sessionFile: result?.sessionFile ?? event.sessionFile,
+									timestamp: event.timestamp,
+									taskIndex: originalStepIndex,
+									totalTasks: steps.length,
+									asyncDir: event.runRecordDir,
 								},
 								parentRunId ? deps.pi : undefined,
 							);
-							return;
-						}
-						const result = event.result;
-						safeEmit(
-							SUBAGENT_ASYNC_RUN_COMPLETE_EVENT,
-							{
-								id: event.runId,
-								runId: event.runId,
-								parentRunId: groupRunId,
-								rootRunId: groupRootRunId,
-								metadata: params.metadata,
-								notifyPolicy,
-								agent: item.step.agentName,
-								...(item.step.label ? { label: item.step.label } : {}),
-								success: result ? result.state === "complete" : false,
-								summary: result?.outputText ?? (event.error ? String(event.error) : ""),
-								exitCode: result?.exitCode,
-								state: result?.state ?? "failed",
-								durationMs: result?.durationMs,
-								sessionFile: result?.sessionFile ?? event.sessionFile,
-								timestamp: event.timestamp,
-								taskIndex: originalStepIndex,
-								totalTasks: steps.length,
-								asyncDir: event.runRecordDir,
-							},
-							parentRunId ? deps.pi : undefined,
-						);
+						},
 					},
-				},
-			);
-			return { item, originalStepIndex, handle };
-		});
+				);
+				return { item, originalStepIndex, handle };
+			});
 
-		void (async () => {
-			logger.info("finalizeAsync: awaiting layer0 parallel handles", { runId: groupRunId });
-			try {
-				const settled = await Promise.allSettled(childRuns.map((child) => child.handle.completed));
-				const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []));
-				// A rejected child (execution threw past the leaf's own catch) has no
-				// ChildAgentResult, but it still counts: dropping it shrinks `total`
-				// and can report success despite a lost child.
-				const anyRejected = settled.some((entry) => entry.status === "rejected");
-				const finalResult = results.find((result) => result.state !== "complete") ?? results.at(-1);
-				const totalUsage: Usage = emptyUsage();
-				for (const entry of settled) {
-					if (entry.status !== "fulfilled") continue;
-					if (entry.value.usage) addUsageInto(totalUsage, entry.value.usage as Usage);
-				}
-				const childResults = childRuns
-					.map((child, index) => {
-						const entry = settled[index];
-						if (entry?.status !== "fulfilled") {
-							// Rejected child: keep it in the aggregate as a failed entry so
-							// total always equals the number of dispatched tasks.
-							const reason = entry ? String(entry.reason) : "child result missing";
+		let childRuns: ReturnType<typeof startChildRuns>;
+		try {
+			childRuns = startChildRuns();
+			void (async () => {
+				logger.info("finalizeAsync: awaiting layer0 parallel handles", { runId: groupRunId });
+				let aggregatePayload: ReturnType<typeof buildAsyncAggregateCompletePayload> | undefined;
+				try {
+					const settled = await Promise.allSettled(childRuns.map((child) => child.handle.completed));
+					const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []));
+					// A rejected child (execution threw past the leaf's own catch) has no
+					// ChildAgentResult, but it still counts: dropping it shrinks `total`
+					// and can report success despite a lost child.
+					const anyRejected = settled.some((entry) => entry.status === "rejected");
+					const finalResult = results.find((result) => result.state !== "complete") ?? results.at(-1);
+					const totalUsage: Usage = emptyUsage();
+					for (const entry of settled) {
+						if (entry.status !== "fulfilled") continue;
+						if (entry.value.usage) addUsageInto(totalUsage, entry.value.usage as Usage);
+					}
+					const childResults = childRuns
+						.map((child, index) => {
+							const entry = settled[index];
+							if (entry?.status !== "fulfilled") {
+								// Rejected child: keep it in the aggregate as a failed entry so
+								// total always equals the number of dispatched tasks.
+								const reason = entry ? String(entry.reason) : "child result missing";
+								return {
+									id: child.handle.runId,
+									runId: child.handle.runId,
+									dispatchRunId: groupRunId,
+									...(params.batch === true ? { batchId: groupRunId } : {}),
+									stepIndex: child.originalStepIndex,
+									agent: child.item.step.agentName,
+									...(child.item.step.label ? { label: child.item.step.label } : {}),
+									state: "failed" as const,
+									success: false,
+									exitCode: 1,
+									output: reason,
+									summary: reason,
+									durationMs: 0,
+									sessionFile: child.handle.sessionFile,
+								};
+							}
+							const r = entry.value;
 							return {
 								id: child.handle.runId,
 								runId: child.handle.runId,
@@ -326,48 +387,28 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 								stepIndex: child.originalStepIndex,
 								agent: child.item.step.agentName,
 								...(child.item.step.label ? { label: child.item.step.label } : {}),
-								state: "failed" as const,
-								success: false,
-								exitCode: 1,
-								output: reason,
-								summary: reason,
-								durationMs: 0,
-								sessionFile: child.handle.sessionFile,
+								state: r.state,
+								success: r.state === "complete",
+								exitCode: r.exitCode,
+								output: r.outputText ?? "",
+								summary: r.outputText ?? "",
+								durationMs: r.durationMs,
+								sessionFile: r.sessionFile,
 							};
-						}
-						const r = entry.value;
-						return {
-							id: child.handle.runId,
-							runId: child.handle.runId,
-							dispatchRunId: groupRunId,
-							...(params.batch === true ? { batchId: groupRunId } : {}),
-							stepIndex: child.originalStepIndex,
-							agent: child.item.step.agentName,
-							...(child.item.step.label ? { label: child.item.step.label } : {}),
-							state: r.state,
-							success: r.state === "complete",
-							exitCode: r.exitCode,
-							output: r.outputText ?? "",
-							summary: r.outputText ?? "",
-							durationMs: r.durationMs,
-							sessionFile: r.sessionFile,
-						};
-					})
-					.sort((a, b) => a.stepIndex - b.stepIndex);
-				if (!parentRunId) {
-					publishSubagentUsage(deps.pi, deps.state, {
-						runId: groupRunId,
-						rootRunId: groupRootRunId,
-						...(rootSessionId ? { rootSessionId } : {}),
-						mode: "parallel",
-						source: "async",
-						totalUsage,
-						timestamp: Date.now(),
-					});
-				}
-				safeEmit(
-					SUBAGENT_ASYNC_COMPLETE_EVENT,
-					buildAsyncAggregateCompletePayload({
+						})
+						.sort((a, b) => a.stepIndex - b.stepIndex);
+					if (!parentRunId) {
+						publishSubagentUsage(deps.pi, deps.state, {
+							runId: groupRunId,
+							rootRunId: groupRootRunId,
+							...(rootSessionId ? { rootSessionId } : {}),
+							mode: "parallel",
+							source: "async",
+							totalUsage,
+							timestamp: Date.now(),
+						});
+					}
+					aggregatePayload = buildAsyncAggregateCompletePayload({
 						id: groupRunId,
 						runId: groupRunId,
 						parentRunId,
@@ -393,21 +434,36 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 							batch: params.batch === true,
 							batchId: groupRunId,
 						},
-					}),
-					parentRunId ? deps.pi : undefined,
-				);
-			} catch (err) {
-				logger.error(
-					"finalizeAsync: layer0 parallel threw",
-					err instanceof Error ? err : new Error(String(err)),
-					{ runId: groupRunId },
-				);
-			} finally {
-				unregisterNestedCancellation();
-				releaseRunController(groupRunId);
-				deps.childRegistry.delete(groupRunId);
-			}
-		})();
+					});
+				} catch (err) {
+					logger.error(
+						"finalizeAsync: layer0 parallel threw",
+						err instanceof Error ? err : new Error(String(err)),
+						{ runId: groupRunId },
+					);
+				} finally {
+					// Emit on EVERY unwind (same contract as the single path's finalizeAsync):
+					// the nested-async hold releases ONLY off this event, and the settle
+					// keep-alive would keep a leaked hold alive and silent forever.
+					safeEmit(
+						SUBAGENT_ASYNC_COMPLETE_EVENT,
+						aggregatePayload ?? failedAggregatePayload(),
+						parentRunId ? deps.pi : undefined,
+					);
+					unregisterNestedCancellation();
+					releaseRunController(groupRunId);
+					deps.childRegistry.delete(groupRunId);
+				}
+			})();
+		} catch (error) {
+			// The dispatch never reached the finalize IIFE: run the same guaranteed
+			// unwind (the failed aggregate clears any parent hold) and surface the error.
+			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, failedAggregatePayload(), parentRunId ? deps.pi : undefined);
+			unregisterNestedCancellation();
+			releaseRunController(groupRunId);
+			deps.childRegistry.delete(groupRunId);
+			throw error;
+		}
 
 		const childDetails = childRuns.map((child) => ({
 			runId: child.handle.runId,
@@ -502,6 +558,45 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 	const unregisterNestedCancellation = parentRunId
 		? registerNestedAsyncCancellation(parentRunId, () => asyncDetachedAbort.abort())
 		: () => {};
+	// Minimal terminal aggregate for unwinds that never reach payload build. Every
+	// registration above must unwind on EVERY path: a synchronous throw escaping
+	// before finalizeAsync is invoked would otherwise leak the cancellation
+	// registration and leave the run record and the parent-facing surface dangling.
+	const failedAggregatePayload = () =>
+		buildAsyncAggregateCompletePayload({
+			id: runId,
+			runId,
+			parentRunId,
+			rootRunId,
+			notifyPolicy: batchToNotifyPolicy(params.batch),
+			success: false,
+			agent: first.step.agentName,
+			summary: "",
+			state: undefined,
+			results: [],
+			children: [],
+			total: 0,
+			completed: 0,
+			asyncDir: runRecordDir,
+			metadata: params.metadata,
+			syncFields: {
+				exitCode: undefined,
+				durationMs: undefined,
+				sessionFile: undefined,
+				shareUrl: undefined,
+				result: undefined,
+				totalUsage: undefined,
+				batch: params.batch === true,
+				batchId: runId,
+			},
+		});
+	const unwindFailedDispatch = (): void => {
+		safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, failedAggregatePayload(), parentRunId ? deps.pi : undefined);
+		unregisterNestedCancellation();
+		releaseRunController(runId);
+		statusWriter.dispose();
+		deps.childRegistry.delete(runId);
+	};
 	const asyncCtx = {
 		extensionCtx: ctx,
 		abortSignal: asyncDetachedAbort.signal,
@@ -661,37 +756,11 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 			// run. Emit on EVERY unwind: the built payload when reached, else a
 			// minimal failed aggregate (the run's status.json carries whatever
 			// terminal state finalizeRun managed to persist).
-			const payload =
-				aggregatePayload ??
-				buildAsyncAggregateCompletePayload({
-					id: runId,
-					runId,
-					parentRunId,
-					rootRunId,
-					notifyPolicy: batchToNotifyPolicy(params.batch),
-					success: false,
-					agent:
-						mode === "parallel" ? steps.map(({ step }) => step.agentName).join(",") : first.step.agentName,
-					summary: "",
-					state: undefined,
-					results: [],
-					children: [],
-					total: 0,
-					completed: 0,
-					asyncDir: runRecordDir,
-					metadata: params.metadata,
-					syncFields: {
-						exitCode: undefined,
-						durationMs: undefined,
-						sessionFile: undefined,
-						shareUrl: undefined,
-						result: undefined,
-						totalUsage: undefined,
-						batch: params.batch === true,
-						batchId: runId,
-					},
-				});
-			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, payload, parentRunId ? deps.pi : undefined);
+			safeEmit(
+				SUBAGENT_ASYNC_COMPLETE_EVENT,
+				aggregatePayload ?? failedAggregatePayload(),
+				parentRunId ? deps.pi : undefined,
+			);
 			unregisterNestedCancellation();
 			releaseRunController(runId);
 			statusWriter.dispose();
@@ -700,8 +769,15 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 	};
 
 	// Only the single-dispatch path reaches here; parallel (hasTasks) returns above.
-	const handlesPromise: Promise<ChildAgentHandle[]> = Promise.resolve([dispatchAsyncChild(first.step, asyncCtx)]);
-	void finalizeAsync(handlesPromise);
+	try {
+		const handlesPromise: Promise<ChildAgentHandle[]> = Promise.resolve([dispatchAsyncChild(first.step, asyncCtx)]);
+		void finalizeAsync(handlesPromise);
+	} catch (error) {
+		// A synchronous throw from the dispatch escapes before finalizeAsync can
+		// register its unwind; run the same guaranteed unwind here and rethrow.
+		unwindFailedDispatch();
+		throw error;
+	}
 
 	safeEmit(
 		SUBAGENT_ASYNC_STARTED_EVENT,

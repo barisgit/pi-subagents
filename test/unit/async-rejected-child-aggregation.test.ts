@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
+import type { RunViewSeed } from "../../src/dispatch/child-agent-registry.ts";
 import { __resetLeafConcurrencyForTest } from "../../src/dispatch/leaf-concurrency.ts";
 import {
 	markNestedAsyncFinished,
@@ -47,14 +48,23 @@ async function waitForAtMost(check: () => boolean, timeoutMs: number): Promise<v
 
 /** A registry whose finalizeView throws for children whose output matches `poison`,
  * forcing that child's completed promise to REJECT (not resolve failed) — the
- * post-execution seam where real rejections escape executeChildAgent's catch. */
+ * post-execution seam where real rejections escape executeChildAgent's catch.
+ * `seedExplosion` additionally makes the SYNCHRONOUS dispatch seam throw:
+ * startChildAgent seeds the registry view before its async chain starts, so a
+ * throwing seedRunView models a sync escape from runAsyncPath's dispatch. */
 class RejectingRegistry extends ChildAgentRegistry {
 	private readonly poison: string;
 	private readonly afterFinalize: (() => void) | undefined;
-	constructor(poison: string, afterFinalize?: () => void) {
+	private readonly seedExplosion: string | undefined;
+	constructor(poison: string, afterFinalize?: () => void, seedExplosion?: string) {
 		super();
 		this.poison = poison;
 		this.afterFinalize = afterFinalize;
+		this.seedExplosion = seedExplosion;
+	}
+	override seedRunView(runId: string, seed: RunViewSeed): void {
+		if (this.seedExplosion) throw new Error(this.seedExplosion);
+		super.seedRunView(runId, seed);
 	}
 	override finalizeView(runId: string, result: ChildAgentResult): void {
 		if (result.outputText.includes(this.poison)) throw new Error("registry mirror exploded");
@@ -63,7 +73,7 @@ class RejectingRegistry extends ChildAgentRegistry {
 	}
 }
 
-function setup(prefix: string, poison: string, afterFinalize?: () => void) {
+function setup(prefix: string, poison: string, afterFinalize?: () => void, seedExplosion?: string) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 	roots.push(root);
 	__resetLeafConcurrencyForTest();
@@ -127,7 +137,7 @@ function setup(prefix: string, poison: string, afterFinalize?: () => void) {
 		config: { maxConcurrentAgents: 4 },
 		asyncByDefault: false,
 		tempArtifactsDir: root,
-		childRegistry: new RejectingRegistry(poison, afterFinalize),
+		childRegistry: new RejectingRegistry(poison, afterFinalize, seedExplosion),
 		expandTilde: (value: string) => value,
 		discoverAgents: () => ({
 			agents: Array.from({ length: 4 }, (_, i) => makeAgent(`A${i}`, { model: "mock/test-model" })),
@@ -293,6 +303,55 @@ describe("finalizeAsync unwind guarantee", () => {
 			const snapshot = nestedAsyncParentSnapshot(parentRunId);
 			assert.ok(snapshot, "the parent state is released by its own executor, not the dispatcher");
 			assert.equal(snapshot.active, false, "the hold must release even when aggregation throws");
+		} finally {
+			if (savedEnv === undefined) delete process.env.PI_SUBAGENT_PARENT_RUN_ID;
+			else process.env.PI_SUBAGENT_PARENT_RUN_ID = savedEnv;
+			releaseNestedAsyncParent(parentRunId);
+		}
+	});
+});
+
+describe("sync-dispatch unwind guarantee", () => {
+	it("unwinds dispatch registrations when the dispatch throws synchronously", { timeout: 8_000 }, async (t) => {
+		// The single-dispatch path registers a run controller and a nested
+		// cancellation between opening the run record and dispatching the child. A
+		// synchronous throw from the dispatch (here: the registry view seed, the
+		// same mirror-corruption seam the rejected-child tests use) used to escape
+		// runAsyncPath before finalizeAsync could register its unwind, leaking both
+		// registrations and never emitting the run's terminal aggregate.
+		const harness = setup("async-sync-throw-", "unused-poison", undefined, "registry mirror exploded");
+		const parentRunId = "run-sync-throw-parent";
+		const savedEnv = process.env.PI_SUBAGENT_PARENT_RUN_ID;
+		process.env.PI_SUBAGENT_PARENT_RUN_ID = parentRunId;
+		registerNestedAsyncParent(parentRunId);
+		const completions: Array<Record<string, unknown>> = [];
+		harness.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data: { runId?: string }) => {
+			completions.push(data);
+			if (data.runId) markNestedAsyncFinished(parentRunId, data.runId);
+		});
+		let reportedError: Error | undefined;
+		t.mock.method(logger, "error", (_message: string, error?: Error) => {
+			reportedError = error;
+		});
+		try {
+			const result = await harness.executor.execute(
+				"id",
+				{ run: [{ agent: "A0", task: "t0" }], async: true } as never,
+				new AbortController().signal,
+				undefined,
+				harness.ctx as never,
+			);
+			assert.equal(result.isError, true, "the sync dispatch failure must surface as an error result");
+			assert.match(JSON.stringify(result.content), /registry mirror exploded/);
+			assert.equal(
+				completions.length,
+				1,
+				"the failed aggregate must emit exactly once on the sync-escape unwind",
+			);
+			const snapshot = nestedAsyncParentSnapshot(parentRunId);
+			assert.ok(snapshot, "the parent state is released by its own executor, not the dispatcher");
+			assert.equal(snapshot.active, false, "no hold-facing mark may survive the unwind");
+			assert.ok(!reportedError, "the sync escape is surfaced to the caller, not swallowed as a log");
 		} finally {
 			if (savedEnv === undefined) delete process.env.PI_SUBAGENT_PARENT_RUN_ID;
 			else process.env.PI_SUBAGENT_PARENT_RUN_ID = savedEnv;
