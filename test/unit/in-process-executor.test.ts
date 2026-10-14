@@ -943,10 +943,7 @@ it("keeps a failing parent's hold alive when a completion reprompt fails to deli
 	);
 	assert.equal(result.state, "failed");
 	assert.equal(result.error?.message, "provider down", "the original failure must stay terminal");
-	assert.ok(
-		!/deliver/i.test(result.error?.message ?? ""),
-		"delivery failure must not mask the original failure",
-	);
+	assert.ok(!/deliver/i.test(result.error?.message ?? ""), "delivery failure must not mask the original failure");
 	assert.equal(failedPatches.length, 1, "the parent must report its failure exactly once");
 	assert.ok(
 		order.indexOf("leaf:complete") !== -1 && order.indexOf("leaf:complete") < order.indexOf("parent:failed"),
@@ -1029,11 +1026,7 @@ it("holds a failing contract-repair turn until its active subtree settles", asyn
 	);
 	await leafDone;
 	assert.ok(leafResult, "leaf must have settled");
-	assert.equal(
-		leafResult.state,
-		"complete",
-		"a failing repair turn's release must not cancel its active descendant",
-	);
+	assert.equal(leafResult.state, "complete", "a failing repair turn's release must not cancel its active descendant");
 	assert.equal(result.state, "failed");
 	assert.equal(result.error?.message, "provider down on repair turn");
 	assert.ok(
@@ -1105,11 +1098,7 @@ it("holds a parent that throws unexpectedly until its active subtree settles", a
 	);
 	await leafDone;
 	assert.ok(leafResult, "leaf must have settled");
-	assert.equal(
-		leafResult.state,
-		"complete",
-		"an unexpected parent error must not cancel its active descendant",
-	);
+	assert.equal(leafResult.state, "complete", "an unexpected parent error must not cancel its active descendant");
 	assert.equal(result.state, "failed");
 	assert.equal(result.error?.message, "exploded prompt");
 	assert.ok(
