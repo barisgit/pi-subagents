@@ -11,6 +11,8 @@
 - Added runtime `fallbackModels` failover after exhausted rate-limit, quota, authentication, and provider failures while preserving the child session history.
 
 ### Fixed
+- Nested-async ancestors parked on active descendants no longer age into `needs_attention`: descendant activity (including sustained engaged phases such as long tool calls) refreshes every ancestor through parallel/workflow group containers, and held runs re-stamp liveness on a keep-alive cadence.
+- Naturally failing async parents now hold until their active nested subtree settles (flushing queued completion reprompts) before reporting failure, so the release can neither cancel live descendants nor finalize the run early; explicit aborts keep immediate cascade-cancel.
 - Restored dashboard mouse-wheel scrolling in Pi 1.2 fullscreen mode while retaining legacy wheel input support.
 - Foreground/sync subagents now auto-interrupt on `needs_attention` instead of emitting an unrouteable parent notice that could only surface after the tool call ended.
 - Prevented laptop sleep from permanently marking a still-live in-process child as lost while retaining bounded orphan recovery after extension reloads.

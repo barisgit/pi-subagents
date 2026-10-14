@@ -18,6 +18,15 @@ const ENGAGED_PHASES = new Set<string>([
 	"retrying",
 ]);
 
+export const DEFAULT_NEEDS_ATTENTION_AFTER_MS = 15 * 60 * 1000;
+
+export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
+	enabled: true,
+	needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_AFTER_MS,
+	notifyOn: DEFAULT_NOTIFY_ON,
+	notifyChannels: CONTROL_NOTIFICATION_CHANNELS,
+};
+
 /**
  * A phase in which the runner is demonstrably mid-work: the model call, a tool,
  * a network wait, or a retry is in flight. Sustained engagement in such a phase
@@ -28,14 +37,6 @@ const ENGAGED_PHASES = new Set<string>([
 export function isEngagedPhase(phase: string | undefined): boolean {
 	return phase !== undefined && ENGAGED_PHASES.has(phase);
 }
-export const DEFAULT_NEEDS_ATTENTION_AFTER_MS = 15 * 60 * 1000;
-
-export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
-	enabled: true,
-	needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_AFTER_MS,
-	notifyOn: DEFAULT_NOTIFY_ON,
-	notifyChannels: CONTROL_NOTIFICATION_CHANNELS,
-};
 
 export function deriveActivityState(input: {
 	config: ResolvedControlConfig;

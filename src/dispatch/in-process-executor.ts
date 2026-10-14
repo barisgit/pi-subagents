@@ -248,10 +248,13 @@ export function createPhaseTicker(options: PhaseTickerOptions): PhaseTickerHandl
 			// (a long tool call, model wait, retry), the quiet tick doubles as an activity
 			// stamp so nested-async ancestors parked on this subtree keep refreshing
 			// lastActivityAt and never age into needs_attention. Idle/paused stays
-			// unstamped so genuine stalls still fire the control loop.
+			// unstamped so genuine stalls still fire the control loop. A tool phase with
+			// no known tool name degrades to a plain running stamp.
 			const engaged = isEngagedPhase(phaseState.phase);
-			const toolPhase = phaseState.phase === "tool_running" || phaseState.phase === "tool_streaming";
-			const engagedToolName = engaged && toolPhase ? phaseState.toolName : undefined;
+			const activityToolName =
+				engaged && (phaseState.phase === "tool_running" || phaseState.phase === "tool_streaming")
+					? phaseState.toolName
+					: undefined;
 			options.onStatusUpdate({
 				runId: options.runId,
 				stepIndex: options.stepIndex,
@@ -262,8 +265,8 @@ export function createPhaseTicker(options: PhaseTickerOptions): PhaseTickerHandl
 				...(engaged
 					? {
 							activity: {
-								state: engagedToolName !== undefined ? "tool_running" : "running",
-								...(engagedToolName !== undefined ? { toolName: engagedToolName } : {}),
+								state: activityToolName !== undefined ? "tool_running" : "running",
+								...(activityToolName !== undefined ? { toolName: activityToolName } : {}),
 								updatedAt: currentNow,
 							},
 						}
@@ -384,11 +387,12 @@ async function settleNestedAsyncParent(
 		if (snapshot.active && !snapshot.agentInFlight) await parkLeafPermit(runId, wait, signal);
 		else await wait();
 		if (nestedAsyncParentSnapshot(runId)?.active) {
+			const now = Date.now();
 			onStatusUpdate?.({
 				runId,
 				stepIndex,
-				activity: { state: "running", updatedAt: Date.now() },
-				runnerHeartbeatAt: Date.now(),
+				activity: { state: "running", updatedAt: now },
+				runnerHeartbeatAt: now,
 			});
 		}
 	}

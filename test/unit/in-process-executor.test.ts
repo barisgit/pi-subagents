@@ -406,7 +406,6 @@ async function waitForAtMost(check: () => boolean, timeoutMs: number): Promise<v
 
 interface RecordedPatch {
 	activity?: { updatedAt?: number };
-	runnerHeartbeatAt?: number;
 }
 
 /** Settle the microtask chain so one descendant patch finishes bubbling to every ancestor. */
@@ -438,13 +437,12 @@ it("keeps every ancestor fresh while a deep descendant works quietly in an engag
 		self.emit({ type: "tool_execution_end", toolName: "bash" });
 		self.lastAssistantText = "<output>leaf-done</output>";
 	});
+	// Only mid's own executor patches reach midPatches (the leaf dispatch records nothing),
+	// so the stamp-count assertions below measure mid's own liveness, not the leaf's traffic.
 	const midPatches: RecordedPatch[] = [];
 	const midSession = new FakeAgentSession(async (self) => {
 		registerNestedAsyncParent(midRunId);
-		dispatchAsyncChild(
-			makeStep({ runId: leafRunId }),
-			makeContext({ onStatusUpdate: (patch) => midPatches.push(patch) }),
-		);
+		dispatchAsyncChild(makeStep({ runId: leafRunId }), makeContext());
 		markNestedAsyncStarted(midRunId, leafRunId);
 		self.lastAssistantText = "<output>mid-dispatched</output>";
 		settleMidPrompt();
@@ -527,16 +525,12 @@ it("bubbles sustained descendant activity through a parallel group container wit
 		self.emit({ type: "tool_execution_end", toolName: "bash" });
 		self.lastAssistantText = "<output>leaf-done</output>";
 	});
-	const midPatches: RecordedPatch[] = [];
 	const midSession = new FakeAgentSession(async (self) => {
 		registerNestedAsyncParent(midRunId);
 		// Parallel/async group shape: the rollup registers the group id while per-child
 		// started events register child run ids, exactly like run-async-path.
 		holdNestedAsyncRollup(midRunId, groupRunId);
-		dispatchAsyncChild(
-			makeStep({ runId: leafRunId }),
-			makeContext({ onStatusUpdate: (patch) => midPatches.push(patch) }),
-		);
+		dispatchAsyncChild(makeStep({ runId: leafRunId }), makeContext());
 		markNestedAsyncStarted(midRunId, leafRunId);
 		self.lastAssistantText = "<output>mid-dispatched</output>";
 		settleMidPrompt();
@@ -712,6 +706,7 @@ it("stops keeping a parent fresh once its descendant subtree settles, and exits 
 	const stampsAfterSettle = patches.filter((patch) => patch.activity !== undefined).length;
 	await new Promise((resolve) => setTimeout(resolve, 300));
 	assert.equal(patches.filter((patch) => patch.activity !== undefined).length, stampsAfterSettle);
+	// A follow-on run must still acquire a leaf permit: a settled hold may not leak the parked slot.
 	assert.equal(
 		(await runChildAgent(makeStep({ runId: "run-after-settled-parent" }), makeContext())).state,
 		"complete",
@@ -820,9 +815,8 @@ it("keeps cascade-cancel semantics when a parent is explicitly aborted", async (
 	const pi = { events } as never;
 	const parentAbort = new AbortController();
 	const leafAbort = new AbortController();
-	const leafSession = new FakeAgentSession(async (self) => {
+	const leafSession = new FakeAgentSession(async () => {
 		await new Promise(() => {});
-		self.lastAssistantText = "<output>leaf-done</output>";
 	});
 	let leafResult: ChildAgentResult | undefined;
 	let settleLeafDone!: () => void;
