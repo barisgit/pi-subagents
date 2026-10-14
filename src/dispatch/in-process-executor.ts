@@ -354,6 +354,7 @@ async function settleNestedAsyncParent(
 	stepIndex: number,
 	signal: AbortSignal,
 	onStatusUpdate?: (patch: StatusPatch) => void,
+	options: { ignoreDeliveryFailures?: boolean } = {},
 ): Promise<"settled" | "aborted" | "delivery_failed"> {
 	while (!signal.aborted) {
 		const snapshot = nestedAsyncParentSnapshot(runId);
@@ -361,7 +362,11 @@ async function settleNestedAsyncParent(
 		if (snapshot.pendingReprompts > 0) {
 			const delivery = await flushNestedCompletionReprompts(runId, signal);
 			if (delivery.aborted) return "aborted";
-			if (delivery.failed) return "delivery_failed";
+			// Failed sends are already dropped from the queue. On the success exit a
+			// failed completion delivery is designed to fail the run; a failure-hold
+			// (ignoreDeliveryFailures) must keep waiting for the live subtree
+			// instead — the original failure stays terminal and is never masked.
+			if (delivery.failed && !options.ignoreDeliveryFailures) return "delivery_failed";
 			continue;
 		}
 		if (!snapshot.active && !snapshot.agentInFlight) return "settled";
@@ -614,7 +619,12 @@ async function executeChildAgent(
 	// during the hold must not mask it. Explicit aborts skip the hold: their
 	// cascade-cancel is intended.
 	const holdFailedParentForSubtree = async (): Promise<void> => {
-		await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate);
+		// A failed completion delivery during the hold drops that nudge and keeps
+		// waiting; ending the hold here would release the subtree to cascade-cancel
+		// while the parent's real failure is still the only thing to report.
+		await settleNestedAsyncParent(step.runId, step.stepIndex, signal, ctx.onStatusUpdate, {
+			ignoreDeliveryFailures: true,
+		});
 	};
 
 	try {

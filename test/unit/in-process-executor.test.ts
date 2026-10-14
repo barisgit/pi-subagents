@@ -804,6 +804,94 @@ it("holds a failing parent until its active subtree settles before finalizing", 
 	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
 });
 
+it("keeps a failing parent's hold alive when a completion reprompt fails to deliver", async () => {
+	leafConcurrencyLimit(4);
+	const parentRunId = "run-fail-hold-delivery-parent";
+	const leafRunId = "run-fail-hold-delivery-leaf";
+	const order: string[] = [];
+	const failedPatches: RecordedPatch[] = [];
+	const events = new EventEmitter();
+	events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data: { runId?: string }) => {
+		if (data.runId) markNestedAsyncStarted(parentRunId, data.runId);
+	});
+	events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data: { runId?: string }) => {
+		if (data.runId) markNestedAsyncFinished(parentRunId, data.runId);
+	});
+	const pi = { events } as never;
+
+	const leafSession = new FakeAgentSession(async (self) => {
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		self.lastAssistantText = "<output>leaf-done</output>";
+	});
+	let leafResult: ChildAgentResult | undefined;
+	let settleLeafDone!: () => void;
+	const leafDone = new Promise<void>((resolve) => {
+		settleLeafDone = resolve;
+	});
+	const finalizeLeaf = async (handle: ChildAgentHandle): Promise<void> => {
+		const result = await handle.completed;
+		leafResult = result;
+		safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, { id: handle.runId, runId: handle.runId, state: result.state }, pi);
+		settleLeafDone();
+	};
+	const leafAbort = new AbortController();
+	const parentSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		const leafHandle = dispatchAsyncChild(
+			makeStep({ runId: leafRunId }),
+			makeContext({
+				pi,
+				abortSignal: leafAbort.signal,
+				onStatusUpdate: (patch) => {
+					if (patch.state === "complete") order.push("leaf:complete");
+				},
+			}),
+		);
+		registerNestedAsyncCancellation(parentRunId, () => leafAbort.abort());
+		safeEmit(SUBAGENT_ASYNC_STARTED_EVENT, { id: leafRunId, runId: leafRunId }, pi);
+		void finalizeLeaf(leafHandle);
+		// The descendant's completion nudge cannot reach the failing parent's
+		// session: the send reports failure while the leaf is still working.
+		enqueueNestedCompletionReprompt(parentRunId, async () => false);
+		self.messages.push({ role: "assistant", stopReason: "error", errorMessage: "provider down" });
+	});
+	installFakeRuntime([parentSession, leafSession]);
+	const patches: RecordedPatch[] = [];
+
+	const result = await runChildAgent(
+		makeStep({ runId: parentRunId }),
+		makeContext({
+			pi,
+			onStatusUpdate: (patch) => {
+				patches.push(patch);
+				if (patch.state === "failed") {
+					failedPatches.push(patch);
+					order.push("parent:failed");
+				}
+			},
+		}),
+	);
+	await leafDone;
+	assert.ok(leafResult, "leaf must have settled");
+	assert.equal(
+		leafResult.state,
+		"complete",
+		"a failed reprompt delivery during a failure-hold must not cancel the active subtree",
+	);
+	assert.equal(result.state, "failed");
+	assert.equal(result.error?.message, "provider down", "the original failure must stay terminal");
+	assert.ok(
+		!/deliver/i.test(result.error?.message ?? ""),
+		"delivery failure must not mask the original failure",
+	);
+	assert.equal(failedPatches.length, 1, "the parent must report its failure exactly once");
+	assert.ok(
+		order.indexOf("leaf:complete") !== -1 && order.indexOf("leaf:complete") < order.indexOf("parent:failed"),
+		"parent must not report failure while its subtree is active",
+	);
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
+});
+
 it("keeps cascade-cancel semantics when a parent is explicitly aborted", async () => {
 	leafConcurrencyLimit(4);
 	const parentRunId = "run-abort-cascade-parent";
