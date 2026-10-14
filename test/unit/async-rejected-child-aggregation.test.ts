@@ -14,7 +14,9 @@ import {
 	nestedAsyncParentSnapshot,
 	registerNestedAsyncParent,
 	releaseNestedAsyncParent,
+	__nestedAsyncCancellationCountForTest,
 } from "../../src/dispatch/nested-async-coordinator.ts";
+import { hasRunController } from "../../src/dispatch/layer0-runs.ts";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/protocol/types.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
@@ -457,9 +459,25 @@ describe("sync-dispatch unwind guarantee", () => {
 				1,
 				"the failed aggregate must emit exactly once on the sync-escape unwind",
 			);
+			// Pin the payload SHAPE, not just the count: emitting a built success
+			// payload instead of the failed one must also fail here.
+			const aggregate = completions[0];
+			assert.equal(aggregate.success, false, "the sync-escape unwind emits the failed aggregate");
+			assert.equal(aggregate.total, 0, "no child completed, so the failed aggregate totals 0");
+			assert.equal((aggregate.children as unknown[]).length, 0, "the failed aggregate carries no children");
 			const snapshot = nestedAsyncParentSnapshot(parentRunId);
 			assert.ok(snapshot, "the parent state is released by its own executor, not the dispatcher");
 			assert.equal(snapshot.active, false, "no hold-facing mark may survive the unwind");
+			assert.equal(
+				hasRunController(String(aggregate.runId)),
+				false,
+				"the detached controller must be released or a reload orphans the run",
+			);
+			assert.equal(
+				__nestedAsyncCancellationCountForTest(parentRunId),
+				0,
+				"the nested cancellation must be unregistered, not left to fire on a later parent release",
+			);
 			assert.ok(!reportedError, "the sync escape is surfaced to the caller, not swallowed as a log");
 		} finally {
 			if (savedEnv === undefined) delete process.env.PI_SUBAGENT_PARENT_RUN_ID;

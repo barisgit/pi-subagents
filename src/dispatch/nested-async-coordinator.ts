@@ -209,6 +209,11 @@ export function __nestedAsyncWaiterCountForTest(parentRunId: string): number {
 	return registry().parents.get(parentRunId)?.waiters.size ?? 0;
 }
 
+/** Test-only: how many cancellation hooks are registered on a parent state. */
+export function __nestedAsyncCancellationCountForTest(parentRunId: string): number {
+	return registry().parents.get(parentRunId)?.cancelDescendants.size ?? 0;
+}
+
 export function releaseNestedAsyncParent(parentRunId: string): void {
 	const state = registry().parents.get(parentRunId);
 	if (!state) return;
