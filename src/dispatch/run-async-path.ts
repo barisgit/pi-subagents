@@ -514,6 +514,7 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 	const finalizeAsync = async (handlesPromise: Promise<ChildAgentHandle[]>) => {
 		logger.info("finalizeAsync: awaiting handles", { runId });
 		let finalResult: ChildAgentResult | undefined;
+		let aggregatePayload: ReturnType<typeof buildAsyncAggregateCompletePayload> | undefined;
 		try {
 			const handles = await handlesPromise;
 			logger.info("finalizeAsync: handles resolved", { runId, count: handles.length });
@@ -624,40 +625,73 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 					timestamp: Date.now(),
 				});
 			}
-			safeEmit(
-				SUBAGENT_ASYNC_COMPLETE_EVENT,
+			aggregatePayload = buildAsyncAggregateCompletePayload({
+				id: runId,
+				runId,
+				parentRunId,
+				rootRunId,
+				notifyPolicy: batchToNotifyPolicy(params.batch),
+				success: finalResult?.state === "complete",
+				agent: completeAgent,
+				summary: finalResult?.outputText ?? "",
+				state: finalResult?.state,
+				results: childResults,
+				children: childResults,
+				total: childResults.length,
+				completed: childResults.filter((child) => child.state === "complete").length,
+				asyncDir: runRecordDir,
+				metadata: params.metadata,
+				syncFields: {
+					exitCode: finalResult?.exitCode,
+					durationMs: finalResult?.durationMs,
+					sessionFile: finalResult?.sessionFile,
+					shareUrl: finalResult?.shareUrl,
+					result: finalResult,
+					totalUsage,
+					batch: params.batch === true,
+					batchId: runId,
+				},
+			});
+		} catch (err) {
+			logger.error("finalizeAsync: threw", err instanceof Error ? err : new Error(String(err)), { runId });
+		} finally {
+			// The nested-async hold releases ONLY off this event (the extension
+			// runtime maps COMPLETE/RUN_COMPLETE to markNestedAsyncFinished), and the
+			// settle keep-alive re-stamps a held parent as alive — skipping the emit
+			// on a thrown finalize would immortalize a silent, healthy-looking held
+			// run. Emit on EVERY unwind: the built payload when reached, else a
+			// minimal failed aggregate (the run's status.json carries whatever
+			// terminal state finalizeRun managed to persist).
+			const payload =
+				aggregatePayload ??
 				buildAsyncAggregateCompletePayload({
 					id: runId,
 					runId,
 					parentRunId,
 					rootRunId,
 					notifyPolicy: batchToNotifyPolicy(params.batch),
-					success: finalResult?.state === "complete",
-					agent: completeAgent,
-					summary: finalResult?.outputText ?? "",
-					state: finalResult?.state,
-					results: childResults,
-					children: childResults,
-					total: childResults.length,
-					completed: childResults.filter((child) => child.state === "complete").length,
+					success: false,
+					agent: mode === "parallel" ? steps.map(({ step }) => step.agentName).join(",") : first.step.agentName,
+					summary: "",
+					state: undefined,
+					results: [],
+					children: [],
+					total: 0,
+					completed: 0,
 					asyncDir: runRecordDir,
 					metadata: params.metadata,
 					syncFields: {
-						exitCode: finalResult?.exitCode,
-						durationMs: finalResult?.durationMs,
-						sessionFile: finalResult?.sessionFile,
-						shareUrl: finalResult?.shareUrl,
-						result: finalResult,
-						totalUsage,
+						exitCode: undefined,
+						durationMs: undefined,
+						sessionFile: undefined,
+						shareUrl: undefined,
+						result: undefined,
+						totalUsage: undefined,
 						batch: params.batch === true,
 						batchId: runId,
 					},
-				}),
-				parentRunId ? deps.pi : undefined,
-			);
-		} catch (err) {
-			logger.error("finalizeAsync: threw", err instanceof Error ? err : new Error(String(err)), { runId });
-		} finally {
+				});
+			safeEmit(SUBAGENT_ASYNC_COMPLETE_EVENT, payload, parentRunId ? deps.pi : undefined);
 			unregisterNestedCancellation();
 			releaseRunController(runId);
 			statusWriter.dispose();

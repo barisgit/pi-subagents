@@ -7,8 +7,15 @@ import { afterEach, describe, it } from "node:test";
 import { ChildAgentRegistry, __setChildAgentExecutorDepsForTest } from "../../src/dispatch/in-process-executor.ts";
 import type { ChildAgentResult } from "../../src/dispatch/in-process-executor.ts";
 import { __resetLeafConcurrencyForTest } from "../../src/dispatch/leaf-concurrency.ts";
+import {
+	markNestedAsyncFinished,
+	markNestedAsyncStarted,
+	nestedAsyncParentSnapshot,
+	registerNestedAsyncParent,
+	releaseNestedAsyncParent,
+} from "../../src/dispatch/nested-async-coordinator.ts";
 import { createSubagentExecutor } from "../../src/dispatch/subagent-executor.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/protocol/types.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/protocol/types.ts";
 import { setCurrentPi } from "../../src/shared/current-pi.ts";
 import { logger } from "../../src/shared/logger.ts";
 import { __setStatusWriterWriteJsonForTest } from "../../src/state/status-writer.ts";
@@ -28,6 +35,14 @@ function waitForEvent(events: EventEmitter, channel: string) {
 	return new Promise<any>((resolve) => {
 		events.once(channel, resolve);
 	});
+}
+
+async function waitForAtMost(check: () => boolean, timeoutMs: number): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!check()) {
+		if (Date.now() >= deadline) return;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
 }
 
 /** A registry whose finalizeView throws for children whose output matches `poison`,
@@ -227,6 +242,62 @@ describe("async aggregation with a rejected child", () => {
 		assert.equal(complete.success, false);
 		assert.equal(complete.children.length, 1);
 		assert.equal(complete.children[0].state, "failed");
+	});
+});
+
+describe("finalizeAsync unwind guarantee", () => {
+	it("releases the nested hold even when aggregation throws mid-finalize", { timeout: 8_000 }, async (t) => {
+		const harness = setup("async-finalize-throw-", "unused-poison");
+		const parentRunId = "run-aggregation-throw-parent";
+		const savedEnv = process.env.PI_SUBAGENT_PARENT_RUN_ID;
+		process.env.PI_SUBAGENT_PARENT_RUN_ID = parentRunId;
+		registerNestedAsyncParent(parentRunId);
+		const completions: Array<Record<string, unknown>> = [];
+		// Production extension-runtime listener shape: the dispatching parent's bus
+		// maps async lifecycle events to nested-async marks. The aggregate COMPLETE
+		// is the only trigger that clears the dispatch/group id (single async
+		// dispatches have no layer0 RUN_COMPLETE for it).
+		harness.events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data: { runId?: string }) => {
+			if (data.runId) markNestedAsyncStarted(parentRunId, data.runId);
+		});
+		harness.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data: { runId?: string }) => {
+			completions.push(data);
+			if (data.runId) markNestedAsyncFinished(parentRunId, data.runId);
+		});
+		let reportedError: Error | undefined;
+		t.mock.method(logger, "error", (_message: string, error?: Error) => {
+			reportedError = error;
+		});
+		const originalInfo = logger.info.bind(logger);
+		t.mock.method(logger, "info", (message: string, context?: Parameters<typeof logger.info>[1]) => {
+			// Simulate a throw from an arbitrary line inside the finalizeAsync try:
+			// the post-allSettled progress log is mid-aggregation, before finalizeRun.
+			if (message === "finalizeAsync: settled") throw new Error("simulated aggregation failure");
+			originalInfo(message, context);
+		});
+		try {
+			await harness.executor.execute(
+				"id",
+				{ run: [{ agent: "A0", task: "t0" }], async: true } as never,
+				new AbortController().signal,
+				undefined,
+				harness.ctx as never,
+			);
+			await waitForAtMost(() => completions.length > 0, 3_000);
+			assert.equal(
+				completions.length,
+				1,
+				"the aggregate completion must emit exactly once even when aggregation throws",
+			);
+			assert.match(String(reportedError?.message ?? ""), /simulated aggregation failure/);
+			const snapshot = nestedAsyncParentSnapshot(parentRunId);
+			assert.ok(snapshot, "the parent state is released by its own executor, not the dispatcher");
+			assert.equal(snapshot.active, false, "the hold must release even when aggregation throws");
+		} finally {
+			if (savedEnv === undefined) delete process.env.PI_SUBAGENT_PARENT_RUN_ID;
+			else process.env.PI_SUBAGENT_PARENT_RUN_ID = savedEnv;
+			releaseNestedAsyncParent(parentRunId);
+		}
 	});
 });
 
