@@ -309,6 +309,115 @@ describe("finalizeAsync unwind guarantee", () => {
 			releaseNestedAsyncParent(parentRunId);
 		}
 	});
+
+	it(
+		"releases the hold when the single finalizeAsync prologue throws before its unwind registers",
+		{ timeout: 8_000 },
+		async (t) => {
+			// The unwind registers when the try block is ENTERED. Any executable
+			// statement before it (the awaiting-handles progress log) would float a
+			// rejection past the catch/finally: no aggregate, immortal hold.
+			const harness = setup("async-prologue-throw-", "unused-poison");
+			const parentRunId = "run-prologue-throw-parent";
+			const savedEnv = process.env.PI_SUBAGENT_PARENT_RUN_ID;
+			process.env.PI_SUBAGENT_PARENT_RUN_ID = parentRunId;
+			registerNestedAsyncParent(parentRunId);
+			const completions: Array<Record<string, unknown>> = [];
+			harness.events.on(SUBAGENT_ASYNC_STARTED_EVENT, (data: { runId?: string }) => {
+				if (data.runId) markNestedAsyncStarted(parentRunId, data.runId);
+			});
+			harness.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data: { runId?: string }) => {
+				completions.push(data);
+				if (data.runId) markNestedAsyncFinished(parentRunId, data.runId);
+			});
+			let reportedError: Error | undefined;
+			t.mock.method(logger, "error", (_message: string, error?: Error) => {
+				reportedError = error;
+			});
+			const originalInfo = logger.info.bind(logger);
+			t.mock.method(logger, "info", (message: string, context?: Parameters<typeof logger.info>[1]) => {
+				if (message === "finalizeAsync: awaiting handles") throw new Error("simulated prologue failure");
+				originalInfo(message, context);
+			});
+			try {
+				await harness.executor.execute(
+					"id",
+					{ run: [{ agent: "A0", task: "t0" }], async: true } as never,
+					new AbortController().signal,
+					undefined,
+					harness.ctx as never,
+				);
+				await waitForAtMost(() => completions.length > 0, 3_000);
+				assert.equal(completions.length, 1, "the clearing aggregate must emit even when the prologue throws");
+				assert.match(String(reportedError?.message ?? ""), /simulated prologue failure/);
+				const snapshot = nestedAsyncParentSnapshot(parentRunId);
+				assert.ok(snapshot, "the parent state is released by its own executor, not the dispatcher");
+				assert.equal(snapshot.active, false, "the hold must release even when the prologue throws");
+			} finally {
+				if (savedEnv === undefined) delete process.env.PI_SUBAGENT_PARENT_RUN_ID;
+				else process.env.PI_SUBAGENT_PARENT_RUN_ID = savedEnv;
+				releaseNestedAsyncParent(parentRunId);
+			}
+		},
+	);
+
+	it(
+		"releases the hold when the parallel finalize prologue throws before its unwind registers",
+		{ timeout: 8_000 },
+		async (t) => {
+			// Parallel twin: the group aggregate IIFE must enter its try before any
+			// executable statement, or a prologue throw skips the finally that clears
+			// the group mark registered by holdNestedAsyncRollup.
+			const harness = setup("async-parallel-prologue-", "unused-poison");
+			const parentRunId = "run-parallel-prologue-parent";
+			const savedEnv = process.env.PI_SUBAGENT_PARENT_RUN_ID;
+			process.env.PI_SUBAGENT_PARENT_RUN_ID = parentRunId;
+			registerNestedAsyncParent(parentRunId);
+			const completions: Array<Record<string, unknown>> = [];
+			// Only the group aggregate clears the hold; per-child STARTED marks are
+			// owned by the group state and die with releaseNestedAsyncParent.
+			harness.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (data: { runId?: string }) => {
+				completions.push(data);
+				if (data.runId) markNestedAsyncFinished(parentRunId, data.runId);
+			});
+			let reportedError: Error | undefined;
+			t.mock.method(logger, "error", (_message: string, error?: Error) => {
+				reportedError = error;
+			});
+			const originalInfo = logger.info.bind(logger);
+			t.mock.method(logger, "info", (message: string, context?: Parameters<typeof logger.info>[1]) => {
+				if (message === "finalizeAsync: awaiting layer0 parallel handles")
+					throw new Error("simulated parallel prologue failure");
+				originalInfo(message, context);
+			});
+			try {
+				await harness.executor.execute(
+					"id",
+					{
+						run: [
+							{ agent: "A0", task: "t0" },
+							{ agent: "A1", task: "t1" },
+						],
+						async: true,
+					} as never,
+					new AbortController().signal,
+					undefined,
+					harness.ctx as never,
+				);
+				await waitForAtMost(() => completions.length > 0, 3_000);
+				assert.equal(completions.length, 1, "the group aggregate must emit even when the prologue throws");
+				assert.equal(completions[0].success, false, "the prologue-throw unwind emits the failed aggregate");
+				assert.match(String(reportedError?.message ?? ""), /simulated parallel prologue failure/);
+				const snapshot = nestedAsyncParentSnapshot(parentRunId);
+				assert.ok(snapshot, "the parent state is released by its own executor, not the dispatcher");
+				assert.equal(snapshot.active, false, "the group hold must release even when the prologue throws");
+			} finally {
+				if (savedEnv === undefined) delete process.env.PI_SUBAGENT_PARENT_RUN_ID;
+				else process.env.PI_SUBAGENT_PARENT_RUN_ID = savedEnv;
+				releaseNestedAsyncParent(parentRunId);
+			}
+		},
+	);
 });
 
 describe("sync-dispatch unwind guarantee", () => {

@@ -339,9 +339,12 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 		try {
 			childRuns = startChildRuns();
 			void (async () => {
-				logger.info("finalizeAsync: awaiting layer0 parallel handles", { runId: groupRunId });
 				let aggregatePayload: ReturnType<typeof buildAsyncAggregateCompletePayload> | undefined;
+				// Same contract as the single path's finalizeAsync: no executable
+				// statements outside the try — a prologue throw here would float a
+				// rejection past the finally that emits the clearing aggregate.
 				try {
+					logger.info("finalizeAsync: awaiting layer0 parallel handles", { runId: groupRunId });
 					const settled = await Promise.allSettled(childRuns.map((child) => child.handle.completed));
 					const results = settled.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : []));
 					// A rejected child (execution threw past the leaf's own catch) has no
@@ -606,10 +609,14 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 		pi: deps.pi,
 	};
 	const finalizeAsync = async (handlesPromise: Promise<ChildAgentHandle[]>) => {
-		logger.info("finalizeAsync: awaiting handles", { runId });
 		let finalResult: ChildAgentResult | undefined;
 		let aggregatePayload: ReturnType<typeof buildAsyncAggregateCompletePayload> | undefined;
+		// No executable statements before the try: as an async function, a
+		// sync-prologue throw would float a rejection past the guaranteed unwind
+		// below instead of running the catch/finally that emits the clearing
+		// aggregate. The `let` declarations above cannot throw.
 		try {
+			logger.info("finalizeAsync: awaiting handles", { runId });
 			const handles = await handlesPromise;
 			logger.info("finalizeAsync: handles resolved", { runId, count: handles.length });
 			const settled = await Promise.allSettled(handles.map((handle) => handle.completed));
@@ -769,16 +776,12 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 	};
 
 	// Only the single-dispatch path reaches here; parallel (hasTasks) returns above.
-	try {
-		const handlesPromise: Promise<ChildAgentHandle[]> = Promise.resolve([dispatchAsyncChild(first.step, asyncCtx)]);
-		void finalizeAsync(handlesPromise);
-	} catch (error) {
-		// A synchronous throw from the dispatch escapes before finalizeAsync can
-		// register its unwind; run the same guaranteed unwind here and rethrow.
-		unwindFailedDispatch();
-		throw error;
-	}
-
+	// STARTED registers the parent's nested-async mark BEFORE the dispatch so that
+	// every unwind path below clears a mark that already exists: a sync dispatch
+	// throw unwinds via the catch, any finalizeAsync throw (sync prologue included)
+	// unwinds via its finally — and the arms stay mutually exclusive (one aggregate
+	// per dispatch). Started handlers only anchor/notify and register marks, so
+	// firing before the child session exists is consumer-equivalent.
 	safeEmit(
 		SUBAGENT_ASYNC_STARTED_EVENT,
 		{
@@ -794,6 +797,16 @@ export function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Su
 		},
 		parentRunId ? deps.pi : undefined,
 	);
+
+	try {
+		const handlesPromise: Promise<ChildAgentHandle[]> = Promise.resolve([dispatchAsyncChild(first.step, asyncCtx)]);
+		void finalizeAsync(handlesPromise);
+	} catch (error) {
+		// A synchronous throw from the dispatch escapes before finalizeAsync can
+		// register its unwind; run the same guaranteed unwind here and rethrow.
+		unwindFailedDispatch();
+		throw error;
+	}
 
 	const handleText =
 		mode === "single"
