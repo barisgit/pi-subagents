@@ -43,6 +43,43 @@ describe("subagent control attention state", () => {
 		);
 	});
 
+	it("alerts a stalled subtree on its own row while a held ancestor stays suppressed", () => {
+		// Sanctioned semantics: sustained engagement is activity. The deepest idle
+		// run ages and alerts on its own row; an ancestor parked on live descendant
+		// registrations is by definition waiting on its subtree and is re-stamped
+		// fresh by the settle keep-alive, so it stays quiet while those
+		// registrations persist. A run wedged INSIDE an engaged phase is not a
+		// stall case — the stuck detector and runner-death reaping own it.
+		const startedAt = 1_000;
+		assert.equal(
+			deriveActivityState({ config, startedAt, lastActivityAt: startedAt, now: startedAt + 1_000 }),
+			"needs_attention",
+			"the stalled leaf's own row must still age into needs_attention",
+		);
+		assert.equal(shouldEmitControlEvent(config, undefined, "needs_attention"), true, "rising edge fires once");
+		assert.equal(
+			shouldEmitControlEvent(config, "needs_attention", "needs_attention"),
+			false,
+			"no flapping while the stall persists",
+		);
+		assert.equal(
+			deriveActivityState({ config, startedAt, lastActivityAt: startedAt + 998, now: startedAt + 1_000 }),
+			undefined,
+			"a held ancestor kept fresh by the keep-alive is suppressed while waiting on its subtree",
+		);
+		assert.equal(
+			deriveActivityState({
+				config,
+				startedAt,
+				lastActivityAt: startedAt,
+				phase: "tool_running",
+				now: startedAt + 1_000,
+			}),
+			undefined,
+			"a run wedged inside an engaged phase is the stuck detector's domain",
+		);
+	});
+
 	it("anchors the stall window on executionStartedAt, not dispatch time", () => {
 		// Dispatched at 0, started executing at 9_900; at now=10_000 only 100ms of
 		// execution has elapsed, well under the 300ms threshold -> not stalled.

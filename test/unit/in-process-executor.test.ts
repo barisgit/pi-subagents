@@ -641,8 +641,9 @@ it("keeps a parked parent's liveness fresh while its whole subtree is active but
 	const midActivityBefore = midPatches.filter((patch) => patch.activity !== undefined).length;
 	const topActivityBefore = topPatches.filter((patch) => patch.activity !== undefined).length;
 
-	// Nothing below emits, so only the parked parents' own keep-alive can refresh
-	// lastActivityAt: activity stamps must keep arriving while the subtree is held.
+	// The leaf emits nothing, so any new liveness on either parked parent is its
+	// own keep-alive, not traffic from below. (That no level is SKIPPED while the
+	// stamps bubble is pinned by the deep-tree and group-container tests above.)
 	await waitForAtMost(
 		() => midPatches.filter((patch) => patch.activity !== undefined).length > midActivityBefore,
 		9_000,
@@ -654,7 +655,7 @@ it("keeps a parked parent's liveness fresh while its whole subtree is active but
 	);
 	assert.ok(
 		topPatches.filter((patch) => patch.activity !== undefined).length > topActivityBefore,
-		"top ancestor must stay activity-fresh through the parked mid parent",
+		"parked top parent must keep stamping its own liveness while its subtree is active",
 	);
 	assert.equal(topSession.disposeCalls, 0, "held ancestors must not be disposed while the subtree works");
 	assert.equal(midSession.disposeCalls, 0, "held middle parent must not be disposed while the subtree works");
