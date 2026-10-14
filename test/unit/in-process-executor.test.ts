@@ -44,8 +44,8 @@ const restoreFns: Array<() => void> = [];
 
 function clearLineage(...sessionIds: string[]): void {
 	const globals = globalThis as Record<string, unknown>;
-	const lineageStore = globals["__piSubagentLineageBySession"] as Map<string, unknown> | undefined;
-	const boundSessionFiles = globals["__piSubagentLineageBoundSessionFiles"] as Map<string, unknown> | undefined;
+	const lineageStore = globals.__piSubagentLineageBySession as Map<string, unknown> | undefined;
+	const boundSessionFiles = globals.__piSubagentLineageBoundSessionFiles as Map<string, unknown> | undefined;
 	for (const sessionId of sessionIds) {
 		lineageStore?.delete(sessionId);
 		boundSessionFiles?.delete(sessionId);
