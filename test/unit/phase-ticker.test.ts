@@ -223,6 +223,37 @@ describe("phase ticker fallback", () => {
 		ticker.stop();
 	});
 
+	it("engaged-quiet-tick-carries-activity", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const { patches, onStatusUpdate } = makeCollector();
+		const phaseRef = makePhaseRef();
+		phaseRef.handle(event({ type: "turn_start" }), 100);
+		phaseRef.handle(event({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }), 200);
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
+
+		t.mock.timers.tick(5_000);
+
+		assert.equal(patches.length, 2);
+		assert.deepEqual(patches[1]!.activity, { state: "running", updatedAt: 5_000 });
+		ticker.stop();
+	});
+
+	it("tool-quiet-tick-stamps-tool-activity", (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+
+		const { patches, onStatusUpdate } = makeCollector();
+		const phaseRef = makePhaseRef();
+		phaseRef.handle(event({ type: "tool_execution_start", toolName: "bash" }), 200);
+		const ticker = createPhaseTicker(baseOpts(phaseRef, onStatusUpdate));
+
+		t.mock.timers.tick(5_000);
+
+		assert.equal(patches.length, 2);
+		assert.deepEqual(patches[1]!.activity, { state: "tool_running", toolName: "bash", updatedAt: 5_000 });
+		ticker.stop();
+	});
+
 	it("re-asserts-current-phase-fields", (t) => {
 		t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
 

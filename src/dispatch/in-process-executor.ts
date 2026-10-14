@@ -16,6 +16,7 @@ import {
 // list unfiltered; extension tools like ast_grep/fetch/mcp/scan_files register during
 // session_start and only pass the gate if their name is in this list.
 import { logger } from "../shared/logger.ts";
+import { isEngagedPhase } from "../shared/control-policy.ts";
 import { runInChildSessionContext } from "../shared/child-session-context.ts";
 import { publishLiveSession } from "../shared/live-session-relay.ts";
 import {
@@ -243,6 +244,14 @@ export function createPhaseTicker(options: PhaseTickerOptions): PhaseTickerHandl
 
 			if (currentNow - options.getLastEventAt() <= quietMs) return;
 
+			// Sustained engagement is progress: while the runner sits in an engaged phase
+			// (a long tool call, model wait, retry), the quiet tick doubles as an activity
+			// stamp so nested-async ancestors parked on this subtree keep refreshing
+			// lastActivityAt and never age into needs_attention. Idle/paused stays
+			// unstamped so genuine stalls still fire the control loop.
+			const engaged = isEngagedPhase(phaseState.phase);
+			const toolPhase = phaseState.phase === "tool_running" || phaseState.phase === "tool_streaming";
+			const engagedToolName = engaged && toolPhase ? phaseState.toolName : undefined;
 			options.onStatusUpdate({
 				runId: options.runId,
 				stepIndex: options.stepIndex,
@@ -250,6 +259,15 @@ export function createPhaseTicker(options: PhaseTickerOptions): PhaseTickerHandl
 				phaseStartedAt: phaseState.phaseStartedAt,
 				runnerHeartbeatAt: currentNow,
 				...(phaseState.toolName !== undefined ? { toolName: phaseState.toolName } : {}),
+				...(engaged
+					? {
+							activity: {
+								state: engagedToolName !== undefined ? "tool_running" : "running",
+								...(engagedToolName !== undefined ? { toolName: engagedToolName } : {}),
+								updatedAt: currentNow,
+							},
+						}
+					: {}),
 			});
 		} catch (error) {
 			logger.debug("Phase ticker heartbeat failed", {
@@ -321,6 +339,13 @@ export function dispatchAsyncChild(step: ChildAgentStep, ctx: ChildAgentContext)
 	return startChildAgent(step, ctx);
 }
 
+/**
+ * Keep-alive cadence for a run parked on active descendants: matches the phase
+ * ticker interval so the settle loop re-stamps activity while held, staying far
+ * inside every control-loop stall window without meaningful wake churn.
+ */
+const NESTED_PARK_KEEP_ALIVE_MS = 5_000;
+
 async function settleNestedAsyncParent(
 	runId: string,
 	stepIndex: number,
@@ -337,7 +362,25 @@ async function settleNestedAsyncParent(
 			continue;
 		}
 		if (!snapshot.active && !snapshot.agentInFlight) return "settled";
-		const wait = () => waitForNestedAsyncParentChange(runId, snapshot.version, signal);
+		// Wake on a real coordinator change, or on the keep-alive cadence while the
+		// subtree is active but silent: each cadence wake re-stamps activity so a
+		// held run's lastActivityAt keeps refreshing and the control loop never
+		// reads a run parked on healthy descendants as stalled.
+		const wait = () =>
+			new Promise<void>((resolve) => {
+				let done = false;
+				const timer = setTimeout(() => {
+					if (done) return;
+					done = true;
+					resolve();
+				}, NESTED_PARK_KEEP_ALIVE_MS);
+				void waitForNestedAsyncParentChange(runId, snapshot.version, signal).then(() => {
+					if (done) return;
+					done = true;
+					clearTimeout(timer);
+					resolve();
+				});
+			});
 		if (snapshot.active && !snapshot.agentInFlight) await parkLeafPermit(runId, wait, signal);
 		else await wait();
 		if (nestedAsyncParentSnapshot(runId)?.active) {
@@ -345,6 +388,7 @@ async function settleNestedAsyncParent(
 				runId,
 				stepIndex,
 				activity: { state: "running", updatedAt: Date.now() },
+				runnerHeartbeatAt: Date.now(),
 			});
 		}
 	}

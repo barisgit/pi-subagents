@@ -17,6 +17,17 @@ const ENGAGED_PHASES = new Set<string>([
 	"tool_streaming",
 	"retrying",
 ]);
+
+/**
+ * A phase in which the runner is demonstrably mid-work: the model call, a tool,
+ * a network wait, or a retry is in flight. Sustained engagement in such a phase
+ * is real progress for liveness purposes even when no discrete event fires, so
+ * phase tickers emit activity during these phases and control logic suppresses
+ * stall detection for them.
+ */
+export function isEngagedPhase(phase: string | undefined): boolean {
+	return phase !== undefined && ENGAGED_PHASES.has(phase);
+}
 export const DEFAULT_NEEDS_ATTENTION_AFTER_MS = 15 * 60 * 1000;
 
 export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
@@ -41,7 +52,7 @@ export function deriveActivityState(input: {
 	// timer would fire purely for waiting in the pool. Suppress entirely until it
 	// actually begins executing (the queued->running flip stamps executionStartedAt).
 	if (input.queued) return undefined;
-	if (input.phase && ENGAGED_PHASES.has(input.phase)) return undefined;
+	if (isEngagedPhase(input.phase)) return undefined;
 	const now = input.now ?? Date.now();
 	// Anchor the stall window on real execution start, not dispatch/queue time:
 	// lastActivityAt when present, else executionStartedAt, else startedAt.

@@ -393,6 +393,328 @@ it("refreshes retained parent activity when an active async descendant progresse
 	assert.equal((await parent).state, "complete");
 });
 
+/** Poll until `check` holds or the timeout elapses; the caller asserts the outcome. */
+async function waitForAtMost(check: () => boolean, timeoutMs: number): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!check() && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+}
+
+interface RecordedPatch {
+	activity?: { updatedAt?: number };
+	runnerHeartbeatAt?: number;
+}
+
+/** Settle the microtask chain so one descendant patch finishes bubbling to every ancestor. */
+async function settleBubbling(): Promise<void> {
+	await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+}
+
+it("keeps every ancestor fresh while a deep descendant works quietly in an engaged phase", async () => {
+	leafConcurrencyLimit(4);
+	const topRunId = "run-deep-top";
+	const midRunId = "run-deep-mid";
+	const leafRunId = "run-deep-leaf";
+	let settleMidPrompt!: () => void;
+	const midPromptSettled = new Promise<void>((resolve) => {
+		settleMidPrompt = resolve;
+	});
+	let signalLeafEngaged!: () => void;
+	const leafEngaged = new Promise<void>((resolve) => {
+		signalLeafEngaged = resolve;
+	});
+	let releaseLeaf!: () => void;
+	const leafGate = new Promise<void>((resolve) => {
+		releaseLeaf = resolve;
+	});
+	const leafSession = new FakeAgentSession(async (self) => {
+		self.emit({ type: "tool_execution_start", toolName: "bash" });
+		signalLeafEngaged();
+		await leafGate;
+		self.emit({ type: "tool_execution_end", toolName: "bash" });
+		self.lastAssistantText = "<output>leaf-done</output>";
+	});
+	const midPatches: RecordedPatch[] = [];
+	const midSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(midRunId);
+		dispatchAsyncChild(
+			makeStep({ runId: leafRunId }),
+			makeContext({ onStatusUpdate: (patch) => midPatches.push(patch) }),
+		);
+		markNestedAsyncStarted(midRunId, leafRunId);
+		self.lastAssistantText = "<output>mid-dispatched</output>";
+		settleMidPrompt();
+	});
+	const topSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(topRunId);
+		dispatchAsyncChild(
+			makeStep({ runId: midRunId }),
+			makeContext({ onStatusUpdate: (patch) => midPatches.push(patch) }),
+		);
+		markNestedAsyncStarted(topRunId, midRunId);
+		self.lastAssistantText = "<output>top-dispatched</output>";
+	});
+	installFakeRuntime([topSession, midSession, leafSession]);
+	const topPatches: RecordedPatch[] = [];
+
+	const top = runChildAgent(
+		makeStep({ runId: topRunId }),
+		makeContext({ onStatusUpdate: (patch) => topPatches.push(patch) }),
+	);
+	await midPromptSettled;
+	await leafEngaged;
+	await settleBubbling();
+
+	// Baseline: the leaf's tool_execution_start instant already bubbled one stamp per level.
+	const topVersionBefore = nestedAsyncParentSnapshot(topRunId)?.version ?? 0;
+	const midVersionBefore = nestedAsyncParentSnapshot(midRunId)?.version ?? 0;
+	const topStampsBefore = topPatches.filter((patch) => patch.activity !== undefined).length;
+	const midStampsBefore = midPatches.filter((patch) => patch.activity !== undefined).length;
+
+	// The leaf stays quiet inside its sustained tool phase; its engagement must keep
+	// refreshing mid AND top through the parked parents (deep subtree activity).
+	await waitForAtMost(() => (nestedAsyncParentSnapshot(topRunId)?.version ?? 0) > topVersionBefore, 9_000);
+
+	assert.ok(
+		(nestedAsyncParentSnapshot(midRunId)?.version ?? 0) > midVersionBefore,
+		"mid parent must be woken by the leaf's engaged quiet tick",
+	);
+	assert.ok(
+		(nestedAsyncParentSnapshot(topRunId)?.version ?? 0) > topVersionBefore,
+		"top ancestor must be woken through the parked mid parent",
+	);
+	assert.ok(
+		midPatches.filter((patch) => patch.activity !== undefined).length > midStampsBefore,
+		"parked mid parent must stamp fresh activity while its descendant works",
+	);
+	assert.ok(
+		topPatches.filter((patch) => patch.activity !== undefined).length > topStampsBefore,
+		"top ancestor must stamp fresh activity while its grandchild works",
+	);
+
+	releaseLeaf();
+	markNestedAsyncFinished(midRunId, leafRunId);
+	markNestedAsyncFinished(topRunId, midRunId);
+	assert.equal((await top).state, "complete");
+});
+
+it("bubbles sustained descendant activity through a parallel group container without skipping a level", async () => {
+	leafConcurrencyLimit(4);
+	const topRunId = "run-group-top";
+	const midRunId = "run-group-mid";
+	const leafRunId = "run-group-leaf";
+	const groupRunId = "run-group-container";
+	let settleMidPrompt!: () => void;
+	const midPromptSettled = new Promise<void>((resolve) => {
+		settleMidPrompt = resolve;
+	});
+	let signalLeafEngaged!: () => void;
+	const leafEngaged = new Promise<void>((resolve) => {
+		signalLeafEngaged = resolve;
+	});
+	let releaseLeaf!: () => void;
+	const leafGate = new Promise<void>((resolve) => {
+		releaseLeaf = resolve;
+	});
+	const leafSession = new FakeAgentSession(async (self) => {
+		self.emit({ type: "tool_execution_start", toolName: "bash" });
+		signalLeafEngaged();
+		await leafGate;
+		self.emit({ type: "tool_execution_end", toolName: "bash" });
+		self.lastAssistantText = "<output>leaf-done</output>";
+	});
+	const midPatches: RecordedPatch[] = [];
+	const midSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(midRunId);
+		// Parallel/async group shape: the rollup registers the group id while per-child
+		// started events register child run ids, exactly like run-async-path.
+		holdNestedAsyncRollup(midRunId, groupRunId);
+		dispatchAsyncChild(
+			makeStep({ runId: leafRunId }),
+			makeContext({ onStatusUpdate: (patch) => midPatches.push(patch) }),
+		);
+		markNestedAsyncStarted(midRunId, leafRunId);
+		self.lastAssistantText = "<output>mid-dispatched</output>";
+		settleMidPrompt();
+	});
+	const topSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(topRunId);
+		dispatchAsyncChild(makeStep({ runId: midRunId }), makeContext());
+		markNestedAsyncStarted(topRunId, midRunId);
+		self.lastAssistantText = "<output>top-dispatched</output>";
+	});
+	installFakeRuntime([topSession, midSession, leafSession]);
+	const topPatches: RecordedPatch[] = [];
+
+	const top = runChildAgent(
+		makeStep({ runId: topRunId }),
+		makeContext({ onStatusUpdate: (patch) => topPatches.push(patch) }),
+	);
+	await midPromptSettled;
+	await leafEngaged;
+	await settleBubbling();
+
+	const topVersionBefore = nestedAsyncParentSnapshot(topRunId)?.version ?? 0;
+	const midVersionBefore = nestedAsyncParentSnapshot(midRunId)?.version ?? 0;
+	const topStampsBefore = topPatches.filter((patch) => patch.activity !== undefined).length;
+
+	await waitForAtMost(() => (nestedAsyncParentSnapshot(topRunId)?.version ?? 0) > topVersionBefore, 9_000);
+
+	assert.ok(
+		(nestedAsyncParentSnapshot(midRunId)?.version ?? 0) > midVersionBefore,
+		"group container must not break the mid parent's wake chain",
+	);
+	assert.ok(
+		(nestedAsyncParentSnapshot(topRunId)?.version ?? 0) > topVersionBefore,
+		"top ancestor must be woken through the group container",
+	);
+	assert.ok(
+		topPatches.filter((patch) => patch.activity !== undefined).length > topStampsBefore,
+		"top ancestor must stamp fresh activity through the group container",
+	);
+
+	releaseLeaf();
+	// The leaf completes first (its child id empties mid's active set), then the
+	// rollup releases its group id — otherwise mid stays held on the unfinished
+	// child registration and its settle loop keeps cycling.
+	markNestedAsyncFinished(midRunId, leafRunId);
+	markNestedAsyncFinished(midRunId, groupRunId);
+	markNestedAsyncFinished(topRunId, midRunId);
+	assert.equal((await top).state, "complete");
+});
+
+it("keeps a parked parent's liveness fresh while its whole subtree is active but silent", async () => {
+	leafConcurrencyLimit(4);
+	const topRunId = "run-silent-top";
+	const midRunId = "run-silent-mid";
+	const leafRunId = "run-silent-leaf";
+	let settleMidPrompt!: () => void;
+	const midPromptSettled = new Promise<void>((resolve) => {
+		settleMidPrompt = resolve;
+	});
+	let signalLeafParked!: () => void;
+	const leafParked = new Promise<void>((resolve) => {
+		signalLeafParked = resolve;
+	});
+	let releaseLeaf!: () => void;
+	const leafGate = new Promise<void>((resolve) => {
+		releaseLeaf = resolve;
+	});
+	// The leaf produces no session events at all while it works: the parked ancestors
+	// must keep stamping activity on their own keep-alive, or the async control loop
+	// reports "no observed activity" against a subtree that is demonstrably working.
+	const leafSession = new FakeAgentSession(async () => {
+		signalLeafParked();
+		await leafGate;
+	});
+	const midPatches: RecordedPatch[] = [];
+	const midSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(midRunId);
+		dispatchAsyncChild(makeStep({ runId: leafRunId }), makeContext());
+		markNestedAsyncStarted(midRunId, leafRunId);
+		self.lastAssistantText = "<output>mid-dispatched</output>";
+		settleMidPrompt();
+	});
+	const topSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(topRunId);
+		// mid's own executor patches (incl. settle-loop stamps) land in midPatches via
+		// top's dispatch recorder; the leaf emits nothing, so any new liveness there is
+		// the parked parents' own keep-alive, not traffic from below.
+		dispatchAsyncChild(
+			makeStep({ runId: midRunId }),
+			makeContext({ onStatusUpdate: (patch) => midPatches.push(patch) }),
+		);
+		markNestedAsyncStarted(topRunId, midRunId);
+		self.lastAssistantText = "<output>top-dispatched</output>";
+	});
+	installFakeRuntime([topSession, midSession, leafSession]);
+	const topPatches: RecordedPatch[] = [];
+
+	const top = runChildAgent(
+		makeStep({ runId: topRunId }),
+		makeContext({ onStatusUpdate: (patch) => topPatches.push(patch) }),
+	);
+	await midPromptSettled;
+	await leafParked;
+	await settleBubbling();
+
+	const midActivityBefore = midPatches.filter((patch) => patch.activity !== undefined).length;
+	const topActivityBefore = topPatches.filter((patch) => patch.activity !== undefined).length;
+
+	// Nothing below emits, so only the parked parents' own keep-alive can refresh
+	// lastActivityAt: activity stamps must keep arriving while the subtree is held.
+	await waitForAtMost(
+		() => midPatches.filter((patch) => patch.activity !== undefined).length > midActivityBefore,
+		9_000,
+	);
+
+	assert.ok(
+		midPatches.filter((patch) => patch.activity !== undefined).length > midActivityBefore,
+		"parked mid parent must keep stamping activity while its subtree is active",
+	);
+	assert.ok(
+		topPatches.filter((patch) => patch.activity !== undefined).length > topActivityBefore,
+		"top ancestor must stay activity-fresh through the parked mid parent",
+	);
+	assert.equal(topSession.disposeCalls, 0, "held ancestors must not be disposed while the subtree works");
+	assert.equal(midSession.disposeCalls, 0, "held middle parent must not be disposed while the subtree works");
+
+	releaseLeaf();
+	markNestedAsyncFinished(midRunId, leafRunId);
+	markNestedAsyncFinished(topRunId, midRunId);
+	assert.equal((await top).state, "complete");
+});
+
+it("stops keeping a parent fresh once its descendant subtree settles, and exits exactly once", async () => {
+	const parentRunId = "run-settles-after-subtree";
+	const descendantRunId = "run-settles-descendant";
+	let settleParentPrompt!: () => void;
+	const parentPromptSettled = new Promise<void>((resolve) => {
+		settleParentPrompt = resolve;
+	});
+	const parentSession = new FakeAgentSession(async (self) => {
+		registerNestedAsyncParent(parentRunId);
+		markNestedAsyncStarted(parentRunId, descendantRunId);
+		self.lastAssistantText = "<output>waiting</output>";
+		settleParentPrompt();
+	});
+	const siblingSession = new FakeAgentSession(async (self) => {
+		self.lastAssistantText = "<output>sibling</output>";
+	});
+	installFakeRuntime([parentSession, siblingSession]);
+	const patches: RecordedPatch[] = [];
+
+	const parent = runChildAgent(
+		makeStep({ runId: parentRunId }),
+		makeContext({ onStatusUpdate: (patch) => patches.push(patch) }),
+	);
+	await parentPromptSettled;
+
+	let reprompted = false;
+	markNestedAsyncFinished(parentRunId, descendantRunId);
+	enqueueNestedCompletionReprompt(parentRunId, () => {
+		reprompted = true;
+		queueMicrotask(() => markNestedParentTurn(parentRunId, false));
+		return true;
+	});
+	const result = await parent;
+	assert.equal(result.state, "complete");
+	assert.equal(reprompted, true);
+	assert.equal(parentSession.disposeCalls, 1, "a settled parent must dispose exactly once");
+	assert.equal(nestedAsyncParentSnapshot(parentRunId), null);
+
+	// A terminal descendant must not keep the parent's record alive: after the subtree
+	// settles, no further activity stamps may land on the parent's run record.
+	const stampsAfterSettle = patches.filter((patch) => patch.activity !== undefined).length;
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	assert.equal(patches.filter((patch) => patch.activity !== undefined).length, stampsAfterSettle);
+	assert.equal(
+		(await runChildAgent(makeStep({ runId: "run-after-settled-parent" }), makeContext())).state,
+		"complete",
+	);
+});
+
 it("binds extensions before prompting so nested async activation retains the parent", async () => {
 	const parentRunId = "run-sdk-faithful-parent";
 	const descendantRunId = "run-sdk-faithful-descendant";
